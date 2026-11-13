@@ -357,8 +357,16 @@ export function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany
 	let reported = ConcurrentRunArray.create(0)
 
 	for child in children 'eachChild'
-		let stdout = drainStream(child, stderr: false)
-		let stderr = drainStream(child, stderr: true)
+		let stdoutReader = try child.takeStdout() otherwise (e) 'stdoutNotTaken'
+			panic("run tests: the gate could not run — could not take a concurrent driver's stdout ({e.displayReason()}).")
+		end 'stdoutNotTaken'
+
+		let stderrReader = try child.takeStderr() otherwise (e) 'stderrNotTaken'
+			panic("run tests: the gate could not run — could not take a concurrent driver's stderr ({e.displayReason()}).")
+		end 'stderrNotTaken'
+
+		let stdout = drainStream(stdoutReader)
+		let stderr = drainStream(stderrReader)
 		let code = try child.wait() otherwise (e) 'waitFailed'
 			panic("run tests: the gate could not run — could not wait for a concurrent driver ({e.displayReason()}).")
 		end 'waitFailed'
@@ -373,31 +381,23 @@ end 'spawnConcurrentRuns'
 // One child stream read to end-of-stream, terminators restored. The reader strips the terminator
 // from every line, so a line has to have one put back for a case to compare what it reads against
 // what a program prints.
-function drainStream(child StreamingSubprocess, stderr bool) returns String
+function drainStream(reader isolated ChildOutputReader) returns String
 	var collected = ""
 
-	while true 'untilEndOfStream'
-		let line = try readOneLine(child, stderr: stderr) otherwise (e) 'readFailed'
-			if not e.endedTheStream() 'aReadFailure'
-				panic("run tests: the gate could not run — could not read a concurrent driver's output ({e.displayReason()}).")
-			end 'aReadFailure'
-
-			break
+	while true 'untilEnded'
+		let read = try reader.readLine() otherwise (e) 'readFailed'
+			panic("run tests: the gate could not run — could not read a concurrent driver's output ({e.name}).")
 		end 'readFailed'
 
-		collected.append("{line}{LineFeed}")
-	end 'untilEndOfStream'
+		match read 'read'
+			line(text) then collected.append("{text}{LineFeed}")
+			ended then return collected
+			pastTheCap then panic("run tests: the gate could not run — a concurrent driver wrote a line past the reader's cap.")
+		end 'read'
+	end 'untilEnded'
 
-	return collected
+	panic("drainStream: the loop leaves only by returning")
 end 'drainStream'
-
-function readOneLine(child StreamingSubprocess, stderr bool) returns String throws SubprocessError
-	if stderr 'theErrorStream'
-		return try child.readStderrLine()
-	end 'theErrorStream'
-
-	return try child.readStdoutLine()
-end 'readOneLine'
 
 // ============================================================================================
 // READING THE CACHE

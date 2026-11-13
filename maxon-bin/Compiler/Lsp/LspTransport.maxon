@@ -5,31 +5,6 @@
 // is why a message this file cannot frame is reported as `framingError` and ends the session rather than
 // being skipped.
 
-// A `Content-Length` value: the body's size in bytes.
-typealias LspContentLength = int(0 to u64.max)
-
-// ⚠ ONE BYTE PER READ WHILE SCANNING HEADERS, DELIBERATELY. A bulk read would consume part of the BODY
-// that follows the blank line, and the body must be taken by exact count — a reader that over-reads has
-// to buffer the remainder, and `stdlib/Console.maxon`'s buffer (the one that already does this) does not
-// export the byte-exact `readBytes` that would make it reusable. Header lines are a few dozen bytes
-// against an editor-paced message rate, so the syscalls cost nothing.
-let HeaderScanByteBudget = 1
-
-// The one header this server reads, lowercased: LSP header field names are case-insensitive.
-let ContentLengthHeaderName = "content-length"
-
-let HeaderFieldSeparator = ":"
-
-// A child's frame is read into memory whole, so a garbled `Content-Length` from it ends the child here
-// rather than sizing an allocation.
-let ChildFrameByteCap = 64 * 1024 * 1024
-
-// How a message can fail to arrive. Both arms are raised.
-enum LspFramingError implements Error
-	streamEnded
-	badContentLength
-end 'LspFramingError'
-
 // What one turn of the read loop produced. A union rather than a throwing read because the three
 // outcomes lead to three different ends of the session — one is handled, one is a clean close, and one
 // is fatal — and a caller that has to name all three cannot silently drop one.
@@ -39,178 +14,22 @@ export union LspIncoming
 	framingError(detail String)
 end 'LspIncoming'
 
-union LspHeaderStep
-	more
-	complete(length LspContentLength)
-	malformed(detail String)
-end 'LspHeaderStep'
-
-type LspFrameHeaders
-	var statedLength = StatedFrameLength.unstated
-
-	static function create() returns LspFrameHeaders
-		return Self{}
-	end 'create'
-
-	function absorb(line String) returns LspHeaderStep
-		if line.isEmpty() 'blankLine'
-			return self.endOfHeaders()
-		end 'blankLine'
-
-		let parts = line.split(HeaderFieldSeparator)
-		let name = (try parts.get(0) otherwise "").toLower()
-
-		// Every other header is ignored, as the protocol requires of a header a peer does not know.
-		if name != ContentLengthHeaderName 'otherHeader'
-			return LspHeaderStep.more
-		end 'otherHeader'
-
-		let raw = (try parts.get(1) otherwise "").trim()
-		self.statedLength = StatedFrameLength.stated(try parseContentLength(raw) otherwise return LspHeaderStep.malformed("Content-Length is not a byte count: '{raw}'"))
-
-		return LspHeaderStep.more
-	end 'absorb'
-
-	function endOfHeaders() returns LspHeaderStep
-		return match self.statedLength 'length'
-			unstated gives LspHeaderStep.malformed("message header carries no Content-Length")
-			stated(count) gives LspHeaderStep.complete(count)
-		end 'length'
-	end 'endOfHeaders'
-end 'LspFrameHeaders'
-
-// Read the next framed message off standard input.
-export function readLspMessage(stdin Stdin) returns isolated LspIncoming
-	let headers = LspFrameHeaders.create()
-
-	while true 'headers'
+extension StreamReader where Source is ByteSource
+	export function readLspMessage() returns isolated LspIncoming
 		// EOF anywhere before a complete message is the same event however far in it lands: the client is
 		// gone and there is nothing left to frame.
-		let line = try readHeaderLine(stdin) otherwise return LspIncoming.endOfStream
+		let body = try self.readContentLengthFrame() otherwise (e) 'unframed'
+			match e 'error'
+				ended then return LspIncoming.endOfStream
+				malformed(detail) then return LspIncoming.framingError(detail)
+			end 'error'
+		end 'unframed'
 
-		match headers.absorb(line) 'step'
-			more then continue
-			complete(length) then return readLspBody(stdin, length: length)
-			malformed(detail) then return LspIncoming.framingError(detail)
-		end 'step'
-	end 'headers'
-
-	panic("readLspMessage: the header loop is left only by a return")
-end 'readLspMessage'
-
-function readLspBody(stdin Stdin, length LspContentLength) returns isolated LspIncoming
-	let contentLength = length as ElementIndex
-	let body = ByteArray.create(0)
-
-	while body.count() < contentLength 'fill'
-		let chunk = stdin.readBytes((contentLength - body.count()) as BytePos)
-
-		if chunk.count() == 0 'truncated'
-			return LspIncoming.framingError("stream ended after {body.count()} of {contentLength} body bytes")
-		end 'truncated'
-
-		body.append(chunk)
-	end 'fill'
-
-	return LspIncoming.message(String.from(body))
-end 'readLspBody'
-
-module function readChildMessage(reader StdoutReader) returns LspIncoming
-	let headers = LspFrameHeaders.create()
-
-	while true 'headers'
-		let line = try reader.readLine() otherwise (e) 'unread'
-			return childReadOutcome(e)
-		end 'unread'
-
-		match headers.absorb(line) 'step'
-			more then continue
-			complete(length) then return readChildBody(reader, length: length)
-			malformed(detail) then return LspIncoming.framingError(detail)
-		end 'step'
-	end 'headers'
-
-	panic("readChildMessage: the header loop is left only by a return")
-end 'readChildMessage'
-
-function childReadOutcome(failure SubprocessError) returns LspIncoming
-	if failure.endedTheStream() 'ended'
-		return LspIncoming.endOfStream
-	end 'ended'
-
-	return LspIncoming.framingError("reading the compiler's output failed: {failure.displayReason()}")
-end 'childReadOutcome'
-
-function readChildBody(reader StdoutReader, length LspContentLength) returns LspIncoming
-	if length > ChildFrameByteCap 'tooLarge'
-		return LspIncoming.framingError("the compiler announced a {length}-byte message, past the {ChildFrameByteCap}-byte limit on one")
-	end 'tooLarge'
-
-	let body = try reader.readBytes(length as ByteLimit) otherwise (e) 'unread'
-		return childReadOutcome(e)
-	end 'unread'
-
-	if (body.byteLength() as ByteLimit) != (length as ByteLimit) 'truncated'
-		return LspIncoming.framingError("stream ended after {body.byteLength()} of {length} body bytes")
-	end 'truncated'
-
-	return LspIncoming.message(body)
-end 'readChildBody'
+		return LspIncoming.message(body)
+	end 'readLspMessage'
+end 'StreamReader'
 
 // Frame `body` and write it to standard output.
 export function writeLspMessage(body String)
-	print("Content-Length: {body.byteLength()}\r\n\r\n{body}")
+	print(contentLengthFrame(body))
 end 'writeLspMessage'
-
-// One header line, terminated by LF and with its CR — if any — dropped.
-//
-// The only CR a header line may carry is the first half of its CRLF terminator, so a CR is never
-// content; skipping it here also reads a client that sends bare LF.
-function readHeaderLine(stdin Stdin) returns String throws LspFramingError
-	let line = ByteArray.create(0)
-	var complete = false
-
-	while not complete 'scan'
-		let chunk = stdin.readBytes(HeaderScanByteBudget)
-
-		if chunk.count() == 0 'streamClosed'
-			throw LspFramingError.streamEnded
-		end 'streamClosed'
-
-		let b = try chunk.get(0) otherwise panic("readHeaderLine: chunk.count() != 0 was just checked")
-
-		if b == '\n' 'terminator'
-			complete = true
-		end 'terminator' else if b != '\r' 'contentByte'
-			line.push(b)
-		end 'contentByte'
-	end 'scan'
-
-	return String.from(line)
-end 'readHeaderLine'
-
-union StatedFrameLength
-	unstated
-	stated(count LspContentLength)
-end 'StatedFrameLength'
-
-// ⚠ `parseInt` reads whatever digits it finds and ignores every other byte, so it answers 40 for `4x0`
-// and 0 for a value with no digit at all. A header value is therefore checked to be a non-empty run of
-// ASCII digits BEFORE it is asked — otherwise a corrupt length would silently become a plausible one and
-// desynchronize the stream at the next message.
-function parseContentLength(text String) returns LspContentLength throws LspFramingError
-	let digits = text.toByteArray()
-
-	if digits.count() == 0 'noDigits'
-		throw LspFramingError.badContentLength
-	end 'noDigits'
-
-	for b in digits 'eachByte'
-		if b < '0' or b > '9' 'notADigit'
-			throw LspFramingError.badContentLength
-		end 'notADigit'
-	end 'eachByte'
-
-	let value = try parseInt(digits) otherwise throw LspFramingError.badContentLength
-	return value as LspContentLength
-end 'parseContentLength'

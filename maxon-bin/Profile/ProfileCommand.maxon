@@ -343,8 +343,9 @@
 			return refuseProfile("could not run {reportSpelledPathDisplay(request.exePath())}: {e.displayReason()}")
 		end 'didNotStart'
 
-		let outcome = sampleUntilItEnds(request, sidecar: sidecar, textBytes: textBytes, child: child, cyclesPerTick: cyclesPerTick)
-		child.release()
+		let pump = pumpOfSpawned(child)
+		let outcome = sampleUntilItEnds(request, sidecar: sidecar, textBytes: textBytes, child: child, pump: pump, cyclesPerTick: cyclesPerTick)
+		pump.release(child)
 		image.release()
 
 		return outcome
@@ -377,7 +378,7 @@
 	//
 	// ⚠ The session is built into a LOCAL `var` rather than handed back inside a union: it is written on
 	// every tick, and a value bound by a `match` arm is immutable (E3063).
-	function sampleUntilItEnds(request ProfileRequest, sidecar MxdbgReader, textBytes DebugAddress, child StreamingSubprocess, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
+	function sampleUntilItEnds(request ProfileRequest, sidecar MxdbgReader, textBytes DebugAddress, child StreamingSubprocess, pump ChildPump, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		let pid = try child.processId() otherwise panic("ProfileCommand.sampleUntilItEnds: the child was spawned for this session and is released only after sampling, so the spawn recorded a process id for it")
 
 		let process = try SampledProcess.open(pid) otherwise (e) 'cannotOpen'
@@ -398,7 +399,7 @@
 
 		let outcome = match attachedImage(request, child: child, session: session, sidecar: sidecar, textBytes: textBytes) 'symbols'
 			refused(reason) gives refuseProfileAfterKilling(child, reason: reason)
-			loaded(image) gives runProfileTicks(request, child: child, session: session, image: image)
+			loaded(image) gives runProfileTicks(request, child: child, pump: pump, session: session, image: image)
 		end 'symbols'
 
 		session.release()
@@ -446,7 +447,7 @@
 		end 'eachLook'
 	end 'profileChildEndsSoon'
 
-	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, session ProfileSession, image ProfileImage) returns ExitCode
+	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, pump ChildPump, session ProfileSession, image ProfileImage) returns ExitCode
 		let accumulator = ProfileAccumulator.create()
 		let frames = ProfileStringArray.create(0)
 
@@ -471,7 +472,7 @@
 			end 'timeToLookAgain'
 
 			session.sampleOnce(accumulator, image: image, frames: frames)
-			_ = forwardChildOutput(child, routing: ChildOutputRouting.allToStandardError, budget: ChildLineBudget.atMost(MaxDrainedLinesPerTick))
+			_ = forwardChildOutput(pump, routing: ChildOutputRouting.allToStandardError, budget: ChildLineBudget.atMost(MaxDrainedLinesPerTick))
 
 			// Liveness is checked after the sample, so a short program's last moments are measured rather
 			// than lost to a check that happened to win the race.
@@ -495,9 +496,9 @@
 		let seconds = profileSecondsOf(Clock.elapsedNanos(started))
 
 		if completed 'itExited'
-			_ = forwardEndedChildTail(child, routing: ChildOutputRouting.allToStandardError, ending: TailEnding.afterExit)
+			_ = forwardEndedChildTail(child, pump: pump, routing: ChildOutputRouting.allToStandardError, ending: TailEnding.afterExit)
 		end 'itExited' else 'stillRunning'
-			_ = endChildAndForwardTail(child, routing: ChildOutputRouting.allToStandardError)
+			_ = endChild(child, pump: pump, routing: ChildOutputRouting.allToStandardError)
 		end 'stillRunning'
 
 		return emitProfileReport(request, report: accumulator.finish(reportSpelledPathDisplay(request.exePath()), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
@@ -507,7 +508,8 @@
 	// which is exactly what `notObserved` means.
 	function profileChildExit(child StreamingSubprocess) returns ProfileTargetStatus
 		return match child.pollExit() 'poll'
-			running gives ProfileTargetStatus.notObserved
+			running or
+			reapedElsewhere gives ProfileTargetStatus.notObserved
 			exited(code) gives ProfileTargetStatus.exited(code as ProfileTargetExitCode)
 		end 'poll'
 	end 'profileChildExit'

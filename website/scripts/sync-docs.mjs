@@ -87,7 +87,7 @@ const SOURCES = [
       },
       {
         page: 'stdlib/io.md',
-        sections: ['File', 'FilePath', 'Directory', 'Console', 'CommandLine', 'Log', 'TraceCapture', 'Process', 'Subprocess', 'SharedMemory', 'Debuggee', 'Sampler'],
+        sections: ['File', 'FilePath', 'Directory', 'Console', 'Stream', 'CommandLine', 'Log', 'TraceCapture', 'Process', 'Subprocess', 'SharedMemory', 'Debuggee', 'Sampler'],
       },
       { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'TlsClient', 'TlsListener', 'TlsStream', 'TlsError', 'HttpClient', 'HttpServer', 'URL'] },
       { page: 'stdlib/data.md', sections: ['Json', 'Base64', 'Pem', 'Der', 'Sha2', 'Hmac', 'Hkdf', 'Rsa', 'AesGcm', 'ChaCha20Poly1305', 'X25519', 'Ed25519', 'EcdhP256', 'Ecdsa', 'EcdsaP256', 'EcdsaP384', 'X509', 'Hasher'] },

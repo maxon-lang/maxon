@@ -1,0 +1,161 @@
+public let ChildProbeMs = 250 as DurationMs
+
+public enum RunEndsWhen
+	childExits
+	outputEnds
+end 'RunEndsWhen'
+
+public union WaitRefusal
+	treeNotEnded(osError OsErrorCode)
+	ioFailed(reason String)
+
+	public function displayReason() returns String
+		return match self 'refusal'
+			treeNotEnded(osError) gives "the child's process tree could not be fully ended: os error {osError}"
+			ioFailed(reason) gives "I/O failed: {reason}"
+		end 'refusal'
+	end 'displayReason'
+end 'WaitRefusal'
+
+public union ChildEnd
+	exited(code ExitInt)
+	reapedElsewhere
+	deadline
+	waitFailed(refusal WaitRefusal)
+end 'ChildEnd'
+
+union ChildProgress
+	carryOn
+	ended(finish ChildEnd)
+end 'ChildProgress'
+
+public function awaitChildEnd(pump ChildPump, child StreamingSubprocess, into ChildLineSink, feed StdinFeed, started InstantMs, deadlineMs DurationMs, endsWhen RunEndsWhen) returns ChildEnd
+	while Clock.remainingMs(started, deadlineMs: deadlineMs) > 0 'pumping'
+		let event = pump.nextWithin(ChildProbeMs, started: started, deadlineMs: deadlineMs)
+		feed.offer(event, child: child, pump: pump)
+		event.deliverTo(into)
+
+		match progressAfter(event, child: child, endsWhen: endsWhen, remainingMs: Clock.remainingMs(started, deadlineMs: deadlineMs)) 'progress'
+			carryOn then continue
+			ended(finish) then return finish
+		end 'progress'
+	end 'pumping'
+
+	return ChildEnd.deadline
+end 'awaitChildEnd'
+
+function progressAfter(event PumpEvent, child StreamingSubprocess, endsWhen RunEndsWhen, remainingMs DurationMs) returns ChildProgress
+	return match event 'event'
+		said or
+		closed or
+		broke or
+		silent gives progressWhileOutputIsOpen(child, endsWhen: endsWhen)
+		exhausted gives ChildProgress.ended(exitAwaited(child, remainingMs: remainingMs))
+	end 'event'
+end 'progressAfter'
+
+function progressWhileOutputIsOpen(child StreamingSubprocess, endsWhen RunEndsWhen) returns ChildProgress
+	match endsWhen 'endsWhen'
+		outputEnds then return ChildProgress.carryOn
+		childExits then return exitPolled(child)
+	end 'endsWhen'
+end 'progressWhileOutputIsOpen'
+
+function exitPolled(child StreamingSubprocess) returns ChildProgress
+	match child.pollExit() 'exitPoll'
+		running then return ChildProgress.carryOn
+		reapedElsewhere then return ChildProgress.ended(ChildEnd.reapedElsewhere)
+		exited(code) then return ChildProgress.ended(ChildEnd.exited(code))
+	end 'exitPoll'
+end 'exitPolled'
+
+function exitAwaited(child StreamingSubprocess, remainingMs DurationMs) returns ChildEnd
+	if remainingMs == 0 'deadlinePassed'
+		return ChildEnd.deadline
+	end 'deadlinePassed'
+
+	let code = try child.wait(WaitDeadline.within(remainingMs as WaitDeadlineMs)) otherwise (e) 'notExited'
+		return endAfterFailedWait(e)
+	end 'notExited'
+
+	return ChildEnd.exited(code)
+end 'exitAwaited'
+
+function endAfterFailedWait(failure SubprocessError) returns ChildEnd
+	return match failure 'failure'
+		timeout gives ChildEnd.deadline
+		statusLost gives ChildEnd.reapedElsewhere
+		treeNotEnded(_, _, _, osError) gives ChildEnd.waitFailed(WaitRefusal.treeNotEnded(osError))
+		ioFailed(reason) gives ChildEnd.waitFailed(WaitRefusal.ioFailed(reason))
+		executableNotFound or
+		spawnFailed or
+		detachRefused or
+		inputTooLarge panic("endAfterFailedWait: a wait answered {failure.displayReason()}, which no wait throws")
+	end 'failure'
+end 'endAfterFailedWait'
+
+public union SurvivorEnd
+	noneHeld
+	ended(tree TreeEnd)
+end 'SurvivorEnd'
+
+public function concludeChild(pump ChildPump, child StreamingSubprocess, into ChildLineSink, ending ChildEnd, tailSilenceMs DurationMs, tailCapMs DurationMs) returns SurvivorEnd
+	match ending 'ending'
+		exited or
+		reapedElsewhere then return PumpTail.begin(tailSilenceMs, capMs: tailCapMs).drainAndEndHolders(pump, child: child, into: into)
+		deadline or
+		waitFailed then return treeEndedThenDrained(pump, child: child, into: into, tailSilenceMs: tailSilenceMs, tailCapMs: tailCapMs)
+	end 'ending'
+end 'concludeChild'
+
+function treeEndedThenDrained(pump ChildPump, child StreamingSubprocess, into ChildLineSink, tailSilenceMs DurationMs, tailCapMs DurationMs) returns SurvivorEnd
+	let tree = child.endTree()
+	_ = PumpTail.begin(tailSilenceMs, capMs: tailCapMs).drainAndRelease(pump, child: child, into: into)
+
+	return SurvivorEnd.ended(tree)
+end 'treeEndedThenDrained'
+
+public type ChildRunReport
+	public let ending as ChildEnd
+	public let survivors as SurvivorEnd
+	public let stdout as String
+	public let stderr as String
+	public let elapsedMs as DurationMs
+
+	public static function create(ending ChildEnd, survivors SurvivorEnd, stdout String, stderr String, elapsedMs DurationMs) returns Self
+		return Self{ending: ending, survivors: survivors, stdout: stdout, stderr: stderr, elapsedMs: elapsedMs}
+	end 'create'
+end 'ChildRunReport'
+
+public union FedChildOutcome
+	ran(report ChildRunReport)
+	outputBroken(stream StdioStream, reason String, report ChildRunReport)
+end 'FedChildOutcome'
+
+public function runChildFedAfterLine(exe Executable, argv StringArray, workingDirectory WorkingDirectory, environment Environment, deadlineMs DurationMs, endsWhen RunEndsWhen, tailSilenceMs DurationMs, tailCapMs DurationMs, anchor String, feed String) returns FedChildOutcome throws SubprocessError
+	let child = try StreamingSubprocess.spawnWithEnvironment(exe, arguments: argv, workingDirectory: workingDirectory, environment: environment)
+
+	let pump = try ChildPump.of(child) otherwise (e) 'outputNotTaken'
+		child.release()
+		throw e
+	end 'outputNotTaken'
+
+	let stdinFeed = StdinFeed.afterLine(anchor, line: feed)
+	let capture = StreamCapture.create()
+	let started = Clock.nowMs()
+
+	let ending = awaitChildEnd(pump, child: child, into: capture, feed: stdinFeed, started: started, deadlineMs: deadlineMs, endsWhen: endsWhen)
+	let elapsedMs = Clock.elapsedMs(started)
+	let survivors = concludeChild(pump, child: child, into: capture, ending: ending, tailSilenceMs: tailSilenceMs, tailCapMs: tailCapMs)
+
+	let report = ChildRunReport.create(ending, survivors: survivors, stdout: capture.stdout, stderr: capture.stderr, elapsedMs: elapsedMs)
+
+	return fedOutcomeOf(report, health: capture.health)
+end 'runChildFedAfterLine'
+
+function fedOutcomeOf(report ChildRunReport, health OutputHealth) returns FedChildOutcome
+	return match health 'health'
+		intact gives FedChildOutcome.ran(report)
+		failed(stream, reason) gives FedChildOutcome.outputBroken(stream, reason: reason, report: report)
+	end 'health'
+end 'fedOutcomeOf'

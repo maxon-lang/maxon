@@ -3,25 +3,9 @@
 // the body's binding count, and `differences` skips a shared chunk by identity.
 export typealias MoveSlotIndexColumn = Array with ElementIndex
 
-let MoveChunkShift = 6 as ElementIndex
-let MoveChunkWidth = 64
-let MoveChunkMask = 63 as ElementIndex
 let UnheldValue = 0 as ValueId
 
-function chunksHolding(height ElementIndex) returns ElementIndex
-	return (height + MoveChunkMask) shr MoveChunkShift
-end 'chunksHolding'
-
-function chunkFirst(index ElementIndex) returns ElementIndex
-	return index shl MoveChunkShift
-end 'chunkFirst'
-
-function chunkStop(index ElementIndex, height ElementIndex) returns ElementIndex
-	let first = chunkFirst(index)
-	return (first + MoveChunkWidth) if first + MoveChunkWidth < height else height
-end 'chunkStop'
-
-type MoveChunk
+module type MoveChunk
 	let moved as BoolArray
 	let values as ValueIdArray
 
@@ -42,14 +26,15 @@ type MoveChunk
 	end 'sameSlot'
 end 'MoveChunk'
 
-typealias MoveChunkColumn = Array with MoveChunk
+module typealias MoveChunkColumn = ChunkedColumn with MoveChunk
+typealias MoveChunkBuilder = ChunkedColumnBuilder with MoveChunk
 
 export type MoveSlots
-	let chunks as MoveChunkColumn
+	module let chunks as MoveChunkColumn
 	export let height as ElementIndex
 
 	export static function empty() returns MoveSlots
-		return Self{chunks: MoveChunkColumn.create(0), height: 0}
+		return Self{chunks: MoveChunkColumn.none(), height: 0}
 	end 'empty'
 
 	static function create(chunks MoveChunkColumn, height ElementIndex) returns MoveSlots
@@ -61,19 +46,15 @@ export type MoveSlots
 			panic("MoveSlots: position {position} is past the {self.height} owned bindings the snapshot holds")
 		end 'pastTheEnd'
 
-		return self.chunkAtIndex(position shr MoveChunkShift)
+		return self.chunks.chunkAt(chunkIndexOf(position))
 	end 'chunkOfPosition'
 
-	function chunkAtIndex(index ElementIndex) returns MoveChunk
-		return try self.chunks.get(index) otherwise panic("MoveSlots.chunkAtIndex: chunk {index} is past the {self.chunks.count()} the snapshot holds")
-	end 'chunkAtIndex'
-
 	export function movedAt(position ElementIndex) returns bool
-		return self.chunkOfPosition(position).movedAt(position and MoveChunkMask)
+		return self.chunkOfPosition(position).movedAt(slotInChunk(position))
 	end 'movedAt'
 
 	export function valueAt(position ElementIndex) returns ValueId
-		return self.chunkOfPosition(position).valueAt(position and MoveChunkMask)
+		return self.chunkOfPosition(position).valueAt(slotInChunk(position))
 	end 'valueAt'
 
 	export function truncated(prefix ElementIndex) returns MoveSlots
@@ -89,15 +70,15 @@ export type MoveSlots
 		let shared = self.height if self.height < other.height else other.height
 
 		for index in 0 upto chunksHolding(shared) 'eachChunk'
-			let mine = self.chunkAtIndex(index)
-			let theirs = other.chunkAtIndex(index)
+			let mine = self.chunks.chunkAt(index)
+			let theirs = other.chunks.chunkAt(index)
 
 			if mine is theirs 'theSameChunk'
 				continue
 			end 'theSameChunk'
 
 			for position in chunkFirst(index) upto chunkStop(index, height: shared) 'eachPosition'
-				if not mine.sameSlot(theirs, slot: position and MoveChunkMask) 'aDifferingSlot'
+				if not mine.sameSlot(theirs, slot: slotInChunk(position)) 'aDifferingSlot'
 					found.push(position)
 				end 'aDifferingSlot'
 			end 'eachPosition'
@@ -111,16 +92,16 @@ export type MoveSlots
 	end 'chunkCount'
 
 	function chunkIsQuiet(index ElementIndex, edges MoveSlotsColumn, enclosing MoveSlotsColumn) returns bool
-		let mine = self.chunkAtIndex(index)
+		let mine = self.chunks.chunkAt(index)
 
 		for edge in edges 'eachEdge'
-			if index >= edge.chunkCount() or not (edge.chunkAtIndex(index) is mine) 'differs'
+			if index >= edge.chunkCount() or not (edge.chunks.chunkAt(index) is mine) 'differs'
 				return false
 			end 'differs'
 		end 'eachEdge'
 
 		for outer in enclosing 'eachEnclosing'
-			if index < outer.chunkCount() and not (outer.chunkAtIndex(index) is mine) 'differs'
+			if index < outer.chunkCount() and not (outer.chunks.chunkAt(index) is mine) 'differs'
 				return false
 			end 'differs'
 		end 'eachEnclosing'
@@ -399,12 +380,12 @@ export type MoveLedger
 			return base
 		end 'nothingToOverlay'
 
-		let chunks = MoveChunkColumn.create(chunksHolding(height), zeroed: false)
+		let chunks = MoveChunkBuilder.create()
 		var next = 0 as ElementIndex
 
 		for index in 0 upto chunksHolding(height) 'eachChunk'
-			if next >= positions.count() or ((try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) shr MoveChunkShift) != index 'untouched'
-				chunks.push(base.chunkAtIndex(index))
+			if next >= positions.count() or chunkIndexOf(try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) != index 'untouched'
+				chunks.push(base.chunks.chunkAt(index))
 				continue
 			end 'untouched'
 
@@ -427,7 +408,7 @@ export type MoveLedger
 			chunks.push(MoveChunk.create(chunkMoved, values: chunkValues))
 		end 'eachChunk'
 
-		return MoveSlots.create(chunks, height: height)
+		return MoveSlots.create(chunks.finished(), height: height)
 	end 'overlay'
 end 'MoveLedger'
 

@@ -17,8 +17,6 @@ let FloodLineCount = 400
 let FloodPaddingBytes = 4000
 let OversizeHeader = "Content-Length: 4294967296\r\n\r\n"
 let FakeServerName = "fake-slot-compiler"
-let HeaderSeparator = ":"
-let ContentLengthHeaderName = "content-length"
 let CleanExit = 0
 let AbnormalExit = 1
 let SetupFailedExit = 2
@@ -37,42 +35,14 @@ union Frame
 	ended
 end 'Frame'
 
-function readFrame(stdin Stdin) returns Frame
-	var length = 0 as ByteLimit
-	var inHeaders = true
+function readFrame(stdin StdinReader) returns Frame
+	let body = try stdin.readContentLengthFrame() otherwise return Frame.ended
 
-	while inHeaders 'headers'
-		let line = try stdin.readLine() otherwise return Frame.ended
-
-		if line.isEmpty() 'blank'
-			inHeaders = false
-		end 'blank' else 'field'
-			let parts = line.split(HeaderSeparator)
-
-			if (try parts.get(0) otherwise "").toLower() == ContentLengthHeaderName 'lengthField'
-				length = (try int.fromString((try parts.get(1) otherwise "").trim()) otherwise return Frame.ended) as ByteLimit
-			end 'lengthField'
-		end 'field'
-	end 'headers'
-
-	let wanted = length as ElementIndex
-	let collected = ByteArray.create(0)
-
-	while collected.count() < wanted 'fill'
-		let chunk = stdin.readBytes((wanted - collected.count()) as BytePos)
-
-		if chunk.count() == 0 'truncated'
-			return Frame.ended
-		end 'truncated'
-
-		collected.append(chunk)
-	end 'fill'
-
-	return Frame.body(String.from(collected))
+	return Frame.body(body)
 end 'readFrame'
 
 function send(message String)
-	print("Content-Length: {message.byteLength()}\r\n\r\n{message}")
+	print(contentLengthFrame(message))
 end 'send'
 
 function quoted(text String) returns String

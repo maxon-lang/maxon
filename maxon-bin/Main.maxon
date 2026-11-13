@@ -45,7 +45,7 @@ module let OutputFlagPrefix = "--output="
 
 // A spec run with nothing filtered takes a while, and a cold-cache compile spikes well past the
 // usual. Ten minutes gives head room without making a runaway run silent.
-module let CompilerChildTimeoutMs = 600000 as DurationMs
+module let CompilerChildTimeoutMs = 600000 as WaitDeadlineMs
 
 // `fmt` takes no options: `main` refuses a flag another command takes, and `runFmt` refuses any other
 // `-`-leading argument (`anyOption`). Silently dropping one is destructive — `maxon fmt --check`
@@ -1488,7 +1488,7 @@ typealias SignalNumber = int(0 to u32.max)
 // install script). `module` so every command that forwards to a child shares one spawn
 // configuration.
 //
-// `timeoutMs = 0`: a deadline would kill a long-running child the caller launched deliberately.
+// No deadline: it would kill a long-running child the caller launched deliberately.
 module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory WorkingDirectory, speaker String) returns ExitCode
 	let config = Configuration.create(executable)
 	config.arguments = arguments
@@ -1497,7 +1497,6 @@ module function spawnForwarding(executable Executable, arguments StringArray, en
 	config.workingDirectory = workingDirectory
 	config.standardOutput = OutputDestination.inherit
 	config.standardError = OutputDestination.inherit
-	config.timeoutMs = 0
 
 	returnIdleHeapToTheOperatingSystem()
 
@@ -2520,7 +2519,7 @@ export type MaxonArgs
 
 	export var bail as BailPolicy
 
-	export var testTimeoutMs as DurationMs
+	export var testTimeoutMs as WaitDeadlineMs
 
 	// Whether `--log=` was accepted: `quietTheBuildChatter` must not silence a caller who asked for
 	// the chatter. A bool, because `parseLogOption` already applied the spec.
@@ -2867,7 +2866,7 @@ export type MaxonArgs
 				end 'bailArg'
 			end 'bailCountFlag' else if arg.startsWith(TestTimeoutFlagPrefix) 'timeoutFlag'
 				match parsePositiveFlagValue(optionValueOf(arg)) 'timeoutArg'
-					valid(ms) then parsed.testTimeoutMs = ms as DurationMs
+					valid(ms) then parsed.testTimeoutMs = ms as WaitDeadlineMs
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'timeoutArg'
 			end 'timeoutFlag' else if arg.startsWith(TestColorFlagPrefix) 'colorFlag'

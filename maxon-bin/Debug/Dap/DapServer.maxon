@@ -71,14 +71,14 @@ union DapWake
 end 'DapWake'
 
 type DapFrameReader
-	var stdin as Stdin
+	var stdin as StdinReader
 
 	static function create() returns DapFrameReader
 		return Self{stdin: Console.stdin()}
 	end 'create'
 
 	export function next() returns isolated LspIncoming
-		return readLspMessage(self.stdin)
+		return self.stdin.readLspMessage()
 	end 'next'
 end 'DapFrameReader'
 
@@ -858,7 +858,7 @@ type DapAdapter
 		end 'someWereDropped'
 
 		var run = StringArray.create(0)
-		var runStream = ChildStream.stdout
+		var runStream = StdioStream.stdout
 
 		for line in output.lines 'eachLine'
 			if line.stream != runStream 'anotherStream'

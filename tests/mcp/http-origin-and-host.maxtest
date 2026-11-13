@@ -63,7 +63,7 @@ end 'a request target that is not a path cannot carry a loopback authority past 
 
 test 'an HTTP-only option without --http is refused by the CLI'
 	for option in ["{McpIdleTimeoutOptionPrefix}5", "{McpMaxSessionsOptionPrefix}2"] 'eachHttpOnlyOption'
-		let out = spawnCompiler(["mcp-server", option], what: "`mcp-server {option}`", timeoutMs: CliDeadlineMs)
+		let out = spawnCompiler(["mcp-server", option], what: "`mcp-server {option}`", deadline: WaitDeadline.within(CliDeadlineMs))
 
 		try Expect.equal(out.exitCode(), expected: RefusedExitCode, message: "`{option}` governs HTTP sessions and must be refused without `{McpHttpOption}` rather than ignored over stdio. It exited {out.exitCode()} saying {out.stdout} {out.stderr}")
 		try Expect.contains(out.stderr, needle: McpHttpOption, message: "the refusal must name `{McpHttpOption}`, the option `{option}` needs; it said {out.stderr}")
@@ -81,7 +81,7 @@ test 'the endpoint the server prints is on loopback'
 end 'the endpoint the server prints is on loopback'
 
 test 'a host spelling given to --http is refused by the CLI'
-	let out = spawnCompiler(["mcp-server", HostSpelledOption], what: "`mcp-server {HostSpelledOption}`", timeoutMs: CliDeadlineMs)
+	let out = spawnCompiler(["mcp-server", HostSpelledOption], what: "`mcp-server {HostSpelledOption}`", deadline: WaitDeadline.within(CliDeadlineMs))
 
 	try Expect.equal(out.exitCode(), expected: RefusedExitCode, message: "`{HostSpelledOption}` must be refused: the transport binds {LoopbackAddress} only and there is no host option. It exited {out.exitCode()} saying {out.stdout} {out.stderr}")
 	try Expect.contains("{out.stdout}{out.stderr}".toLower(), needle: LoopbackWord, message: "the refusal must say WHY there is no host to choose — that the transport is {LoopbackWord}-only — or the reader tries another spelling")

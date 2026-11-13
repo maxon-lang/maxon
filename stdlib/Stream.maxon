@@ -1,0 +1,179 @@
+public typealias ReadCapacity = int(1 to i64.max)
+
+public typealias LineCap = int(0 to u64.max) implements BytePos
+
+public let DefaultLineCap = 1048576 as LineCap
+
+public let StreamMessageCap = 64 * 1024 * 1024 as LineCap
+
+let StreamChunkBytes = 65536
+let LineFeed = "\n"
+let CarriageReturn = 13
+
+public typealias ChildOutputReader = StreamReader with ChildOutput
+public typealias FileStreamReader = StreamReader with FileSource
+public typealias TcpStreamReader = StreamReader with TcpClient
+public typealias TlsStreamReader = StreamReader with TlsStream
+public typealias StdinReader = StreamReader with StdinSource
+
+public union StreamError implements Error
+	timedOut
+	closed
+	failed(reason String)
+	secure(error TlsError)
+
+	public function displayReason() returns String
+		return match self 'e'
+			timedOut gives "the read timed out"
+			closed gives "the stream was closed"
+			failed(reason) gives "the read failed: {reason}"
+			secure(error) gives "the secure channel failed: {error.name}"
+		end 'e'
+	end 'displayReason'
+end 'StreamError'
+
+public union LineRead
+	line(text String)
+	ended
+	pastTheCap
+end 'LineRead'
+
+union UntilRead
+	text(length BytePos)
+	ended
+	pastTheCap
+end 'UntilRead'
+
+public interface ByteSource
+	/// Up to `most` bytes, parking until one arrives; empty only at the end of the stream.
+	function readSome(mutable self, most ReadCapacity) returns isolated ByteArray throws StreamError
+end 'ByteSource'
+
+public type StreamReader uses Source where Source is ByteSource
+	public var source as Source
+	var backlog as ByteBacklog
+	var atEnd as bool
+
+	/// A reader over `source` with nothing buffered.
+	public static function over(source Source) returns Self
+		return Self{source: source, backlog: ByteBacklog.create(), atEnd: false}
+	end 'over'
+
+	/// The bytes read from the source and not yet handed out.
+	public function unreadBytes() returns BytePos
+		return self.backlog.unread()
+	end 'unreadBytes'
+
+	/// The next line without its LF or a CR before it. `pastTheCap` when no LF arrives within `cap`
+	/// bytes, which stay buffered.
+	public function readLine(cap LineCap = DefaultLineCap) returns LineRead throws StreamError
+		let read = try self.seekDelimiter(LineFeed, cap: cap)
+
+		match read 'read'
+			text(length) then return LineRead.line(self.lineOf(length))
+			ended then return try self.finalLine()
+			pastTheCap then return LineRead.pastTheCap
+		end 'read'
+	end 'readLine'
+
+	/// The text up to `delimiter`, which is consumed and not returned; `pastTheCap` as `readLine`.
+	public function readUntil(delimiter String, cap LineCap) returns LineRead throws StreamError
+		let read = try self.seekDelimiter(delimiter, cap: cap)
+
+		match read 'read'
+			text(length) then return LineRead.line(String.from(self.backlog.take(length, skipping: delimiter.byteLength())))
+			ended then return LineRead.ended
+			pastTheCap then return LineRead.pastTheCap
+		end 'read'
+	end 'readUntil'
+
+	/// Exactly `count` bytes, fewer only at the end of the stream.
+	public function readBytes(count BytePos) returns isolated ByteArray throws StreamError
+		while self.unreadBytes() < count and not self.atEnd 'filling'
+			try self.fill()
+		end 'filling'
+
+		return self.backlog.takeAtMost(count)
+	end 'readBytes'
+
+	/// Every byte left in the stream, the buffered ones first.
+	public function readToEnd() returns isolated ByteArray throws StreamError
+		while not self.atEnd 'draining'
+			try self.fill()
+		end 'draining'
+
+		return self.backlog.take(self.unreadBytes(), skipping: 0)
+	end 'readToEnd'
+
+	function seekDelimiter(delimiter String, cap LineCap) returns UntilRead throws StreamError
+		let width = delimiter.byteLength()
+		let overlap = width - 1
+		var scanned = 0 as BytePos
+
+		while true 'seeking'
+			match self.backlog.find(delimiter, from: scanned) 'found'
+				at(length) then return streamTextBefore(length, cap: cap)
+				absent then scanned = self.unreadBytes() - overlap if self.unreadBytes() > overlap else 0
+			end 'found'
+
+			if scanned > cap 'pastTheCap'
+				return UntilRead.pastTheCap
+			end 'pastTheCap'
+
+			try self.fill()
+
+			if self.atEnd 'ended'
+				return UntilRead.ended
+			end 'ended'
+		end 'seeking'
+
+		panic("StreamReader.seekDelimiter: the search loop returns when it finds the delimiter, passes the cap or meets the end")
+	end 'seekDelimiter'
+
+	function lineOf(length BytePos) returns String
+		var textLength = length
+		var skipping = LineFeed.byteLength()
+
+		if length > 0 'mayEndInCarriageReturn'
+			if self.backlog.byteAt(length - 1) == CarriageReturn 'carriageReturn'
+				textLength = length - 1
+				skipping = skipping + 1
+			end 'carriageReturn'
+		end 'mayEndInCarriageReturn'
+
+		return String.from(self.backlog.take(textLength, skipping: skipping))
+	end 'lineOf'
+
+	function finalLine() returns LineRead throws StreamError
+		if self.unreadBytes() == 0 'nothingLeft'
+			return LineRead.ended
+		end 'nothingLeft'
+
+		return LineRead.line(String.from(try self.readToEnd()))
+	end 'finalLine'
+
+	function fill() throws StreamError
+		if self.atEnd 'finished'
+			return
+		end 'finished'
+
+		let chunk = try self.source.readSome(StreamChunkBytes)
+		let arrived = merge chunk
+
+		if arrived.isEmpty() 'sourceEnded'
+			self.atEnd = true
+
+			return
+		end 'sourceEnded'
+
+		self.backlog.append(arrived)
+	end 'fill'
+end 'StreamReader'
+
+function streamTextBefore(length BytePos, cap LineCap) returns UntilRead
+	if length > cap 'pastTheCap'
+		return UntilRead.pastTheCap
+	end 'pastTheCap'
+
+	return UntilRead.text(length)
+end 'streamTextBefore'

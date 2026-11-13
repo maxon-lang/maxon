@@ -2668,7 +2668,7 @@ export function emitGtZeroOverlapped(module StdModule, block IrBlock, overlapped
 	end 'eachWord'
 end 'emitGtZeroOverlapped'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool, descendantArming DescendantArming, requestStagingBytes ByteOffset)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, stdioStream EnumLayout, releasesRegistry bool, releasesGlobals bool, descendantArming DescendantArming, requestStagingBytes ByteOffset)
 	requireGtRecordLayout()
 
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
@@ -2787,7 +2787,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// reaches, and an install gate here would be a second reachability analysis.
 	buildSubpYieldRead(module, target: target)
 	buildGtIoRead(module, commandShape: subprocessCommandShape(target))
-	installSubpRuntime(module, target: target, streamState: streamState)
+	installSubpRuntime(module, target: target, streamState: streamState, stdioStream: stdioStream)
 
 	// ⭐ **THE COWN RUNTIME RIDES `usesGt` EXACTLY AS THE SCHEDULER DOES, AND FOR THE SAME REASON:
 	// there is no program that wants one without the other.** `__cown_spawn` calls `__gt_spawn_green`
@@ -8886,7 +8886,7 @@ end 'buildGtIoRead'
 let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
 
-let SubpSlotBytes = 224
+let SubpSlotBytes = 240
 
 // A live handle is `generation * SubpHandleSlotSpan + slotIndex`: the index in the low bits, the slot's
 // `SubpSlotGeneration` above it. The generation is bumped before the handle is minted, so every live handle
@@ -8897,7 +8897,7 @@ let SubpHandleSlotSpan = SubpMaxHandles
 let SubpHandleSlotIndexMask = SubpHandleSlotSpan - 1
 
 // Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
-// the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
+// the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/writeBuf)
 // survive release for reuse; the OS handles are cleared at release.
 let SubpSlotInUse = 0
 
@@ -8911,13 +8911,12 @@ let SubpSlotLive = 2
 export let SubpSlotHProcess = 8
 export let SubpSlotStdinWrite = 16
 
-// ⛔⛔ **EVERY READ OF THE WORD THIS POINTS AT IS AN `emitLoadDword`, NEVER AN `emitLoadField`.** It is one
-// 8-byte scratch shared by `WriteFile`, `ReadFile`, `PeekNamedPipe` and `GetExitCodeProcess`, it is never
-// zeroed between users, and each of those Win32 out-params writes only its LOW DWORD — so the upper half
-// is whatever the previous user left. A full-word load answers a byte count or an exit status with
-// garbage above bit 31, which no caller can detect and a narrowed `ExitInt` turns into an uncatchable
-// range panic. The readers live in this file and in `SubprocessRuntime.maxon`; all of them obey this.
-export let SubpSlotBytesOut = 24
+// Every OS count and exit status lands here, and each Win32 out-param writes only its low DWORD over
+// what the last user left: every read is an `emitLoadDword`, never an `emitLoadField`.
+export function emitSubpCountWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitFieldAddr(module, block: block, record: emitLoadCurrentGt(module, block: block, ids: ids), offset: GtOffIoResult, ids: ids)
+end 'emitSubpCountWord'
+
 export let SubpStdoutBase = 32
 export let SubpStderrBase = 72
 let SubpSlotWriteBuf = 112
@@ -8937,7 +8936,7 @@ let SubpSlotGeneration = 128
 // all three by hand. `subprocessGetPid`, `StdinKind.bytes` and `OutputDestination.collect(limit)` are three
 // promises of the fourteen-argument contract, and each is a fact about the HANDLE rather than about a call.
 //
-// `SubpSlotStdinPend` is a POINTER into the caller's payload and `SubpSlotStdinRemaining` the count
+// `SubpSlotStdinPend` is a POINTER into the queued payload and `SubpSlotStdinRemaining` the count
 // of its bytes still to push; the drain loop advances the one and shrinks the other until the count
 // is 0, so a NUL in the payload is pushed like any other byte. A pointer of 0 means "nothing
 // queued", which is what every non-`bytes` stdin kind leaves it. The two limits are capture
@@ -8985,6 +8984,8 @@ export let SubpSlotTraced = 208 as ByteOffset
 // `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
 // again.
 let SubpSlotCollector = 216
+export let SubpSlotStdinRegistered = 224 as ByteOffset
+export let SubpSlotStdinBase = 232 as ByteOffset
 let SubpCollectorFree = 0
 export let SubpCollectorHeld = 1 as FullRangeInt
 let SubpCollectorReleased = 2
@@ -9002,10 +9003,9 @@ let SubpStreamBufLen = 24
 // ⚠ The ordinals are the CORPUS declaration's, threaded in as an `EnumLayout` rather than transcribed; the
 // readers stop on "not `open`" rather than on "nonzero" so that this file states no ordinal at all.
 let SubpStreamStateWord = 32
-export let SubpReadChunkBytes = 4096
+let SubpReadChunkBytes = 4096
 let SubpInitialLineBufBytes = 4096
 export let SubpMaxLineBytes = 1048576  // 1 MiB per-line cap — a newline-less child cannot grow the buffer without bound
-let SubpBytesOutBytes = 8
 
 // The out-param block one pipe creation fills, reused across the 3 pipes: the read end, the write end,
 // and — for the inbound form alone — the host's answer to whether an inline read stays off the completion port.
@@ -9062,14 +9062,8 @@ export let SubpSpawnName = b"__gt_subp_spawn"
 export let SubpSpawnCoreName = b"__gt_subp_spawn_core"
 export let SubpReadLineName = b"__gt_subp_read_line"
 export let SubpReadErrLineName = b"__gt_subp_read_err_line"
-export let SubpReadExactName = b"__gt_subp_read_exact"
+export let SubpReadAvailableName = b"__gt_subp_read_available"
 
-// ⭐ **THE NON-BLOCKING TWINS OF THE TWO LINE READERS.** Same body-builder, same per-handle buffer, same
-// consume — the ONE difference is that a refill is preceded by a peek and a pipe with nothing ready ends
-// the call rather than parking on it. A parent that must stay responsive while its child runs has no other
-// way to drain a line: the blocking reader parks until one arrives, and a child that is quiet has not ended.
-export let SubpTryReadLineName = b"__gt_subp_try_read_line"
-export let SubpTryReadErrLineName = b"__gt_subp_try_read_err_line"
 export let SubpWriteLineName = b"__gt_subp_write_line"
 export let SubpCloseStdinName = b"__gt_subp_close_stdin"
 export let SubpWaitName = b"__gt_subp_wait"
@@ -9287,15 +9281,10 @@ function emitSubpHandleGeneration(module StdModule, block IrBlock, ids ValueMint
 	return emitBin(module, block: block, a: handle, b: emitSubpHandleGenerationShift(module, block: block, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 end 'emitSubpHandleGeneration'
 
-union SlotCapacity
-	recorded(field ByteOffset)
-	fixed
-end 'SlotCapacity'
-
 // If `record[fieldOffset]` is 0 (a per-slot buffer never allocated on a FRESH slot), allocate `size` bytes and
-// store the pointer (and `size` into a `SlotCapacity.recorded` field); else reuse the buffer persisted from a
+// store the pointer (and `size` into `capacityField`); else reuse the buffer persisted from a
 // prior use. Returns the continuation block. This is the per-HANDLE reuse that bounds a spawn/read/release loop's memory.
-function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt, capacity SlotCapacity) returns IrBlock
+function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt, capacityField ByteOffset) returns IrBlock
 	let doAlloc = module.addBlock(func, label: b"subpalloc", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"subpallocd", heat: BlockHeat.normal)
 	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
@@ -9305,10 +9294,7 @@ function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter
 	let buf = emitSlabAlloc(module, block: doAlloc, bytes: sizeConst, kind: SlabBufferKind.subprocessSlotBuffer, ids: ids)
 	emitStoreField(module, block: doAlloc, record: record, offset: fieldOffset, value: buf)
 
-	match capacity 'capacity'
-		recorded(field) then emitStoreField(module, block: doAlloc, record: record, offset: field, value: sizeConst)
-		fixed then break
-	end 'capacity'
+	emitStoreField(module, block: doAlloc, record: record, offset: capacityField, value: sizeConst)
 
 	module.setTerminator(doAlloc, op: StdOp.branch(cont.id))
 	return cont
@@ -10175,20 +10161,19 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let stderrStream = emitBin(module, block: spawnOk, a: slot, b: stderrBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamBufLen, value: zeroB)
 	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamStateWord, value: openState)
-	let afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capacity: SlotCapacity.recorded(SubpStreamBufCap))
-	let afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capacity: SlotCapacity.recorded(SubpStreamBufCap))
-	let afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as FullRangeInt, capacity: SlotCapacity.recorded(SubpSlotWriteCap))
-	let afterBytesOut = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as FullRangeInt, capacity: SlotCapacity.fixed)
+	let afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capacityField: SubpStreamBufCap)
+	let afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capacityField: SubpStreamBufCap)
+	let afterBuffers = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as FullRangeInt, capacityField: SubpSlotWriteCap)
 
 	// ⭐ This is the point the slot becomes a live HANDLE: `SubpSlotLive` is published after every
 	// set-up store above, so a guard that finds it sees them all. The handle packs the generation
 	// taken at the claim, so a reader still parked on the PREVIOUS occupant sees a mismatch on resume
 	// and writes nothing back (see `SubpSlotGeneration`). A failed spawn releases the claim at
 	// `spawnfail`.
-	let slotC = emitSubpSlotAddr(module, block: afterBytesOut, ids: ids, table: table, slotIdx: slotIdx)
-	let claimedGenerationC = emitLoadField(module, block: afterBytesOut, record: slotC, offset: SubpSlotGeneration, ids: ids)
-	emitSubpPublishSlotState(module, block: afterBytesOut, slot: slotC, value: SubpSlotLive, ids: ids)
-	let handle = emitSubpPackHandle(module, block: afterBytesOut, ids: ids, slotIdx: slotIdx, generation: claimedGenerationC)
+	let slotC = emitSubpSlotAddr(module, block: afterBuffers, ids: ids, table: table, slotIdx: slotIdx)
+	let claimedGenerationC = emitLoadField(module, block: afterBuffers, record: slotC, offset: SubpSlotGeneration, ids: ids)
+	emitSubpPublishSlotState(module, block: afterBuffers, slot: slotC, value: SubpSlotLive, ids: ids)
+	let handle = emitSubpPackHandle(module, block: afterBuffers, ids: ids, slotIdx: slotIdx, generation: claimedGenerationC)
 
 	// A DETACHED spawn answers the child's PID and hands the slot straight back. The slot is claimed first and
 	// released here rather than skipped, because releasing is what CLOSES the process handle, the three pipe
@@ -10196,8 +10181,8 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// objects per spawn, and the release path already knows every handle a slot owns. It is a guarded entry, so
 	// it is given the
 	// PACKED handle: a bare index decodes to generation 0, which the guard refuses, and the slot would stay live.
-	let detachAsked = emitLoadField(module, block: afterBytesOut, record: req, offset: SubpReqDetach, ids: ids)
-	emitBranchOnCompare(module, block: afterBytesOut, value: detachAsked, pred: StdCmpPred.eq, against: 0, whenTrue: attached, whenFalse: detached, ids: ids)
+	let detachAsked = emitLoadField(module, block: afterBuffers, record: req, offset: SubpReqDetach, ids: ids)
+	emitBranchOnCompare(module, block: afterBuffers, value: detachAsked, pred: StdCmpPred.eq, against: 0, whenTrue: attached, whenFalse: detached, ids: ids)
 
 	module.setTerminator(attached, op: StdOp.ret(handle))
 
@@ -10346,6 +10331,8 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	// end?" and "is there a payload?" plain word tests rather than kind tests repeated one pass later.
 	emitStoreField(module, block: cur, record: slot, offset: SubpSlotStdinWrite, value: zero)
 	emitSubpStoreStdinQueue(module, block: cur, slot: slot, cursor: zero, remaining: zero)
+	emitStoreField(module, block: cur, record: slot, offset: SubpSlotStdinRegistered, value: zero)
+	emitStoreField(module, block: cur, record: slot, offset: SubpSlotStdinBase, value: zero)
 	emitSubpStoreStdinState(module, block: cur, slot: slot, value: SubpStdinIdle, ids: ids)
 	let wantsPipe = emitSubpStdinKindWantsPipe(module, block: cur, kind: kind, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: wantsPipe, pred: StdCmpPred.eq, against: 0, whenTrue: nonPipe, whenFalse: queueTest, ids: ids)
@@ -10673,8 +10660,10 @@ end 'emitSubpCloseStdinThenIdle'
 // push; `emitSubpPushStdin` writes without testing for a pipe because of it.
 export function emitSubpCloseStdinWrite(module StdModule, block IrBlock, ids ValueMinter, slot ValueId)
 	emitSubpClosePipeEnd(module, block: block, ids: ids, record: slot, offset: SubpSlotStdinWrite as ByteOffset)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SubpQueueDropName, args: argsOf(slot)))
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	emitSubpStoreStdinQueue(module, block: block, slot: slot, cursor: zero, remaining: zero)
+	emitStoreField(module, block: block, record: slot, offset: SubpSlotStdinRegistered, value: zero)
 end 'emitSubpCloseStdinWrite'
 
 // The end is zeroed as it is closed: the slot outlives this child, and a number left in it would be
@@ -10696,7 +10685,7 @@ end 'emitSubpCloseStreamReadEnd'
 // ⭐ **CONSUME `takeLen` BYTES OFF THE FRONT OF THE PER-HANDLE STREAM BUFFER.** Answers them as a fresh OWNED
 // String (a COPY the caller drops) and compacts what is left forward, which is the whole of what a buffered
 // reader does once it has decided WHERE its answer ends. WHERE is the caller's question and the two readers
-// answer it differently — `buildSubpReadLine` ends at a `\n`, `buildSubpReadExact` at a count — but the consume
+// answer it differently — `buildSubpReadLine` ends at a `\n`, `buildSubpReadAvailable` at a count — but the consume
 // is one fact, and the publish of the new length is the step that must not exist twice.
 //
 // `takeLen == bufLen` leaves the buffer empty through the same arithmetic, so an EOF remainder needs no
@@ -10796,52 +10785,6 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	return resumed
 end 'emitSubpTopUpStream'
 
-// ⭐⭐ **MAY A LINE READER PARK ON THE PIPE?** The one fact that separates `__gt_subp_read_line` from
-// `__gt_subp_try_read_line`, and it is a parameter rather than a second body-builder because everything else
-// about them is identical: the newline scan, the per-handle buffer, the growth policy, the consume, the EOF
-// remainder and the stale-slot guard. A second copy would be a second chance to get the generation guard
-// wrong, which is the one window in this substrate where a slot changes owner.
-enum LineReadWait
-	// Refill and PARK until a line arrives or the stream ends.
-	untilALineArrives
-
-	// Refill only from bytes the pipe already holds, and answer "" rather than wait.
-	onlyWhatIsBuffered
-end 'LineReadWait'
-
-// ⭐ **ASK THE PIPE BEFORE COMMITTING TO A REFILL** — the whole of what `onlyWhatIsBuffered` adds.
-// `emitSubpTopUpStream` parks the calling green thread on the read, so a reader that must never wait has to
-// establish first that bytes are already there; a peek that answers N then makes the overlapped read complete
-// SYNCHRONOUSLY, which is the same structure the collect loop drains two pipes with.
-//
-// ⚠ **A FAILED PEEK CONTINUES TO THE REFILL.** A broken pipe is what a peek fails with once the child has
-// closed its write end, and the stream's state word is `emitSubpTopUpStream`'s to write from a read that
-// really happened — so the refill's read is what finds the end and latches it. Answering "" instead would
-// leave the stream `open` for good.
-//
-// Answers the block `readMore` must branch to; `refill` is where a pipe with bytes ready continues.
-function emitSubpPeekBeforeRefill(module StdModule, func IrFunction, ids ValueMinter, readEnd ValueId, bytesOutPtr ValueId, refill IrBlock) returns IrBlock
-	let gate = module.addBlock(func, label: b"trypeek", heat: BlockHeat.normal)
-	let ready = module.addBlock(func, label: b"trypeeked", heat: BlockHeat.normal)
-	let nothing = module.addBlock(func, label: b"trynone", heat: BlockHeat.normal)
-
-	let peekOk = ids.mint()
-	module.appendOp(gate, op: StdOp.osPipePeek(peekOk, handleId: readEnd, availPtrId: bytesOutPtr))
-	emitBranchOnCompare(module, block: gate, value: peekOk, pred: StdCmpPred.eq, against: 0, whenTrue: refill, whenFalse: ready, ids: ids)
-
-	let avail = emitLoadDword(module, block: ready, record: bytesOutPtr, offset: 0, ids: ids)
-	emitBranchOnCompare(module, block: ready, value: avail, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: refill, ids: ids)
-
-	// An empty OWNED String rather than 0, for `buildSubpReadLine`'s stated reason: the result is dropped
-	// through `__str_decref`, which dereferences the record header.
-	let emptyLen = emitConst(module, block: nothing, value: 0, ids: ids)
-	let emptyLine = ids.mint()
-	module.appendOp(nothing, op: StdOp.call(emptyLine, callee: SubpStrFromBytesName, args: twoArgs(emptyLen, second: emptyLen)))
-	module.setTerminator(nothing, op: StdOp.ret(emptyLine))
-
-	return gate
-end 'emitSubpPeekBeforeRefill'
-
 // ⭐ `<name>(handle) -> ownedString` — read one line (INCLUDING the trailing '\n') from the stream at `streamBase`
 // (SubpStdoutBase or SubpStderrBase, baked in per instance so stdout and stderr share this ONE body-builder),
 // yielding while a chunk read is in flight. Scans the handle's growable line buffer for '\n'; returns everything
@@ -10850,7 +10793,7 @@ end 'emitSubpPeekBeforeRefill'
 // leaves the stream's state word past `open`, and the remaining bytes (or "") are returned. The result is a
 // fresh OWNED String the caller drops (the parser marks it a pending owned temp). `i` (the scan resume index)
 // is `scanHdr`'s loop arg; everything else flows by dominance.
-function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffset, streamState EnumLayout, wait LineReadWait)
+function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffset, streamState EnumLayout)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(2)
 
@@ -10866,11 +10809,8 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let staleExit = module.addBlock(func, label: b"staleexit", heat: BlockHeat.normal)
 	let badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
-	// ⭐ **THE PER-LINE CAP IS THE CALLER'S, NOT A CONSTANT.** `__Builtins.subprocessReadStdoutLine(h, maxBytes)`
-	// promises that *"lines longer than maxBytes are truncated and the remainder is delivered on the next
-	// call"*, and this reader's ceiling IS that promise — one truncation rather than a second,
-	// differently-spelled one at the boundary. The bare-name `subpReadLine(h)` builtin passes
-	// `SubpMaxLineBytes`.
+	// ⭐ **THE PER-LINE CAP IS THE CALLER'S, NOT A CONSTANT.** The bare-name `subpReadLine(h)` builtin
+	// passes `SubpMaxLineBytes`.
 	emitParams(module, block: entry, count: 2)
 	let handle = 0
 	let maxLineBytes = 1
@@ -10878,7 +10818,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
 	// A handle naming no live child reads as EOF — the SAME answer this reader gives a child that has closed
-	// its stdout, and the one `stripTrailingCR` and `String.init` already handle. ⚠ It answers an empty OWNED
+	// its stdout, and the one `String.init` already handles. ⚠ It answers an empty OWNED
 	// String rather than 0 for the reason `buildSubpResolvePath` states about its own miss: the result is
 	// dropped through `__str_decref`, which dereferences the record header, so a null would move the fault
 	// rather than remove it.
@@ -10892,7 +10832,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let streamBaseConst = emitConst(module, block: live, value: streamBase as FullRangeInt, ids: ids)
 	let streamPtr = emitBin(module, block: live, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let readEnd = emitLoadField(module, block: live, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
-	let bytesOutPtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
+	let bytesOutPtr = emitSubpCountWord(module, block: live, ids: ids)
 	let zeroStart = emitConst(module, block: live, value: 0, ids: ids)
 	emitBranchCarrying(module, from: live, to: scanHdr, values: argsOf(zeroStart))
 
@@ -10933,17 +10873,10 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let bufLenM = emitLoadField(module, block: readMore, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let overCap = emitCmp(module, block: readMore, a: bufLenM, b: maxLineBytes, pred: StdCmpPred.ge, ids: ids)
 
-	// The BLOCK ID rather than the block: binding a block here would MOVE `growCheck`, which the top-up
-	// below still needs.
-	let refillEntry = match wait 'wait'
-		untilALineArrives gives growCheck.id
-		onlyWhatIsBuffered gives emitSubpPeekBeforeRefill(module, func: func, ids: ids, readEnd: readEnd, bytesOutPtr: bytesOutPtr, refill: growCheck).id
-	end 'wait'
-
-	module.setTerminator(readMore, op: StdOp.condBranch(overCap, thenBlockId: emitRemainder.id, elseBlockId: refillEntry))
+	module.setTerminator(readMore, op: StdOp.condBranch(overCap, thenBlockId: emitRemainder.id, elseBlockId: growCheck.id))
 
 	// The top-up — grow, park on the read, and either latch why the stream stopped or publish the new
-	// length — is `emitSubpTopUpStream`'s, shared with `buildSubpReadExact`.
+	// length — is `emitSubpTopUpStream`'s, shared with `buildSubpReadAvailable`.
 	let toppedUp = emitSubpTopUpStream(module, func: func, ids: ids, cur: growCheck, streamPtr: streamPtr, readEnd: readEnd, bytesOutPtr: bytesOutPtr, streamBase: streamBase, streamState: streamState, whenStale: staleExit)
 
 	// staleExit: our handle was released and its slot re-spawned into a different one while we slept. Return an
@@ -10960,99 +10893,69 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	module.functions.push(func)
 end 'buildSubpReadLine'
 
-// ⭐⭐ `__gt_subp_read_exact(handle, want) -> ownedString` — EXACTLY `want` bytes off the child's stdout,
-// blocking until it has them. It answers FEWER only at EOF, and then only what remained; a second call after
-// that answers "" off the SAME latched flag the line reader uses, and `want == 0` answers "" without touching
-// the pipe. The result is a fresh OWNED String the caller drops (the parser marks it a pending owned temp).
-//
-// ⭐⭐ **WHY A COUNT IS A DIFFERENT QUESTION FROM A LINE.** A framed protocol puts its body length in a
-// header — `Content-Length: N\r\n\r\n<body>`, the LSP framing — and the body carries NO trailing newline. A
-// line reader asked for it blocks for ever on a terminator the sender will never write.
-//
-// ⭐⭐ **IT READS THE SAME PER-HANDLE BUFFER `buildSubpReadLine` DOES, AND THAT IS LOAD-BEARING.** Such a
-// client alternates the two — headers by line, body by count — and the line reader pulls a whole 4 KiB chunk
-// off the pipe to find its newline. A reader with a buffer of its own would be blind to every byte already
-// pulled: it would block on a pipe holding nothing more, and those bytes would be silently lost. That is a
-// WRONG ANSWER, not a limitation. The sharing is structural rather than remembered — both readers address the
-// stream as `slot + streamBase` and neither owns the top-up (`emitSubpTopUpStream`) or the consume
-// (`emitSubpTakeFromStream`).
-//
-// ⚠ **STDOUT ONLY.** The line readers are a stdout/stderr pair because both streams carry lines; nothing in
-// the language asks stderr for a byte COUNT, and an uninstalled twin is a second body to keep right with no
-// caller to say when it stopped being right.
-function buildSubpReadExact(module StdModule, streamState EnumLayout)
-	let func = IrFunction.createFromStd(SubpReadExactName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	let ids = ValueMinter.create(2)
+function emitSubpTakeAvailable(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, most ValueId, streamBase ByteOffset, streamState EnumLayout, whenStale IrBlock)
+	let checkState = module.addBlock(func, label: b"availstate", heat: BlockHeat.normal)
+	let refill = module.addBlock(func, label: b"availrefill", heat: BlockHeat.normal)
+	let clamp = module.addBlock(func, label: b"availclamp", heat: BlockHeat.normal)
+	let takeMost = module.addBlock(func, label: b"availmost", heat: BlockHeat.normal)
+	let takeAll = module.addBlock(func, label: b"availall", heat: BlockHeat.normal)
+
+	let streamBaseConst = emitConst(module, block: cur, value: streamBase as FullRangeInt, ids: ids)
+	let streamPtr = emitBin(module, block: cur, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
+	let bufLenBuffered = emitLoadField(module, block: cur, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: bufLenBuffered, pred: StdCmpPred.gt, against: 0, whenTrue: clamp, whenFalse: checkState, ids: ids)
+
+	let state = emitLoadField(module, block: checkState, record: streamPtr, offset: SubpStreamStateWord, ids: ids)
+	emitBranchOnCompare(module, block: checkState, value: state, pred: StdCmpPred.ne, against: streamState.tagOfCase(SubprocessStreamOpenCaseName), whenTrue: clamp, whenFalse: refill, ids: ids)
+
+	let readEnd = emitLoadField(module, block: refill, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
+	let bytesOutPtr = emitSubpCountWord(module, block: refill, ids: ids)
+	let toppedUp = emitSubpTopUpStream(module, func: func, ids: ids, cur: refill, streamPtr: streamPtr, readEnd: readEnd, bytesOutPtr: bytesOutPtr, streamBase: streamBase, streamState: streamState, whenStale: whenStale)
+	module.setTerminator(toppedUp, op: StdOp.branch(clamp.id))
+
+	let bufLen = emitLoadField(module, block: clamp, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	emitBranchOnCompareValues(module, block: clamp, a: bufLen, pred: StdCmpPred.gt, b: most, whenTrue: takeMost, whenFalse: takeAll, ids: ids)
+
+	let resultMost = emitSubpTakeFromStream(module, block: takeMost, ids: ids, streamPtr: streamPtr, takeLen: most)
+	module.setTerminator(takeMost, op: StdOp.ret(resultMost))
+
+	let resultAll = emitSubpTakeFromStream(module, block: takeAll, ids: ids, streamPtr: streamPtr, takeLen: bufLen)
+	module.setTerminator(takeAll, op: StdOp.ret(resultAll))
+end 'emitSubpTakeAvailable'
+
+function buildSubpReadAvailable(module StdModule, streamState EnumLayout, stdioStream EnumLayout)
+	let func = IrFunction.createFromStd(SubpReadAvailableName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let handleCheck = module.addBlock(func, label: b"exacthandle", heat: BlockHeat.normal)
-	let wantCheck = module.addBlock(func, label: b"exacthdr", heat: BlockHeat.normal)
-	let takeWant = module.addBlock(func, label: b"exactwant", heat: BlockHeat.normal)
-	let eofCheck = module.addBlock(func, label: b"exacteof", heat: BlockHeat.normal)
-	let takeRest = module.addBlock(func, label: b"exactrest", heat: BlockHeat.normal)
-	let needMore = module.addBlock(func, label: b"exactmore", heat: BlockHeat.normal)
-	let staleExit = module.addBlock(func, label: b"exactstale", heat: BlockHeat.normal)
-	let refused = module.addBlock(func, label: b"exactrefused", heat: BlockHeat.normal)
+	let handleCheck = module.addBlock(func, label: b"availhandle", heat: BlockHeat.normal)
+	let onStdout = module.addBlock(func, label: b"availstdout", heat: BlockHeat.normal)
+	let notStdout = module.addBlock(func, label: b"availnotstdout", heat: BlockHeat.normal)
+	let onStderr = module.addBlock(func, label: b"availstderr", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"availrefused", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: 3)
 	let handle = 0
-	let want = 1
+	let stream = 1
+	let most = 2
 
-	// The ONE refusal, shared by both guards below: an empty OWNED String, no slot state touched. A handle
-	// naming no live child reads as EOF, which is what `buildSubpReadLine` answers it, and an OWNED String
-	// rather than 0 for the reason stated there — the result is dropped through `__str_decref`, which
-	// dereferences the record header, so a null would move the fault rather than remove it.
 	let emptyLen = emitConst(module, block: refused, value: 0, ids: ids)
 	let emptyResult = ids.mint()
 	module.appendOp(refused, op: StdOp.call(emptyResult, callee: SubpStrFromBytesName, args: twoArgs(emptyLen, second: emptyLen)))
 	module.setTerminator(refused, op: StdOp.ret(emptyResult))
 
-	// ⚠ **A NEGATIVE COUNT MUST BE REFUSED BEFORE THE BUFFERED TEST, NOT INSIDE IT.** `bufLen >= want` is
-	// VACUOUSLY TRUE for a negative want, so the request would fall straight into the take with a negative
-	// length: a String record claiming a negative length, and — because the take publishes `bufLen - takeLen`
-	// — a stream buffer whose length has been driven UP past what it holds, corrupting the NEXT reader too.
-	// Unguarded, `readStdoutBytes(-1)` panics in `String.byteLength`.
-	emitBranchOnCompare(module, block: entry, value: want, pred: StdCmpPred.lt, against: 0, whenTrue: refused, whenFalse: handleCheck, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: most, pred: StdCmpPred.le, against: 0, whenTrue: refused, whenFalse: handleCheck, ids: ids)
 
 	let live = emitSubpRequireHandle(module, func: func, ids: ids, cur: handleCheck, handle: handle, whenBad: refused)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
-	let streamBaseConst = emitConst(module, block: live, value: SubpStdoutBase as FullRangeInt, ids: ids)
-	let streamPtr = emitBin(module, block: live, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
-	let readEnd = emitLoadField(module, block: live, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
-	let bytesOutPtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
-	module.setTerminator(live, op: StdOp.branch(wantCheck.id))
+	emitBranchOnCompare(module, block: live, value: stream, pred: StdCmpPred.eq, against: stdioStream.tagOfCase(StdioStreamStdoutCaseName), whenTrue: onStdout, whenFalse: notStdout, ids: ids)
+	emitBranchOnCompare(module, block: notStdout, value: stream, pred: StdCmpPred.eq, against: stdioStream.tagOfCase(StdioStreamStderrCaseName), whenTrue: onStderr, whenFalse: refused, ids: ids)
 
-	// wantCheck: enough buffered → hand back exactly `want`. `want == 0` satisfies this on the first pass,
-	// which is what makes a zero-byte request cost no system call.
-	let bufLenW = emitLoadField(module, block: wantCheck, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
-	emitBranchOnCompareValues(module, block: wantCheck, a: bufLenW, pred: StdCmpPred.ge, b: want, whenTrue: takeWant, whenFalse: eofCheck, ids: ids)
-
-	let resultWant = emitSubpTakeFromStream(module, block: takeWant, ids: ids, streamPtr: streamPtr, takeLen: want)
-	module.setTerminator(takeWant, op: StdOp.ret(resultWant))
-
-	// eofCheck: short of `want`. The stream has STOPPED → hand back what remains (possibly ""); else top up
-	// and re-test. The loop terminates because a top-up either appends at least one byte or leaves the state
-	// word past `open`.
-	let stateE = emitLoadField(module, block: eofCheck, record: streamPtr, offset: SubpStreamStateWord, ids: ids)
-	emitBranchOnCompare(module, block: eofCheck, value: stateE, pred: StdCmpPred.ne, against: streamState.tagOfCase(SubprocessStreamOpenCaseName), whenTrue: takeRest, whenFalse: needMore, ids: ids)
-
-	let bufLenR = emitLoadField(module, block: takeRest, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
-	let resultRest = emitSubpTakeFromStream(module, block: takeRest, ids: ids, streamPtr: streamPtr, takeLen: bufLenR)
-	module.setTerminator(takeRest, op: StdOp.ret(resultRest))
-
-	let toppedUp = emitSubpTopUpStream(module, func: func, ids: ids, cur: needMore, streamPtr: streamPtr, readEnd: readEnd, bytesOutPtr: bytesOutPtr, streamBase: SubpStdoutBase, streamState: streamState, whenStale: staleExit)
-	module.setTerminator(toppedUp, op: StdOp.branch(wantCheck.id))
-
-	// staleExit: our handle was released and its slot re-spawned into a different one while we slept. Answer
-	// EMPTY (correct for us — our handle is gone) and touch NO slot state, so the new occupant is untouched.
-	// `streamPtr` is only a source address for a ZERO-length copy here, so it reads nothing.
-	let staleLen = emitConst(module, block: staleExit, value: 0, ids: ids)
-	let staleResult = ids.mint()
-	module.appendOp(staleExit, op: StdOp.call(staleResult, callee: SubpStrFromBytesName, args: twoArgs(streamPtr, second: staleLen)))
-	module.setTerminator(staleExit, op: StdOp.ret(staleResult))
+	emitSubpTakeAvailable(module, func: func, ids: ids, cur: onStdout, slot: slot, most: most, streamBase: SubpStdoutBase, streamState: streamState, whenStale: refused)
+	emitSubpTakeAvailable(module, func: func, ids: ids, cur: onStderr, slot: slot, most: most, streamBase: SubpStderrBase, streamState: streamState, whenStale: refused)
 
 	module.functions.push(func)
-end 'buildSubpReadExact'
+end 'buildSubpReadAvailable'
 
 // ⭐ `<name>(handle) -> __SubprocessStreamState ordinal` — WHAT A READER OF THIS STREAM WOULD ANSWER NEXT,
 // which is the one fact a reader's BYTES cannot carry: `""` is a clean end of stream and every refusal
@@ -11086,9 +10989,68 @@ function buildSubpStreamStateQuery(module StdModule, name ByteArray, streamBase 
 	module.functions.push(func)
 end 'buildSubpStreamStateQuery'
 
+export function emitSubpChunkOf(module StdModule, block IrBlock, remaining ValueId, ids ValueMinter) returns ValueId
+	let limit = emitConst(module, block: block, value: SubpReadChunkBytes as FullRangeInt, ids: ids)
+	let overLimit = emitCmp(module, block: block, a: remaining, b: limit, pred: StdCmpPred.gt, ids: ids)
+
+	return emitSelectWord(module, block: block, cond: overLimit, whenSet: limit, whenClear: remaining, ids: ids)
+end 'emitSubpChunkOf'
+
+export function emitSubpRequireNoQueue(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, whenQueued IrBlock) returns IrBlock
+	let clear = module.addBlock(func, label: b"subpnoqueue", heat: BlockHeat.normal)
+	let queued = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: queued, pred: StdCmpPred.ne, against: 0, whenTrue: whenQueued, whenFalse: clear, ids: ids)
+
+	return clear
+end 'emitSubpRequireNoQueue'
+
+export function emitSubpWriteFailureTails(module StdModule, ids ValueMinter, closed IrBlock, failed IrBlock, answer FullRangeInt)
+	emitSubpStoreLastError(module, block: closed, code: ErrorBrokenPipe, ids: ids)
+	emitConstReturn(module, block: closed, value: answer, ids: ids)
+
+	emitSubpRecordLastError(module, block: failed, ids: ids)
+	emitConstReturn(module, block: failed, value: answer, ids: ids)
+end 'emitSubpWriteFailureTails'
+
+export function emitSubpWriteAll(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, writeEnd ValueId, buffer ValueId, length ValueId, whenClosed IrBlock, whenFailed IrBlock) returns IrBlock
+	let writable = module.addBlock(func, label: b"subpwopen", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"subpwloop", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"subpwchunk", heat: BlockHeat.normal)
+	let counted = module.addBlock(func, label: b"subpwcounted", heat: BlockHeat.normal)
+	let advance = module.addBlock(func, label: b"subpwadvance", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"subpwdone", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: cur, value: writeEnd, pred: StdCmpPred.eq, against: 0, whenTrue: whenClosed, whenFalse: writable, ids: ids)
+
+	let countWord = emitSubpCountWord(module, block: writable, ids: ids)
+	emitBranchCarrying(module, from: writable, to: header, values: twoArgs(buffer, second: length))
+
+	let cursor = ids.mint()
+	let left = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(cursor, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(left, argType: StdType.i64))
+	emitBranchOnCompare(module, block: header, value: left, pred: StdCmpPred.eq, against: 0, whenTrue: done, whenFalse: attempt, ids: ids)
+
+	let chunk = emitSubpChunkOf(module, block: attempt, remaining: left, ids: ids)
+	let verdict = ids.mint()
+	module.appendOp(attempt, op: StdOp.osWriteFile(verdict, handleId: writeEnd, bufId: cursor, lenId: chunk, bytesOutPtrId: countWord))
+	emitBranchOnCompare(module, block: attempt, value: verdict, pred: StdCmpPred.eq, against: 0, whenTrue: whenFailed, whenFalse: counted, ids: ids)
+
+	// A pipe that took nothing is treated as dead: retrying it would spin for ever on this thread.
+	let written = emitLoadDword(module, block: counted, record: countWord, offset: 0, ids: ids)
+	emitBranchOnCompare(module, block: counted, value: written, pred: StdCmpPred.eq, against: 0, whenTrue: whenClosed, whenFalse: advance, ids: ids)
+
+	let nextCursor = emitBin(module, block: advance, a: cursor, b: written, opcode: StdBinOpcode.add, ids: ids)
+	let nextLeft = emitBin(module, block: advance, a: left, b: written, opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchCarrying(module, from: advance, to: header, values: twoArgs(nextCursor, second: nextLeft))
+
+	return done
+end 'emitSubpWriteAll'
+
 // `__gt_subp_write_line(handle, strPtr) -> rc` — write `strPtr`'s bytes + '\n' to the child's stdin (a synchronous
 // WriteFile on the sync outbound pipe). Uses the per-handle write buffer (grown on demand, reused across writes) so
-// a line's bytes + the newline are one contiguous WriteFile. Returns 0 on success, 1 on a broken pipe.
+// a line's bytes + the newline are one contiguous buffer for `emitSubpWriteAll`. Answers as
+// `__gt_subp_write_bytes` does.
 function buildSubpWriteLine(module StdModule)
 	let func = IrFunction.createFromStd(SubpWriteLineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(2)
@@ -11097,8 +11059,9 @@ function buildSubpWriteLine(module StdModule)
 	let growCheck = module.addBlock(func, label: b"growcheck", heat: BlockHeat.normal)
 	let doGrow = module.addBlock(func, label: b"dogrow", heat: BlockHeat.normal)
 	let doWrite = module.addBlock(func, label: b"dowrite", heat: BlockHeat.normal)
-	let wrote = module.addBlock(func, label: b"wrote", heat: BlockHeat.normal)
+	let closed = module.addBlock(func, label: b"closed", heat: BlockHeat.normal)
 	let failed = module.addBlock(func, label: b"failed", heat: BlockHeat.normal)
+	let queued = module.addBlock(func, label: b"queued", heat: BlockHeat.normal)
 	let badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
@@ -11107,18 +11070,18 @@ function buildSubpWriteLine(module StdModule)
 
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
-	// A handle naming no live child answers the same non-zero this entry answers for a broken pipe.
-	let badRc = emitConst(module, block: badHandle, value: -1, ids: ids)
-	module.setTerminator(badHandle, op: StdOp.ret(badRc))
+	emitConstReturn(module, block: badHandle, value: SubpFailure, ids: ids)
+	emitConstReturn(module, block: queued, value: SubpStdinQueuePendingAnswer, ids: ids)
 
 	let live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: badHandle)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
-	let stdinWrite = emitLoadField(module, block: live, record: slot, offset: SubpSlotStdinWrite, ids: ids)
-	let strBuf = emitLoadField(module, block: live, record: strPtr, offset: StringBufferOffset, ids: ids)
-	let strLen = emitLoadField(module, block: live, record: strPtr, offset: StringLengthOffset, ids: ids)
-	let oneW = emitConst(module, block: live, value: 1, ids: ids)
-	let needed = emitBin(module, block: live, a: strLen, b: oneW, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(live, op: StdOp.branch(growCheck.id))
+	let unqueued = emitSubpRequireNoQueue(module, func: func, ids: ids, cur: live, slot: slot, whenQueued: queued)
+	let stdinWrite = emitLoadField(module, block: unqueued, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let strBuf = emitLoadField(module, block: unqueued, record: strPtr, offset: StringBufferOffset, ids: ids)
+	let strLen = emitLoadField(module, block: unqueued, record: strPtr, offset: StringLengthOffset, ids: ids)
+	let oneW = emitConst(module, block: unqueued, value: 1, ids: ids)
+	let needed = emitBin(module, block: unqueued, a: strLen, b: oneW, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(unqueued, op: StdOp.branch(growCheck.id))
 
 	let writeCap = emitLoadField(module, block: growCheck, record: slot, offset: SubpSlotWriteCap, ids: ids)
 	emitBranchOnCompareValues(module, block: growCheck, a: needed, pred: StdCmpPred.gt, b: writeCap, whenTrue: doGrow, whenFalse: doWrite, ids: ids)
@@ -11126,8 +11089,10 @@ function buildSubpWriteLine(module StdModule)
 	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
 	let newCap = emitBin(module, block: doGrow, a: needed, b: twoConst, opcode: StdBinOpcode.mul, ids: ids)
 	let newBuf = emitSlabAlloc(module, block: doGrow, bytes: newCap, kind: SlabBufferKind.subprocessSlotBuffer, ids: ids)
+	let oldBuf = emitLoadField(module, block: doGrow, record: slot, offset: SubpSlotWriteBuf, ids: ids)
 	emitStoreField(module, block: doGrow, record: slot, offset: SubpSlotWriteBuf, value: newBuf)
 	emitStoreField(module, block: doGrow, record: slot, offset: SubpSlotWriteCap, value: newCap)
+	emitSlabFree(module, block: doGrow, ptr: oldBuf, kind: SlabBufferKind.subprocessSlotBuffer, ids: ids)
 	module.setTerminator(doGrow, op: StdOp.branch(doWrite.id))
 
 	// doWrite: copy the line into the write buffer, append '\n', WriteFile the whole thing.
@@ -11137,15 +11102,10 @@ function buildSubpWriteLine(module StdModule)
 	let nlAddr = emitBin(module, block: doWrite, a: writeBuf, b: strLen, opcode: StdBinOpcode.add, ids: ids)
 	let nlByte = emitConst(module, block: doWrite, value: SubpNewlineByte as FullRangeInt, ids: ids)
 	module.appendOp(doWrite, op: StdOp.storeIndirect(nlAddr, offset: 0, valueId: nlByte, valueType: StdType.u8))
-	let bytesOutW = emitLoadField(module, block: doWrite, record: slot, offset: SubpSlotBytesOut, ids: ids)
-	let writeOk = ids.mint()
-	module.appendOp(doWrite, op: StdOp.osWriteFile(writeOk, handleId: stdinWrite, bufId: writeBuf, lenId: needed, bytesOutPtrId: bytesOutW))
-	emitBranchOnCompare(module, block: doWrite, value: writeOk, pred: StdCmpPred.ne, against: 0, whenTrue: wrote, whenFalse: failed, ids: ids)
+	let written = emitSubpWriteAll(module, func: func, ids: ids, cur: doWrite, writeEnd: stdinWrite, buffer: writeBuf, length: needed, whenClosed: closed, whenFailed: failed)
 
-	let rcZero = emitConst(module, block: wrote, value: 0, ids: ids)
-	module.setTerminator(wrote, op: StdOp.ret(rcZero))
-	let rcOne = emitConst(module, block: failed, value: 1, ids: ids)
-	module.setTerminator(failed, op: StdOp.ret(rcOne))
+	emitConstReturn(module, block: written, value: SubpStdinAcceptedAnswer, ids: ids)
+	emitSubpWriteFailureTails(module, ids: ids, closed: closed, failed: failed, answer: SubpStdinBrokenAnswer)
 
 	module.functions.push(func)
 end 'buildSubpWriteLine'
@@ -11217,7 +11177,7 @@ function buildSubpWait(module StdModule)
 	let live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: badHandle)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
 	let hProcess = emitLoadField(module, block: live, record: slot, offset: SubpSlotHProcess, ids: ids)
-	emitSubpReturnExitAnswer(module, func: func, block: live, slot: slot, hProcess: hProcess, ids: ids)
+	emitSubpReturnExitAnswer(module, func: func, block: live, hProcess: hProcess, ids: ids)
 
 	module.functions.push(func)
 end 'buildSubpWait'
@@ -11268,7 +11228,7 @@ end 'buildSubpRelease'
 
 // The streaming subprocess API's surface. `__gt_subp_yield_read`, the read it rides, is built beside
 // `__gt_io_read` in `installGtRuntime`.
-function installSubpRuntime(module StdModule, target Target, streamState EnumLayout)
+function installSubpRuntime(module StdModule, target Target, streamState EnumLayout, stdioStream EnumLayout)
 	buildSubpStrFromBytes(module)
 
 	if hostTextIsWide(module) 'wideRequest'
@@ -11278,11 +11238,9 @@ function installSubpRuntime(module StdModule, target Target, streamState EnumLay
 
 	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState)
 	buildSubpSpawn(module, commandShape: subprocessCommandShape(target))
-	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase, streamState: streamState, wait: LineReadWait.untilALineArrives)
-	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase, streamState: streamState, wait: LineReadWait.untilALineArrives)
-	buildSubpReadLine(module, name: SubpTryReadLineName, streamBase: SubpStdoutBase, streamState: streamState, wait: LineReadWait.onlyWhatIsBuffered)
-	buildSubpReadLine(module, name: SubpTryReadErrLineName, streamBase: SubpStderrBase, streamState: streamState, wait: LineReadWait.onlyWhatIsBuffered)
-	buildSubpReadExact(module, streamState: streamState)
+	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase, streamState: streamState)
+	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase, streamState: streamState)
+	buildSubpReadAvailable(module, streamState: streamState, stdioStream: stdioStream)
 
 	// The two per-stream state queries, beside the readers whose empty answer they are the discriminator for.
 	buildSubpStreamStateQuery(module, name: SubpOutStateName, streamBase: SubpStdoutBase, streamState: streamState)

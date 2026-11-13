@@ -32,7 +32,7 @@ end 'main'
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](#array) | Array, List, Map, Set, FixedArray, Range, Iterators, Interfaces |
-| [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
+| [I/O and processes](#file) | File, FilePath, Directory, Console, Stream, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
 | [System](#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, TrustStore, Math, Primitive Extensions |
@@ -111,14 +111,16 @@ alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float 
 | `LogGroupPath`, `LogFieldArray` | `Array with String` / `Array with LogField` | Log |
 | `TraceKeyArray` | `Array with String` | TraceCapture |
 | `SocketDeadlineMs` | `int(0 to 4294967295)` — a socket deadline | TcpClient |
-| `RecvCapacity` | `int(1 to i64.max)` | TcpClient |
+| `ReadCapacity` | `int(1 to i64.max)` — the most bytes one `readSome` returns | Stream |
+| `LineCap` | `int(0 to u64.max)`, implementing `BytePos` — the longest line a read takes | Stream |
 | `HttpByteCap` | `int(0 to 1099511627776)` | HttpServer |
 | `HttpAcceptRetryMs` | `int(0 to 1000)` | HttpServer |
 | `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
 | `ExitInt` | `int(0 to u32.max)` | Subprocess |
+| `WaitDeadlineMs` | `int(1 to u64.max)` — the milliseconds a `WaitDeadline.within` allows | Subprocess |
 | `OsErrorCode` | `int(0 to u32.max)` — the Windows error code a `SubprocessError` case carries: `GetLastError` on Windows; on Linux and macOS the errno mapped onto its Windows equivalent, 31 when it has none | Subprocess |
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
-| `StdioKindValue` | `int(0 to 5)` | Subprocess |
+| `StdioKindValue` | `int(0 to 4)` | Subprocess |
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
@@ -1186,6 +1188,7 @@ Output: `EUR 250 | USD 250 | true greaterThan 1`.
 |--------|---------|--------|-------------|
 | `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text, read to its end — bytes appended while it is read are included. |
 | `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes, read the same way. |
+| `File.openRead(path FilePath)` | `FileStreamReader` | `FileReadError` | Open the file for reading through a [StreamReader](#stream): lines, exact byte counts and the rest of the file. A read that fails throws `StreamError.failed`. `reader.source.close()` closes the file early. |
 | `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
 | `File.createText(path FilePath, content String)` | — | `FileWriteError` | Create a file that must not exist yet, then write. An existing file is `alreadyExists` and is left as it was. A failed write deletes the new file and throws the write's error; when that delete fails too, it throws `partialFileLeft`. |
 | `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
@@ -1417,26 +1420,37 @@ It prints `true true`, then `a.txt false` and `nested true` in the order the OS 
 
 ## Console
 
-`Console.stdin()` returns a buffered reader over standard input. Keep one reader for the life of the
-program: a new reader does not see input an earlier one already buffered.
+`Console.stdin()` returns a [StreamReader](#stream) over standard input, a `StdinReader`. Keep one reader for
+the life of the program: a new reader does not see input an earlier one already buffered.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Console.stdin()` | `Stdin` | — | The standard-input reader. |
-| `Stdin.create()` | `Stdin` | — | A reader with an empty buffer; `Console.stdin()` returns one. |
+| `Console.stdin()` | `StdinReader` | — | A reader over standard input with nothing buffered. Its source is a `StdinSource`, whose `readSome(most ReadCapacity)` reads up to `most` bytes of standard input, an empty array at its end. |
 | `Console.stdoutWantsColor()` | `bool` | — | True when standard output is a terminal, `NO_COLOR` is unset and `TERM` is other than `dumb` (compared case-insensitively): output may then carry ANSI escapes. `NO_COLOR` set to any value turns colour off; Windows reads an empty value as unset. `false` on `wasm32-wasi`. |
-| `readLine()` | `String` | `ConsoleError.endOfFile` | The next line without its `\n`; a `\r` before it is removed too. A last line with no terminator is returned, and the call after it throws. |
-| `readBytes(n BytePos)` | `ByteArray` | — | Up to `n` bytes, unchanged. Fewer than `n` only when input ends first; an empty array at the end of input. It reads from the same buffer as `readLine`. |
+
+`readLine()` answers `LineRead.line(text)` without the `\n` or a `\r` before it, a last line with no
+terminator included, and `ended` once input has ended; `readBytes(n)` answers up to `n` bytes, unchanged, from
+the same buffer.
 
 ```maxon
+function echoLine(stdin StdinReader) returns bool
+	let read = try stdin.readLine() otherwise return false
+
+	match read 'read'
+		line(text) then print("[{text}]\n")
+		ended or
+		pastTheCap then return false
+	end 'read'
+
+	return true
+end 'echoLine'
+
 function main() returns ExitCode
 	let stdin = Console.stdin()
 	var lines = 0 as Count
 
-	while true 'read'
-		let line = try stdin.readLine() otherwise break
+	while echoLine(stdin) 'read'
 		lines = lines + 1
-		print("[{line}]\n")
 	end 'read'
 
 	print("{lines} lines\n")
@@ -1445,6 +1459,96 @@ end 'main'
 ```
 
 Given `one\r\ntwo\nthree` on stdin, it prints `[one]`, `[two]`, `[three]`, `3 lines`.
+
+## Stream
+
+`StreamReader` is one buffered reader over any byte source: a child process's output stream, a file, a
+`TcpClient`, a `TlsStream` or standard input. It holds its source in the public field `source`, for the
+source's own operations (`send` on a `TcpClient`, `close()` on a `FileSource`), and the bytes read from it but
+not yet handed out.
+
+```maxon
+interface ByteSource
+	function readSome(mutable self, most ReadCapacity) returns isolated ByteArray throws StreamError
+end 'ByteSource'
+
+type StreamReader uses Source where Source is ByteSource
+```
+
+A source's `readSome` answers between one and `most` bytes, parking the calling green thread until one
+arrives, and an empty array only at the end of the stream.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `StreamReader.over(source Source)` | `StreamReader` | — | A reader over `source` with nothing buffered. |
+| `readLine(cap LineCap = DefaultLineCap)` | `LineRead` | `StreamError` | `line(text)` without its LF or a CR before it, a last line with no LF included; `ended` at the end of the stream; `pastTheCap` when no LF arrives within `cap` bytes. |
+| `readUntil(delimiter String, cap LineCap)` | `LineRead` | `StreamError` | The text up to `delimiter`, nothing stripped; the delimiter is consumed. `ended` when the stream ends before a delimiter, and `pastTheCap` as `readLine`. |
+| `readBytes(count BytePos)` | `isolated ByteArray` | `StreamError` | Exactly `count` bytes, fewer only at the end of the stream. |
+| `readToEnd()` | `isolated ByteArray` | `StreamError` | Every byte left. |
+| `unreadBytes()` | `BytePos` | — | The bytes read from the source and not yet handed out. |
+
+`pastTheCap` consumes nothing: the bytes stay buffered and the next read sees them. `DefaultLineCap` is 1 MiB;
+`StreamMessageCap`, 64 MiB, is the cap for a line that carries a whole protocol message.
+
+```maxon
+union LineRead
+	line(text String)
+	ended
+	pastTheCap
+end 'LineRead'
+
+union StreamError implements Error
+	timedOut
+	closed
+	failed(reason String)
+	secure(error TlsError)
+end 'StreamError'
+```
+
+| Case | Meaning |
+|------|---------|
+| `timedOut` | A read deadline set on the source passed |
+| `closed` | The source was closed: a `TlsStream` after `close()`, or a child released while its reader was out |
+| `failed(reason)` | The read failed, for `reason` |
+| `secure(error)` | The TLS session failed, its handshake included, with its `TlsError`: `truncated` for a connection that ended without a close_notify |
+
+`displayReason()` renders any case as one line.
+
+| Source | Reader | From |
+|--------|--------|------|
+| `ChildOutput` | `ChildOutputReader` | `StreamingSubprocess.takeStdout()`, `takeStderr()` ([StreamingSubprocess](#streamingsubprocess)) |
+| `FileSource` | `FileStreamReader` | `File.openRead(path)` ([File](#file)) |
+| `TcpClient` | `TcpStreamReader` | `StreamReader.over(client)` ([TcpClient](#tcpclient)) |
+| `TlsStream` | `TlsStreamReader` | `StreamReader.over(stream)` ([TlsStream](#tlsstream)) |
+| `StdinSource` | `StdinReader` | `Console.stdin()` ([Console](#console)) |
+
+Each source's `readSome(most ReadCapacity)` is public. `FileSource.close()` closes its file. A `TcpClient` and
+a `TlsStream` are unique, so `StreamReader.over` moves one into the reader, and the program sends through
+`reader.source`.
+
+```maxon
+function main() returns ExitCode
+	let path = FilePath from "notes.txt"
+	try File.writeText(path, content: "one\r\ntwo\n") otherwise return 1
+
+	let reader = try File.openRead(path) otherwise return 2
+	let first = try reader.readLine() otherwise return 3
+	let rest = try reader.readToEnd() otherwise return 4
+	reader.source.close()
+
+	let line = match first 'first'
+		line(text) gives text
+		ended or
+		pastTheCap gives ""
+	end 'first'
+
+	print("{line} {String.from(rest)}")
+	try File.delete(path) otherwise return 5
+	return 0
+end 'main'
+```
+
+It prints `one two` and a newline.
 
 ## CommandLine
 
@@ -1775,11 +1879,25 @@ With `git` on `PATH`, it prints `true 0 true`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. A `timeoutMs` deadline kills the child's whole process tree ([SubprocessError](#subprocesserror)); `0` waits forever. |
+| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, deadline WaitDeadline = WaitDeadline.none)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each, and wait for the child as `deadline` allows ([WaitDeadline](#waitdeadline)). |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 
 All of them throw `SubprocessError`.
+
+### WaitDeadline
+
+```maxon
+union WaitDeadline
+	none
+	within(timeoutMs WaitDeadlineMs)
+end 'WaitDeadline'
+```
+
+How long a run or a `StreamingSubprocess.wait` waits for the child: `none` until it exits, `within(timeoutMs)`
+at most `timeoutMs` milliseconds, which is at least one (`WaitDeadlineMs` is `int(1 to u64.max)`). A deadline
+that passes kills the child's whole process tree and throws `timeout`, or `treeNotEnded` when that tree cannot
+be fully ended ([SubprocessError](#subprocesserror)).
 
 ### Executable
 
@@ -1835,7 +1953,7 @@ assign the fields you need, then run it.
 | `standardInput` | `InputSource` | `none` |
 | `standardOutput` | `OutputDestination` | `collect` up to 16 MiB |
 | `standardError` | `OutputDestination` | `collect` up to 16 MiB |
-| `timeoutMs` | `DurationMs` | `0`, no deadline. Non-zero kills the child's whole process tree ([SubprocessError](#subprocesserror)). |
+| `deadline` | [`WaitDeadline`](#waitdeadline) | `none` |
 | `platformOptions` | `PlatformOptions` | `PlatformOptions.defaults()` |
 
 | Method | Returns | Description |
@@ -1898,7 +2016,7 @@ override's spelling, and a map that names one variable in two spellings makes th
 | `file(path)` | Written to a file |
 
 A run feeds `bytes` input while it drains the child's output, so a child that writes before it
-reads still receives its whole input, and a `timeoutMs` deadline fires while input is still pending.
+reads still receives its whole input, and a deadline fires while input is still pending.
 
 A child inherits only the three standard streams its own configuration gives it; the files this process
 holds open and the pipes of other spawns in progress at the same moment stay with this process.
@@ -1939,7 +2057,6 @@ union SubprocessError implements Error
 	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
 	detachRefused(osError OsErrorCode)
 	inputTooLarge
-	endOfStream
 	statusLost(stdout String, stderr String)
 end 'SubprocessError'
 ```
@@ -1957,7 +2074,7 @@ operand.
 
 `timeout` carries the output the child had already produced when the deadline killed it, since that partial
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
-collecting output, which is `StreamingSubprocess.waitWithTimeout`.
+collecting output, which is `StreamingSubprocess.wait`.
 
 A deadline ends the child's whole process tree, and so does [`StreamingSubprocess.endTree()`](#streamingsubprocess).
 On Linux and macOS the tree is the child and every process
@@ -1983,18 +2100,16 @@ is true for it and `timedOut()` false.
 breakaway. It carries the `GetLastError` code, and its reason says to run the program outside that job or allow
 breakaway on it.
 
-`endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
-
-`statusLost(stdout, stderr)` is what `Subprocess.run` and `StreamingSubprocess.wait()` / `waitWithTimeout()` throw for a
+`statusLost(stdout, stderr)` is what `Subprocess.run` and `StreamingSubprocess.wait` throw for a
 child that has ended while another process took its exit status, so the status is unavailable, before any
 deadline fired; once a deadline has fired the answer is `timeout` or `treeNotEnded` wherever the status went. It carries the
-output `run` collected; `wait()` and `waitWithTimeout()` throw empty fields. Whether the status is available
+output `run` collected; `wait` throws empty fields. Whether the status is available
 depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go.
 
 `displayReason()` renders any case as one line, such as
 `timed out after 5000ms, and the kill was sent to the child's whole process tree`. `timedOut()` is true for
-`timeout`, `deadlineFired()` for `timeout` and `treeNotEnded`, and `endedTheStream()` for `endOfStream`, so a
-caller can test for any of them without a `match`.
+`timeout` and `deadlineFired()` for `timeout` and `treeNotEnded`, so a caller can test for either without a
+`match`.
 
 `SpawnPreparation` — `none`, `standardStream`, `workingDirectory` — names the step of a spawn the runtime
 records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`.
@@ -2034,43 +2149,30 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory WorkingDirectory, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory and an environment. |
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory WorkingDirectory, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
-| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws on a broken pipe. |
-| `takeStdout()` | `StdoutReader` | `SubprocessError` | Take the child's stdout side out as a `StdoutReader`, which a coroutine can drain beside the child's owner. While the reader is out, the child's own stdout reads (`readStdoutLine`, `readStdoutLineCapped`, `readStdoutBytes`, `tryReadStdoutLine`) throw `ioFailed`. Throws `ioFailed` when the stdout side is already out, and once the handle is released. |
-| `reclaimStdout()` | — | `SubprocessError` | Make the stdout side the child's again, once the coroutine that held the `StdoutReader` has ended. Throws `ioFailed` when the stdout side is not out. |
-| `takeStderr()` | `StderrReader` | `SubprocessError` | As `takeStdout()`, for the child's stderr side: while the `StderrReader` is out, `readStderrLine`, `readStderrLineCapped` and `tryReadStderrLine` throw `ioFailed`. Throws `ioFailed` when the stderr side is already out, and once the handle is released. |
-| `reclaimStderr()` | — | `SubprocessError` | Make the stderr side the child's again, once the coroutine that held the `StderrReader` has ended. Throws `ioFailed` when the stderr side is not out. |
-| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
-| `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
-| `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
-| `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
-| `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | With a cap. |
-| `tryReadStdoutLine()` | `LinePoll` | `SubprocessError` | A line if one is already buffered; never blocks. Throws `ioFailed` while the stdout side is out with a `StdoutReader`. |
-| `tryReadStderrLine()` | `LinePoll` | `SubprocessError` | As above, for stderr. Throws `ioFailed` while the stderr side is out with a `StderrReader`. |
-| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
-| `isReapedElsewhere()` | `bool` | — | Whether another process has taken the child's exit status, so that `pollExit()` answers `running` for ever. Whether a status is available depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go. `false` on Windows and for a released handle. Answers at once. |
+| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws `ioFailed` when the write fails, a broken pipe included. |
+| `writeStdin(text String)` | — | `SubprocessError` | Write `text` exactly as given, NUL bytes included, for a framed protocol. Throws as `writeStdinLine`. |
+| `takeStdout()` | `isolated ChildOutputReader` | `SubprocessError` | Take the child's stdout out as a [`StreamReader`](#stream), once: a second take throws `ioFailed`, and so does a take once the handle is released. The reader shares no data with the child, so a coroutine or a service can read it beside the child's owner. |
+| `takeStderr()` | `isolated ChildOutputReader` | `SubprocessError` | As `takeStdout()`, for the child's stderr. Reading stderr beside stdout keeps a child that writes a lot of it from blocking on a full pipe. |
+| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it: `running`, `exited(code)`, or `reapedElsewhere` when another process has taken its exit status, so this process cannot tell whether it still runs. Whether a status is available depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
-| `streamHasEnded(stream StdioStream)` | `bool` | — | Whether a read of the child's `stdout` or `stderr` has found the end of that stream, answering at once. A read latches the end, so a loop of `tryReadStdoutLine` / `tryReadStderrLine` calls moves this to `true`. A read that failed and a released handle answer `true`. |
+| `streamHasEnded(stream StdioStream)` | `bool` | — | Whether a read of the child's `stdout` or `stderr` has found the end of that stream, answering at once. A read latches the end, so reading the stream through its reader moves this to `true`; a stream nothing reads stays `false`. A read that failed and a released handle answer `true`. |
 | `outputHasEnded()` | `bool` | — | Whether reads have found the end of both `stdout` and `stderr`: `streamHasEnded` for each. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
-| `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. A child whose exit status went to another process throws `statusLost`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
-| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds (its code as `treeNotEnded`'s, [SubprocessError](#subprocesserror)), and `unconfirmed(reason)` when the kill was refused and no wait saw the child end within those five seconds, or the handle is released. |
-| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader` or the stderr side with a `StderrReader`: `reclaimStdout()` or `reclaimStderr()` first. |
-| `handle`, `released` | fields | — | The raw handle and whether it has been released. |
+| `wait(deadline WaitDeadline = WaitDeadline.none)` | exit code | `SubprocessError` | Park the calling green thread until the child exits, or until `deadline` passes ([WaitDeadline](#waitdeadline)): then it throws `timeout` and kills the child's whole process tree, or `treeNotEnded` when that tree cannot be fully ended. A child whose exit status went to another process throws `statusLost`, and a failed wait `ioFailed`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller reading the streams. |
+| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `wait` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds (its code as `treeNotEnded`'s, [SubprocessError](#subprocesserror)), and `unconfirmed(reason)` when the kill was refused and no wait saw the child end within those five seconds, or the handle is released. |
+| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. A reader taken from the child throws `StreamError.closed` afterwards. |
+| `released` | field | — | Whether the handle has been released. |
 
 ```maxon
-union LinePoll
-	line(text String)
-	none
-end 'LinePoll'
-
 union ExitPoll
 	running
+	reapedElsewhere
 	exited(code int(0 to u32.max))
 end 'ExitPoll'
 
 union TerminationPoll
 	running
+	reapedElsewhere
 	ended(status TerminationStatus)
 end 'TerminationPoll'
 
@@ -2086,28 +2188,13 @@ enum StdioStream
 end 'StdioStream'
 ```
 
-`LinePoll` exists because a blank line from the child and "nothing buffered" are both `""` once the
-terminator is removed. `none` says nothing about whether the stream has ended; ask `pollExit()` for the
-child, or `streamHasEnded(stream)` for the stream.
-
+`ExitPoll.childIsKnownGone()` is true for `exited` alone: a `reapedElsewhere` child may still be running.
 `TreeEnd.displayReason()` renders the answer as one line for a diagnostic.
 
-### StdoutReader
-
-The stdout side of a `StreamingSubprocess`, taken out with `takeStdout()`. It reads lines and owns nothing
-else: no release and no wait. It is a clean input to `async`, so a coroutine can drain it while the child's
-owner keeps writing stdin and waiting, and the promise of that coroutine may be stored and awaited later.
-Once the coroutine has ended, `reclaimStdout()` makes the stdout side the child's again, and `release()` of
-the child follows.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStdoutLine`, including `endOfStream` when the stream has ended. |
-| `readBytes(count ByteLimit)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; the contract of `StreamingSubprocess.readStdoutBytes`, for a length-framed protocol read in a coroutine. |
-
-`specs/subprocess.md` pins the flow: `subprocess-take-stdout-moves-the-stdout-side-out-of-the-child`,
-`subprocess-release-while-the-stdout-reader-is-out-is-refused` and
-`subprocess-a-reader-whose-drain-ends-is-reclaimed-before-the-child-is-released`.
+A read through a reader parks until bytes or the end of the stream arrive. An owner that must stay
+responsive hands each reader to a service of its own, one per stream, and `awaitAny`s over `async` calls
+awaiting the services' reads beside a timer coroutine; a deadline then ends the child's process tree, which
+ends its streams and the reads parked on them.
 
 ```maxon
 function main() returns ExitCode
@@ -2119,9 +2206,13 @@ function main() returns ExitCode
 		return 1
 	end 'spawn'
 
-	let line = try child.readStdoutLine() otherwise (e) 'read'
-		print("{e.displayReason()}\n")
-		return 1
+	let output = try child.takeStdout() otherwise return 1
+	let read = try output.readLine() otherwise return 1
+
+	let line = match read 'read'
+		line(text) gives text
+		ended or
+		pastTheCap gives ""
 	end 'read'
 
 	let code = try child.wait() otherwise (e) 'wait'
@@ -2131,6 +2222,7 @@ function main() returns ExitCode
 
 	let state = match child.pollExit() 'poll'
 		running gives "running"
+		reapedElsewhere gives "reaped elsewhere"
 		exited(c) gives "exited {c}"
 	end 'poll'
 
@@ -2141,17 +2233,6 @@ end 'main'
 ```
 
 With `git` on `PATH`, it prints `true 0 exited 0`.
-
-### StderrReader
-
-The stderr side of a `StreamingSubprocess`, taken out with `takeStderr()`, on the terms `StdoutReader` has
-for stdout: it reads lines and owns nothing else, a coroutine can drain it beside the child's owner, and
-`reclaimStderr()` makes the stderr side the child's again once that coroutine has ended. Draining stderr
-in its own coroutine keeps a child that writes a lot of it from blocking on a full pipe.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStderrLine`, including `endOfStream` when the stream has ended. |
 
 ## SharedMemory
 
@@ -2491,25 +2572,24 @@ lines, asks that one nameserver only, and waits on it for as long as it takes to
 | `TcpClient.connect(host String, port NetworkPort, deadlineMs SocketDeadlineMs = 0)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`, or `timedOut` when the connection is not made within `deadlineMs`; `0` waits with no deadline. |
 | `TcpClient.adopt(socket)` | `TcpClient` | — | Wrap an already-connected socket; how `TcpListener.accept()` returns its connections. |
 | `send(data String)` | `int(0 to u64.max)` | `NetworkError` | Send every byte, looping over partial sends; returns the byte count. |
-| `recv(bufferSize RecvCapacity)` | `String` | `NetworkError` | Between one and `bufferSize` bytes. Throws `connectionClosed` when the peer has closed. |
-| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `NetworkError` | Make a read that waits longer than this throw `timedOut`. Measured from this call; `0` clears it. |
-| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `NetworkError` | The same for sends. A send goes to the OS in 1 MiB slices, so the deadline also ends a large send to a peer that has stopped reading. |
-| `shutdownWrite()` | — | `NetworkError` | Stop sending: the peer reads end-of-stream while this side can still `recv`. |
+| `readSome(most ReadCapacity)` | `isolated ByteArray` | `StreamError` | Between one and `most` bytes, and an empty array once the peer has closed: the client is a [`ByteSource`](#stream), and `StreamReader.over(client)` reads lines and exact counts from it. A read past the read deadline throws `timedOut`, and an OS error `failed(reason)`. |
+| `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `NetworkError` | Make a read that waits longer than this throw `StreamError.timedOut`. Measured from this call; `0` clears it. |
+| `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `NetworkError` | Make a send that waits longer than this throw `timedOut`. A send goes to the OS in 1 MiB slices, so the deadline also ends a large send to a peer that has stopped reading. |
+| `shutdownWrite()` | — | `NetworkError` | Stop sending: the peer reads end-of-stream while this side can still read. |
 | `close()` | — | — | Close the connection. Idempotent. |
 
 A deadline setter and `shutdownWrite` throw `connectionClosed` when the socket is already closed.
 
 `NetworkPort` is `int(0 to 65535)`. Port `0` asks `TcpListener.bind` for any free port; a live connection
 always has a nonzero one. `SocketDeadlineMs` is `int(0 to 4294967295)`, the milliseconds a deadline setter takes.
-`RecvCapacity` is `int(1 to i64.max)`: a read of zero bytes is how a closed peer is reported, so a buffer
-holds at least one.
+`ReadCapacity` is `int(1 to i64.max)`: an empty read is how a closed peer is reported, so a read asks for at
+least one byte.
 
 ```maxon
 enum NetworkError implements Error
 	resolveFailed
 	connectFailed
 	sendFailed
-	recvFailed
 	connectionClosed
 	timedOut
 	bindFailed
@@ -2522,9 +2602,9 @@ end 'NetworkError'
 |------|---------|
 | `resolveFailed` | The host name did not resolve. An empty host, or one holding a NUL byte, is always this, for `connect` and `bind` alike |
 | `connectFailed` | The connection was refused or could not be made |
-| `sendFailed`, `recvFailed` | The OS reported an error |
-| `connectionClosed` | The peer closed the connection |
-| `timedOut` | A connect, read, write or accept deadline expired |
+| `sendFailed` | The OS reported an error |
+| `connectionClosed` | The peer closed the connection, or the socket is closed |
+| `timedOut` | A connect, write or accept deadline expired |
 | `bindFailed` | The address or port could not be bound |
 | `acceptFailed` | The listener can accept nothing more: it is closed, or the OS refused it for good |
 | `acceptInterrupted` | The OS refused one connection, for example with the process out of descriptors; the listener can take the next |
@@ -2536,7 +2616,7 @@ unaffected.
 
 ## TcpListener
 
-`TcpListener` is a listening socket. It has no `send` or `recv`; `accept()` returns a `TcpClient` for each
+`TcpListener` is a listening socket. It has no `send` or `readSome`; `accept()` returns a `TcpClient` for each
 connection. `accept()` parks its green thread until a connection arrives, so a waiting server blocks no OS
 thread. It closes when the last reference goes away. Same targets as `TcpClient`.
 
@@ -2553,8 +2633,8 @@ thread. It closes when the last reference goes away. Same targets as `TcpClient`
 ```maxon
 function echoOnce(listener TcpListener) returns ExitCode throws NetworkError
 	let conn = try listener.accept()
-	let data = try conn.recv(1024)
-	_ = try conn.send(data)
+	let data = try conn.readSome(1024) otherwise return 1
+	_ = try conn.send(String.from(data))
 	return 0
 end 'echoOnce'
 
@@ -2575,14 +2655,14 @@ function main() returns ExitCode
 		server.cancel()
 		return 4
 	end 'unsent'
-	let reply = try client.recv(1024) otherwise 'unanswered'
+	let reply = try client.readSome(1024) otherwise 'unanswered'
 		server.cancel()
 		return 5
 	end 'unanswered'
 	client.close()
 
 	_ = try await server otherwise 9
-	print("{reply}\n")
+	print("{String.from(reply)}\n")
 	return 0
 end 'main'
 ```
@@ -2637,10 +2717,10 @@ function main() returns ExitCode
 
 	_ = try stream.send("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n") otherwise return 3
 
-	let head = try stream.recv(4096) otherwise return 4
+	let head = try stream.readSome(4096) otherwise return 4
 
 	stream.close()
-	print(head)
+	print(String.from(head))
 
 	return 0
 end 'main'
@@ -2657,11 +2737,11 @@ ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 |--------|---------|--------|-------------|
 | `TlsListener.bind(host String, port NetworkPort, options TlsServerOptions)` | `TlsListener` | `TlsError` | Bind and listen. Port `0` takes any free port. `bindFailed` when the address cannot be bound. |
 | `port()` | `NetworkPort` | — | The bound port. |
-| `accept()` | `TlsStream` | `TlsError` | The next connection, before its handshake. The handshake's errors surface from the stream's first `send`, `recv` or `handshake()`, and the listener goes on accepting; `acceptFailed` when the listener is closed or has failed. |
+| `accept()` | `TlsStream` | `TlsError` | The next connection, before its handshake. The handshake's errors surface from the stream's first `send`, `readSome` or `handshake()`, and the listener goes on accepting; `acceptFailed` when the listener is closed or has failed. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | Make an `accept()` still waiting for a connection `milliseconds` after this call throw `timedOut`; `0` clears it. |
 | `close()` | — | — | Stop listening. Idempotent. |
 
-The handshake runs on the stream's first `send`, `recv`, `shutdownWrite` or `handshake()`, under the options'
+The handshake runs on the stream's first `send`, `readSome`, `shutdownWrite` or `handshake()`, under the options'
 handshake deadline (30 s by default), so a client that connects and then stalls holds only its own stream. A server
 that accepts in a loop and moves each stream into a service of its own (a `spawn`ed one) answers other
 clients meanwhile.
@@ -2675,7 +2755,7 @@ clients meanwhile.
 | `setApplicationProtocols(names StringArray)` | `TlsError` | The ALPN protocols, in order of preference. A client that offers ALPN and none of them is refused with `no_application_protocol`; a client that offers none is accepted without one. |
 | `requestClientCertificates(roots RootCertificates)` | `TlsError` | Ask clients for a certificate. One that is presented must chain to `roots` for the client authentication purpose, or the handshake ends; a client that presents none is accepted. |
 | `requireClientCertificates(roots RootCertificates)` | `TlsError` | The same, and a client that presents none is refused with `certificate_required` (TLS 1.3) or `handshake_failure` (TLS 1.2). No roots is `invalidConfiguration`. |
-| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long a connection's handshake may take, from its first `send`, `recv` or `handshake()`, before that call throws `handshakeTimedOut`; `0` waits with no deadline. |
+| `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long a connection's handshake may take, from its first `send`, `readSome` or `handshake()`, before that call throws `handshakeTimedOut`; `0` waits with no deadline. |
 | `setVerificationTime(seconds UnixSeconds)` | — | The Unix time client certificates are checked at, in place of the clock. |
 
 With client certificates asked for, the CertificateRequest names the subjects of `roots`.
@@ -2683,9 +2763,9 @@ With client certificates asked for, the CertificateRequest names the subjects of
 ```maxon
 function serve(listener TlsListener) returns ExitCode
 	let stream = try listener.accept() otherwise return 1
-	let request = try stream.recv(4096) otherwise return 2
+	let request = try stream.readSome(4096) otherwise return 2
 
-	_ = try stream.send("echo:{request}") otherwise return 3
+	_ = try stream.send("echo:{String.from(request)}") otherwise return 3
 	stream.close()
 
 	return 0
@@ -2715,23 +2795,22 @@ PKCS #8 (P-256, P-384, Ed25519 or RSA), SEC1 `ECPrivateKey` (P-256 or P-384) or 
 ## TlsStream
 
 `TlsStream` is a TLS connection, the one `TlsClient.connect` and `TlsListener.accept()` return. `connect` returns an
-established stream; a stream from `accept()` runs its handshake on its first `send`, `recv` or `shutdownWrite`, or on
-`handshake()`. It is used from one green thread at a time, through a `var`. `send`, `recv` and the deadlines follow `TcpClient`; the
+established stream; a stream from `accept()` runs its handshake on its first `send`, `readSome` or `shutdownWrite`, or on
+`handshake()`. It is used from one green thread at a time, through a `var`. `send`, `readSome` and the deadlines follow `TcpClient`; the
 bytes are the application data, and a write is split into records of at most 16 KiB.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `send(data String)`, `sendBytes(data ByteArray)` | `BytePos` | `TlsError` | Send every byte; returns the count. `closed` after `close` or `shutdownWrite`. A send that fails part-way, at its write deadline or on a transport error, fails the write side for good: this call throws the failure and every later `send` and `shutdownWrite` throws the same one, because the peer may hold part of a record. |
-| `handshake()` | — | `TlsError` | Run the handshake if it has not run; a stream whose handshake has completed returns at once. `send`, `recv` and `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later call throws `closed`. |
-| `recv(bufferSize RecvCapacity)` | `String` | `TlsError` | Between one and `bufferSize` bytes of application data. |
-| `recvBytes(bufferSize RecvCapacity)` | `ByteArray` | `TlsError` | The same bytes, unconverted. After the peer's close_notify and the data before it, `connectionClosed`; a TCP connection that ends without one, `truncated`. |
+| `handshake()` | — | `TlsError` | Run the handshake if it has not run; a stream whose handshake has completed returns at once. `send`, `readSome` and `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later call throws `closed`. |
+| `readSome(most ReadCapacity)` | `isolated ByteArray` | `StreamError` | Between one and `most` bytes of application data; the stream is a [`ByteSource`](#stream). After the peer's close_notify and the data before it, an empty array; a TCP connection that ends without one throws `secure(truncated)`. `timedOut` past the read deadline, `closed` once the stream is closed, and `secure(error)` for every other `TlsError`, a failed handshake included. |
 | `protocol()` | `TlsProtocol` | `TlsError` | `tls13` or `tls12`, whichever was negotiated. `handshakePending` until the handshake has completed. |
 | `cipherSuite()` | `TlsCipherSuite` | `TlsError` | `tls13(suite)` with a `Tls13CipherSuite`, or `tls12(suite)` with a `Tls12CipherSuite`. `handshakePending` until the handshake has completed. |
 | `applicationProtocol()` | `TlsApplicationProtocol` | `TlsError` | `negotiated(name)` or `unnegotiated`. `handshakePending` until the handshake has completed. |
 | `peerCertificates()` | `ByteArrays` | `TlsError` | The chain the peer presented, DER, in the order sent: the server's for a client, the client's (none when it presented none) for a server. `handshakePending` until the handshake has completed. |
 | `setReadDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A read that waits longer than this throws `timedOut`; the stream stays usable. Measured from this call; `0` clears it. Set before the handshake has completed, it applies from the moment the handshake completes. `closed` once the stream is closed. |
 | `setWriteDeadline(milliseconds SocketDeadlineMs)` | — | `TlsError` | A write that cannot finish within this many milliseconds of this call throws `timedOut` and fails the write side (see `send`). Measured from this call; `0` clears it. Set before the handshake has completed, it applies from the moment the handshake completes. `closed` once the stream is closed. |
-| `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still `recv`. The close_notify is written under a write deadline of 5 seconds, which replaces the one set; a peer that has stopped reading ends it with `timedOut`. |
+| `shutdownWrite()` | — | `TlsError` | Send close_notify and stop sending: the peer reads the end of the stream while this side can still read. The close_notify is written under a write deadline of 5 seconds, which replaces the one set; a peer that has stopped reading ends it with `timedOut`. |
 | `close()` | — | — | Send close_notify, under a write deadline of 5 seconds, and close the connection; a stream whose write side has failed sends none. Idempotent. |
 
 `TlsApplicationProtocol` is a union: `unnegotiated`, or `negotiated(name String)`. `TlsProtocol` is `tls13` or `tls12`.
@@ -2795,9 +2874,10 @@ end 'TlsError'
 
 | Case | Meaning |
 |------|---------|
-| `resolveFailed`, `connectFailed`, `bindFailed`, `acceptFailed`, `acceptInterrupted`, `timedOut`, `sendFailed`, `recvFailed` | The `NetworkError` case of the same name. `timedOut` is a connect, accept, read or write deadline that passed. |
+| `resolveFailed`, `connectFailed`, `bindFailed`, `acceptFailed`, `acceptInterrupted`, `timedOut`, `sendFailed` | The `NetworkError` case of the same name. `timedOut` is a connect, accept, read or write deadline that passed. |
+| `recvFailed` | Reading the TCP connection failed. |
 | `handshakeTimedOut` | A connection was made and its handshake did not finish within its deadline. A stream from a listener throws this from the call that runs its handshake, and `accept()` throws `timedOut` when no connection arrived, so a caller can tell the two apart. |
-| `connectionClosed` | The peer ended the stream with close_notify, and every byte before it was read; or the transport refused a write because the peer had gone. |
+| `connectionClosed` | The transport refused a write because the peer had gone. |
 | `truncated` | The TCP connection ended without a close_notify, so the data may be incomplete. |
 | `closed` | The stream was closed, or ended in an error that was already thrown. |
 | `handshakePending` | `protocol()`, `cipherSuite()`, `applicationProtocol()` or `peerCertificates()` was called on a stream whose handshake has not completed. |
@@ -2807,7 +2887,7 @@ end 'TlsError'
 | `invalidCertificate`, `invalidPrivateKey`, `invalidPem` | A `TlsIdentity` input could not be used. |
 | `certificateRejected(reason)` | This side refused the peer's chain, for the `X509VerifyError` `reason`: `hostnameMismatch`, `unknownAuthority`, `expired`, and the others. The alert sent is `bad_certificate`, `unknown_ca`, `certificate_expired` or `unsupported_certificate`. |
 | `protocolError(alert)` | This side ended the connection and sent `alert`: a malformed or unexpected message, no common version (`protocolVersion`), no common ALPN protocol (`noApplicationProtocol`), a missing client certificate (`certificateRequired`, `handshakeFailure`), a record longer than a record can be (`recordOverflow`). |
-| `peerAlert(alert)` | The peer sent a fatal alert, or close_notify before the handshake finished. In TLS 1.3 a server decides about a client certificate after the client's handshake is complete, so the client reads that alert from its first `recv`. |
+| `peerAlert(alert)` | The peer sent a fatal alert, or close_notify before the handshake finished. In TLS 1.3 a server decides about a client certificate after the client's handshake is complete, so the client reads that alert from its first `readSome`. |
 | `peerAlertUnrecognised(code)` | The peer sent an alert whose code `TlsAlert` does not name. |
 
 `TlsAlert` is every alert description of RFC 8446 section 6, with its code point as the raw value: `closeNotify` (0),
@@ -2990,7 +3070,7 @@ field.
 ```maxon
 function serveOnce(listener TcpListener) returns ExitCode throws NetworkError
 	let conn = try listener.accept()
-	_ = try conn.recv(4096)
+	_ = try conn.readSome(4096) otherwise return 1
 	_ = try conn.send("HTTP/1.1 200 OK\r\nX-Demo: yes\r\nContent-Length: 2\r\n\r\nhi")
 	conn.close()
 	return 0
@@ -4209,6 +4289,7 @@ and time of day use `WallClock`.
 | `Clock.elapsedNanos(since InstantNanos)` | `DurationNanos` | Nanoseconds since a `nowNanos()` reading; `0` if the clock appears to go backwards. |
 | `Clock.nowMs()` | `InstantMs` | The same clock in milliseconds. |
 | `Clock.elapsedMs(since InstantMs)` | `DurationMs` | Milliseconds since a `nowMs()` reading. |
+| `Clock.remainingMs(started InstantMs, deadlineMs DurationMs)` | `DurationMs` | What is left of a `deadlineMs` budget measured from the `nowMs()` reading `started`; `0` once it has passed. |
 | `Clock.osTickMs()` | `InstantMs` | How long the machine has been up, in milliseconds, from the operating system's tick count. It moves in host ticks, up to 16 ms apart on `x64-windows`. |
 | `Clock.threadCpuTicks()` | `ThreadCpuTicks` | CPU time the calling thread has consumed. It advances only while the thread runs on a core, so a difference of two readings is that thread's cost alone, whatever else the machine runs. |
 

@@ -9,7 +9,7 @@ category: system
 
 ## Documentation
 
-A socket is registered with the network poller and driven non-blocking, so `connect`, `recv` and `send`
+A socket is registered with the network poller and driven non-blocking, so `connect`, `readSome` and `send`
 PARK the green thread that issued them and hand the processor back. The property is that a green thread
 waiting on a socket holds NO machine: it is suspended on the poller until the descriptor is readable or
 writable, and never sits inside a kernel call holding the processor it was running on.
@@ -34,7 +34,7 @@ address it did not choose — and how two of these cases running at once cannot 
 
 <!-- test: netpoll-socket.n-concurrent-reads-do-not-serialise -->
 <!-- procs: 1 -->
-**FOUR ECHO ROUND-TRIPS IN FLIGHT AT ONE PROCESSOR, AND THE MONITOR NEVER FIRES.** A blocking `recv` holds the
+**FOUR ECHO ROUND-TRIPS IN FLIGHT AT ONE PROCESSOR, AND THE MONITOR NEVER FIRES.** A blocking `readSome` holds the
 only machine there, so four round-trips cost four times one round-trip and sysmon retakes the processor out of
 the kernel call; a reader parked on the poller holds nothing, so the four overlap and nothing is retaken.
 
@@ -42,7 +42,7 @@ the kernel call; a reader parked on the poller holds nothing, so the four overla
 ELSE.** A retake is sysmon doing its job for a genuinely blocking call, and x64-windows' FIRST crossing
 carries one that is not this band: Winsock's once-per-process startup sits behind the first socket of the process.
 It is a real blocking call and sysmon is right to retake it — it simply says nothing about what a parked
-`recv` does to its processor. So the warm-up pays for it, and the four measured round-trips cross a window
+`readSome` does to its processor. So the warm-up pays for it, and the four measured round-trips cross a window
 that holds only calls the scheduler waits for on the poller (`a-literal-address-round-trip-enters-no-kernel-bracket`
 counts that).
 
@@ -62,7 +62,7 @@ monitor never had to rescue a machine"* is vacuous. So one ATTEMPT owns its dist
 its peer, the warm-up, the four round-trips and both counter readings; an attempt the monitor disturbed is
 not tolerated but DISCARDED — its peer awaited, its listener dropped — and repeated, up to `attemptCap`
 times, and only an attempt with EXACTLY ZERO retakes and preemptions prints. A genuine defect fails
-every attempt, since a `recv` that holds the machine is retaken on each one, and exhausting the cap prints
+every attempt, since a `readSome` that holds the machine is retaken on each one, and exhausting the cap prints
 the same `stuck=true` the defect would; an attempt with fewer than four echoes is the case's own
 failure and prints at once.
 ```maxon
@@ -83,7 +83,7 @@ function echoRounds(listener TcpListener) returns Tally
 
 	while served < rounds 'serving'
 		let conn = try listener.accept() otherwise return served
-		let heard = try conn.recv(1024) otherwise return served
+		let heard = String.from(try conn.readSome(1024) otherwise return served)
 		_ = try conn.send(heard) otherwise return served
 		served = served + 1
 	end 'serving'
@@ -95,7 +95,7 @@ function echoOnce(port NetworkPort, n Tally) returns Tally throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: port)
 	let msg = "maxon line {n}\n"
 	_ = try client.send(msg)
-	let response = try client.recv(1024)
+	let response = String.from(try client.readSome(1024) otherwise return 0)
 
 	if response == msg 'echoed'
 		return 1
@@ -196,7 +196,7 @@ function echoRounds(listener TcpListener) returns Tally
 
 	while served < rounds 'serving'
 		let conn = try listener.accept() otherwise return served
-		let heard = try conn.recv(1024) otherwise return served
+		let heard = String.from(try conn.readSome(1024) otherwise return served)
 		_ = try conn.send(heard) otherwise return served
 		served = served + 1
 	end 'serving'
@@ -208,7 +208,7 @@ function echoOnce(port NetworkPort, n Tally) returns Tally throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: port)
 	let msg = "maxon line {n}\n"
 	_ = try client.send(msg)
-	let response = try client.recv(1024)
+	let response = String.from(try client.readSome(1024) otherwise return 0)
 
 	if response == msg 'echoed'
 		return 1
@@ -267,7 +267,7 @@ themselves: two concurrent round-trips must leave at least one poller park each 
 still answer correctly — a counter that rises while the data is wrong is measuring the wrong thing.
 
 ⚠ **THE PEER RUNS ONLY WHEN A READER YIELDS, WHICH IS WHAT MAKES THE FLOOR A FLOOR.** It shares the readers'
-strand, so a reader's `recv` is always issued before anything has been echoed to it and always finds the
+strand, so a reader's `readSome` is always issued before anything has been echoed to it and always finds the
 socket empty. The peer's own parks can only add to the count above that floor.
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -280,7 +280,7 @@ function echoRounds(listener TcpListener) returns Tally
 
 	while served < readers 'serving'
 		let conn = try listener.accept() otherwise return served
-		let heard = try conn.recv(1024) otherwise return served
+		let heard = String.from(try conn.readSome(1024) otherwise return served)
 		_ = try conn.send(heard) otherwise return served
 		served = served + 1
 	end 'serving'
@@ -292,7 +292,7 @@ function echoOnce(port NetworkPort, n Tally) returns Tally throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: port)
 	let msg = "maxon line {n}\n"
 	_ = try client.send(msg)
-	let response = try client.recv(1024)
+	let response = String.from(try client.readSome(1024) otherwise return 0)
 
 	if response == msg 'echoed'
 		return 1
@@ -376,13 +376,15 @@ function main() returns ExitCode
 	var open = true
 
 	while open 'reading'
-		if let chunk = try client.recv(1024) 'got'
-			heard = "{heard}{chunk}"
+		if let chunk = try client.readSome(1024) 'got'
+			heard = "{heard}{String.from(chunk)}"
+			open = not chunk.isEmpty()
 		end 'got' else (e) 'failed'
 			match e 'why'
 				timedOut then timeouts = timeouts + 1
-				connectionClosed then open = false
-				default panic("unreachable: a read of a peer that sent and closed ends in its bytes, its close or its deadline")
+				failed or
+				closed or
+				secure then panic("unreachable: a read of a peer that sent and closed ends in its bytes, its close or its deadline")
 			end 'why'
 
 			try client.setReadDeadline(0) otherwise panic("unreachable: the reading side is still open")
@@ -500,7 +502,7 @@ timedOut
 
 <!-- test: netpoll-socket.drop-a-parked-reader -->
 <!-- procs: 1 -->
-**A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `recv` DOES NOT HANG THE EXIT.** `main` spawns a reader
+**A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `readSome` DOES NOT HANG THE EXIT.** `main` spawns a reader
 that connects and then reads from a peer that never writes, waits until that reader is observably parked on
 the poller INSIDE the read, and lets the promise drop at scope exit without ever awaiting it. The drop must
 unregister the reader from the poller and RENOUNCE it: a reader still registered when its stack is gone is a
@@ -508,7 +510,7 @@ use-after-free the next readiness event walks into, and a reader the drop cannot
 exit's join waiting forever — the case TIMES OUT rather than failing.
 
 ⭐ **THE READER NAMES THE COUNT ITS OWN PARK WILL REACH, SO NO SLEEP HAS TO BE LONG ENOUGH.** `stall`
-publishes `parkedFrom` in the one statement before its `recv`: the count as it stood with the connect already
+publishes `parkedFrom` in the one statement before its `readSome`: the count as it stood with the connect already
 behind it, plus one. `parkedInRecv()` is then a READING rather than a wait — the count has arrived at that
 mark — and only a netpoll commit can move it there. `main` parks on a timer, which this counter does not see;
 the listener never accepts and the bind parks nothing; so the reader's read is the one park left to move it.
@@ -539,7 +541,7 @@ the thread that made it. At
 more than one processor the same two lines would be an unsynchronised word shared by two machines.
 
 ⚠ **THE LISTENER IS THE PEER, AND IT NEVER ACCEPTS.** The kernel completes the handshake into the backlog, so
-the connection is ESTABLISHED and the reader's `recv` genuinely parks — while nothing on the other side can
+the connection is ESTABLISHED and the reader's `readSome` genuinely parks — while nothing on the other side can
 ever write to it, or close it out from under the drop this case is about.
 
 ⚠ **THE STACK IS FREED BY THE THREAD'S OWN COMPLETION, NOT BY THE DROP.** Nothing can unwind a SUSPENDED
@@ -573,7 +575,7 @@ function stall(listener TcpListener, parkedFrom ParkMark) returns ExitCode throw
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
 
 	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-	_ = try client.recv(1024)
+	_ = try client.readSome(1024) otherwise return 1
 
 	return 0
 end 'stall'
@@ -607,7 +609,7 @@ dropped=true
 **A RENOUNCED COROUTINE MAY NOT OPEN A READ NOTHING CAN END.** The drop is one-shot: it reaches the thread in
 whatever state it is in and is then spent. A coroutine dropped while it is on a TIMER — a `sleep`, or the I/O
 yield every blocking operation takes, which is a timer park with a deadline of `now` — is renounced and simply
-carries on, which is the ruling a dropped `sleep` already has. Here it carries on into a `recv` on a peer that
+carries on, which is the ruling a dropped `sleep` already has. Here it carries on into a `readSome` on a peer that
 never writes, and the wait it then opens has no ender left: the dropper has already spent itself.
 
 ⚠ **THE HANG IS SILENT, WHICH IS WHY THE VERDICT IS A TIMEOUT.** The read publishes a waiter, so
@@ -636,7 +638,7 @@ function stall(listener TcpListener, dialled DialledFlag) returns ExitCode throw
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
 	dialled.publish(1 as Dialled)
 	sleep(1000)
-	_ = try client.recv(1024)
+	_ = try client.readSome(1024) otherwise return 1
 
 	return 0
 end 'stall'
@@ -670,10 +672,10 @@ dropped=true
 **A SOCKET HAS ONE OWNER AT A TIME, SO NO ONE CAN CLOSE IT UNDER A PARKED READER.** `async readUntilClosed(client)`
 lends the socket to the coroutine that reads it until the promise is awaited or cancelled, so `readOver` closing it
 in between is a use of a lent value (E3102). The reader closes its own socket when it returns, and it cannot do that
-while it is parked in `recv`.
+while it is parked in `readSome`.
 ```maxon
 function readUntilClosed(client TcpClient) returns ExitCode
-	_ = try client.recv(1024) otherwise return 1
+	_ = try client.readSome(1024) otherwise return 1
 
 	return 0
 end 'readUntilClosed'
@@ -716,7 +718,7 @@ in between. The closed descriptor is therefore the lowest free one when the seco
 that connection takes it.
 
 ⚠ **THE PEER MUST OUTLAST A CONNECTION THAT DIES WITHOUT SPEAKING.** The first connection is closed without ever
-writing, so the peer's read of it ends in an error; the peer is finished only once it has ECHOED, which is the
+writing, so the peer's read of it ends with no bytes or with an error; the peer is finished only once it has ECHOED, which is the
 second connection.
 
 ⚠ **THE WITNESS IS THAT THE SECOND CONNECTION'S READ COMPLETES AT ALL.** A stranded reader is not a wrong
@@ -726,10 +728,10 @@ a read on a HEALTHY socket has an answer waiting for it, which is what makes "ne
 and not the peer.
 
 ⚠ **THE OWNER CANCELS ONLY WHEN THE READER IS COUNTED PARKED, AND THE PEER'S OWN PARK IS COUNTED OUT FIRST.** The
-peer also commits to the poller, in its `recv` of this same connection, so a count that moved could be the
-peer's. `echoUntilAnswered` publishes `peerFrom` in the statement before that `recv`, and the owner waits until the
+peer also commits to the poller, in its `readSome` of this same connection, so a count that moved could be the
+peer's. `echoUntilAnswered` publishes `peerFrom` in the statement before that `readSome`, and the owner waits until the
 netpoll count has reached it; only then does the owner start the reader, whose `readNothing` publishes
-`parkedFrom` before its own `recv`, and the owner waits for that count too. Nothing else is alive to commit between
+`parkedFrom` before its own `readSome`, and the owner waits for that count too. Nothing else is alive to commit between
 the two waits. Neither wait has a bound, so a park that never arrives is a TIMEOUT and no sleep has to outlast the
 host.
 
@@ -760,12 +762,12 @@ function readNothing(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 
 	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
-	try client.recv(1024) otherwise (e) 'readErr'
+	try client.readSome(1024) otherwise (e) 'readErr'
 		match e 'which'
-			recvFailed then code = 1
-			connectionClosed then code = 2
+			failed then code = 1
+			closed then code = 2
 			timedOut then code = 3
-			default panic("unreachable: a cancelled read on a socket nothing writes to ends in one of the three above")
+			secure then panic("unreachable: a plain socket's read throws no TLS failure")
 		end 'which'
 	end 'readErr'
 
@@ -778,8 +780,13 @@ function echoUntilAnswered(listener TcpListener, peerFrom ParkMark) returns Answ
 	while answered == 0 'serving'
 		let conn = try listener.accept() otherwise return 0
 		peerFrom.publish(Scheduler.counters().netpollBlocks + 1)
-		let heard = try conn.recv(1024) otherwise continue
-		_ = try conn.send(heard) otherwise return 0
+		let heard = try conn.readSome(1024) otherwise continue
+
+		if heard.isEmpty() 'silent'
+			continue
+		end 'silent'
+
+		_ = try conn.send(String.from(heard)) otherwise return 0
 		answered = 1
 	end 'serving'
 
@@ -831,7 +838,7 @@ function reuseItsDescriptor(first TcpClient, port NetworkPort, peerFrom ParkMark
 
 	_ = try second.send("reuse\n") otherwise return "the send failed\n"
 
-	let echo = try second.recv(1024) otherwise return "the echo never arrived\n"
+	let echo = String.from(try second.readSome(1024) otherwise return "the echo never arrived\n")
 
 	return "echoed={echo == "reuse\n"}\n"
 end 'reuseItsDescriptor'
@@ -850,7 +857,7 @@ socket to the coroutine that reads it until the promise is awaited or cancelled,
 between is a use of a lent value (E3102). Two reads of one socket are never in flight together.
 ```maxon
 function readNothing(client TcpClient) returns ExitCode
-	_ = try client.recv(1024) otherwise return 1
+	_ = try client.readSome(1024) otherwise return 1
 
 	return 0
 end 'readNothing'
@@ -859,7 +866,7 @@ function readOver(client TcpClient) returns ExitCode
 	let first = async readNothing(client)
 
 	Scheduler.yield()
-	_ = try client.recv(1024) otherwise return 2
+	_ = try client.readSome(1024) otherwise return 2
 
 	return await first
 end 'readOver'
@@ -890,7 +897,7 @@ so a reader that never parks is a TIMEOUT and no sleep has to outlast the host.
 them is the owner's.
 ```maxon
 function readNothing(client TcpClient) returns ExitCode
-	_ = try client.recv(1024) otherwise return 1
+	_ = try client.readSome(1024) otherwise return 1
 
 	return 0
 end 'readNothing'
@@ -907,11 +914,11 @@ function readOver(client TcpClient, peer TcpClient) returns String
 
 	_ = try peer.send("late") otherwise return "the send failed"
 
-	let heard = try client.recv(1024) otherwise (e) 'unheard'
+	let heard = try client.readSome(1024) otherwise (e) 'unheard'
 		return "recv threw {e.name}"
 	end 'unheard'
 
-	return "heard={heard}"
+	return "heard={String.from(heard)}"
 end 'readOver'
 
 function main() returns ExitCode
@@ -946,7 +953,7 @@ typealias Served = int(0 to 1)
 
 function serveOne(listener TcpListener) returns Served
 	let conn = try listener.accept() otherwise return 0
-	let heard = try conn.recv(1024) otherwise return 0
+	let heard = String.from(try conn.readSome(1024) otherwise return 0)
 	_ = try conn.send(heard) otherwise return 0
 
 	return 1
@@ -957,7 +964,7 @@ function roundTrip(port NetworkPort) returns bool
 
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
 	_ = try client.send(payload) otherwise return false
-	let answer = try client.recv(1024) otherwise return false
+	let answer = String.from(try client.readSome(1024) otherwise return false)
 
 	return answer == payload
 end 'roundTrip'
@@ -1016,7 +1023,7 @@ function acceptOne(listener TcpListener, parkedFrom ParkMark) returns Served
 	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	let conn = try listener.accept() otherwise return 0
-	_ = try conn.recv(1024) otherwise return 0
+	_ = try conn.readSome(1024) otherwise return 0
 
 	return 1
 end 'acceptOne'
@@ -1075,11 +1082,11 @@ function serveBoth(listener TcpListener) returns Served
 
 	var served = 0 as Served
 
-	let fromEarlier = try earlier.recv(1024) otherwise return served
+	let fromEarlier = String.from(try earlier.readSome(1024) otherwise return served)
 	_ = try earlier.send(fromEarlier) otherwise return served
 	served = served + 1
 
-	let fromLater = try later.recv(1024) otherwise return served
+	let fromLater = String.from(try later.readSome(1024) otherwise return served)
 	_ = try later.send(fromLater) otherwise return served
 	served = served + 1
 
@@ -1089,7 +1096,7 @@ end 'serveBoth'
 function roundTrip(port NetworkPort, payload String) returns bool
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
 	_ = try client.send(payload) otherwise return false
-	let answer = try client.recv(1024) otherwise return false
+	let answer = String.from(try client.readSome(1024) otherwise return false)
 
 	return answer == payload
 end 'roundTrip'
@@ -1421,7 +1428,7 @@ function halfClosed(listener TcpListener) returns String
 		return "shutdown threw {e.name}"
 	end 'unshut'
 
-	let heard = try conn.recv(1024) otherwise (e) 'unheard'
+	let heard = try conn.readSome(1024) otherwise (e) 'unheard'
 		return "recv threw {e.name}"
 	end 'unheard'
 
@@ -1429,7 +1436,7 @@ function halfClosed(listener TcpListener) returns String
 
 	let again = "shutdown after close {shutdownOutcome(conn)}"
 
-	return "heard={heard} {again}"
+	return "heard={String.from(heard)} {again}"
 end 'halfClosed'
 
 function shutdownOutcome(conn TcpClient) returns String
@@ -1441,9 +1448,15 @@ function shutdownOutcome(conn TcpClient) returns String
 end 'shutdownOutcome'
 
 function nextRead(client TcpClient) returns String
-	return try client.recv(1024) otherwise (e) 'unread'
+	let read = try client.readSome(1024) otherwise (e) 'unread'
 		return e.name
 	end 'unread'
+
+	if read.isEmpty() 'ended'
+		return "ended"
+	end 'ended'
+
+	return String.from(read)
 end 'nextRead'
 
 function exchangeOver(listener TcpListener) returns ExitCode
@@ -1476,7 +1489,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-first=before then=connectionClosed
+first=before then=ended
 heard=after shutdown after close threw connectionClosed
 ```
 ```exitcode
@@ -1521,9 +1534,11 @@ function greet(port NetworkPort) returns ExitCode
 end 'greet'
 
 function greetingOf(conn TcpClient) returns String
-	return try conn.recv(1024) otherwise (e) 'unread'
+	let read = try conn.readSome(1024) otherwise (e) 'unread'
 		return e.name
 	end 'unread'
+
+	return String.from(read)
 end 'greetingOf'
 
 function serveTheGreeting(listener TcpListener) returns String

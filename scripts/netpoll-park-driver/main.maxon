@@ -53,11 +53,18 @@ function reader(lines Count) returns Count
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise panic("spawn failed")
 
+	let taken = try child.takeStdout() otherwise panic("stdout already taken")
+	let output = merge taken
 	var n = 0 as Count
 
 	while true 'lineLoop'
-		_ = try child.readStdoutLine() otherwise break
-		n = n + 1
+		let read = try output.readLine() otherwise break
+
+		match read 'read'
+			line then n = n + 1
+			ended then break
+			pastTheCap then panic("a line of the paced producer ran past the line cap")
+		end 'read'
 	end 'lineLoop'
 
 	child.release()

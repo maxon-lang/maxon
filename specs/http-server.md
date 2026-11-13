@@ -195,7 +195,7 @@ served=3 status=200 body=host=::1 authorityHost=[::1] path=/hello
 
 ### A POST body arrives whole
 
-⚠ **A BODY LARGER THAN ONE READ IS THE POINT.** A server that answered after its first `recv` would be
+⚠ **A BODY LARGER THAN ONE READ IS THE POINT.** A server that answered after its first read would be
 right about every short body and wrong about every real one, so the handler answers the byte COUNT it
 received and the case pins it against the count the client sent.
 
@@ -574,7 +574,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 		peer.cancel()
 		return 3
 	end 'cancelled17'
-	_ = try client.recv(ReadBufferBytes) otherwise 'cancelled18'
+	_ = try client.readSome(ReadBufferBytes) otherwise 'cancelled18'
 		peer.cancel()
 		return 4
 	end 'cancelled18'
@@ -626,7 +626,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -703,7 +703,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -758,7 +758,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -818,7 +818,7 @@ end 'statusCodeOf'
 
 function saySilence(port NetworkPort) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -890,7 +890,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -949,7 +949,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -968,7 +968,7 @@ end 'serveOne'
 
 function answerWithABadHeaderLine(listener TcpListener) returns Served
 	let connection = try listener.accept() otherwise return 1
-	_ = try connection.recv(ReadBufferBytes) otherwise return 2
+	_ = try connection.readSome(ReadBufferBytes) otherwise return 2
 	_ = try connection.send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nBadHeaderLine\r\n\r\nhi") otherwise return 3
 	connection.close()
 
@@ -1039,7 +1039,7 @@ function trickle(port NetworkPort) returns String
 		Scheduler.yield()
 	end 'eachByte'
 
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	let firstLine = try answer.split("\r\n").get(0) otherwise return "no-status-line"
@@ -1109,7 +1109,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -1350,7 +1350,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -1459,7 +1459,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -1537,7 +1537,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -1635,8 +1635,9 @@ function everythingFrom(client TcpClient) returns String
 	var open = true
 
 	while open 'untilClosed'
-		if let chunk = try client.recv(ReadBufferBytes) 'more'
-			answer.append(chunk)
+		if let chunk = try client.readSome(ReadBufferBytes) 'more'
+			answer.append(String.from(chunk))
+			open = not chunk.isEmpty()
 		end 'more' else 'closed'
 			open = false
 		end 'closed'
@@ -1911,7 +1912,11 @@ function exchangeOver(server HttpServer) returns ExitCode
 		peer.cancel()
 		return 3
 	end 'cancelled32'
-	let refused = statusCodeOf(try client.recv(ReadBufferBytes) otherwise "recv-failed")
+	let refusal = try client.readSome(ReadBufferBytes) otherwise 'cancelled33'
+		peer.cancel()
+		return 5
+	end 'cancelled33'
+	let refused = statusCodeOf(String.from(refusal))
 	client.close()
 
 	let response = try HttpClient.get("http://127.0.0.1:{boundPort}/next") otherwise 'cancelled36'
@@ -1977,15 +1982,18 @@ function trickle(client TcpClient) returns String
 		_ = try client.send("a") otherwise return "send-failed"
 		try client.setReadDeadline(1) otherwise return "deadline-failed"
 
-		if let answer = try client.recv(ReadBufferBytes) 'answered'
-			client.close()
-
-			return statusCodeOf(answer)
-		end 'answered' else (e) 'notYet'
-			if e != NetworkError.timedOut 'gone'
-				return e.name
-			end 'gone'
+		let answer = try client.readSome(ReadBufferBytes) otherwise (e) 'notYet'
+			match e 'cause'
+				timedOut then continue
+				failed or
+				closed or
+				secure then return e.name
+			end 'cause'
 		end 'notYet'
+
+		client.close()
+
+		return statusCodeOf(String.from(answer))
 	end 'trickling'
 end 'trickle'
 
@@ -2060,13 +2068,13 @@ function upload(port NetworkPort) returns String
 		return "send {e.name}"
 	end 'sendFailed'
 
-	let answer = try client.recv(ReadBufferBytes) otherwise (e) 'recvFailed'
+	let answer = try client.readSome(ReadBufferBytes) otherwise (e) 'recvFailed'
 		return "recv {e.name}"
 	end 'recvFailed'
 
 	client.close()
 
-	return statusCodeOf(answer)
+	return statusCodeOf(String.from(answer))
 end 'upload'
 
 function exchangeOver(server HttpServer) returns ExitCode
@@ -2111,7 +2119,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -2230,7 +2238,7 @@ function exchangeOver(listening HttpServer) returns ExitCode
 		peer.cancel()
 		return 3
 	end 'cancelled40'
-	_ = try client.recv(1) otherwise 'cancelled41'
+	_ = try client.readSome(1) otherwise 'cancelled41'
 		peer.cancel()
 		return 4
 	end 'cancelled41'
@@ -2273,8 +2281,9 @@ function everythingFrom(client TcpClient) returns String
 	var open = true
 
 	while open 'untilClosed'
-		if let chunk = try client.recv(ReadBufferBytes) 'more'
-			answer.append(chunk)
+		if let chunk = try client.readSome(ReadBufferBytes) 'more'
+			answer.append(String.from(chunk))
+			open = not chunk.isEmpty()
 		end 'more' else 'closed'
 			open = false
 		end 'closed'
@@ -2379,7 +2388,7 @@ end 'statusCodeOf'
 function shout(port NetworkPort, block String) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 	_ = try client.send(block) otherwise return "send-failed"
-	let answer = try client.recv(ReadBufferBytes) otherwise return "recv-failed"
+	let answer = String.from(try client.readSome(ReadBufferBytes) otherwise return "recv-failed")
 	client.close()
 
 	return statusCodeOf(answer)
@@ -2453,8 +2462,9 @@ function everythingFrom(client TcpClient) returns String
 	var open = true
 
 	while open 'untilClosed'
-		if let chunk = try client.recv(ReadBufferBytes) 'more'
-			answer.append(chunk)
+		if let chunk = try client.readSome(ReadBufferBytes) 'more'
+			answer.append(String.from(chunk))
+			open = not chunk.isEmpty()
 		end 'more' else 'closed'
 			open = false
 		end 'closed'
@@ -2556,8 +2566,9 @@ function everythingFrom(client TcpClient) returns String
 	var open = true
 
 	while open 'untilClosed'
-		if let chunk = try client.recv(ReadBufferBytes) 'more'
-			answer.append(chunk)
+		if let chunk = try client.readSome(ReadBufferBytes) 'more'
+			answer.append(String.from(chunk))
+			open = not chunk.isEmpty()
 		end 'more' else 'closed'
 			open = false
 		end 'closed'

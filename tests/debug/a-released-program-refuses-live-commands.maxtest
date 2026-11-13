@@ -103,11 +103,11 @@ end 'firstLinesOf'
 
 	function systemEvidence(pid Pid, staged FilePath) returns String
 		let predicate = "eventMessage CONTAINS \"{pid}\""
-		let shown = try Subprocess.run(Executable.name(SystemLogTool), arguments: ["show", "--last", "{SystemLogWindowSeconds}s", "--style", "compact", "--predicate", predicate], timeoutMs: SystemLogMs) otherwise (e) 'noLog'
+		let shown = try Subprocess.run(Executable.name(SystemLogTool), arguments: ["show", "--last", "{SystemLogWindowSeconds}s", "--style", "compact", "--predicate", predicate], deadline: WaitDeadline.within(SystemLogMs)) otherwise (e) 'noLog'
 			return "(`{SystemLogTool} show` could not run: {e.displayReason()})"
 		end 'noLog'
 
-		let reports = try Subprocess.run(Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path")), arguments: ["-c", CrashReportScript, CrashReportScriptName, staged.toString()], timeoutMs: CrashReportsMs) otherwise (e) 'noReports'
+		let reports = try Subprocess.run(Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path")), arguments: ["-c", CrashReportScript, CrashReportScriptName, staged.toString()], deadline: WaitDeadline.within(CrashReportsMs)) otherwise (e) 'noReports'
 			return "(the crash reports could not be searched: {e.displayReason()})"
 		end 'noReports'
 

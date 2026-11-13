@@ -7,7 +7,7 @@ public let HttpContentTypeHeaderName = "content-type"
 public let HttpReadChunkBytes = 8192
 public let HttpLineBreak = "\r\n"
 public let HttpLargestBodyBytes = 1099511627776 as BytePos
-let MaxIgnoredLeadingEmptyLines = 4 as IgnoredLineTally
+let MaxIgnoredLeadingEmptyLines = 4
 let FirstInterimStatus = 100
 let SwitchingProtocolsStatus = 101
 let LastInterimStatus = 199
@@ -28,7 +28,7 @@ let TransferEncodingHeaderName = "transfer-encoding"
 let SetCookieHeaderName = "set-cookie"
 let SentHostName = "Host"
 let SentConnectionName = "Connection"
-let SentContentLengthName = "Content-Length"
+public let SentContentLengthName = "Content-Length"
 let ClosingConnection = "close"
 let RepeatedListSeparator = ", "
 let RepeatedLineSeparator = "\n"
@@ -230,144 +230,32 @@ public function httpResponseWith(code StatusCode, body String, contentType Strin
 	return HttpResponse.create(code, reasonPhrase: reasonPhraseOf(code), responseHeaders: headers, responseBody: body)
 end 'httpResponseWith'
 
-union HttpFound
-	at(bytePos BytePos)
-	absent
-end 'HttpFound'
+public typealias HttpTransportReader = StreamReader with HttpTransport
 
-public type HttpInbound
-	public var connection as HttpTransport
-	var received as String
-	var consumed as BytePos
+public function httpReadHead(reader HttpTransportReader, cap LineCap) returns LineRead throws StreamError
+	var skipped = 0 as IgnoredLineTally
 
-	public static function over(connection HttpTransport) returns HttpInbound
-		return HttpInbound{connection: connection, received: "", consumed: 0}
-	end 'over'
+	while skipped < MaxIgnoredLeadingEmptyLines 'leadingEmptyLines'
+		let next = try reader.readUntil(HttpLineBreak, cap: 0)
 
-	public function unreadBytes() returns BytePos
-		return self.received.byteLength() - self.consumed
-	end 'unreadBytes'
+		match next 'next'
+			line then skipped = skipped + 1
+			ended or
+			pastTheCap then break 'leadingEmptyLines'
+		end 'next'
+	end 'leadingEmptyLines'
 
-	public function receiveMore() throws HttpTransportFault
-		let arrived = try self.connection.recv(HttpReadChunkBytes)
+	return try reader.readUntil(HeadBlockTerminator, cap: cap)
+end 'httpReadHead'
 
-		if self.consumed > 0 'compact'
-			self.received = urlByteRange(self.received, from: self.consumed, until: self.received.byteLength())
-			self.consumed = 0
-		end 'compact'
+public function httpReadDeclared(reader HttpTransportReader, length BytePos) returns String throws StreamError
+	let body = try reader.readBytes(length)
 
-		self.received.append(arrived)
-	end 'receiveMore'
+	if body.count() < length 'cutShort'
+		throw StreamError.closed
+	end 'cutShort'
 
-	public function take(byteCount BytePos) returns String
-		let taken = urlByteRange(self.received, from: self.consumed, until: self.consumed + byteCount)
-		self.consumed = self.consumed + byteCount
-
-		return taken
-	end 'take'
-
-	function skip(byteCount BytePos)
-		self.consumed = self.consumed + byteCount
-	end 'skip'
-
-	function unreadStartsWith(text String) returns bool
-		if self.unreadBytes() < text.byteLength() 'tooShort'
-			return false
-		end 'tooShort'
-
-		for pos in 0 upto text.byteLength() 'eachByte'
-			if self.received.byteAtOrPanic(self.consumed + pos) != text.byteAtOrPanic(pos) 'differs'
-				return false
-			end 'differs'
-		end 'eachByte'
-
-		return true
-	end 'unreadStartsWith'
-
-	// Resumes `needle - 1` bytes before where the last search stopped: a terminator split across two
-	// receives is still found, and the bytes already searched are not scanned again.
-	function find(needle String, searchedTo BytePos) returns HttpFound
-		let overlap = needle.byteLength() - 1
-		let windowStart = searchedTo - overlap if searchedTo > overlap else 0
-		let found = try self.received.bytePosOf(needle, from: self.consumed + windowStart) otherwise (cause) 'search'
-			if cause == StringError.notFound 'absent'
-				return HttpFound.absent
-			end 'absent'
-
-			panic("HttpInbound.find: the search starts inside what was received")
-		end 'search'
-
-		return HttpFound.at(found - self.consumed)
-	end 'find'
-end 'HttpInbound'
-
-public enum HttpDelimiter
-	head
-	line
-end 'HttpDelimiter'
-
-function delimiterText(delimiter HttpDelimiter) returns String
-	return match delimiter 'which'
-		head gives HeadBlockTerminator
-		line gives HttpLineBreak
-	end 'which'
-end 'delimiterText'
-
-function leadingEmptyLinesSkipped(delimiter HttpDelimiter) returns IgnoredLineTally
-	return match delimiter 'which'
-		head gives MaxIgnoredLeadingEmptyLines
-		line gives 0
-	end 'which'
-end 'leadingEmptyLinesSkipped'
-
-public union HttpDelimitedRead
-	delimited(text String)
-	pastTheCap
-end 'HttpDelimitedRead'
-
-public function httpReadDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos) returns HttpDelimitedRead throws HttpTransportFault
-	let terminator = delimiterText(delimiter)
-	let overlap = terminator.byteLength() - 1
-	var skippable = leadingEmptyLinesSkipped(delimiter)
-	var searchedTo = 0 as BytePos
-
-	while true 'fill'
-		while skippable > 0 and inbound.unreadStartsWith(HttpLineBreak) 'leadingEmptyLine'
-			inbound.skip(HttpLineBreak.byteLength())
-			skippable = skippable - 1
-			searchedTo = 0
-		end 'leadingEmptyLine'
-
-		match inbound.find(terminator, searchedTo: searchedTo) 'terminator'
-			at(textEnd) then return delimitedAt(inbound, textEnd: textEnd, terminator: terminator, cap: cap)
-			absent then searchedTo = inbound.unreadBytes()
-		end 'terminator'
-
-		if searchedTo > cap + overlap 'alreadyPastTheCap'
-			return HttpDelimitedRead.pastTheCap
-		end 'alreadyPastTheCap'
-
-		try inbound.receiveMore()
-	end 'fill'
-end 'httpReadDelimited'
-
-function delimitedAt(inbound HttpInbound, textEnd BytePos, terminator String, cap BytePos) returns HttpDelimitedRead
-	if textEnd > cap 'endedPastTheCap'
-		return HttpDelimitedRead.pastTheCap
-	end 'endedPastTheCap'
-
-	let text = inbound.take(textEnd)
-	inbound.skip(terminator.byteLength())
-
-	return HttpDelimitedRead.delimited(text)
-end 'delimitedAt'
-
-public function httpReadDeclared(inbound HttpInbound, length BytePos) returns String throws HttpTransportFault
-	while inbound.unreadBytes() < length 'fill'
-		try inbound.receiveMore()
-	end 'fill'
-
-	return inbound.take(length)
+	return String.from(body)
 end 'httpReadDeclared'
 
 public function httpParseRequestHead(head String, scheme HttpUrlScheme) returns HttpRequestHead throws HttpServerError
@@ -459,23 +347,52 @@ function knownMethodSpelled(spelled String) returns HttpMethod throws HttpServer
 	throw HttpServerError.unsupportedMethod
 end 'knownMethodSpelled'
 
-public function httpDeclaredBodyLength(headers HttpHeaders, cap HttpByteCap) returns BytePos throws HttpServerError
-	if not headers.has(ContentLengthHeaderName) 'noBody'
-		return 0
-	end 'noBody'
+public union DeclaredLength
+	undeclared
+	notADecimal(spelled String)
+	aboveTheBound
+	value(length BytePos)
+end 'DeclaredLength'
 
-	match declaredContentLength(headers, bound: cap as UrlDecimalBound) 'declared'
-		value(length) then return length as BytePos
+public function declaredLengthOf(headers HttpHeaders, bound UrlDecimalBound) returns DeclaredLength
+	let spelled = try headers.get(ContentLengthHeaderName) otherwise return DeclaredLength.undeclared
+
+	return match urlDecimalWithin(spelled, from: 0, until: spelled.byteLength(), bound: bound) 'declared'
+		value(length) gives DeclaredLength.value(length as BytePos)
+		notADecimal gives DeclaredLength.notADecimal(spelled)
+		aboveTheBound gives DeclaredLength.aboveTheBound
+	end 'declared'
+end 'declaredLengthOf'
+
+public function httpDeclaredBodyLength(headers HttpHeaders, cap HttpByteCap) returns BytePos throws HttpServerError
+	match declaredLengthOf(headers, bound: cap as UrlDecimalBound) 'declared'
+		undeclared then return 0
+		value(length) then return length
 		notADecimal then throw HttpServerError.malformedRequest
 		aboveTheBound then throw HttpServerError.bodyTooLarge
 	end 'declared'
 end 'httpDeclaredBodyLength'
 
-function declaredContentLength(headers HttpHeaders, bound UrlDecimalBound) returns UrlDecimalReading
-	let spelled = try headers.get(ContentLengthHeaderName) otherwise panic("declaredContentLength: every caller asks only after finding `{ContentLengthHeaderName}` present")
+public union HeaderBlockLength
+	undeclared
+	malformedBlock
+	notADecimal(spelled String)
+	aboveTheBound
+	value(length BytePos)
+end 'HeaderBlockLength'
 
-	return urlDecimalWithin(spelled, from: 0, until: spelled.byteLength(), bound: bound)
-end 'declaredContentLength'
+public function httpHeaderBlockLength(lines StringArray, bound UrlDecimalBound) returns HeaderBlockLength
+	let headers = HttpHeaders.create()
+
+	try parseHeaderLines(lines, from: 0, into: headers, side: HttpMessageSide.request) otherwise return HeaderBlockLength.malformedBlock
+
+	return match declaredLengthOf(headers, bound: bound) 'declared'
+		undeclared gives HeaderBlockLength.undeclared
+		value(length) gives HeaderBlockLength.value(length)
+		notADecimal(spelled) gives HeaderBlockLength.notADecimal(spelled)
+		aboveTheBound gives HeaderBlockLength.aboveTheBound
+	end 'declared'
+end 'httpHeaderBlockLength'
 
 public union HttpResponseFraming
 	bodiless
@@ -495,12 +412,9 @@ public function httpResponseFramingOf(response HttpResponse, method HttpMethod) 
 		return HttpResponseFraming.chunked if finalCodingIsChunked(response.headers()) else HttpResponseFraming.closeDelimited
 	end 'transferCoded'
 
-	if not response.headers().has(ContentLengthHeaderName) 'undeclared'
-		return HttpResponseFraming.closeDelimited
-	end 'undeclared'
-
-	match declaredContentLength(response.headers(), bound: HttpLargestBodyBytes as UrlDecimalBound) 'declared'
-		value(length) then return HttpResponseFraming.declared(length as BytePos)
+	match declaredLengthOf(response.headers(), bound: HttpLargestBodyBytes as UrlDecimalBound) 'declared'
+		undeclared then return HttpResponseFraming.closeDelimited
+		value(length) then return HttpResponseFraming.declared(length)
 		notADecimal or
 		aboveTheBound then throw HttpError.invalidResponse
 	end 'declared'

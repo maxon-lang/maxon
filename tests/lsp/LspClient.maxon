@@ -501,22 +501,6 @@ typealias LspRequestIdNumber = int(1 to i64.max)
 
 let FirstRequestId = 1
 
-enum FrameLengthError implements Error
-	unstated
-end 'FrameLengthError'
-
-union StatedFrameLength
-	unstated
-	stated(count ByteLimit)
-
-	function count() returns ByteLimit throws FrameLengthError
-		match self 'length'
-			unstated then throw FrameLengthError.unstated
-			stated(count) then return count
-		end 'length'
-	end 'count'
-end 'StatedFrameLength'
-
 // How many messages addressed to somebody else may arrive before this client stops waiting. Server
 // notifications are legitimate and unbounded in principle; a budget turns a server that answers nothing
 // into a named failure instead of a hang.
@@ -526,6 +510,7 @@ let UnaddressedMessageBudget = 64 as SkippedMessageTally
 
 public type LspClient
 	var server as StreamingSubprocess
+	var replies as ChildOutputReader
 	var nextRequestId as LspRequestIdNumber
 
 	// Every server-initiated notification seen and not yet taken, in arrival order. They arrive ahead
@@ -549,7 +534,12 @@ public type LspClient
 			panic("LspClient: the test could not run — `{binary.toString()} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
 		end 'spawnFailed'
 
-		return Self{server: spawned, nextRequestId: FirstRequestId, notifications: StringArray.create(0)}
+		let replies = try spawned.takeStdout() otherwise (e) 'stdoutNotTaken'
+			spawned.release()
+			panic("LspClient: the test could not run — the server's stdout could not be taken ({e.displayReason()}).")
+		end 'stdoutNotTaken'
+
+		return Self{server: spawned, replies: merge replies, nextRequestId: FirstRequestId, notifications: StringArray.create(0)}
 	end 'start'
 
 	// End the session and free the OS handle. MUST be called on every path — a dropped
@@ -560,7 +550,7 @@ public type LspClient
 	// inherits a machine with one more orphan on it.
 	public function release()
 		self.server.closeStdin()
-		try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise (failure) 'notExited'
+		try self.server.wait(WaitDeadline.within(ServerExitDeadlineMs)) otherwise (failure) 'notExited'
 			requireDeadlineKill(failure, what: "the language server")
 		end 'notExited'
 
@@ -693,7 +683,7 @@ public type LspClient
 	// Block until the server exits, and report how. A server that never exits is a defect this reports
 	// rather than a harness failure, so the deadline throws instead of panicking.
 	public function waitForExit() returns ProcessExitCode throws LspClientError
-		return try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise (e) 'neverExited'
+		return try self.server.wait(WaitDeadline.within(ServerExitDeadlineMs)) otherwise (e) 'neverExited'
 			throw LspClientError.transportFailed("the server did not exit within {ServerExitDeadlineMs} ms: {e.displayReason()}")
 		end 'neverExited'
 	end 'waitForExit'
@@ -1285,64 +1275,16 @@ public type LspClient
 		try self.writeFrame(Json.stringify(doc))
 	end 'sendNotification'
 
-	// ⚠ **THE COUNT INCLUDES THE LINE WRITER'S OWN NEWLINE, AND THAT IS THE WHOLE TRICK.**
-	// `writeStdinLine` is stdlib's only stdin writer and it appends an LF. A byte left OUTSIDE the frame
-	// would be read by the server as the start of the next message — a header line that is blank and
-	// carries no `Content-Length` — which desynchronizes the stream permanently. Counting it instead puts
-	// it inside the body, where RFC 8259 allows trailing whitespace after a value, so every conforming
-	// JSON parser sees the same message.
 	function writeFrame(body String) throws LspClientError
-		try self.server.writeStdinLine("Content-Length: {body.byteLength() + LineWriterNewlineByteCount}\r\n\r\n{body}") otherwise (e) 'writeFailed'
+		try self.server.writeStdinFrame(body) otherwise (e) 'writeFailed'
 			throw LspClientError.transportFailed("writing a {body.byteLength()}-byte message failed: {e.displayReason()}")
 		end 'writeFailed'
 	end 'writeFrame'
 
-	// Read one framed message: header lines until a blank one, then EXACTLY `Content-Length` bytes.
-	//
-	// ⛔ The body MUST be taken by count. It carries no terminator, so a line reader blocks for ever on a
-	// newline that never arrives, and `readStdoutLineCapped`'s cap is a truncation ceiling rather than a
-	// length. `readStdoutBytes` shares the per-handle buffer with the line reader, which is what lets the
-	// headers be read by line and the body by count on one stream.
 	function readFrame() returns String throws LspClientError
-		var statedLength = StatedFrameLength.unstated
-		var inHeaders = true
-
-		while inHeaders 'headers'
-			let line = try self.server.readStdoutLine() otherwise (e) 'headerReadFailed'
-				throw LspClientError.transportFailed(headerReadFailure(e))
-			end 'headerReadFailed'
-
-			if line.isEmpty() 'blankLine'
-				inHeaders = false
-			end 'blankLine' else 'headerField'
-				let parts = line.split(HeaderFieldSeparator)
-				let name = (try parts.get(0) otherwise "").toLower()
-
-				// Every other header is ignored, as the protocol requires of one a peer does not know.
-				if name == ContentLengthHeaderName 'contentLengthField'
-					let raw = (try parts.get(1) otherwise "").trim()
-					let length = try int.fromString(raw) otherwise 'notACount'
-						throw LspClientError.transportFailed("a Content-Length header is not a byte count: '{raw}'")
-					end 'notACount'
-
-					statedLength = StatedFrameLength.stated(length as ByteLimit)
-				end 'contentLengthField'
-			end 'headerField'
-		end 'headers'
-
-		let contentLength = try statedLength.count() otherwise throw LspClientError.transportFailed("the server's headers ended before any Content-Length header")
-
-		// A refusal throws; a SHORT answer is end of stream, which mid-frame is its own transport
-		// failure, so both are checked and neither is a whole frame.
-		let body = try self.server.readStdoutBytes(contentLength) otherwise (e) 'bodyReadFailed'
-			throw LspClientError.transportFailed("reading a {contentLength}-byte message body failed: {e.displayReason()}")
-		end 'bodyReadFailed'
-
-		if (body.byteLength() as ByteLimit) != contentLength 'truncated'
-			throw LspClientError.transportFailed("the server's stdout ended after {body.byteLength()} of {contentLength} body bytes")
-		end 'truncated'
-
-		return body
+		return try self.replies.readContentLengthFrame() otherwise (e) 'unframed'
+			throw LspClientError.transportFailed(e.displayReason())
+		end 'unframed'
 	end 'readFrame'
 
 	// Read messages until the one addressed to `id` arrives. Anything else — a notification, or a reply
@@ -1373,10 +1315,6 @@ public type LspClient
 		throw LspClientError.transportFailed("no reply to request {id} arrived within {UnaddressedMessageBudget} messages addressed elsewhere")
 	end 'awaitReply'
 end 'LspClient'
-
-function headerReadFailure(e SubprocessError) returns String
-	return "the server's stdout ended before a message's headers did" if e.endedTheStream() else "reading a message header failed: {e.displayReason()}"
-end 'headerReadFailure'
 
 export function fileUriOf(file FilePath) returns String
 	let slashed = file.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
@@ -2090,13 +2028,6 @@ let LoadingKey = "loading"
 let EventKey = "event"
 let AddedKey = "added"
 let RemovedKey = "removed"
-
-// The header field this client reads, lowercased: LSP header names are case-insensitive.
-let ContentLengthHeaderName = "content-length"
-let HeaderFieldSeparator = ":"
-
-// The one byte `writeStdinLine` appends beyond the body it is given.
-let LineWriterNewlineByteCount = 1
 
 // `CompletionTriggerKind.TriggerCharacter` — the client typed a character the server registered.
 let TriggerCharacterKind = 2

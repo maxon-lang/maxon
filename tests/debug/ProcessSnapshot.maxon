@@ -156,7 +156,7 @@ union ListedLookup
 end 'ListedLookup'
 
 function listedProcesses() returns ListedProcesses throws SubprocessError
-	let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], timeoutMs: ProcessListingMs)
+	let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], deadline: WaitDeadline.within(ProcessListingMs))
 	let processes = ListedProcesses.create(0)
 
 	for line in outputLines(listed.stdout) 'eachRow'
@@ -300,7 +300,7 @@ export function sampledStack(process Pid) returns String
 	#if os(Windows)
 		return "(this host has no sampler to read process {process})"
 	#else
-		let sampled = try Subprocess.run(Executable.name(SamplingTool), arguments: ["{process}", SamplingSeconds], timeoutMs: SamplingMs) otherwise (e) 'noSample'
+		let sampled = try Subprocess.run(Executable.name(SamplingTool), arguments: ["{process}", SamplingSeconds], deadline: WaitDeadline.within(SamplingMs)) otherwise (e) 'noSample'
 			return "(the sampler could not run: {e.displayReason()})"
 		end 'noSample'
 

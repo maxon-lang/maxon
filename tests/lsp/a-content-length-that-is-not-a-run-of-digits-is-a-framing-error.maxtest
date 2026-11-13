@@ -1,0 +1,31 @@
+let LspServerCommand = "lsp-server"
+let FramedBody = "\{\}"
+let FramingFailureExitCode = 1
+let FramingFailureReportLead = "maxon lsp-server: Content-Length is not a byte count: "
+let MalformedHeaderBlockReport = "maxon lsp-server: message header block is malformed"
+
+test 'a Content-Length that is not a run of digits is a framing error that ends the session'
+	let stated = ["-5", "+5", "4x0", "4:0", ""]
+
+	for value in stated 'eachValue'
+		let frame = "Content-Length: {value}\r\n\r\n{FramedBody}"
+		let argv = [LspServerCommand]
+		let run = spawnCompiler(argv, what: "the language server", standardInput: InputSource.bytes(frame))
+
+		Expect.equal(run.exitCode(), expected: FramingFailureExitCode, message: "a frame stating `Content-Length: {value}` ended the session with exit {run.exitCode()}, not the abnormal exit a framing error is. stderr: {run.stderr}")
+		Expect.contains(run.stderr, needle: "{FramingFailureReportLead}'{value}'", message: "a frame stating `Content-Length: {value}` was not reported as a framing error naming the stated value. stderr: {run.stderr}")
+		Expect.isEmpty(run.stdout, message: "a frame stating `Content-Length: {value}` was answered on stdout, though it was never framed. stdout: {run.stdout}")
+	end 'eachValue'
+
+	let headerBlocks = ["Content-Length: 2\r\nContent-Length: 3", "Content-Length : 2"]
+
+	for block in headerBlocks 'eachBlock'
+		let frame = "{block}\r\n\r\n{FramedBody}"
+		let argv = [LspServerCommand]
+		let run = spawnCompiler(argv, what: "the language server", standardInput: InputSource.bytes(frame))
+
+		Expect.equal(run.exitCode(), expected: FramingFailureExitCode, message: "a frame whose header block was `{block}` ended the session with exit {run.exitCode()}, not the abnormal exit a framing error is. stderr: {run.stderr}")
+		Expect.contains(run.stderr, needle: MalformedHeaderBlockReport, message: "a frame whose header block was `{block}` was not reported as a malformed header block. stderr: {run.stderr}")
+		Expect.isEmpty(run.stdout, message: "a frame whose header block was `{block}` was answered on stdout, though it was never framed. stdout: {run.stdout}")
+	end 'eachBlock'
+end 'a Content-Length that is not a run of digits is a framing error that ends the session'

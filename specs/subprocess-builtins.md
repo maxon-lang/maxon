@@ -19,7 +19,7 @@ that drive the public surface compile as an ordinary program.
 | Family | Intrinsics |
 |---|---|
 | the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fourteen arguments), `subprocessGetPid`, `subprocessQueueStdin`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
-| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll` / `subprocessWriteStdinBytes`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessReadStdoutBytes`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit`, and the three that ask rather than commit — `subprocessPollExit`, `subprocessTryReadStdoutLine` / `TryReadStderrLine` |
+| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll` / `subprocessWriteStdinBytes`, `subprocessReadAvailable`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit`, and `subprocessPollExit`, which asks rather than commits |
 | the helpers | `subprocessResolveOnPath`, `subprocessLastErrorMessage`, and `managedIsNull` (a `__ManagedMemory` predicate whose only corpus caller is the executable lookup) |
 
 `subprocessKill` and `subprocessSendSignal` are deliberately NOT surfaced, because no corpus file calls
@@ -85,7 +85,7 @@ live has the release close three garbage words as HANDLEs and zero memory it doe
 result readers are the same hazard one door over; each guards with its own `nullValue`.
 
 ⭐ **SO THE RULE IS STRUCTURAL, AND THE CASES BELOW COVER EVERY DOOR.**
-The guard sits at the ENTRY POINT, never at a wrapper, so both families — the twenty-two
+The guard sits at the ENTRY POINT, never at a wrapper, so both families — the
 `__Builtins.subprocess*` intrinsics and the seven bare-name `subp*` streaming builtins — reach it
 without either having anything to remember. `emitSubpSlotOf` is the one door from a caller's handle
 to a slot address — it decodes the slot index out of the packed handle, so the address it yields is
@@ -394,7 +394,7 @@ verbatim=true len=17 kind=0
 never spawned — a negative handle, one whose packed generation (`3` is generation 0) no live slot ever
 holds, and live-looking ones (`64`, `9999`) in a table no spawn allocated. ⚠ A guessed handle that
 happens to equal a live one is the live one; the guard names a child, it does not authenticate the
-caller. All ten: the two VOID entries and the two READERS are here precisely because they are the
+caller. All ten: the two VOID entries and the reader, once on each stream, are here precisely because they are the
 ones that fault unguarded, and reaching the final `print` at all is
 what proves they returned.
 ```maxon
@@ -407,8 +407,8 @@ function main() returns ExitCode
 	let writeBytes = __Builtins.subprocessWriteStdinBytes(-1, empty.cstr(), 0)
 	let queue = __Builtins.subprocessQueueStdin(64, empty.cstr(), 0)
 	print("getPid={getPid} waitCollect={waitCollect} waitExit={waitExit} writeAll={writeAll} writeBytes={writeBytes} queue={queue}\n")
-	let outLine = String.init(__Builtins.subprocessReadStdoutLine(-1, 64))
-	let errLine = String.init(__Builtins.subprocessReadStderrLine(64, 64))
+	let outLine = String.init(__Builtins.subprocessReadAvailable(-1, StdioStream.stdout.rawValue, 64))
+	let errLine = String.init(__Builtins.subprocessReadAvailable(64, StdioStream.stderr.rawValue, 64))
 	__Builtins.subprocessCloseStdin(-1)
 	__Builtins.subprocessReleaseHandle(-1)
 	print("readOut={outLine.byteLength()} readErr={errLine.byteLength()} voidsReturned=true\n")
@@ -710,8 +710,8 @@ kind=0 code=7
 <!-- test: subprocess-builtins.timeout-kills-the-child -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-A non-zero `timeoutMs` is a KILL-AFTER deadline, which is what `stdlib/Subprocess.maxon`'s
-`Configuration.timeoutMs` documents. The child would run for many seconds; the deadline fires,
+A non-zero `timeoutMs` argument is a KILL-AFTER deadline, which is what `stdlib/Subprocess.maxon`'s
+`WaitDeadline.within` hands the runtime. The child would run for many seconds; the deadline fires,
 `TerminateJobObject` ends the job the spawn put it in, and the result's status kind is `timedOut` (`2`). A
 wait that ignored the deadline would take twenty seconds and answer `0`. What the kill reaches BEYOND the
 direct child is `timeout-kills-the-whole-tree`'s subject, not this case's.
@@ -2096,8 +2096,10 @@ what "streaming" MEANS — there are no stdio triples to pass because the caller
 does take the environment pair the attached contract carries, and a `1` there is `EnvSource.parent`,
 under which the block beside it is never read.
 `writeStdinAll` writes exactly the bytes it is given (the surface appends its own newline), the
-`readStdoutLine` reader answers a `__ManagedMemory` rather than the `String` the bare-name
-`subpReadLine` builtin answers, and `waitExit` honours a deadline the streaming `subpWait` cannot.
+`subprocessReadAvailable` reader answers a `__ManagedMemory` rather than the `String` the bare-name
+`subpReadLine` builtin answers, and `waitExit` honours a deadline the streaming `subpWait` cannot. `cmd /c
+more` echoes `ping` CRLF-terminated and then a blank line, so the reads until an empty answer gather eight
+bytes.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -2123,10 +2125,21 @@ function main() returns ExitCode
 	let payload = "ping\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
-	let line = String.init(__Builtins.subprocessReadStdoutLine(h, 1024))
+	var output = ""
+
+	while true 'draining'
+		let chunk = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 1024))
+
+		if chunk.byteLength() == 0 'ended'
+			break
+		end 'ended'
+
+		output.append(chunk)
+	end 'draining'
+
 	let code = __Builtins.subprocessWaitExit(h, 0)
 	let expected = "ping"
-	print("wrote={wrote} echoed={line.startsWith(expected)} lineLen={line.byteLength()} code={code}")
+	print("wrote={wrote} echoed={output.startsWith(expected)} outLen={output.byteLength()} code={code}")
 	__Builtins.subprocessReleaseHandle(h)
 	return 0
 end 'main'
@@ -2135,29 +2148,21 @@ end 'main'
 0
 ```
 ```stdout
-wrote=0 echoed=true lineLen=6 code=0
+wrote=0 echoed=true outLen=8 code=0
 
 ```
 
-<!-- test: subprocess-builtins.streaming-read-exact-bytes -->
+<!-- test: read-available-answers-at-most-most-and-keeps-the-rest-for-the-next-read -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-`subprocessReadStdoutBytes(handle, n)` answers EXACTLY `n` bytes, and that is a different question
-from the one `subprocessReadStdoutLine` answers — which is why it exists. A line reader cannot
-express *"the next four bytes"*, so a framed protocol whose body length arrives in a header
-(`Content-Length: N\r\n\r\n<body>`, the LSP framing, whose body carries NO trailing newline) has no
-way to ask for the body: the line reader blocks for a newline that never comes.
-
-⭐ **THIS CASE DISCRIMINATES THE TWO READERS BY STOPPING MID-LINE.** The child echoes
-`abcdefghij` — one line — and the two four-byte reads answer `abcd` then `efgh`. The line reader
-given the same stream can only answer the whole line (`abcdefghij\r\n`), so a case that read
-a whole newline-terminated line would pass against it too and would prove nothing.
+`subprocessReadAvailable(handle, stream, most)` answers AT MOST `most` bytes, and the bytes buffered past
+them stay buffered for the next read. The child echoes `abcdefghij` — one line — and the two four-byte reads
+answer `abcd` then `efgh`, stopping mid-line: a read that handed over everything buffered would answer the
+whole line, and one that dropped what it did not hand over would answer something other than `efgh` second.
 
 ⚠ **SHORT ONLY AT EOF.** `cmd /c more` echoes the line CRLF-terminated and then a blank line, so the
-child produces `abcdefghij\r\n\r\n` — 14 bytes. The third read asks for 100 and gets the 6 that
-remain after the two four-byte reads, because the child has exited and its pipe is closed; the fourth
-read gets 0, from the SAME latched EOF the line reader uses. A short answer anywhere but EOF would be a
-wrong answer, not a limitation.
+child produces `abcdefghij\r\n\r\n` — 14 bytes. The reads of 100 that follow gather the 6 that remain after
+the two four-byte reads, and the read after them answers 0, from the latched end of the stream.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -2183,12 +2188,23 @@ function main() returns ExitCode
 	let payload = "abcdefghij\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
-	let first = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
-	let second = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
-	let rest = String.init(__Builtins.subprocessReadStdoutBytes(h, 100))
-	let afterEof = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let first = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 4))
+	let second = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 4))
+	var restLen = 0 as Count
+
+	while true 'draining'
+		let chunk = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+
+		if chunk.byteLength() == 0 'ended'
+			break
+		end 'ended'
+
+		restLen = restLen + chunk.byteLength()
+	end 'draining'
+
+	let afterEof = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 4))
 	let code = __Builtins.subprocessWaitExit(h, 0)
-	print("wrote={wrote} first={first} second={second} restLen={rest.byteLength()} eofLen={afterEof.byteLength()} code={code}\n")
+	print("wrote={wrote} first={first} second={second} restLen={restLen} eofLen={afterEof.byteLength()} code={code}\n")
 	__Builtins.subprocessReleaseHandle(h)
 	return 0
 end 'main'
@@ -2200,18 +2216,10 @@ wrote=0 first=abcd second=efgh restLen=6 eofLen=0 code=0
 0
 ```
 
-<!-- test: subprocess-builtins.streaming-read-bytes-after-line -->
+<!-- test: read-available-answers-what-is-buffered-without-waiting-for-more -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⭐⭐ **THE TWO READERS SHARE ONE PER-HANDLE BUFFER, AND THIS IS THE CASE THAT SAYS SO.** A framed
-client reads its headers a LINE at a time and its body by exact COUNT, so the two readers alternate
-on one stream. The line reader pulls a whole 4 KiB chunk off the pipe to find its newline; if the
-byte reader kept a buffer of its own, every byte already pulled would be invisible to it — the read
-below would block on a pipe with nothing left to deliver, and the bytes would be silently lost.
-That is a wrong answer, not a limitation, which is why it gets a case rather than a note.
-
-The child echoes two lines. `subprocessReadStdoutLine` takes `first\r\n` (7 bytes — the runtime's
-line result carries its terminator), and the four bytes immediately after it are `abcd`.
+`subprocessReadAvailable(handle, stream, most)` answers the bytes already buffered for that stream, up to `most`, and parks only while none are. The child re-spawned from this program writes `first`, sleeps two seconds and writes `second`, so a read of 100 that waited for its count, or for the end of the stream, would answer both lines at once; answering the first line's six bytes alone is what tells the two apart. The second read parks until the second line arrives, and at the end of the stream each stream's read answers no bytes.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -2226,51 +2234,48 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("first\n")
+		sleep(2000)
+		print("second\n")
+		return 0
+	end 'childMode'
+
+	let exe = try Process.executablePath() otherwise return 2
 	let argv = ByteArray.create(0)
-	appendToken(argv, token: "cmd")
-	appendToken(argv, token: "/c")
-	appendToken(argv, token: "more")
+	appendToken(argv, token: "{exe}")
+	appendToken(argv, token: "emit")
 	let empty = ""
 	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
-	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
-	let payload = "first\nabcdefghij\n"
-	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
+	let h = __Builtins.subprocessSpawnStreaming(argv, 2, empty.cstr(), 0, envBlock, 1)
 	__Builtins.subprocessCloseStdin(h)
-	let line = String.init(__Builtins.subprocessReadStdoutLine(h, 1024))
-	let after = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let first = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	let second = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	let atEnd = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	let errAtEnd = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stderr.rawValue, 100))
 	let code = __Builtins.subprocessWaitExit(h, 0)
-	print("wrote={wrote} lineLen={line.byteLength()} after={after} code={code}\n")
+	print("first={first.trim()} firstLen={first.byteLength()} second={second.trim()} secondLen={second.byteLength()} endLen={atEnd.byteLength()} stderrLen={errAtEnd.byteLength()} code={code}\n")
 	__Builtins.subprocessReleaseHandle(h)
 	return 0
 end 'main'
 ```
 ```stdout
-wrote=0 lineLen=7 after=abcd code=0
+first=first firstLen=6 second=second secondLen=7 endLen=0 stderrLen=0 code=0
 ```
 ```exitcode
 0
 ```
 
-<!-- test: subprocess-builtins.streaming-read-bytes-refuses-a-negative-count -->
+
+<!-- test: read-available-with-a-most-of-zero-or-less-answers-empty-without-parking -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⛔⛔ **A NEGATIVE COUNT IS REFUSED, AND THE STREAM IS LEFT EXACTLY AS IT WAS.** The refusal has to happen
-BEFORE the "is enough buffered?" test, because `bufferedBytes >= count` is VACUOUSLY TRUE for a negative
-count — so the request would fall straight through into the consume with a negative length. That produces a
-`String` record claiming a negative length AND, because the consume publishes `buffered - taken`, a stream
-buffer whose recorded length is driven UP past what it holds: the corruption outlives the call and
-the NEXT reader walks it (`panic at String.maxon:279: Range check failed: value outside typealias
-'BytePos'`, exit 1).
-
-⚠ **`still=abcd` IS THE HALF THAT MAKES THIS A TEST.** An empty answer alone would also come from a
-reader that had quietly eaten the stream; reading four real bytes afterwards is what says the refusal
-touched nothing.
-
-⭐ **`state=open` IS WHAT SEPARATES THIS REFUSAL FROM END OF STREAM.** The reader's empty answer is the
-same bytes a clean EOF answers; `subprocessStdoutState` is the per-stream fact the reader cannot carry,
-and a refusal leaves it `open` where a 0-byte read would have latched `atEof`. That is the whole of what
-lets `stdlib/Subprocess.maxon` throw for one and return for the other.
+A `most` of 0 or less answers no bytes at once, and leaves the stream exactly as it was. Both reads are made
+before the child has been sent anything, and `cmd /c more` writes nothing until it reads its input, so a read
+that parked for bytes would park for good and the runner would report the case TIMED OUT. `state=open` says
+neither read latched the end of the stream, and `still=abcd` that neither consumed anything: the first real
+read after them gets the first four bytes the child writes.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -2293,20 +2298,229 @@ function main() returns ExitCode
 	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
+	let negative = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, -1))
+	let zero = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 0))
+	let state = __Builtins.subprocessStdoutState(h)
 	let payload = "abcdefghij\n"
 	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
 	__Builtins.subprocessCloseStdin(h)
-	let refused = String.init(__Builtins.subprocessReadStdoutBytes(h, -1))
-	let state = __Builtins.subprocessStdoutState(h)
-	let still = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let still = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 4))
 	let code = __Builtins.subprocessWaitExit(h, 0)
-	print("wrote={wrote} negLen={refused.byteLength()} state={state.name} still={still} code={code}\n")
+	print("negLen={negative.byteLength()} zeroLen={zero.byteLength()} state={state.name} wrote={wrote} still={still} code={code}\n")
 	__Builtins.subprocessReleaseHandle(h)
 	return 0
 end 'main'
 ```
 ```stdout
-wrote=0 negLen=0 state=open still=abcd code=0
+negLen=0 zeroLen=0 state=open wrote=0 still=abcd code=0
+```
+```exitcode
+0
+```
+
+<!-- test: read-available-of-a-stream-other-than-stdout-or-stderr-answers-empty -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+The `stream` argument is `StdioStream`'s raw value, `0` for stdout and `1` for stderr; any other value answers
+no bytes and reads neither stream. The child re-spawned from this program writes `first` and exits; the reads
+of stream `2` and `-1` answer nothing, and the stdout read after them still gets the whole line.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("first\n")
+		return 0
+	end 'childMode'
+
+	let exe = try Process.executablePath() otherwise return 2
+	let argv = ByteArray.create(0)
+	appendToken(argv, token: "{exe}")
+	appendToken(argv, token: "emit")
+	let empty = ""
+	let envBlock = ByteArray.create(0)
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 2, empty.cstr(), 0, envBlock, 1)
+	__Builtins.subprocessCloseStdin(h)
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	let past = String.init(__Builtins.subprocessReadAvailable(h, 2, 100))
+	let below = String.init(__Builtins.subprocessReadAvailable(h, -1, 100))
+	let out = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	print("pastLen={past.byteLength()} belowLen={below.byteLength()} out={out.trim()} outLen={out.byteLength()} code={code}\n")
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```stdout
+pastLen=0 belowLen=0 out=first outLen=6 code=0
+```
+```exitcode
+0
+```
+
+<!-- test: read-available-of-a-released-handle-answers-empty -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+A handle `subprocessReleaseHandle` has given back answers no bytes, even though the child wrote a line nothing
+read before the release: the handle guard refuses the released slot, so the read reaches neither the freed pipe
+nor the bytes that were left in it, and the stream's state answers `noSuchChild`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("first\n")
+		return 0
+	end 'childMode'
+
+	let exe = try Process.executablePath() otherwise return 2
+	let argv = ByteArray.create(0)
+	appendToken(argv, token: "{exe}")
+	appendToken(argv, token: "emit")
+	let empty = ""
+	let envBlock = ByteArray.create(0)
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 2, empty.cstr(), 0, envBlock, 1)
+	__Builtins.subprocessCloseStdin(h)
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	__Builtins.subprocessReleaseHandle(h)
+	let out = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	let err = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stderr.rawValue, 100))
+	let state = __Builtins.subprocessStdoutState(h)
+	print("code={code} outLen={out.byteLength()} errLen={err.byteLength()} state={state.name}\n")
+	return 0
+end 'main'
+```
+```stdout
+code=0 outLen=0 errLen=0 state=noSuchChild
+```
+```exitcode
+0
+```
+
+<!-- test: read-available-reads-stderr-apart-from-stdout -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+A `stream` of `1` reads the child's stderr. The child re-spawned from this program writes `oops` on stderr and
+`fine` on stdout; each read answers its own stream's line, and each stream's next read answers no bytes, so
+neither line reached the other stream.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		printError("oops\n")
+		print("fine\n")
+		return 0
+	end 'childMode'
+
+	let exe = try Process.executablePath() otherwise return 2
+	let argv = ByteArray.create(0)
+	appendToken(argv, token: "{exe}")
+	appendToken(argv, token: "emit")
+	let empty = ""
+	let envBlock = ByteArray.create(0)
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 2, empty.cstr(), 0, envBlock, 1)
+	__Builtins.subprocessCloseStdin(h)
+	let err = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stderr.rawValue, 100))
+	let out = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	let errAtEnd = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stderr.rawValue, 100))
+	let outAtEnd = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	print("err={err.trim()} out={out.trim()} errEndLen={errAtEnd.byteLength()} outEndLen={outAtEnd.byteLength()} code={code}\n")
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```stdout
+err=oops out=fine errEndLen=0 outEndLen=0 code=0
+```
+```exitcode
+0
+```
+
+<!-- test: a-subprocess-read-recovers-as-isolated -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+`subprocessReadAvailable` answers a buffer it allocated for this read alone, so `ByteArray.init` over it is a fresh
+region and is returned as `isolated` without a copy. The child re-spawned from this program writes `fine`, and the
+array the read gave answers its bytes.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function readOut(h FullRangeInt) returns isolated ByteArray
+	return ByteArray.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+end 'readOut'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("fine\n")
+		return 0
+	end 'childMode'
+
+	let exe = try Process.executablePath() otherwise return 2
+	let argv = ByteArray.create(0)
+	appendToken(argv, token: "{exe}")
+	appendToken(argv, token: "emit")
+	let empty = ""
+	let envBlock = ByteArray.create(0)
+	envBlock.push(0)
+	let h = __Builtins.subprocessSpawnStreaming(argv, 2, empty.cstr(), 0, envBlock, 1)
+	__Builtins.subprocessCloseStdin(h)
+	let out = readOut(h)
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	let f = try out.get(0) otherwise return 3
+	let i = try out.get(1) otherwise return 4
+	let n = try out.get(2) otherwise return 5
+	let e = try out.get(3) otherwise return 6
+	print("{f} {i} {n} {e} code={code}\n")
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```stdout
+102 105 110 101 code=0
 ```
 ```exitcode
 0
@@ -2316,14 +2530,14 @@ wrote=0 negLen=0 state=open still=abcd code=0
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `subprocessStdoutState(handle)` / `subprocessStderrState(handle)` answer `__SubprocessStreamState` — the
-per-stream fact a reader's bytes cannot carry. A reader answers `""` for a clean end of stream AND for
-every refusal (a handle naming no live child, a negative count, a failed OS read), so the bytes alone
-cannot say which; the state can. It is an ENUM, not a number: `.name` below is what an `int` could not
-answer, and it is the one place the four outcomes are spelled.
+per-stream fact a reader's bytes cannot carry. `subprocessReadAvailable` answers no bytes for a clean end of
+stream AND for every refusal (a handle naming no live child, a `most` of 0 or less, a failed OS read), so the
+bytes alone cannot say which; the state can. It is an ENUM, not a number: `.name` below is what an `int` could
+not answer, and it is the one place the four outcomes are spelled.
 
 ⭐ **THE STATE FOLLOWS THE READER, NOT THE CHILD.** `before` is `open` even though the child has already
 been handed EOF on its stdin and may have exited: nothing latches until a READ sees the 0-byte answer.
-`after` is `atEof` because the 100-byte request ran into it. A released slot and an invented handle both
+`after` is `atEof` because the last read of the drain ran into it. A released slot and an invented handle both
 answer `noSuchChild`, from the handle guard rather than from any slot.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -2352,15 +2566,26 @@ function main() returns ExitCode
 	__Builtins.subprocessCloseStdin(h)
 	let before = __Builtins.subprocessStdoutState(h)
 	let errBefore = __Builtins.subprocessStderrState(h)
-	let all = String.init(__Builtins.subprocessReadStdoutBytes(h, 100))
+	var outLen = 0 as Count
+
+	while true 'draining'
+		let chunk = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stdout.rawValue, 100))
+
+		if chunk.byteLength() == 0 'ended'
+			break
+		end 'ended'
+
+		outLen = outLen + chunk.byteLength()
+	end 'draining'
+
 	let after = __Builtins.subprocessStdoutState(h)
-	let errLine = String.init(__Builtins.subprocessReadStderrLine(h, 64))
+	let errLine = String.init(__Builtins.subprocessReadAvailable(h, StdioStream.stderr.rawValue, 64))
 	let errAfter = __Builtins.subprocessStderrState(h)
 	let code = __Builtins.subprocessWaitExit(h, 0)
 	__Builtins.subprocessReleaseHandle(h)
 	let released = __Builtins.subprocessStdoutState(h)
 	let invented = __Builtins.subprocessStderrState(-1)
-	print("wrote={wrote} before={before.name} errBefore={errBefore.name} outLen={all.byteLength()} after={after.name} errLen={errLine.byteLength()} errAfter={errAfter.name} code={code} released={released.name} invented={invented.name}\n")
+	print("wrote={wrote} before={before.name} errBefore={errBefore.name} outLen={outLen} after={after.name} errLen={errLine.byteLength()} errAfter={errAfter.name} code={code} released={released.name} invented={invented.name}\n")
 	return 0
 end 'main'
 ```
@@ -2373,42 +2598,38 @@ wrote=0 before=open errBefore=open outLen=7 after=atEof errLen=0 errAfter=atEof 
 
 <!-- test: subprocess-builtins.streaming-read-after-release-throws -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-The stdlib half of the case above. `StreamingSubprocess`'s readers tell end of stream from a refusal:
-a short `readStdoutBytes` at EOF returns what remained, a `readStdoutLine` at EOF throws
-`SubprocessError.endOfStream`, and nothing else ends a read. A refusal throws `SubprocessError.ioFailed` — here the one every caller can reach, a handle
-used after `release()`, which the stdlib refuses itself before the runtime is asked (the handle is a
-raw pointer, so the runtime could not refuse it safely). `writeStdinLine` and `wait` are
-held to the same rule. `closeStdin` and `release` are NOT: they are idempotent, and a released child
-already satisfies their postcondition, so they answer as no-ops rather than throwing — and neither
-reaches the freed handle.
+The stdlib half of the case above. A `ChildOutputReader` tells the end of the stream from a refusal: a short
+`readBytes` at the end returns what remained, a `readLine` at the end answers `LineRead.ended`, and nothing
+else ends a read. After `release()` the reader `takeStderr()` handed out before it throws `StreamError.closed`,
+because the stream's state is `noSuchChild`, and a take, `writeStdinLine` and `wait` throw
+`SubprocessError.ioFailed`, which the stdlib refuses itself before the runtime is asked (the handle is a raw
+pointer, so the runtime could not refuse it safely). `closeStdin` and `release` are NOT held to that rule:
+they are idempotent, and a released child already satisfies their postcondition, so they answer as no-ops
+rather than throwing — and neither reaches the freed handle.
 ```maxon
-function readBytesAfterRelease(child StreamingSubprocess) returns String
-	let text = try child.readStdoutBytes(4) otherwise (e) 'refused'
-		return e.displayReason()
-	end 'refused'
-	return "answered {text.byteLength()} bytes"
-end 'readBytesAfterRelease'
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
 
-function readLineAfterRelease(child StreamingSubprocess) returns String
-	let text = try child.readStdoutLine() otherwise (e) 'refused'
-		return e.displayReason()
+function readLineAfterRelease(reader ChildOutputReader) returns String
+	let read = try reader.readLine() otherwise (e) 'refused'
+		return e.name
 	end 'refused'
-	return "answered {text.byteLength()} bytes"
+
+	return "answered {shown(read)}"
 end 'readLineAfterRelease'
 
-function readErrLineAfterRelease(child StreamingSubprocess) returns String
-	let text = try child.readStderrLine() otherwise (e) 'refused'
+function takeAfterRelease(child StreamingSubprocess) returns String
+	_ = try child.takeStdout() otherwise (e) 'refused'
 		return e.displayReason()
 	end 'refused'
-	return "answered {text.byteLength()} bytes"
-end 'readErrLineAfterRelease'
 
-function readLineAtTheEnd(child StreamingSubprocess) returns String
-	let text = try child.readStdoutLine() otherwise (e) 'ended'
-		return e.displayReason()
-	end 'ended'
-	return "answered {text.byteLength()} bytes"
-end 'readLineAtTheEnd'
+	return "took a reader"
+end 'takeAfterRelease'
 
 function writeAfterRelease(child StreamingSubprocess) returns String
 	try child.writeStdinLine("late") otherwise (e) 'refused'
@@ -2429,17 +2650,18 @@ function main() returns ExitCode
 	argv.push("/c")
 	argv.push("more")
 	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv) otherwise return 3
-	try child.writeStdinLine("abc") otherwise return 4
+	let out = try child.takeStdout() otherwise return 4
+	let err = try child.takeStderr() otherwise return 5
+	try child.writeStdinLine("abc") otherwise return 6
 	child.closeStdin()
-	let line = try child.readStdoutLine() otherwise return 5
-	let tail = try child.readStdoutBytes(100) otherwise return 6
-	let atEnd = readLineAtTheEnd(child)
-	let code = try child.wait() otherwise return 8
+	let line = shown(try out.readLine() otherwise return 7)
+	let tail = try out.readBytes(100) otherwise return 8
+	let atEnd = shown(try out.readLine() otherwise return 9)
+	let code = try child.wait() otherwise return 10
 	child.release()
-	print("line={line} tailLen={tail.byteLength()} atEnd={atEnd} code={code}\n")
-	print("bytes: {readBytesAfterRelease(child)}\n")
-	print("line: {readLineAfterRelease(child)}\n")
-	print("errLine: {readErrLineAfterRelease(child)}\n")
+	print("line={line} tailLen={tail.count()} atEnd={atEnd} code={code}\n")
+	print("errLine: {readLineAfterRelease(err)}\n")
+	print("take: {takeAfterRelease(child)}\n")
 	print("write: {writeAfterRelease(child)}\n")
 	print("wait: {waitAfterRelease(child)}\n")
 	child.closeStdin()
@@ -2448,10 +2670,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-line=abc tailLen=2 atEnd=end of stream code=0
-bytes: I/O failed: used after release()
-line: I/O failed: used after release()
-errLine: I/O failed: used after release()
+line=abc tailLen=2 atEnd=ended code=0
+errLine: closed
+take: I/O failed: used after release()
 write: I/O failed: used after release()
 wait: I/O failed: used after release()
 closeStdin: returned

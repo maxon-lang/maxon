@@ -1,0 +1,301 @@
+public let DefaultPumpWaitMs = 1000 as DurationMs
+
+public union PumpEvent
+	said(stream StdioStream, text String)
+	closed(stream StdioStream)
+	broke(stream StdioStream, reason String)
+	silent
+	exhausted
+
+	public function deliverTo(sink ChildLineSink)
+		match self 'event'
+			said(stream, text) then sink.heard(stream, text: text)
+			broke(stream, reason) then sink.broken(stream, reason: reason)
+			closed or
+			silent or
+			exhausted then break
+		end 'event'
+	end 'deliverTo'
+end 'PumpEvent'
+
+public interface ChildLineSink
+	function heard(mutable self, stream StdioStream, text String)
+	function broken(mutable self, stream StdioStream, reason String)
+end 'ChildLineSink'
+
+public enum TailEnd
+	drained
+	stillOpen
+end 'TailEnd'
+
+public type ChildLineReader
+	let stream as StdioStream
+	var reader as ChildOutputReader
+
+	public static function create(reader isolated ChildOutputReader, stream StdioStream) returns Self
+		return Self{stream: stream, reader: merge reader}
+	end 'create'
+
+	export function next() returns isolated PumpEvent
+		let read = try self.reader.readLine(StreamMessageCap) otherwise (e) 'broken'
+			return PumpEvent.broke(self.stream, reason: e.displayReason())
+		end 'broken'
+
+		return match read 'read'
+			line(text) gives PumpEvent.said(self.stream, text: text)
+			ended gives PumpEvent.closed(self.stream)
+			pastTheCap gives PumpEvent.broke(self.stream, reason: "a line ran past the reader's cap")
+		end 'read'
+	end 'next'
+end 'ChildLineReader'
+
+typealias PumpPromise = Promise with PumpEvent
+typealias PumpPromiseArray = Array with PumpPromise
+
+let FirstSlot = 0
+let TickSlot = FirstSlot
+
+function pumpedTick(waitMs DurationMs) returns PumpEvent
+	sleep(waitMs as Milliseconds)
+
+	return PumpEvent.silent
+end 'pumpedTick'
+
+function stdinWritable(watch StdinWatch, blockedPasses BlockedPasses) returns PumpEvent
+	watch.untilWritable(blockedPasses)
+
+	return PumpEvent.silent
+end 'stdinWritable'
+
+function nextBlockedPass(passes BlockedPasses) returns BlockedPasses
+	return passes if passes == BlockedPassesMax else (passes + 1) as BlockedPasses
+end 'nextBlockedPass'
+
+public type ChildPump
+	var arrivals as PumpPromiseArray
+	var watching as bool
+	var blockedPasses as BlockedPasses
+	let stdoutReader as ChildLineReader.handle
+	let stderrReader as ChildLineReader.handle
+
+	public static function of(child StreamingSubprocess) returns ChildPump throws SubprocessError
+		let stdout = try child.takeStdout()
+		let stderr = try child.takeStderr()
+		let stdoutReader = spawn ChildLineReader.create(stdout, stream: StdioStream.stdout)
+		let stderrReader = spawn ChildLineReader.create(stderr, stream: StdioStream.stderr)
+		let arrivals = PumpPromiseArray.create(0)
+		arrivals.push(try stdoutReader.next() otherwise panic("ChildPump.of: a service answers the message it was spawned to receive"))
+		arrivals.push(try stderrReader.next() otherwise panic("ChildPump.of: a service answers the message it was spawned to receive"))
+
+		return Self{arrivals: arrivals, watching: false, blockedPasses: BlockedPassesNone, stdoutReader: stdoutReader, stderrReader: stderrReader}
+	end 'of'
+
+	module function watchStdin(child StreamingSubprocess, progressed bool) throws SubprocessError
+		if progressed 'moved'
+			self.blockedPasses = BlockedPassesNone
+		end 'moved'
+
+		if self.watching 'armed'
+			return
+		end 'armed'
+
+		let watch = try child.stdinWatch()
+
+		self.blockedPasses = nextBlockedPass(self.blockedPasses)
+		self.arrivals.insert(FirstSlot, value: async stdinWritable(watch, blockedPasses: self.blockedPasses))
+		self.watching = true
+	end 'watchStdin'
+
+	module function unwatchStdin()
+		if not self.watching 'unarmed'
+			return
+		end 'unarmed'
+
+		let watch = try self.arrivals.remove(FirstSlot) otherwise panic("ChildPump.unwatchStdin: a watch holds the first slot")
+		watch.cancel()
+		self.watching = false
+	end 'unwatchStdin'
+
+	public function poll() returns PumpEvent
+		return self.takeCompleted(true)
+	end 'poll'
+
+	public function pollWithoutRearming() returns PumpEvent
+		return self.takeCompleted(false)
+	end 'pollWithoutRearming'
+
+	function takeCompleted(rearming bool) returns PumpEvent
+		if self.arrivals.count() == self.watchWidth() 'nothingLeft'
+			return PumpEvent.exhausted
+		end 'nothingLeft'
+
+		for slot in FirstSlot upto self.arrivals.count() 'eachArrival'
+			if (try self.arrivals.get(slot) otherwise panic("ChildPump.takeCompleted: the slot is inside the array")).isComplete() 'arrived'
+				return self.settle(slot, rearming: rearming, watchSlot: FirstSlot)
+			end 'arrived'
+		end 'eachArrival'
+
+		return PumpEvent.silent
+	end 'takeCompleted'
+
+	public function next(waitMs DurationMs = DefaultPumpWaitMs) returns PumpEvent
+		let arrived = self.poll()
+
+		match arrived 'arrived'
+			silent then break
+			said or
+			closed or
+			broke or
+			exhausted then return arrived
+		end 'arrived'
+
+		if waitMs == 0 'noWait'
+			return arrived
+		end 'noWait'
+
+		self.arrivals.insert(TickSlot, value: async pumpedTick(waitMs))
+
+		let ready = self.arrivals.awaitAny()
+
+		if ready != TickSlot 'aReaderSpoke'
+			let event = self.settle(ready, rearming: true, watchSlot: TickSlot + 1)
+			self.dropTick()
+
+			return event
+		end 'aReaderSpoke'
+
+		self.dropTick()
+
+		return self.poll()
+	end 'next'
+
+	public function nextWithin(waitMs DurationMs, started InstantMs, deadlineMs DurationMs) returns PumpEvent
+		let remaining = Clock.remainingMs(started, deadlineMs: deadlineMs)
+
+		return self.next(waitMs if waitMs < remaining else remaining)
+	end 'nextWithin'
+
+	function watchWidth() returns Count
+		return 1 if self.watching else 0
+	end 'watchWidth'
+
+	function settle(slot ElementIndex, rearming bool, watchSlot ElementIndex) returns PumpEvent
+		let arrived = try self.arrivals.remove(slot) otherwise panic("ChildPump.settle: the slot is inside the array")
+		let event = await arrived
+
+		if self.watching and slot == watchSlot 'stdinWritable'
+			self.watching = false
+
+			return event
+		end 'stdinWritable'
+
+		match event 'event'
+			said(stream, _) then self.rearm(stream, rearming: rearming)
+			closed or
+			broke then break
+			silent or
+			exhausted then panic("ChildPump.settle: a stream's reader answered {event.name}")
+		end 'event'
+
+		return event
+	end 'settle'
+
+	function rearm(stream StdioStream, rearming bool)
+		if not rearming 'leftUnread'
+			return
+		end 'leftUnread'
+
+		match stream 'stream'
+			stdout then self.arrivals.push(try self.stdoutReader.next() otherwise panic("ChildPump.rearm: the reader stops only with the pump"))
+			stderr then self.arrivals.push(try self.stderrReader.next() otherwise panic("ChildPump.rearm: the reader stops only with the pump"))
+		end 'stream'
+	end 'rearm'
+
+	function dropTick()
+		let tick = try self.arrivals.remove(TickSlot) otherwise panic("ChildPump.dropTick: the tick holds the first slot")
+		tick.cancel()
+	end 'dropTick'
+
+	public function stop()
+		while self.arrivals.count() > 0 'cancelling'
+			let pending = try self.arrivals.remove(0) otherwise panic("ChildPump.stop: the array is not empty")
+			pending.cancel()
+		end 'cancelling'
+
+		self.stdoutReader.shutdown()
+		self.stderrReader.shutdown()
+	end 'stop'
+
+	public function release(child StreamingSubprocess)
+		self.stop()
+		child.release()
+	end 'release'
+end 'ChildPump'
+
+public type PumpTail
+	let began as InstantMs
+	let silenceMs as DurationMs
+	let capMs as DurationMs
+
+	public static function begin(silenceMs DurationMs, capMs DurationMs) returns Self
+		return Self{began: Clock.nowMs(), silenceMs: silenceMs, capMs: capMs}
+	end 'begin'
+
+	public function drainAndRelease(pump ChildPump, child StreamingSubprocess, into ChildLineSink) returns TailEnd
+		let tail = self.drain(pump, into: into)
+		pump.release(child)
+
+		return tail
+	end 'drainAndRelease'
+
+	public function drainAndEndHolders(pump ChildPump, child StreamingSubprocess, into ChildLineSink) returns SurvivorEnd
+		let survivors = match self.drain(pump, into: into) 'tail'
+			drained gives SurvivorEnd.noneHeld
+			stillOpen gives SurvivorEnd.ended(child.endTree())
+		end 'tail'
+
+		pump.release(child)
+
+		return survivors
+	end 'drainAndEndHolders'
+
+	function drain(pump ChildPump, into ChildLineSink) returns TailEnd
+		// First: a finished watch settles as `silent`, which ends the tail early. A `PumpEvent` arm
+		// for it would be unreachable to every consumer outside this module, which cannot watch.
+		pump.unwatchStdin()
+
+		while Clock.remainingMs(self.began, deadlineMs: self.capMs) > 0 'untilTheCap'
+			let event = pump.nextWithin(self.silenceMs, started: self.began, deadlineMs: self.capMs)
+			event.deliverTo(into)
+
+			match event 'event'
+				said or
+				closed or
+				broke then continue
+				silent then return TailEnd.stillOpen
+				exhausted then return TailEnd.drained
+			end 'event'
+		end 'untilTheCap'
+
+		return self.absorbWhatHasArrived(pump, into: into)
+	end 'drain'
+
+	function absorbWhatHasArrived(pump ChildPump, into ChildLineSink) returns TailEnd
+		var leftUnread = false
+
+		while true 'onePass'
+			let event = pump.pollWithoutRearming()
+			event.deliverTo(into)
+
+			match event 'event'
+				said then leftUnread = true
+				closed or
+				broke then continue
+				silent then return TailEnd.stillOpen
+				exhausted then return TailEnd.stillOpen if leftUnread else TailEnd.drained
+			end 'event'
+		end 'onePass'
+
+		panic("PumpTail.absorbWhatHasArrived: the pass is left only by a return")
+	end 'absorbWhatHasArrived'
+end 'PumpTail'

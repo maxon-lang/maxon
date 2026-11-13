@@ -1,9 +1,9 @@
 // Pure number parsing functions for the compiler.
 // Converts string representations of integer and float literals to numeric values.
 
-// How a literal's text can fail to become a number. EXACTLY the two failures `parseInt` /
-// `__float_bitsFromText` actually raise, because a dead arm in an error union is a case every
-// handler has to invent a story for.
+// How a literal's text can fail to become a number. EXACTLY the two failures
+// `parseIntegerLiteral` / `__float_bitsFromText` actually raise, because a dead arm in an error union
+// is a case every handler has to invent a story for.
 export union ParserError
 	overflow
 
@@ -119,17 +119,6 @@ end 'absFloatBits'
 module function floatBitsAreNaN(bits FullRangeInt) returns bool
 	return absFloatBits(bits) > FloatInfinityMagnitude
 end 'floatBitsAreNaN'
-
-// Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
-module function parseInt(bytes ByteArray) returns FullRangeInt throws ParserError
-	let literal = try parseIntegerLiteral(bytes)
-
-	if literal < 0 'aboveTheSignedTop'
-		throw ParserError.overflow
-	end 'aboveTheSignedTop'
-
-	return literal
-end 'parseInt'
 
 // Decimal, hex (0x), binary (0b) and octal (0o) all reach `u64.max`, and the answer is the 64-bit
 // pattern: a literal above `i64.max` comes back NEGATIVE. A caller reading it as a signed number

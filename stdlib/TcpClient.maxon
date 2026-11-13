@@ -10,10 +10,6 @@
 /// second, narrower alias would be a widening the language has no spelling for.
 public typealias NetworkPort = int(0 to 65535)
 
-/// The most bytes one `recv` returns. At least one: a read of zero bytes is how a closed peer is
-/// reported.
-public typealias RecvCapacity = int(1 to i64.max)
-
 // A send goes to the OS in slices of this size. Windows takes one send of any size into the kernel at
 // once, so an unsliced send to a peer that stops reading never waits and a write deadline never ends it.
 let SendSliceBytes = 1048576
@@ -31,7 +27,6 @@ public enum NetworkError implements Error
 	resolveFailed
 	connectFailed
 	sendFailed
-	recvFailed
 	connectionClosed
 	timedOut
 	bindFailed
@@ -40,7 +35,7 @@ public enum NetworkError implements Error
 end 'NetworkError'
 
 /// TCP client connection. Automatically closes when it goes out of scope.
-public type TcpClient
+public type TcpClient implements ByteSource
 	var socket as __ManagedSocket
 
 	/// Connect to a TCP server by hostname and port.
@@ -105,36 +100,30 @@ public type TcpClient
 		return totalSent
 	end 'send'
 
-	/// Receive data as a string (up to bufferSize bytes).
-	/// Returns the received data. Throws connectionClosed if the peer closed.
-	public function recv(bufferSize RecvCapacity) returns String throws NetworkError
-		// Exactly `bufferSize`: `__ms_recv` fills the whole capacity, so any spare byte is a read that
-		// may return more than the caller asked for.
-		let managed = try __ManagedMemory.create(bufferSize, 1) otherwise 'createErr'
-			panic("TcpClient.recv: create — bufferSize >= 0 guaranteed")
-		end 'createErr'
+	// Exactly `most`: `__ms_recv` fills the whole capacity, so any spare byte is a read that may
+	// return more than the caller asked for.
+	public function readSome(most ReadCapacity) returns isolated ByteArray throws StreamError
+		let managed = (try __ManagedMemory.create(most, 1) otherwise 'createErr'
+			panic("TcpClient.readSome: create — most >= 1 guaranteed")
+		end 'createErr') as isolated __ManagedMemory
 
 		let received = try socket.recv(managed) otherwise 'recvErr'
 			// See `send` for why the deadline crosses as a predicate.
 			if socket.timedOut() 'late'
-				throw NetworkError.timedOut
+				throw StreamError.timedOut
 			end 'late'
 
-			throw NetworkError.recvFailed
+			throw StreamError.failed(ReceiveFailedReason)
 		end 'recvErr'
 
-		if received == 0 'closed'
-			throw NetworkError.connectionClosed
-		end 'closed'
-
 		try managed.setLength(received) otherwise 'lenErr'
-			panic("TcpClient.recv: setLength(received) — received is within the buffer's capacity")
+			panic("TcpClient.readSome: setLength(received) — received is within the buffer's capacity")
 		end 'lenErr'
 
-		return String.init(managed)
-	end 'recv'
+		return ByteArray.init(managed)
+	end 'readSome'
 
-	/// End a read that the peer leaves unanswered after `milliseconds`, with `NetworkError.timedOut`.
+	/// End a read that the peer leaves unanswered after `milliseconds`, with `StreamError.timedOut`.
 	/// `0` clears the deadline. It is measured from this call, not from the read that observes it.
 	public function setReadDeadline(milliseconds SocketDeadlineMs) throws NetworkError
 		// The only failure the setter has is a socket that is already closed.
@@ -152,7 +141,7 @@ public type TcpClient
 		end 'deadlineErr'
 	end 'setWriteDeadline'
 
-	/// Stop sending: the peer reads end-of-stream while this side can still `recv`. Throws
+	/// Stop sending: the peer reads end-of-stream while this side can still read. Throws
 	/// `connectionClosed` when the socket is already closed.
 	public function shutdownWrite() throws NetworkError
 		try socket.shutdownWrite() otherwise (e) 'shutdownErr'
@@ -186,7 +175,14 @@ module function lingerForThePeer(connection TcpClient)
 	var drained = 0 as BytePos
 
 	while drained < LingerDrainBytes 'drain'
-		let chunk = try connection.recv(LingerReadBytes) otherwise return
-		drained = drained + chunk.byteLength()
+		let chunk = try connection.readSome(LingerReadBytes) otherwise return
+
+		if chunk.isEmpty() 'peerClosed'
+			return
+		end 'peerClosed'
+
+		drained = drained + chunk.count()
 	end 'drain'
 end 'lingerForThePeer'
+
+let ReceiveFailedReason = "receiving from the socket failed"

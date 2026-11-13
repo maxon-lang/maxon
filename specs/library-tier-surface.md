@@ -18,7 +18,7 @@ reaches the same facilities through the safe standard-library API, and naming th
 
 | Raw surface | What a program uses instead |
 |---|---|
-| any `__Builtins.<member>(…)` call | the stdlib API over it — `Process.id()`, `Clock.nowNanos()`, `HeapStats.*`, `Scheduler.*`, `Math.bitsOf`, `Stdin.readBytes`, … |
+| any `__Builtins.<member>(…)` call | the stdlib API over it — `Process.id()`, `Clock.nowNanos()`, `HeapStats.*`, `Scheduler.*`, `Math.bitsOf`, `Console.stdin().readBytes`, … |
 | `value.managed` | the `Array` methods |
 | the `__ManagedMemory` and `__ManagedMemoryCursor` types, their statics, and a method called on such a value | `Array`, `ByteArray`, `String` |
 | `String.cstr()` and the `cstring` type | no public replacement |

@@ -53,6 +53,14 @@ module function isolatedRecoveryRefusal(subject String, advice String) returns S
 	return "{subject} is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted{advice}"
 end 'isolatedRecoveryRefusal'
 
+module function handedBackRefusal(callee String) returns String
+	return "'{callee}' hands back mutable data of the isolated region it opens; use it inside a `modify` block"
+end 'handedBackRefusal'
+
+module function calleeSourceName(callee immutable ByteArray) returns String
+	return String.from(unqualifiedMemberOf(genericTemplateName(callee)))
+end 'calleeSourceName'
+
 module function uniqueAliasMessage(action String) returns String
 	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`"
 end 'uniqueAliasMessage'
@@ -191,6 +199,7 @@ export enum StoreVerdict
 	isolatedIntoMutable
 	immutableIntoMutable
 	pausedIntoMutable
+	isolatedPartRead
 end 'StoreVerdict'
 
 function storeMismatchMessage(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String, holderNoun String) returns String
@@ -201,7 +210,8 @@ function storeMismatchMessage(verdict StoreVerdict, fieldName String, valueType 
 		pausedIntoMutable gives "cannot store a read-only '{valueType}' into '{fieldName}'{readOnlyReason}; store a copy"
 		fits or
 		recovers or
-		notRecoverable panic("storeMismatchMessage: a {verdict.name} verdict is not a mismatch")
+		notRecoverable or
+		isolatedPartRead panic("storeMismatchMessage: a {verdict.name} verdict is not a mismatch")
 	end 'verdict'
 end 'storeMismatchMessage'
 
@@ -247,6 +257,7 @@ module function storeRefusalOf(verdict StoreVerdict, fieldName String, valueType
 		fits or
 		recovers then throw AbsentError.absent
 		notRecoverable then return (ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, isolatedRecoveryRefusal(subject, advice: "; declare it `as isolated {valueType}`, or store a copy"))
+		isolatedPartRead then panic("storeRefusalOf: an isolated part read is refused by the reader that knows where the part was read")
 		mutableIntoImmutable or
 		isolatedIntoMutable or
 		immutableIntoMutable or
@@ -287,12 +298,28 @@ module function markedParamTakesAReference(capability ParamCapability, headTakes
 	return capability == ParamCapability.isolated or headTakesAReference
 end 'markedParamTakesAReference'
 
+function verdictBeforeCapability(isValueType bool, isSlotRead bool) returns StoreVerdict throws AbsentError
+	if isValueType 'aValue'
+		return StoreVerdict.fits
+	end 'aValue'
+
+	if isSlotRead 'aPartRead'
+		return StoreVerdict.isolatedPartRead
+	end 'aPartRead'
+
+	throw AbsentError.absent
+end 'verdictBeforeCapability'
+
 module function assignmentVerdict(variable ValueCapability, value ValueCapability, isValueType bool, isSlotRead bool) returns StoreVerdict
 	if variable == ValueCapability.isolated 'anIsolatedVariable'
 		return storeVerdict(ParamCapability.isolated, value: value, isValueType: isValueType, isSlotRead: isSlotRead)
 	end 'anIsolatedVariable'
 
-	if not isValueType and joinMixesIsolatedWithData(variable, second: value) 'isolatedIntoData'
+	if let decided = try verdictBeforeCapability(isValueType, isSlotRead: isSlotRead) 'decidedByTheValueAlone'
+		return decided
+	end 'decidedByTheValueAlone'
+
+	if joinMixesIsolatedWithData(variable, second: value) 'isolatedIntoData'
 		return StoreVerdict.isolatedIntoMutable
 	end 'isolatedIntoData'
 
@@ -375,22 +402,26 @@ module function isCleanInput(capability ValueCapability, isValueType bool, isSlo
 		return true
 	end 'aValue'
 
-	if capability == ValueCapability.isolated 'movedIsolated'
-		return not isSlotRead
-	end 'movedIsolated'
+	if isSlotRead 'aPartRead'
+		return false
+	end 'aPartRead'
 
-	return capability == ValueCapability.immutable or capability == ValueCapability.temporary
+	return capability == ValueCapability.isolated or capability == ValueCapability.immutable or capability == ValueCapability.temporary
 end 'isCleanInput'
 
 module function storeVerdict(slot ParamCapability, value ValueCapability, isValueType bool, isSlotRead bool) returns StoreVerdict
-	if isValueType or value == ValueCapability.unknown 'aValueOrAnUnknown'
+	if let decided = try verdictBeforeCapability(isValueType, isSlotRead: isSlotRead) 'decidedByTheValueAlone'
+		return decided
+	end 'decidedByTheValueAlone'
+
+	if value == ValueCapability.unknown 'anUnknown'
 		return StoreVerdict.fits
-	end 'aValueOrAnUnknown'
+	end 'anUnknown'
 
 	if slot == ParamCapability.isolated 'anIsolatedSlot'
-		if value == ValueCapability.isolated and not isSlotRead 'aMovedIsolated'
+		if value == ValueCapability.isolated 'anIsolatedValue'
 			return StoreVerdict.fits
-		end 'aMovedIsolated'
+		end 'anIsolatedValue'
 
 		return StoreVerdict.recovers if value == ValueCapability.temporary else StoreVerdict.notRecoverable
 	end 'anIsolatedSlot'

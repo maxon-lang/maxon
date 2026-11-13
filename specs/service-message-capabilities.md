@@ -744,9 +744,9 @@ function main() returns ExitCode
 
 	_ = try out.send("handle") otherwise return 5
 
-	let heard = try served.recv(64) otherwise return 6
+	let heard = try served.readSome(64) otherwise return 6
 
-	print("{heard}\n")
+	print("{String.from(heard)}\n")
 
 	return 0
 end 'main'

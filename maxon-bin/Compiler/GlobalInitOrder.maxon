@@ -34,16 +34,11 @@
 // another global's slot depends on it.
 //
 // ⭐ **THE EDGE PRIMITIVES ARE `StdlibSource`'s** — `markMaxonCalleeEdge` for a direct call / `functionRef` /
-// `serviceSend`, `markConformerWitnessImpls` for a reached type's witness impls, `markOneReachable` for one
-// callee name.
-// It is deliberately NOT the same WALK, and both divergences are in the safe direction for the set that
-// reads them:
-//
-//   • no skip list reaches `markConformerWitnessImpls` (`StdlibSource` passes the six builtin conformers,
-//     because a SEED credits those there and nothing seeds this walk), so `possible` credits MORE;
-//   • the builtin-conformer seed and the second drain `StdlibSource.reachableMaxonFunctionNames` runs
-//     are absent, so `possible` credits LESS than that walk would. Both are order constraints only, and a
-//     missing one can cost an order this graph never had a reason to fix.
+// `serviceSend`, `WitnessEvidenceLedger.liveImplsOf` for the witness impls a reached function's credits name
+// (the credits `StdlibSource`'s walk recorded), `markOneReachable` for one callee name.
+// It is deliberately NOT the same WALK, and either divergence is safe for the set that reads it: a
+// `possible` edge is an order constraint only, and a missing one can cost an order this graph never had a
+// reason to fix.
 //
 // ⚠ **COST: TWO CALL-GRAPH WALKS PER GLOBAL WHOSE INITIALIZER CALLS, and none at all for a program with no
 // such global.** A global whose record the compiler MATERIALIZES (a String literal, an array literal, an
@@ -82,7 +77,7 @@ typealias GlobalInitVisitArray = Array with GlobalInitVisit
 // Called once per compile, on the merged Maxon module, immediately before `installManagedGlobalInit` — the
 // same position `liveGlobalLabels` occupies and for the same reason: `__module_init` opens every global with
 // a `globalAddr` of its own slot, so a walk run afterwards would find every global depending on itself.
-export function dependencyOrderedGlobals(module MaxonModule, project Project, signatures ProgramSignatures, globals ManagedGlobalArray) returns ManagedGlobalArray throws CompileError
+export function dependencyOrderedGlobals(module MaxonModule, project Project, globals ManagedGlobalArray) returns ManagedGlobalArray throws CompileError
 	if not anyInitializerCalls(globals) 'nothingRunsProgramCode'
 		return globals
 	end 'nothingRunsProgramCode'
@@ -93,7 +88,7 @@ export function dependencyOrderedGlobals(module MaxonModule, project Project, si
 		nodes.push(InitOrderNode.create(global.label, initCallees: global.initCallees))
 	end 'eachGlobal'
 
-	let order = try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.globals(globals))
+	let order = try dependencyOrder(module, project: project, nodes: nodes, refusal: InitCycleRefusal.globals(globals))
 	let ordered = ManagedGlobalArray.create(order.count(), zeroed: false)
 
 	for position in order 'eachPosition'
@@ -106,7 +101,7 @@ end 'dependencyOrderedGlobals'
 // The `default`s in build order. A default depends on another when its initializer reaches that
 // key's slot label — the `globalAddr` every `current()`/`register()` emits — so the walk that
 // orders the globals orders these; a cycle is E3172.
-export function dependencyOrderedDefaults(module MaxonModule, project Project, signatures ProgramSignatures, defaults DefaultSlotArray) returns DefaultSlotArray throws CompileError
+export function dependencyOrderedDefaults(module MaxonModule, project Project, defaults DefaultSlotArray) returns DefaultSlotArray throws CompileError
 	if defaults.count() == 0 'nothingToOrder'
 		return defaults
 	end 'nothingToOrder'
@@ -119,7 +114,7 @@ export function dependencyOrderedDefaults(module MaxonModule, project Project, s
 		nodes.push(InitOrderNode.create(slot.label, initCallees: roots))
 	end 'eachDefault'
 
-	let order = try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.defaults(defaults))
+	let order = try dependencyOrder(module, project: project, nodes: nodes, refusal: InitCycleRefusal.defaults(defaults))
 	let ordered = DefaultSlotArray.create(order.count(), zeroed: false)
 
 	for position in order 'eachPosition'
@@ -145,15 +140,15 @@ union InitCycleRefusal
 	defaults(defaults DefaultSlotArray)
 end 'InitCycleRefusal'
 
-function dependencyOrder(module MaxonModule, project Project, signatures ProgramSignatures, nodes InitOrderNodeArray, refusal InitCycleRefusal) returns GlobalInitIndexArray throws CompileError
+function dependencyOrder(module MaxonModule, project Project, nodes InitOrderNodeArray, refusal InitCycleRefusal) returns GlobalInitIndexArray throws CompileError
 	// The index can see no duplicate the pipeline's own does not — it is built BEFORE the synthesized
 	// functions exist, exactly as `StdlibSource.reachableMaxonFunctionNames`' is — so refusing here
 	// reports the same E4015, at the same declaration, that `PassPipeline.run` would report one screen
 	// later.
 	let index = try FunctionNameIndex.create(module.functions, project: project)
 
-	let named = initDependencies(module, project: project, signatures: signatures, index: index, nodes: nodes, edges: EdgeConfidence.named)
-	let possible = initDependencies(module, project: project, signatures: signatures, index: index, nodes: nodes, edges: EdgeConfidence.possible)
+	let named = initDependencies(module, project: project, index: index, nodes: nodes, edges: EdgeConfidence.named)
+	let possible = initDependencies(module, project: project, index: index, nodes: nodes, edges: EdgeConfidence.possible)
 
 	return orderedByDependency(nodes.count(), deps: try buildEffectiveDeps(nodes.count(), named: named, possible: possible, refusal: refusal, project: project))
 end 'dependencyOrder'
@@ -311,7 +306,7 @@ end 'rowContains'
 //
 // The `reached` array is allocated ONCE and cleared between roots rather than reallocated: the walks are
 // independent, but the array is a function of the module and not of the root.
-function initDependencies(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, nodes InitOrderNodeArray, edges EdgeConfidence) returns GlobalInitDependencies
+function initDependencies(module MaxonModule, project Project, index FunctionNameIndex, nodes InitOrderNodeArray, edges EdgeConfidence) returns GlobalInitDependencies
 	let slotOf = GlobalInitIndexByLabel.create()
 
 	for i in 0 upto nodes.count() 'eachGlobal'
@@ -332,7 +327,7 @@ function initDependencies(module MaxonModule, project Project, signatures Progra
 		end 'dependsOnNothing'
 
 		clearReached(reached)
-		deps.push(slotsReadFrom(module, project: project, signatures: signatures, index: index, roots: node.initCallees, slotOf: slotOf, reached: reached, names: names, edges: edges))
+		deps.push(slotsReadFrom(module, project: project, index: index, roots: node.initCallees, slotOf: slotOf, reached: reached, names: names, edges: edges))
 	end 'eachRoot'
 
 	return deps
@@ -350,7 +345,7 @@ end 'clearReached'
 
 // Every global slot named by any function reachable from `roots` at this confidence — the initializer's own
 // call tree, walked to a fixpoint.
-function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots NameRoster, slotOf GlobalInitIndexByLabel, reached FixedBoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
+function slotsReadFrom(module MaxonModule, project Project, index FunctionNameIndex, roots NameRoster, slotOf GlobalInitIndexByLabel, reached FixedBoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
 	let found = GlobalInitIndexArray.create(0)
 	let claimed = GlobalInitIndexSet.create()
 	let worklist = FuncIndexArray.create(0)
@@ -362,7 +357,7 @@ function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSi
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("slotsReadFrom: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
-		markWitnessEdges(func, project: project, signatures: signatures, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
+		markWitnessEdges(func, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
 
 		// `block.bodyOps()` directly, for `StdlibSource.markMaxonCallees`' reason: this runs at the Maxon tier,
 		// where a dropped op keeps its `module.ops` index and belongs to no block, so a flat scan of
@@ -416,11 +411,15 @@ end 'markNamedCallee'
 
 // A reached type's witness impls. A dispatch names a SLOT rather than a body, so which impl runs is a fact
 // about the receiver — credited at `possible` and never at `named`.
-function markWitnessEdges(func IrFunction, project Project, signatures ProgramSignatures, edges EdgeConfidence, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markWitnessEdges(func IrFunction, project Project, edges EdgeConfidence, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
-		named then break
-		possible then markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: NameRoster.create(0), byName: byName, reached: reached, worklist: worklist, names: names)
+		named then return
+		possible then break
 	end 'edges'
+
+	for impl in project.libraryFacts.witnessEvidence.liveImplsOf(func.name) 'eachLiveImpl'
+		markOneReachable(impl, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachLiveImpl'
 end 'markWitnessEdges'
 
 // Record the global an op names, once. A slot named twice in one cone is one dependency, and the set is what

@@ -843,7 +843,7 @@ A write goes through data that is `immutable` or read-only: a field or element a
 
 ### E3198 — `semanticIsolatedReadOutsideBlock`
 
-An isolated value is used where its region is not open. Refused: `modify` of a value that is not isolated (declare it `as isolated T`), `swap` of a path that is not an isolated field or element, and a read of an isolated field or element outside a block. Open the value with `modify`, or take it out with `swap`.
+An isolated value is used where its region is not open. Refused: `modify` of a value that is not isolated (declare it `as isolated T`), `swap` of a path that is not an isolated field or element, and a read of an isolated field, element or payload outside a block that would become another holder's data: bound, stored, returned, captured by a closure, frozen, put in a tuple, union or constructor, or handed to an `async` call, a message or a parameter that keeps it. The read stays one through a join, a field of it, a call given it, and each element a `for` loop hands out over an isolated collection field. Open the value with `modify`, take it out with `swap`, or keep a `.clone()`.
 
 ### E3199 — `semanticIsolatedHolderNotWritable`
 
@@ -855,7 +855,7 @@ A position that needs a region of its own, or `freeze` or `merge`, is given a va
 
 ### E3201 — `semanticIsolatedCallOpensTwoRegions`
 
-One call or statement opens a second region, or mixes in mutable data of the current one. A statement opens one isolated value, so reaching through two isolated values is refused: open one with `modify`, or split the statement. A call into an isolated region, and a store into one, takes values, immutable data or isolated data, never mutable data of the region outside it. A call that hands back mutable data of the region it opens is refused outside a `modify` block. Reported at the offending value.
+One call or statement opens a second region, or mixes in mutable data of the current one. A statement opens one isolated value, so reaching through two isolated values is refused: open one with `modify`, or split the statement. A call into an isolated region, and a store into one, takes values, immutable data or isolated data, never mutable data of the region outside it. A call that hands back mutable data of the region it opens is refused unless the same statement consumes the result: a comparison, a `for` loop over it, or a call whose other inputs and result are values (`.count()`). Use it inside a `modify` block otherwise. Reported at the offending value.
 
 ### E3202 — `semanticValueLeavesWindow`
 

@@ -35,9 +35,9 @@ connection, the echo, and how the connection ended.
   OpenSSL's), because the certificates are valid for 2025-06-01 to 2026-06-01.
 
 `openssl s_server` is started with `-accept 127.0.0.1:0`, so the kernel picks its port, and the case reads the port off
-the `ACCEPT 127.0.0.1:<port>` line the server prints once it listens; the client dials after that. Every wait is
-bounded by 30 s: the wait for the `ACCEPT` line polls the server's output and kills an `openssl s_server` that has not
-printed it by then, the wait for the server to exit kills it, with its whole process tree, and the client's connect,
+the `ACCEPT 127.0.0.1:<port>` line the server prints once it listens, through the reader `takeStdout()` hands out; the
+client dials after that, and a server whose output ends before that line is a failure. Every other wait is bounded by
+30 s: the wait for the server to exit kills it, with its whole process tree, and the client's connect,
 handshake, reads and writes, a listener's accept and read, and an `s_client` run carry deadlines of their own. The certificates and keys are written to a directory of the working directory and
 removed afterwards.
 
@@ -117,6 +117,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -147,7 +156,6 @@ let probeTimeoutMs = 30000
 enum InteropError implements Error
 	noPort
 	spawnFailed
-	timedOut
 end 'InteropError'
 
 function opensslExecutable() returns Executable
@@ -211,34 +219,19 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function idle(child StreamingSubprocess) throws InteropError
-	match child.pollExit() 'exit'
-		exited then throw InteropError.noPort
-		running then Scheduler.yield()
-	end 'exit'
-end 'idle'
-
-function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
-	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then return text
-			none then try idle(child)
-		end 'polled'
-	end 'polling'
-
-	_ = try child.waitWithTimeout(1) otherwise 0
-
-	throw InteropError.timedOut
-end 'waitForLine'
-
-function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
-	let start = Clock.nowMs()
-
+function acceptedPort(reader ChildOutputReader) returns NetworkPort throws InteropError
 	while true 'reading'
-		let line = try waitForLine(child, start: start)
+		let read = try reader.readLine() otherwise throw InteropError.noPort
+		var heard = ""
 
-		if line.startsWith("ACCEPT ") 'listening'
-			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+		match read 'read'
+			line(text) then heard = text
+			ended or
+			pastTheCap then throw InteropError.noPort
+		end 'read'
+
+		if heard.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{heard.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
 
 			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
@@ -249,6 +242,7 @@ end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
+	export var output as ChildOutputReader
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
@@ -259,41 +253,53 @@ type OpensslServer
 		end 'eachOption'
 
 		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-		let port = try acceptedPort(child) otherwise (error) 'unlistening'
+		let taken = try child.takeStdout() otherwise 'untaken'
+			child.release()
+
+			throw InteropError.spawnFailed
+		end 'untaken'
+
+		let output = merge taken
+		let port = try acceptedPort(output) otherwise (error) 'unlistening'
 			child.release()
 
 			throw error
 		end 'unlistening'
 
-		return Self{child: child, port: port}
+		return Self{child: child, output: output, port: port}
 	end 'start'
 end 'OpensslServer'
 
-function drainOutput(lines StringArray, child StreamingSubprocess)
+function drainLines(lines StringArray, reader ChildOutputReader)
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return
+		let read = try reader.readLine() otherwise return
 
-		lines.push(line)
+		match read 'read'
+			line(text) then lines.push(text)
+			ended or
+			pastTheCap then return
+		end 'read'
 	end 'reading'
-end 'drainOutput'
-
-function drainErrors(lines StringArray, child StreamingSubprocess)
-	while true 'reading'
-		let line = try child.readStderrLine() otherwise return
-
-		lines.push(line)
-	end 'reading'
-end 'drainErrors'
+end 'drainLines'
 
 function finish(server OpensslServer) returns String
-	let code = try server.child.waitWithTimeout(probeTimeoutMs) otherwise (error) 'stuck'
+	let code = try server.child.wait(WaitDeadline.within(probeTimeoutMs)) otherwise (error) 'stuck'
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
 	let lines = StringArray.create(0)
 
-	drainOutput(lines, child: server.child)
-	drainErrors(lines, child: server.child)
+	drainLines(lines, reader: server.output)
+
+	let taken = try server.child.takeStderr() otherwise (error) 'untaken'
+		server.child.release()
+
+		return "takeStderr: {error.displayReason()}"
+	end 'untaken'
+
+	let errors = merge taken
+
+	drainLines(lines, reader: errors)
 	server.child.release()
 
 	var faults = 0 as Count
@@ -312,21 +318,27 @@ function finish(server OpensslServer) returns String
 	return "exit={code} protocol={valueAfter(lines, prefix: "Protocol version: ")} suite={valueAfter(lines, prefix: "Ciphersuite: ")} peer={valueAfter(lines, prefix: "Peer certificate: ").replace(" ", with: "")} closeNotify={closeNotify} errors={faults}"
 end 'finish'
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
 end 'readLine'
 
 
-function peerEnd(error TlsError) returns String
-	let text = describe(error)
+function peerEnd(error StreamError) returns String
+	let text = readFault(error)
 
-	if text == "connectionClosed" or text == "truncated" 'ended'
+	if text == "truncated" 'ended'
 		return "peer ended"
 	end 'ended'
 
@@ -352,7 +364,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 	end 'unsent'
 
 	let reply = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	let protocol = try stream.protocol() otherwise (error) 'unestablished'
@@ -373,11 +385,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
+	let after = try stream.readSome(16) otherwise (error) 'failed'
 		return "{summary} then {peerEnd(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then peer ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
@@ -483,6 +499,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -513,7 +538,6 @@ let probeTimeoutMs = 30000
 enum InteropError implements Error
 	noPort
 	spawnFailed
-	timedOut
 end 'InteropError'
 
 function opensslExecutable() returns Executable
@@ -577,34 +601,19 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function idle(child StreamingSubprocess) throws InteropError
-	match child.pollExit() 'exit'
-		exited then throw InteropError.noPort
-		running then Scheduler.yield()
-	end 'exit'
-end 'idle'
-
-function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
-	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then return text
-			none then try idle(child)
-		end 'polled'
-	end 'polling'
-
-	_ = try child.waitWithTimeout(1) otherwise 0
-
-	throw InteropError.timedOut
-end 'waitForLine'
-
-function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
-	let start = Clock.nowMs()
-
+function acceptedPort(reader ChildOutputReader) returns NetworkPort throws InteropError
 	while true 'reading'
-		let line = try waitForLine(child, start: start)
+		let read = try reader.readLine() otherwise throw InteropError.noPort
+		var heard = ""
 
-		if line.startsWith("ACCEPT ") 'listening'
-			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+		match read 'read'
+			line(text) then heard = text
+			ended or
+			pastTheCap then throw InteropError.noPort
+		end 'read'
+
+		if heard.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{heard.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
 
 			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
@@ -615,6 +624,7 @@ end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
+	export var output as ChildOutputReader
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
@@ -625,41 +635,53 @@ type OpensslServer
 		end 'eachOption'
 
 		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-		let port = try acceptedPort(child) otherwise (error) 'unlistening'
+		let taken = try child.takeStdout() otherwise 'untaken'
+			child.release()
+
+			throw InteropError.spawnFailed
+		end 'untaken'
+
+		let output = merge taken
+		let port = try acceptedPort(output) otherwise (error) 'unlistening'
 			child.release()
 
 			throw error
 		end 'unlistening'
 
-		return Self{child: child, port: port}
+		return Self{child: child, output: output, port: port}
 	end 'start'
 end 'OpensslServer'
 
-function drainOutput(lines StringArray, child StreamingSubprocess)
+function drainLines(lines StringArray, reader ChildOutputReader)
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return
+		let read = try reader.readLine() otherwise return
 
-		lines.push(line)
+		match read 'read'
+			line(text) then lines.push(text)
+			ended or
+			pastTheCap then return
+		end 'read'
 	end 'reading'
-end 'drainOutput'
-
-function drainErrors(lines StringArray, child StreamingSubprocess)
-	while true 'reading'
-		let line = try child.readStderrLine() otherwise return
-
-		lines.push(line)
-	end 'reading'
-end 'drainErrors'
+end 'drainLines'
 
 function finish(server OpensslServer) returns String
-	let code = try server.child.waitWithTimeout(probeTimeoutMs) otherwise (error) 'stuck'
+	let code = try server.child.wait(WaitDeadline.within(probeTimeoutMs)) otherwise (error) 'stuck'
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
 	let lines = StringArray.create(0)
 
-	drainOutput(lines, child: server.child)
-	drainErrors(lines, child: server.child)
+	drainLines(lines, reader: server.output)
+
+	let taken = try server.child.takeStderr() otherwise (error) 'untaken'
+		server.child.release()
+
+		return "takeStderr: {error.displayReason()}"
+	end 'untaken'
+
+	let errors = merge taken
+
+	drainLines(lines, reader: errors)
 	server.child.release()
 
 	var faults = 0 as Count
@@ -678,21 +700,27 @@ function finish(server OpensslServer) returns String
 	return "exit={code} protocol={valueAfter(lines, prefix: "Protocol version: ")} suite={valueAfter(lines, prefix: "Ciphersuite: ")} peer={valueAfter(lines, prefix: "Peer certificate: ").replace(" ", with: "")} closeNotify={closeNotify} errors={faults}"
 end 'finish'
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
 end 'readLine'
 
 
-function peerEnd(error TlsError) returns String
-	let text = describe(error)
+function peerEnd(error StreamError) returns String
+	let text = readFault(error)
 
-	if text == "connectionClosed" or text == "truncated" 'ended'
+	if text == "truncated" 'ended'
 		return "peer ended"
 	end 'ended'
 
@@ -718,7 +746,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 	end 'unsent'
 
 	let reply = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	let protocol = try stream.protocol() otherwise (error) 'unestablished'
@@ -739,11 +767,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
+	let after = try stream.readSome(16) otherwise (error) 'failed'
 		return "{summary} then {peerEnd(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then peer ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
@@ -864,6 +896,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -899,7 +940,6 @@ let probeTimeoutMs = 30000
 enum InteropError implements Error
 	noPort
 	spawnFailed
-	timedOut
 end 'InteropError'
 
 function opensslExecutable() returns Executable
@@ -963,34 +1003,19 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function idle(child StreamingSubprocess) throws InteropError
-	match child.pollExit() 'exit'
-		exited then throw InteropError.noPort
-		running then Scheduler.yield()
-	end 'exit'
-end 'idle'
-
-function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
-	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then return text
-			none then try idle(child)
-		end 'polled'
-	end 'polling'
-
-	_ = try child.waitWithTimeout(1) otherwise 0
-
-	throw InteropError.timedOut
-end 'waitForLine'
-
-function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
-	let start = Clock.nowMs()
-
+function acceptedPort(reader ChildOutputReader) returns NetworkPort throws InteropError
 	while true 'reading'
-		let line = try waitForLine(child, start: start)
+		let read = try reader.readLine() otherwise throw InteropError.noPort
+		var heard = ""
 
-		if line.startsWith("ACCEPT ") 'listening'
-			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+		match read 'read'
+			line(text) then heard = text
+			ended or
+			pastTheCap then throw InteropError.noPort
+		end 'read'
+
+		if heard.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{heard.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
 
 			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
@@ -1001,6 +1026,7 @@ end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
+	export var output as ChildOutputReader
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
@@ -1011,41 +1037,53 @@ type OpensslServer
 		end 'eachOption'
 
 		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-		let port = try acceptedPort(child) otherwise (error) 'unlistening'
+		let taken = try child.takeStdout() otherwise 'untaken'
+			child.release()
+
+			throw InteropError.spawnFailed
+		end 'untaken'
+
+		let output = merge taken
+		let port = try acceptedPort(output) otherwise (error) 'unlistening'
 			child.release()
 
 			throw error
 		end 'unlistening'
 
-		return Self{child: child, port: port}
+		return Self{child: child, output: output, port: port}
 	end 'start'
 end 'OpensslServer'
 
-function drainOutput(lines StringArray, child StreamingSubprocess)
+function drainLines(lines StringArray, reader ChildOutputReader)
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return
+		let read = try reader.readLine() otherwise return
 
-		lines.push(line)
+		match read 'read'
+			line(text) then lines.push(text)
+			ended or
+			pastTheCap then return
+		end 'read'
 	end 'reading'
-end 'drainOutput'
-
-function drainErrors(lines StringArray, child StreamingSubprocess)
-	while true 'reading'
-		let line = try child.readStderrLine() otherwise return
-
-		lines.push(line)
-	end 'reading'
-end 'drainErrors'
+end 'drainLines'
 
 function finish(server OpensslServer) returns String
-	let code = try server.child.waitWithTimeout(probeTimeoutMs) otherwise (error) 'stuck'
+	let code = try server.child.wait(WaitDeadline.within(probeTimeoutMs)) otherwise (error) 'stuck'
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
 	let lines = StringArray.create(0)
 
-	drainOutput(lines, child: server.child)
-	drainErrors(lines, child: server.child)
+	drainLines(lines, reader: server.output)
+
+	let taken = try server.child.takeStderr() otherwise (error) 'untaken'
+		server.child.release()
+
+		return "takeStderr: {error.displayReason()}"
+	end 'untaken'
+
+	let errors = merge taken
+
+	drainLines(lines, reader: errors)
 	server.child.release()
 
 	var faults = 0 as Count
@@ -1064,21 +1102,27 @@ function finish(server OpensslServer) returns String
 	return "exit={code} protocol={valueAfter(lines, prefix: "Protocol version: ")} suite={valueAfter(lines, prefix: "Ciphersuite: ")} peer={valueAfter(lines, prefix: "Peer certificate: ").replace(" ", with: "")} closeNotify={closeNotify} errors={faults}"
 end 'finish'
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
 end 'readLine'
 
 
-function peerEnd(error TlsError) returns String
-	let text = describe(error)
+function peerEnd(error StreamError) returns String
+	let text = readFault(error)
 
-	if text == "connectionClosed" or text == "truncated" 'ended'
+	if text == "truncated" 'ended'
 		return "peer ended"
 	end 'ended'
 
@@ -1104,7 +1148,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 	end 'unsent'
 
 	let reply = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	let protocol = try stream.protocol() otherwise (error) 'unestablished'
@@ -1125,11 +1169,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
+	let after = try stream.readSome(16) otherwise (error) 'failed'
 		return "{summary} then {peerEnd(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then peer ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
@@ -1235,6 +1283,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1265,7 +1322,6 @@ let probeTimeoutMs = 30000
 enum InteropError implements Error
 	noPort
 	spawnFailed
-	timedOut
 end 'InteropError'
 
 function opensslExecutable() returns Executable
@@ -1329,34 +1385,19 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function idle(child StreamingSubprocess) throws InteropError
-	match child.pollExit() 'exit'
-		exited then throw InteropError.noPort
-		running then Scheduler.yield()
-	end 'exit'
-end 'idle'
-
-function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
-	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then return text
-			none then try idle(child)
-		end 'polled'
-	end 'polling'
-
-	_ = try child.waitWithTimeout(1) otherwise 0
-
-	throw InteropError.timedOut
-end 'waitForLine'
-
-function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
-	let start = Clock.nowMs()
-
+function acceptedPort(reader ChildOutputReader) returns NetworkPort throws InteropError
 	while true 'reading'
-		let line = try waitForLine(child, start: start)
+		let read = try reader.readLine() otherwise throw InteropError.noPort
+		var heard = ""
 
-		if line.startsWith("ACCEPT ") 'listening'
-			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+		match read 'read'
+			line(text) then heard = text
+			ended or
+			pastTheCap then throw InteropError.noPort
+		end 'read'
+
+		if heard.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{heard.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
 
 			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
@@ -1367,6 +1408,7 @@ end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
+	export var output as ChildOutputReader
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
@@ -1377,41 +1419,53 @@ type OpensslServer
 		end 'eachOption'
 
 		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-		let port = try acceptedPort(child) otherwise (error) 'unlistening'
+		let taken = try child.takeStdout() otherwise 'untaken'
+			child.release()
+
+			throw InteropError.spawnFailed
+		end 'untaken'
+
+		let output = merge taken
+		let port = try acceptedPort(output) otherwise (error) 'unlistening'
 			child.release()
 
 			throw error
 		end 'unlistening'
 
-		return Self{child: child, port: port}
+		return Self{child: child, output: output, port: port}
 	end 'start'
 end 'OpensslServer'
 
-function drainOutput(lines StringArray, child StreamingSubprocess)
+function drainLines(lines StringArray, reader ChildOutputReader)
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return
+		let read = try reader.readLine() otherwise return
 
-		lines.push(line)
+		match read 'read'
+			line(text) then lines.push(text)
+			ended or
+			pastTheCap then return
+		end 'read'
 	end 'reading'
-end 'drainOutput'
-
-function drainErrors(lines StringArray, child StreamingSubprocess)
-	while true 'reading'
-		let line = try child.readStderrLine() otherwise return
-
-		lines.push(line)
-	end 'reading'
-end 'drainErrors'
+end 'drainLines'
 
 function finish(server OpensslServer) returns String
-	let code = try server.child.waitWithTimeout(probeTimeoutMs) otherwise (error) 'stuck'
+	let code = try server.child.wait(WaitDeadline.within(probeTimeoutMs)) otherwise (error) 'stuck'
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
 	let lines = StringArray.create(0)
 
-	drainOutput(lines, child: server.child)
-	drainErrors(lines, child: server.child)
+	drainLines(lines, reader: server.output)
+
+	let taken = try server.child.takeStderr() otherwise (error) 'untaken'
+		server.child.release()
+
+		return "takeStderr: {error.displayReason()}"
+	end 'untaken'
+
+	let errors = merge taken
+
+	drainLines(lines, reader: errors)
 	server.child.release()
 
 	var faults = 0 as Count
@@ -1430,21 +1484,27 @@ function finish(server OpensslServer) returns String
 	return "exit={code} protocol={valueAfter(lines, prefix: "Protocol version: ")} suite={valueAfter(lines, prefix: "Ciphersuite: ")} peer={valueAfter(lines, prefix: "Peer certificate: ").replace(" ", with: "")} closeNotify={closeNotify} errors={faults}"
 end 'finish'
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
 end 'readLine'
 
 
-function peerEnd(error TlsError) returns String
-	let text = describe(error)
+function peerEnd(error StreamError) returns String
+	let text = readFault(error)
 
-	if text == "connectionClosed" or text == "truncated" 'ended'
+	if text == "truncated" 'ended'
 		return "peer ended"
 	end 'ended'
 
@@ -1470,7 +1530,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 	end 'unsent'
 
 	let reply = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	let protocol = try stream.protocol() otherwise (error) 'unestablished'
@@ -1491,11 +1551,15 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
+	let after = try stream.readSome(16) otherwise (error) 'failed'
 		return "{summary} then {peerEnd(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then peer ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
@@ -1612,6 +1676,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1705,11 +1778,17 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
@@ -1726,7 +1805,7 @@ function serveOnce(listener TlsListener) returns String
 	end 'unbounded'
 
 	let line = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	_ = try stream.send("echo:{line}") otherwise (error) 'unsent'
@@ -1751,11 +1830,15 @@ function serveOnce(listener TlsListener) returns String
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
-		return "{summary} then {describe(error)}"
+	let after = try stream.readSome(16) otherwise (error) 'failed'
+		return "{summary} then {readFault(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'serveOnce'
 
 union ClientOutcome
@@ -1774,7 +1857,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes("ping\n")
-	configuration.timeoutMs = probeTimeoutMs
+	configuration.deadline = WaitDeadline.within(probeTimeoutMs)
 
 	let result = try configuration.run() otherwise (error) 'failed'
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
@@ -1837,9 +1920,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-TLS_AES_128_GCM_SHA256: server[heard=ping protocol=tls13 suite=tls13/aes128GcmSha256 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256]
-TLS_AES_256_GCM_SHA384: server[heard=ping protocol=tls13 suite=tls13/aes256GcmSha384 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384]
-TLS_CHACHA20_POLY1305_SHA256: server[heard=ping protocol=tls13 suite=tls13/chaCha20Poly1305Sha256 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_CHACHA20_POLY1305_SHA256]
+TLS_AES_128_GCM_SHA256: server[heard=ping protocol=tls13 suite=tls13/aes128GcmSha256 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256]
+TLS_AES_256_GCM_SHA384: server[heard=ping protocol=tls13 suite=tls13/aes256GcmSha384 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384]
+TLS_CHACHA20_POLY1305_SHA256: server[heard=ping protocol=tls13 suite=tls13/chaCha20Poly1305Sha256 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_CHACHA20_POLY1305_SHA256]
 ```
 ```exitcode
 0
@@ -1913,6 +1996,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -2006,11 +2098,17 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
@@ -2027,7 +2125,7 @@ function serveOnce(listener TlsListener) returns String
 	end 'unbounded'
 
 	let line = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	_ = try stream.send("echo:{line}") otherwise (error) 'unsent'
@@ -2052,11 +2150,15 @@ function serveOnce(listener TlsListener) returns String
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
-		return "{summary} then {describe(error)}"
+	let after = try stream.readSome(16) otherwise (error) 'failed'
+		return "{summary} then {readFault(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'serveOnce'
 
 union ClientOutcome
@@ -2075,7 +2177,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes("ping\n")
-	configuration.timeoutMs = probeTimeoutMs
+	configuration.deadline = WaitDeadline.within(probeTimeoutMs)
 
 	let result = try configuration.run() otherwise (error) 'failed'
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
@@ -2150,12 +2252,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-ECDHE-ECDSA-AES128-GCM-SHA256: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaAes128GcmSha256 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-AES128-GCM-SHA256]
-ECDHE-ECDSA-AES256-GCM-SHA384: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaAes256GcmSha384 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384]
-ECDHE-ECDSA-CHACHA20-POLY1305: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaChaCha20Poly1305Sha256 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-CHACHA20-POLY1305]
-ECDHE-RSA-AES128-GCM-SHA256: server[heard=ping protocol=tls12 suite=tls12/ecdheRsaAes128GcmSha256 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-RSA-AES128-GCM-SHA256]
-ECDHE-RSA-AES256-GCM-SHA384: server[heard=ping protocol=tls12 suite=tls12/ecdheRsaAes256GcmSha384 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384]
-ECDHE-RSA-CHACHA20-POLY1305: server[heard=ping protocol=tls12 suite=tls12/ecdheRsaChaCha20Poly1305Sha256 peers=0 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-RSA-CHACHA20-POLY1305]
+ECDHE-ECDSA-AES128-GCM-SHA256: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaAes128GcmSha256 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-AES128-GCM-SHA256]
+ECDHE-ECDSA-AES256-GCM-SHA384: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaAes256GcmSha384 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384]
+ECDHE-ECDSA-CHACHA20-POLY1305: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaChaCha20Poly1305Sha256 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-CHACHA20-POLY1305]
+ECDHE-RSA-AES128-GCM-SHA256: server[heard=ping protocol=tls12 suite=tls12/ecdheRsaAes128GcmSha256 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-RSA-AES128-GCM-SHA256]
+ECDHE-RSA-AES256-GCM-SHA384: server[heard=ping protocol=tls12 suite=tls12/ecdheRsaAes256GcmSha384 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384]
+ECDHE-RSA-CHACHA20-POLY1305: server[heard=ping protocol=tls12 suite=tls12/ecdheRsaChaCha20Poly1305Sha256 peers=0 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-RSA-CHACHA20-POLY1305]
 ```
 ```exitcode
 0
@@ -2228,6 +2330,15 @@ function describe(error TlsError) returns String
 		invalidPem gives error.name
 	end 'error'
 end 'describe'
+
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
 
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
@@ -2322,11 +2433,17 @@ function valueAfter(lines StringArray, prefix String) returns String
 end 'valueAfter'
 
 
-function readLine(stream TlsStream) returns String throws TlsError
+function readLine(stream TlsStream) returns String throws StreamError
 	var text = ""
 
 	while not text.endsWith("\n") 'reading'
-		text.append(try stream.recv(1024))
+		let chunk = try stream.readSome(1024)
+
+		if chunk.isEmpty() 'ended'
+			return text
+		end 'ended'
+
+		text.append(String.from(chunk))
 	end 'reading'
 
 	return text
@@ -2343,7 +2460,7 @@ function serveOnce(listener TlsListener) returns String
 	end 'unbounded'
 
 	let line = try readLine(stream) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+		return "recv: {readFault(error)}"
 	end 'unheard'
 
 	_ = try stream.send("echo:{line}") otherwise (error) 'unsent'
@@ -2368,11 +2485,15 @@ function serveOnce(listener TlsListener) returns String
 		return "{summary} shutdownWrite: {describe(error)}"
 	end 'unshut'
 
-	let after = try stream.recv(16) otherwise (error) 'ended'
-		return "{summary} then {describe(error)}"
+	let after = try stream.readSome(16) otherwise (error) 'failed'
+		return "{summary} then {readFault(error)}"
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		return "{summary} then ended"
 	end 'ended'
 
-	return "{summary} then data [{after}]"
+	return "{summary} then data [{String.from(after)}]"
 end 'serveOnce'
 
 union ClientOutcome
@@ -2391,7 +2512,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes("ping\n")
-	configuration.timeoutMs = probeTimeoutMs
+	configuration.deadline = WaitDeadline.within(probeTimeoutMs)
 
 	let result = try configuration.run() otherwise (error) 'failed'
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
@@ -2463,8 +2584,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13: server[heard=ping protocol=tls13 suite=tls13/chaCha20Poly1305Sha256 peers=1 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_CHACHA20_POLY1305_SHA256]
-tls12: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaChaCha20Poly1305Sha256 peers=1 then connectionClosed] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-CHACHA20-POLY1305]
+tls13: server[heard=ping protocol=tls13 suite=tls13/chaCha20Poly1305Sha256 peers=1 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.3, Cipher is TLS_CHACHA20_POLY1305_SHA256]
+tls12: server[heard=ping protocol=tls12 suite=tls12/ecdheEcdsaChaCha20Poly1305Sha256 peers=1 then ended] s_client[exit=0 reply=true verification=OK negotiated=TLSv1.2, Cipher is ECDHE-ECDSA-CHACHA20-POLY1305]
 ```
 ```exitcode
 0
@@ -2650,34 +2771,19 @@ function valueAfter(lines StringArray, prefix String) returns String
 	return "-"
 end 'valueAfter'
 
-function idle(child StreamingSubprocess) throws InteropError
-	match child.pollExit() 'exit'
-		exited then throw InteropError.noPort
-		running then Scheduler.yield()
-	end 'exit'
-end 'idle'
-
-function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
-	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then return text
-			none then try idle(child)
-		end 'polled'
-	end 'polling'
-
-	_ = try child.waitWithTimeout(1) otherwise 0
-
-	throw InteropError.timedOut
-end 'waitForLine'
-
-function acceptedPort(child StreamingSubprocess) returns NetworkPort throws InteropError
-	let start = Clock.nowMs()
-
+function acceptedPort(reader ChildOutputReader) returns NetworkPort throws InteropError
 	while true 'reading'
-		let line = try waitForLine(child, start: start)
+		let read = try reader.readLine() otherwise throw InteropError.noPort
+		var heard = ""
 
-		if line.startsWith("ACCEPT ") 'listening'
-			let address = try URL.parse("https://{line.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
+		match read 'read'
+			line(text) then heard = text
+			ended or
+			pastTheCap then throw InteropError.noPort
+		end 'read'
+
+		if heard.startsWith("ACCEPT ") 'listening'
+			let address = try URL.parse("https://{heard.replace("ACCEPT ", with: "")}") otherwise throw InteropError.noPort
 
 			return try address.port() otherwise throw InteropError.noPort
 		end 'listening'
@@ -2688,6 +2794,7 @@ end 'acceptedPort'
 
 type OpensslServer
 	export var child as StreamingSubprocess
+	export var output as ChildOutputReader
 	export var port as NetworkPort
 
 	static function start(directory String, options StringArray) returns OpensslServer throws InteropError
@@ -2698,30 +2805,41 @@ type OpensslServer
 		end 'eachOption'
 
 		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
-		let port = try acceptedPort(child) otherwise (error) 'unlistening'
+		let taken = try child.takeStdout() otherwise 'untaken'
+			child.release()
+
+			throw InteropError.spawnFailed
+		end 'untaken'
+
+		let output = merge taken
+		let port = try acceptedPort(output) otherwise (error) 'unlistening'
 			child.release()
 
 			throw error
 		end 'unlistening'
 
-		return Self{child: child, port: port}
+		return Self{child: child, output: output, port: port}
 	end 'start'
 end 'OpensslServer'
 
-function drainOutput(lines StringArray, child StreamingSubprocess)
+function drainLines(lines StringArray, reader ChildOutputReader)
 	while true 'reading'
-		let line = try child.readStdoutLine() otherwise return
+		let read = try reader.readLine() otherwise return
 
-		lines.push(line)
+		match read 'read'
+			line(text) then lines.push(text)
+			ended or
+			pastTheCap then return
+		end 'read'
 	end 'reading'
-end 'drainOutput'
+end 'drainLines'
 
 function sentCloseNotify(server OpensslServer) returns bool throws InteropError
-	_ = try server.child.waitWithTimeout(probeTimeoutMs) otherwise throw InteropError.timedOut
+	_ = try server.child.wait(WaitDeadline.within(probeTimeoutMs)) otherwise throw InteropError.timedOut
 
 	let lines = StringArray.create(0)
 
-	drainOutput(lines, child: server.child)
+	drainLines(lines, reader: server.output)
 	server.child.release()
 
 	for line in lines 'eachLine'
@@ -3086,7 +3204,7 @@ function attemptClient(directory String, port NetworkPort, request String, optio
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes(request)
-	configuration.timeoutMs = probeTimeoutMs
+	configuration.deadline = WaitDeadline.within(probeTimeoutMs)
 
 	let result = try configuration.run() otherwise (error) 'failed'
 		return ClientOutcome.observed("s_client: {error.displayReason()}")

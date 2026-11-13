@@ -26,19 +26,24 @@ holding a copy of the accepted socket would keep the connection open for ever, a
 ```maxon
 function waitingChild() returns ExitCode
 	let stdin = Console.stdin()
+	let read = try stdin.readLine() otherwise return 2
 
-	_ = try stdin.readLine() otherwise return 0
-
-	return 1
+	return match read 'read'
+		ended gives 0
+		line or
+		pastTheCap gives 1
+	end 'read'
 end 'waitingChild'
 
 function readsItsEnd(port NetworkPort) returns bool
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
-	let heard = try client.recv(64) otherwise (e) 'ended'
-		return e == NetworkError.connectionClosed
+	let heard = try client.readSome(64) otherwise return false
+
+	if heard.isEmpty() 'ended'
+		return true
 	end 'ended'
 
-	print("unexpected bytes '{heard}'\n")
+	print("unexpected bytes '{String.from(heard)}'\n")
 	return false
 end 'readsItsEnd'
 
@@ -90,26 +95,31 @@ the child is still alive, because the server closes the child's input only after
 ```maxon
 function waitingChild() returns ExitCode
 	let stdin = Console.stdin()
+	let read = try stdin.readLine() otherwise return 2
 
-	_ = try stdin.readLine() otherwise return 0
-
-	return 1
+	return match read 'read'
+		ended gives 0
+		line or
+		pastTheCap gives 1
+	end 'read'
 end 'waitingChild'
 
 function closesOnSignal(port NetworkPort) returns bool
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
-	let signal = try client.recv(1) otherwise return false
+	let signal = try client.readSome(1) otherwise return false
 	client.close()
 
-	return signal == "!"
+	return String.from(signal) == "!"
 end 'closesOnSignal'
 
 function readsItsEnd(conn TcpClient) returns bool
-	let heard = try conn.recv(64) otherwise (e) 'ended'
-		return e == NetworkError.connectionClosed
+	let heard = try conn.readSome(64) otherwise return false
+
+	if heard.isEmpty() 'ended'
+		return true
 	end 'ended'
 
-	print("unexpected bytes '{heard}'\n")
+	print("unexpected bytes '{String.from(heard)}'\n")
 	return false
 end 'readsItsEnd'
 

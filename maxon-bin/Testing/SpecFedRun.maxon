@@ -1,132 +1,41 @@
 let FedRunSurvivorDrainMs = 100
-let FedRunLineEnd = "\n"
 
-type FedRun
-	var child as StreamingSubprocess
-	var stdout = ""
-	var stderr = ""
-	var fed = false
-	let anchor as String
-	let feed as String
+function treeEndError(tree TreeEnd, report ChildRunReport) returns SubprocessError
+	return match tree 'tree'
+		ended gives SubprocessError.timeout(report.elapsedMs, stdout: report.stdout, stderr: report.stderr)
+		survived(osError) gives SubprocessError.treeNotEnded(report.elapsedMs, stdout: report.stdout, stderr: report.stderr, osError: osError)
+		unconfirmed(reason) gives SubprocessError.ioFailed(reason)
+	end 'tree'
+end 'treeEndError'
 
-	static function begin(child StreamingSubprocess, anchor String, feed String) returns FedRun
-		return Self{child: child, anchor: anchor, feed: feed}
-	end 'begin'
+function deadlineError(report ChildRunReport) returns SubprocessError
+	return match report.survivors 'survivors'
+		noneHeld panic("deadlineError: a run that reached its deadline ended the child's tree, so it has a tree end to report")
+		ended(tree) gives treeEndError(tree, report: report)
+	end 'survivors'
+end 'deadlineError'
 
-	function conclude(timeoutMs DurationMs) returns ProcessCapture throws SubprocessError
-		let status = try self.pump(timeoutMs) otherwise (e) 'unfinished'
-			self.child.release()
-			throw e
-		end 'unfinished'
+function refusedWait(refusal WaitRefusal, report ChildRunReport) returns SubprocessError
+	return match refusal 'which'
+		treeNotEnded(osError) gives SubprocessError.treeNotEnded(report.elapsedMs, stdout: report.stdout, stderr: report.stderr, osError: osError)
+		ioFailed(reason) gives SubprocessError.ioFailed(reason)
+	end 'which'
+end 'refusedWait'
 
-		self.child.release()
-
-		return ProcessCapture.create(status.code() as ExitCodeValue, stdout: self.stdout, stderr: self.stderr)
-	end 'conclude'
-
-	function absorbAvailable() returns bool
-		let outMoved = self.absorbStdoutLine()
-		let errMoved = self.absorbStderrLine()
-
-		return outMoved or errMoved
-	end 'absorbAvailable'
-
-	function absorbStdoutLine() returns bool
-		match pollChildStreamLine(self.child, stream: ChildStream.stdout) 'polled'
-			none then return false
-			line(text) then self.noteStdout(text)
-		end 'polled'
-
-		return true
-	end 'absorbStdoutLine'
-
-	function absorbStderrLine() returns bool
-		match pollChildStreamLine(self.child, stream: ChildStream.stderr) 'polled'
-			none then return false
-			line(text) then self.stderr.append("{text}{FedRunLineEnd}")
-		end 'polled'
-
-		return true
-	end 'absorbStderrLine'
-
-	function noteStdout(text String)
-		self.stdout.append("{text}{FedRunLineEnd}")
-
-		if self.fed or text != self.anchor 'notTheAnchor'
-			return
-		end 'notTheAnchor'
-
-		// A child that exits without reading has already closed its end, which is the case's outcome to
-		// judge rather than a harness error.
-		try self.child.writeStdinLine(self.feed) otherwise ignore
-		self.child.closeStdin()
-		self.fed = true
-	end 'noteStdout'
-
-	function pump(timeoutMs DurationMs) returns TerminationStatus throws SubprocessError
-		let start = Clock.nowMs()
-
-		while true 'pumping'
-			try self.requireTimeLeft(start, timeoutMs: timeoutMs)
-
-			if self.absorbAvailable() 'moved'
-				continue
-			end 'moved'
-
-			match childProgress(self.child) 'progress'
-				finished(status) then return status
-				waiting then sleep(ChildPollMs)
-			end 'progress'
-		end 'pumping'
-
-		panic("FedRun.pump: the pump loop leaves only by returning or throwing")
-	end 'pump'
-
-	function requireTimeLeft(start InstantMs, timeoutMs DurationMs) throws SubprocessError
-		if Clock.elapsedMs(start) >= timeoutMs 'expired'
-			throw self.endedByDeadline(Clock.elapsedMs(start))
-		end 'expired'
-	end 'requireTimeLeft'
-
-	function endedByDeadline(elapsedMs DurationMs) returns SubprocessError
-		return match self.child.endTree() 'tree'
-			ended gives self.timeoutOf(elapsedMs)
-			survived(osError) gives self.treeNotEndedOf(elapsedMs, osError: osError)
-
-			// No kill was confirmed: reporting a timeout would claim the tree ended, which nothing confirmed.
-			unconfirmed(reason) gives SubprocessError.ioFailed(reason)
-		end 'tree'
-	end 'endedByDeadline'
-
-	function timeoutOf(elapsedMs DurationMs) returns SubprocessError
-		self.absorbWithinSurvivorWindow()
-
-		return SubprocessError.timeout(elapsedMs, stdout: self.stdout, stderr: self.stderr)
-	end 'timeoutOf'
-
-	// A survivor, or a process the child started outside its tree, may hold the pipes open forever, so
-	// nothing waits for their end here. The
-	// `FedRunSurvivorDrainMs` bound stops a descendant that writes continuously from keeping this loop
-	// running and growing the captured output without limit.
-	function absorbWithinSurvivorWindow()
-		let start = Clock.nowMs()
-		var moved = true
-
-		while moved and Clock.elapsedMs(start) < FedRunSurvivorDrainMs 'available'
-			moved = self.absorbAvailable()
-		end 'available'
-	end 'absorbWithinSurvivorWindow'
-
-	function treeNotEndedOf(elapsedMs DurationMs, osError OsErrorCode) returns SubprocessError
-		self.absorbWithinSurvivorWindow()
-
-		return SubprocessError.treeNotEnded(elapsedMs, stdout: self.stdout, stderr: self.stderr, osError: osError)
-	end 'treeNotEndedOf'
-end 'FedRun'
+function capturedAfter(report ChildRunReport) returns ProcessCapture throws SubprocessError
+	match report.ending 'ending'
+		exited(code) then return ProcessCapture.create(code as ExitCodeValue, stdout: report.stdout, stderr: report.stderr)
+		reapedElsewhere then throw SubprocessError.statusLost(report.stdout, stderr: report.stderr)
+		deadline then throw deadlineError(report)
+		waitFailed(refusal) then throw refusedWait(refusal, report: report)
+	end 'ending'
+end 'capturedAfter'
 
 export function runProcessFedAfter(exe Executable, argv StringArray, workingDirectory WorkingDirectory, timeoutMs DurationMs, environment Environment, anchor String, feed String) returns ProcessCapture throws SubprocessError
-	let child = try StreamingSubprocess.spawnWithEnvironment(exe, arguments: argv, workingDirectory: workingDirectory, environment: environment)
-	let run = FedRun.begin(child, anchor: anchor, feed: feed)
+	let outcome = try runChildFedAfterLine(exe, argv: argv, workingDirectory: workingDirectory, environment: environment, deadlineMs: timeoutMs, endsWhen: RunEndsWhen.outputEnds, tailSilenceMs: FedRunSurvivorDrainMs, tailCapMs: FedRunSurvivorDrainMs, anchor: anchor, feed: feed)
 
-	return try run.conclude(timeoutMs)
+	match outcome 'outcome'
+		ran(report) then return try capturedAfter(report)
+		outputBroken(stream, reason, _) then throw SubprocessError.ioFailed("reading the program's {stream.name} failed ({reason})")
+	end 'outcome'
 end 'runProcessFedAfter'

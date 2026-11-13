@@ -1,8 +1,8 @@
 export type ChildOutputLine
-	export let stream as ChildStream
+	export let stream as StdioStream
 	export let text as String
 
-	static function create(stream ChildStream, text String) returns ChildOutputLine
+	static function create(stream StdioStream, text String) returns ChildOutputLine
 		return Self{stream: stream, text: text}
 	end 'create'
 end 'ChildOutputLine'
@@ -53,7 +53,7 @@ export type OutputSink
 		return Self{lines: ChildOutputLineList.create(), heldBytes: 0, dropped: 0}
 	end 'create'
 
-	function record(text String, stream ChildStream)
+	function record(text String, stream StdioStream)
 		let kept = self.withinCapacity(text)
 		self.lines.append(ChildOutputLine.create(stream, text: kept))
 		self.heldBytes = self.heldBytes + (kept.byteLength() as SinkBytes)
@@ -139,106 +139,93 @@ export let LeastTargetSeconds = 0.001 as TargetSeconds
 let TreeNotEndedNotice = "maxon: the target's process tree is not known to have ended, so the rest of its output is not waited for: "
 let KilledTailBoundNotice = "maxon: a process the target started and left outside its process tree still holds its output, so the rest of it is not waited for\n"
 let ExitedTailBoundNotice = "maxon: the target's output is still held open after it exited, so the rest of it is not waited for\n"
+let UnendedTailLines = 64
+let ChildLineFollowMs = 1
 let EndedTailSilenceMs = 1000
 let EndedTailCapMs = 10000
-let UnendedTailLines = 64
 
 export union TailEnding
 	afterKill
 	afterExit
 end 'TailEnding'
 
-// Emptiness is not the stopping rule and cannot be: a child's own blank line and a pipe with
-// nothing in it are the same string once the terminator is off, so a loop keyed off the text drops
-// every blank line the child writes. The poll's `none` is the stopping rule.
-//
-// The budget bounds one pass: a chatty child must not starve the caller's own schedule.
-export function forwardChildOutput(child StreamingSubprocess, routing ChildOutputRouting, budget ChildLineBudget) returns bool
-	var faulted = false
+export function forwardChildOutput(pump ChildPump, routing ChildOutputRouting, budget ChildLineBudget) returns bool
+	let forwarder = ChildOutputForwarder.create(routing)
 	var taken = 0 as ChildLineTally
-	var buffered = true
+	var followed = false
 
-	while buffered and withinBudget(budget, taken: taken) 'interleaved'
-		let pass = forwardOneLineEach(child, routing: routing)
-		faulted = pass.faulted or faulted
-		buffered = pass.moved
-		taken = taken + 1
+	while withinBudget(budget, taken: taken) 'interleaved'
+		let event = pump.next(ChildLineFollowMs) if followed else pump.poll()
+		event.deliverTo(forwarder)
+
+		let kind = stepKindOf(event)
+		followed = kind == StepKind.line
+
+		if followed 'aLine'
+			taken = taken + 1
+		end 'aLine'
+
+		if kind == StepKind.silence or kind == StepKind.drained 'nothingMore'
+			break
+		end 'nothingMore'
 	end 'interleaved'
 
-	return faulted
+	return forwarder.faulted
 end 'forwardChildOutput'
 
-type ChildPass
-	export let moved as bool
-	export let faulted as bool
+enum StepKind
+	line
+	skipped
+	silence
+	drained
+end 'StepKind'
 
-	static function create(moved bool, faulted bool) returns ChildPass
-		return Self{moved: moved, faulted: faulted}
-	end 'create'
-end 'ChildPass'
+function stepKindOf(event PumpEvent) returns StepKind
+	return match event 'event'
+		said gives StepKind.line
+		closed or
+		broke gives StepKind.skipped
+		silent gives StepKind.silence
+		exhausted gives StepKind.drained
+	end 'event'
+end 'stepKindOf'
 
-function forwardOneLineEach(child StreamingSubprocess, routing ChildOutputRouting) returns ChildPass
-	var moved = false
-	var faulted = false
-
-	for stream in ChildStream.allCases 'eachStream'
-		match pollChildStreamLine(child, stream: stream) 'polled'
-			none then continue
-			line(text) then faulted = emitChildStreamLine(text, stream: stream, routing: routing) or faulted
-		end 'polled'
-
-		moved = true
-	end 'eachStream'
-
-	return ChildPass.create(moved, faulted: faulted)
-end 'forwardOneLineEach'
-
-export function endChildAndForwardTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
+export function endChild(child StreamingSubprocess, pump ChildPump, routing ChildOutputRouting) returns bool
 	let treeEnd = child.endTree()
 
 	match treeEnd 'tree'
-		ended then return forwardEndedChildTail(child, routing: routing, ending: TailEnding.afterKill)
+		ended then return forwardEndedChildTail(child, pump: pump, routing: routing, ending: TailEnding.afterKill)
 		survived or
-		unconfirmed then return forwardUnendedChildOutput(child, treeEnd: treeEnd, routing: routing)
+		unconfirmed then return forwardUnendedChildOutput(child, pump: pump, treeEnd: treeEnd, routing: routing)
 	end 'tree'
-end 'endChildAndForwardTail'
+end 'endChild'
 
-// A process the target started and left behind can hold its pipes open for good, so the wait ends
-// when no output has moved for `EndedTailSilenceMs` (the clock restarts whenever output moves, so a
-// holder that keeps printing is still forwarded) or `EndedTailCapMs` after entry, which bounds a
-// holder that never stops. The streams' end is checked before the bound, so a tail that finishes on
-// the bound's tick prints no notice. The notice states what the caller knows: after a kill only a
-// process outside the target's tree can hold the output, after an exit the holder may be anywhere.
-export function forwardEndedChildTail(child StreamingSubprocess, routing ChildOutputRouting, ending TailEnding) returns bool
-	let start = Clock.nowMs()
-	var lastMoved = start
-	var faulted = false
+export function forwardEndedChildTail(child StreamingSubprocess, pump ChildPump, routing ChildOutputRouting, ending TailEnding) returns bool
+	let forwarder = ChildOutputForwarder.create(routing)
 
-	while true 'untilItEnds'
-		let pass = forwardOneLineEach(child, routing: routing)
-		faulted = pass.faulted or faulted
+	if PumpTail.begin(EndedTailSilenceMs, capMs: EndedTailCapMs).drainAndRelease(pump, child: child, into: forwarder) == TailEnd.stillOpen 'heldOpen'
+		printError(tailBoundNotice(ending))
+	end 'heldOpen'
 
-		if pass.moved 'somethingArrived'
-			lastMoved = Clock.nowMs()
-		end 'somethingArrived'
-
-		if child.outputHasEnded() 'drained'
-			return faulted
-		end 'drained'
-
-		if Clock.elapsedMs(lastMoved) >= EndedTailSilenceMs or Clock.elapsedMs(start) >= EndedTailCapMs 'boundReached'
-			printError(tailBoundNotice(ending))
-
-			return faulted
-		end 'boundReached'
-
-		if not pass.moved 'idle'
-			sleep(ChildPollMs)
-		end 'idle'
-	end 'untilItEnds'
-
-	panic("forwardEndedChildTail: the tail loop leaves only by returning")
+	return forwarder.faulted
 end 'forwardEndedChildTail'
+
+type ChildOutputForwarder implements ChildLineSink
+	let routing as ChildOutputRouting
+	export var faulted as bool
+
+	static function create(routing ChildOutputRouting) returns ChildOutputForwarder
+		return Self{routing: routing, faulted: false}
+	end 'create'
+
+	export function heard(stream StdioStream, text String)
+		self.faulted = emitChildStreamLine(text, stream: stream, routing: self.routing) or self.faulted
+	end 'heard'
+
+	export function broken(stream StdioStream, reason String)
+		printError("maxon: reading the target's {stream.name} ended early: {reason}\n")
+	end 'broken'
+end 'ChildOutputForwarder'
 
 function tailBoundNotice(ending TailEnding) returns String
 	return match ending 'which'
@@ -247,18 +234,14 @@ function tailBoundNotice(ending TailEnding) returns String
 	end 'which'
 end 'tailBoundNotice'
 
-function forwardUnendedChildOutput(child StreamingSubprocess, treeEnd TreeEnd, routing ChildOutputRouting) returns bool
+function forwardUnendedChildOutput(child StreamingSubprocess, pump ChildPump, treeEnd TreeEnd, routing ChildOutputRouting) returns bool
 	printError("{TreeNotEndedNotice}{treeEnd.displayReason()}\n")
 
-	return forwardChildOutput(child, routing: routing, budget: ChildLineBudget.atMost(UnendedTailLines))
-end 'forwardUnendedChildOutput'
-
-export function endChild(child StreamingSubprocess, routing ChildOutputRouting) returns bool
-	let faulted = endChildAndForwardTail(child, routing: routing)
-	child.release()
+	let faulted = forwardChildOutput(pump, routing: routing, budget: ChildLineBudget.atMost(UnendedTailLines))
+	pump.release(child)
 
 	return faulted
-end 'endChild'
+end 'forwardUnendedChildOutput'
 
 // Everything past the FIRST `=` is the value, because a value may contain one of its own.
 export function parseTargetEnv(raw String) returns TargetEnvParse
@@ -333,7 +316,7 @@ function withinBudget(budget ChildLineBudget, taken ChildLineTally) returns bool
 	end 'which'
 end 'withinBudget'
 
-function emitChildStreamLine(text String, stream ChildStream, routing ChildOutputRouting) returns bool
+function emitChildStreamLine(text String, stream StdioStream, routing ChildOutputRouting) returns bool
 	match routing 'where'
 		allToStandardError then printError("{text}\n")
 		verbatim then emitChildLineVerbatim(text, stream: stream)
@@ -343,7 +326,7 @@ function emitChildStreamLine(text String, stream ChildStream, routing ChildOutpu
 	return childFaultLineSeen(text)
 end 'emitChildStreamLine'
 
-function emitChildLineVerbatim(text String, stream ChildStream)
+function emitChildLineVerbatim(text String, stream StdioStream)
 	match stream 'which'
 		stdout then print("{text}\n")
 		stderr then printError("{text}\n")

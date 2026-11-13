@@ -3648,6 +3648,124 @@ end 'main'
 10
 ```
 
+The GLOBAL-INITIALIZER route. A module-level `let` cannot hold an interface value (an initializer of an interface type is refused), so the global holds the concrete enum and the widening happens in `main`. The enum is named by nothing but the initializer of that `let`: no function body mentions `Color`, so no reached function is OF `Color`, yet the table for its `Named` conformance is built and its `name` slot must still name a built body.
+
+<!-- test: witness-impl-of-an-enum-named-only-by-a-global-initializer -->
+```maxon
+interface Named
+	function name() returns String
+end 'Named'
+
+enum Color implements Named
+	red
+
+	function name() returns String
+		return "red"
+	end 'name'
+end 'Color'
+
+type Holder
+	export let named as Named
+
+	static function create(named Named) returns Self
+		return Self{named: named}
+	end 'create'
+end 'Holder'
+
+let Fallback = Color.red
+
+function main() returns ExitCode
+	let holder = Holder.create(Fallback)
+	print("{holder.named.name()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+red
+```
+
+The same route with the interface and the enum both in the standard library: the user's program names the enum only in the global's initializer.
+
+<!-- test: witness-impl-of-a-library-enum-named-only-by-a-global-initializer -->
+```maxon
+// --- stdlib-overlay: Console.maxon
+public interface ZNamed
+	function name() returns String
+end 'ZNamed'
+
+public enum ZColor implements ZNamed
+	red
+
+	public function name() returns String
+		return "red"
+	end 'name'
+end 'ZColor'
+// --- file: main.maxon
+type Holder
+	export let named as ZNamed
+
+	static function create(named ZNamed) returns Self
+		return Self{named: named}
+	end 'create'
+end 'Holder'
+
+let Fallback = ZColor.red
+
+function main() returns ExitCode
+	let holder = Holder.create(Fallback)
+	print("{holder.named.name()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+red
+```
+
+The same route when the requirement implementation itself reaches stdlib (`print`), the body the walk can credit only through the conformer.
+
+<!-- test: witness-impl-reaching-stdlib-of-an-enum-named-only-by-a-global-initializer -->
+```maxon
+interface Speaker
+	function speak()
+end 'Speaker'
+
+enum Mood implements Speaker
+	calm
+
+	function speak()
+		print("calm\n")
+	end 'speak'
+end 'Mood'
+
+type Holder
+	export let speaker as Speaker
+
+	static function create(speaker Speaker) returns Self
+		return Self{speaker: speaker}
+	end 'create'
+end 'Holder'
+
+let Default = Mood.calm
+
+function main() returns ExitCode
+	let holder = Holder.create(Default)
+	holder.speaker.speak()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+calm
+```
+
 
 <!-- test: interface-return-of-two-conformers-at-three-depths-of-owned-locals -->
 ```maxon

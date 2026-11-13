@@ -743,7 +743,7 @@ module type CompileAnswer
 	end 'isBuilt'
 end 'CompileAnswer'
 
-// Every spawn carries a deadline, because `Subprocess`'s default (`timeoutMs = 0`) is to wait
+// Every spawn carries a deadline, because `Subprocess`'s default (`WaitDeadline.none`) is to wait
 // forever, and a gate that hangs indefinitely reports nothing, so there is nothing to act on. An
 // external runner can block after its guest process has exited, and a redirected runner's
 // block-buffered stdout makes that hang silent rather than slow.
@@ -778,10 +778,10 @@ export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 // value, so the one that differs is the one that states it: `runGuestBatch` for the deadline, since
 // it performs many executions in one spawn, and for the script it hands `orb` on standard input,
 // and the RUN step for the environment (`runEnvironmentFor`) and standard input (`runWithStdin`).
-export function runProcess(exe Executable, argv StringArray, workingDirectory WorkingDirectory, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
+export function runProcess(exe Executable, argv StringArray, workingDirectory WorkingDirectory, timeoutMs WaitDeadlineMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
 	let config = Configuration.create(exe)
 	config.arguments = argv
-	config.timeoutMs = timeoutMs
+	config.deadline = WaitDeadline.within(timeoutMs)
 	config.workingDirectory = workingDirectory
 	config.environment = environment
 	config.standardInput = standardInput
@@ -3999,8 +3999,9 @@ function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns Fil
 
 	child.closeStdin()
 
-	let status = followGuestSuite(child, capture: capture)
-	child.release()
+	let pump = pumpOfSpawned(child)
+	let status = followGuestSuite(child, pump: pump, capture: capture)
+	pump.release(child)
 
 	// Strict, unlike the polls in `followGuestSuite`: a read that fails here would silently drop
 	// the tail of the suite's output.
@@ -4033,10 +4034,10 @@ end 'GuestOutputError'
 
 type FollowedOutput
 	let path as FilePath
-	let stream as ChildStream
+	let stream as StdioStream
 	var shown = 0 as BytePos
 
-	static function create(path FilePath, stream ChildStream) returns FollowedOutput
+	static function create(path FilePath, stream StdioStream) returns FollowedOutput
 		return Self{path: path, stream: stream}
 	end 'create'
 
@@ -4084,7 +4085,7 @@ type GuestSuiteCapture
 		let stdoutPath = directory.join(GuestSuiteStdoutName)
 		let stderrPath = directory.join(GuestSuiteStderrName)
 
-		return Self{directory: directory, stdoutPath: stdoutPath, stderrPath: stderrPath, stdoutFollow: FollowedOutput.create(stdoutPath, stream: ChildStream.stdout), stderrFollow: FollowedOutput.create(stderrPath, stream: ChildStream.stderr)}
+		return Self{directory: directory, stdoutPath: stdoutPath, stderrPath: stderrPath, stdoutFollow: FollowedOutput.create(stdoutPath, stream: StdioStream.stdout), stderrFollow: FollowedOutput.create(stderrPath, stream: StdioStream.stderr)}
 	end 'begin'
 
 	function redirectArguments() returns StringArray
@@ -4108,47 +4109,44 @@ function discardCaptureAfter(capture GuestSuiteCapture, exitCode ExitCode) retur
 	return exitCode
 end 'discardCaptureAfter'
 
-function writeToChildStream(text String, stream ChildStream)
+function writeToChildStream(text String, stream StdioStream)
 	match stream 'which'
 		stdout then print(text)
 		stderr then printError(text)
 	end 'which'
 end 'writeToChildStream'
 
-function forwardLauncherLine(child StreamingSubprocess, stream ChildStream) returns bool
-	match pollChildStreamLine(child, stream: stream) 'polled'
-		none then return false
-		line(text) then writeToChildStream("{text}\n", stream: stream)
-	end 'polled'
-
-	return true
-end 'forwardLauncherLine'
-
-function forwardLauncherLines(child StreamingSubprocess) returns bool
-	let outMoved = forwardLauncherLine(child, stream: ChildStream.stdout)
-	let errMoved = forwardLauncherLine(child, stream: ChildStream.stderr)
-
-	return outMoved or errMoved
-end 'forwardLauncherLines'
-
-function followGuestSuite(child StreamingSubprocess, capture GuestSuiteCapture) returns TerminationStatus
+function followGuestSuite(child StreamingSubprocess, pump ChildPump, capture GuestSuiteCapture) returns TerminationStatus
 	while true 'following'
 		// A poll mid-run may fail and the next one retries it; only the final replay in
 		// `spawnGuestSuite` must succeed.
 		try capture.replay() otherwise ignore
 
-		if forwardLauncherLines(child) 'moved'
-			continue
-		end 'moved'
-
-		match childProgress(child) 'progress'
-			finished(status) then return status
-			waiting then sleep(GuestOutputFollowMs)
-		end 'progress'
+		match pump.next(GuestOutputFollowMs) 'event'
+			said(stream, text) then writeToChildStream("{text}\n", stream: stream)
+			closed or
+			silent then continue
+			broke(stream, reason) then printError("error: reading the launcher's {stream.name} failed ({reason})\n")
+			exhausted then return followGuestSuiteToItsExit(child, capture: capture)
+		end 'event'
 	end 'following'
 
 	panic("SpecTestRunner.followGuestSuite: the follow loop leaves only by returning")
 end 'followGuestSuite'
+
+function followGuestSuiteToItsExit(child StreamingSubprocess, capture GuestSuiteCapture) returns TerminationStatus
+	while true 'waiting'
+		try capture.replay() otherwise ignore
+
+		match child.pollTermination() 'polled'
+			ended(status) then return status
+			reapedElsewhere then panic("SpecTestRunner.followGuestSuiteToItsExit: the exit status of the suite's launcher went to another process, though nothing else waits on it")
+			running then sleep(GuestOutputFollowMs)
+		end 'polled'
+	end 'waiting'
+
+	panic("SpecTestRunner.followGuestSuiteToItsExit: the wait loop leaves only by returning")
+end 'followGuestSuiteToItsExit'
 
 function reportGuestOutputFailure(failure GuestOutputError) returns ExitCode
 	return match failure 'which'
@@ -4587,7 +4585,6 @@ function runFailureReason(e SubprocessError) returns String
 		ioFailed or
 		detachRefused or
 		inputTooLarge gives "program spawn failed: {e.displayReason()}"
-		endOfStream gives "program output ended early: {e.displayReason()}"
 	end 'why'
 end 'runFailureReason'
 
@@ -4833,8 +4830,8 @@ end 'launchBatch'
 // actually bounds a wedged PROGRAM, per test, at exactly the value one spawn is bounded by; this
 // bounds only a `wsl` that never returns at all, which the pool's own wedge watchdog would report
 // anyway.
-export function batchDeadlineMs(executions TestTally) returns DurationMs
-	return SpecSpawnTimeoutMs * ((executions + 1) as DurationMs)
+export function batchDeadlineMs(executions TestTally) returns WaitDeadlineMs
+	return SpecSpawnTimeoutMs * ((executions + 1) as WaitDeadlineMs)
 end 'batchDeadlineMs'
 
 // What a batch that never had to run reports: no process, no output, no failure. Named because

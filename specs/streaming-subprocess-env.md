@@ -37,7 +37,7 @@ reader parks its green thread until the Windows I/O completion port answers, and
 A streaming child is spawned with `Environment.inheritUpdating` naming ONE variable that does not
 exist in this process. The child is `cmd /c echo %MAXON_STREAM_ENV_PROBE%`, which expands the name
 from the environment it was actually given and writes the result to the stdout pipe; the parent reads
-that one line back with `readStdoutLine` (so the terminator is already stripped) and exits with its
+that one line back through the reader `takeStdout()` hands out (so the terminator is already stripped) and exits with its
 byte length — `seen`, 4. A spawn that inherited instead would echo the unexpanded
 `%MAXON_STREAM_ENV_PROBE%` literal, which is 24 bytes and not 4, so the wrong answer is a different
 exit code rather than a near miss.
@@ -50,12 +50,20 @@ function main() returns ExitCode
 
 	let childEnvironment = Environment.inheritUpdating(["MAXON_STREAM_ENV_PROBE": "seen"])
 	let child = try StreamingSubprocess.spawnWithEnvironment(Executable.name("cmd"), arguments: argv, workingDirectory: WorkingDirectory.inherit, environment: childEnvironment) otherwise return 4
-	let line = try child.readStdoutLine() otherwise return 5
+	let output = try child.takeStdout() otherwise return 5
+	let read = try output.readLine() otherwise return 5
+
+	let echoed = match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+
 	let code = try child.wait() otherwise return 6
 	child.release()
 
-	print("line={line} childCode={code}\n")
-	return line.byteLength() as ExitCode
+	print("line={echoed} childCode={code}\n")
+	return echoed.byteLength() as ExitCode
 end 'main'
 ```
 ```stdout

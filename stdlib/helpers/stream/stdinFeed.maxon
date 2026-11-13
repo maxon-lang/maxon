@@ -1,0 +1,76 @@
+union FeedState
+	idle
+	waiting(anchor String, line String)
+	pushing(left BytePos)
+	fed
+end 'FeedState'
+
+public type StdinFeed
+	var state as FeedState
+
+	public static function never() returns Self
+		return Self{state: FeedState.idle}
+	end 'never'
+
+	public static function afterLine(anchor String, line String) returns Self
+		return Self{state: FeedState.waiting(anchor, line: line)}
+	end 'afterLine'
+
+	public function offer(event PumpEvent, child StreamingSubprocess, pump ChildPump)
+		match self.state 'state'
+			waiting(anchor, line) then self.queueOnAnchor(event, child: child, pump: pump, anchor: anchor, line: line)
+			pushing(left) then self.push(child, pump: pump, left: left)
+			idle or
+			fed then break
+		end 'state'
+	end 'offer'
+
+	function queueOnAnchor(event PumpEvent, child StreamingSubprocess, pump ChildPump, anchor String, line String)
+		match event 'event'
+			said(stream, text) then self.queueIfAnchor(stream, text: text, child: child, pump: pump, anchor: anchor, line: line)
+			closed or
+			broke or
+			silent or
+			exhausted then break
+		end 'event'
+	end 'queueOnAnchor'
+
+	function queueIfAnchor(stream StdioStream, text String, child StreamingSubprocess, pump ChildPump, anchor String, line String)
+		if stream != StdioStream.stdout or text != anchor 'notTheAnchor'
+			return
+		end 'notTheAnchor'
+
+		let payload = "{line}\n"
+
+		try child.queueStdin(payload) otherwise 'refused'
+			self.state = FeedState.fed
+
+			return
+		end 'refused'
+
+		self.push(child, pump: pump, left: payload.byteLength())
+	end 'queueIfAnchor'
+
+	function push(child StreamingSubprocess, pump ChildPump, left BytePos)
+		var pending = left
+
+		while pending > 0 'draining'
+			let remaining = try child.pushQueuedStdin() otherwise panic("StdinFeed.push: a feed that is pushing holds a live child")
+
+			if remaining >= pending 'blocked'
+				break
+			end 'blocked'
+
+			pending = remaining
+		end 'draining'
+
+		if pending == 0 'drained'
+			self.state = FeedState.fed
+
+			return
+		end 'drained'
+
+		self.state = FeedState.pushing(pending)
+		try pump.watchStdin(child, progressed: pending < left) otherwise panic("StdinFeed.push: a feed that is pushing holds a live child")
+	end 'push'
+end 'StdinFeed'

@@ -150,6 +150,7 @@ end 'runMcpSingle'
 
 export type StreamingMcpSession
 	export var server as StreamingSubprocess
+	var responses as ChildOutputReader
 
 	// `binary` is a parameter because a case starts a server from a STAGED COPY and then replaces or
 	// renames that copy on disk; it must not be the tree's own slot.
@@ -165,21 +166,31 @@ export type StreamingMcpSession
 			panic("StreamingMcpSession: failed to spawn mcp server: {e.displayReason()}")
 		end 'spawnFailed'
 
-		return StreamingMcpSession{server: spawned}
+		let responses = try spawned.takeStdout() otherwise (e) 'stdoutNotTaken'
+			spawned.release()
+			panic("StreamingMcpSession: could not take the server's stdout: {e.displayReason()}")
+		end 'stdoutNotTaken'
+
+		return StreamingMcpSession{server: spawned, responses: merge responses}
 	end 'startFrom'
 
 	export function sendLine(line String) throws SubprocessError
 		try self.server.writeStdinLine(line)
 	end 'sendLine'
 
-	export function readResponseDoc() returns JsonDoc throws SubprocessError
-		let line = try self.server.readStdoutLineCapped(ResponseLineByteCap)
-		return try Json.parse(line) otherwise panic("StreamingMcpSession: invalid JSON response: {line}")
+	export function readResponseDoc() returns JsonDoc throws StreamError
+		let read = try self.responses.readLine(cap: ResponseLineByteCap)
+
+		match read 'read'
+			line(text) then return try Json.parse(text) otherwise panic("StreamingMcpSession: invalid JSON response: {text}")
+			ended then throw StreamError.closed
+			pastTheCap then throw StreamError.failed("a response line ran past {ResponseLineByteCap} bytes")
+		end 'read'
 	end 'readResponseDoc'
 
 	export function close() returns ExitInt throws SubprocessError
 		self.server.closeStdin()
-		let code = try self.server.waitWithTimeout(10000) otherwise (e) 'waitErr'
+		let code = try self.server.wait(WaitDeadline.within(10000)) otherwise (e) 'waitErr'
 			self.server.release()
 			throw e
 		end 'waitErr'
@@ -389,6 +400,7 @@ export typealias HttpAnswerStatus = int(100 to 599)
 
 let LowestHttpAnswerStatus = 100 as FullRangeInt
 let HighestHttpAnswerStatus = 599 as FullRangeInt
+let AnswerBodyBound = 16777216
 
 export let McpHttpOption = "--http"
 export let McpExitOnStdinEofOption = "--exit-on-stdin-eof"
@@ -402,10 +414,7 @@ let HeaderSeparator = "\r\n"
 let HeaderEnd = "\r\n\r\n"
 let StatusLineFieldSeparator = " "
 let HeaderNameSeparator = ": "
-let RecvChunkBytes = 65536
-let RecvAttemptBudget = 4096
 let ServerExitDeadlineMs = 5000
-let ContentLengthHeaderName = "content-length"
 let NoContentStatus = 204
 let NotModifiedStatus = 304
 
@@ -470,37 +479,21 @@ function httpExchange(port NetworkPort, requestText String) returns HttpAnswer
 		panic("McpHarness: could not connect to the MCP HTTP transport on port {port}: {e.name}")
 	end 'noConnection'
 
-	_ = try client.send(requestText) otherwise (e) 'sendFailed'
-		client.close()
+	let reader = StreamReader.over(client)
+
+	_ = try reader.source.send(requestText) otherwise (e) 'sendFailed'
+		reader.source.close()
 		panic("McpHarness: could not send to the MCP HTTP transport: {e.name}")
 	end 'sendFailed'
 
-	var raw = ""
-	var reads = 0 as Count
-	var open = true
+	let answer = try reader.readToEnd() otherwise (e) 'readFailed'
+		reader.source.close()
+		panic("McpHarness: reading the MCP HTTP transport's answer failed ({e.displayReason()})")
+	end 'readFailed'
 
-	while open 'drain'
-		if reads >= RecvAttemptBudget 'neverClosed'
-			client.close()
-			panic("McpHarness: the MCP HTTP transport sent {reads} reads of an answer without closing the connection. What arrived: {raw}")
-		end 'neverClosed'
+	reader.source.close()
 
-		let chunk = try client.recv(RecvChunkBytes) otherwise (e) 'ended'
-			match e 'why'
-				connectionClosed then open = false
-				default panic("McpHarness: reading the MCP HTTP transport's answer failed ({e.name}) after {raw.byteLength()} bytes: {raw}")
-			end 'why'
-
-			continue
-		end 'ended'
-
-		raw.append(chunk)
-		reads = reads + 1
-	end 'drain'
-
-	client.close()
-
-	return parseHttpAnswer(raw)
+	return parseHttpAnswer(String.from(answer))
 end 'httpExchange'
 
 function parseHttpAnswer(raw String) returns HttpAnswer
@@ -534,11 +527,14 @@ function parseHttpAnswer(raw String) returns HttpAnswer
 
 	let statusCode = parsed as HttpAnswerStatus
 	let headers = HeaderMap.create()
+	let headerLines = StringArray.create(0)
 
 	for (iter, line) in lines.withIterator() 'eachLine'
 		if iter.index() == 0 'statusLine'
 			continue
 		end 'statusLine'
+
+		headerLines.push(line)
 
 		let parts = line.split(HeaderNameSeparator)
 
@@ -549,44 +545,110 @@ function parseHttpAnswer(raw String) returns HttpAnswer
 		end 'named'
 	end 'eachLine'
 
-	if statusCode == NoContentStatus or statusCode == NotModifiedStatus 'contentless'
-		if headers.contains(ContentLengthHeaderName) or not body.isEmpty() 'carriesContent'
-			panic("McpHarness: a {statusCode} answer carries a Content-Length or a body, which that status forbids: {raw}")
-		end 'carriesContent'
+	let contentless = statusCode == NoContentStatus or statusCode == NotModifiedStatus
 
-		return HttpAnswer.create(statusCode, headers: headers, body: body)
-	end 'contentless'
-
-	let declared = try headers.get(ContentLengthHeaderName) otherwise panic("McpHarness: an HTTP answer carries no Content-Length, so a truncated one cannot be told from a whole one: {raw}")
-	let declaredBytes = try int.fromString(declared.trim()) otherwise panic("McpHarness: an HTTP answer's Content-Length is not a number: {raw}")
-
-	if (body.byteLength() as FullRangeInt) != declaredBytes 'truncated'
-		panic("McpHarness: an HTTP answer declares {declaredBytes} body bytes and {body.byteLength()} arrived: {raw}")
-	end 'truncated'
+	match httpHeaderBlockLength(headerLines, bound: AnswerBodyBound as UrlDecimalBound) 'framing'
+		undeclared then requireUndeclaredFraming(contentless, body: body, raw: raw)
+		malformedBlock then panic("McpHarness: an HTTP answer's header block is malformed: {raw}")
+		notADecimal then panic("McpHarness: an HTTP answer's Content-Length is not a run of decimal digits: {raw}")
+		aboveTheBound then panic("McpHarness: an HTTP answer's Content-Length is past {AnswerBodyBound}: {raw}")
+		value(declaredBytes) then requireDeclaredFraming(contentless, declaredBytes: declaredBytes, body: body, raw: raw)
+	end 'framing'
 
 	return HttpAnswer.create(statusCode, headers: headers, body: body)
 end 'parseHttpAnswer'
 
-// Polled, not read: a blocking read of a stderr a live server never writes to would hang instead of
-// reporting.
-function drainedStderr(child StreamingSubprocess) returns String
-	var said = ""
-	var reads = 0 as Count
+function requireUndeclaredFraming(contentless bool, body String, raw String)
+	if not contentless 'bodied'
+		panic("McpHarness: an HTTP answer carries no Content-Length, so a truncated one cannot be told from a whole one: {raw}")
+	end 'bodied'
 
-	while reads < StderrDrainBudget 'drain'
-		match try child.tryReadStderrLine() otherwise panic("the server's stderr is out with a StderrReader") 'polled'
-			line(text) then said.append("{text} ")
-			none then break
-		end 'polled'
+	if not body.isEmpty() 'carriesContent'
+		panic("McpHarness: a contentless answer carries a body, which its status forbids: {raw}")
+	end 'carriesContent'
+end 'requireUndeclaredFraming'
 
-		reads = reads + 1
-	end 'drain'
+function requireDeclaredFraming(contentless bool, declaredBytes BytePos, body String, raw String)
+	if contentless 'forbidden'
+		panic("McpHarness: a contentless answer carries a Content-Length, which its status forbids: {raw}")
+	end 'forbidden'
 
-	return said if not said.isEmpty() else "nothing on stderr"
-end 'drainedStderr'
+	if body.byteLength() != declaredBytes 'truncated'
+		panic("McpHarness: an HTTP answer declares {declaredBytes} body bytes and {body.byteLength()} arrived: {raw}")
+	end 'truncated'
+end 'requireDeclaredFraming'
 
-let StderrDrainBudget = 32
+let EndpointDeadlineMs = 60000
 let ResponseLineByteCap = 16777216
+
+union EndpointLine
+	awaited
+	printed(text String)
+end 'EndpointLine'
+
+enum EndpointNotPrinted implements Error
+	awaited
+end 'EndpointNotPrinted'
+
+type EndpointWatch implements ChildLineSink
+	var line as EndpointLine
+	var stderrSeen as String
+
+	static function create() returns EndpointWatch
+		return Self{line: EndpointLine.awaited, stderrSeen: ""}
+	end 'create'
+
+	function isAwaiting() returns bool
+		return match self.line 'line'
+			awaited gives true
+			printed gives false
+		end 'line'
+	end 'isAwaiting'
+
+	function printedLine() returns String throws EndpointNotPrinted
+		match self.line 'line'
+			printed(text) then return text
+			awaited then throw EndpointNotPrinted.awaited
+		end 'line'
+	end 'printedLine'
+
+	export function heard(stream StdioStream, text String)
+		match stream 'stream'
+			stdout then self.line = EndpointLine.printed(text)
+			stderr then self.stderrSeen.append("{text} ")
+		end 'stream'
+	end 'heard'
+
+	export function broken(stream StdioStream, reason String)
+		self.stderrSeen.append("(reading {stream.name} failed: {reason}) ")
+	end 'broken'
+
+	function said() returns String
+		return self.stderrSeen if not self.stderrSeen.isEmpty() else "nothing on stderr"
+	end 'said'
+end 'EndpointWatch'
+
+function watchedForEndpoint(pump ChildPump) returns EndpointWatch
+	let watch = EndpointWatch.create()
+	let started = Clock.nowMs()
+
+	while watch.isAwaiting() and Clock.remainingMs(started, deadlineMs: EndpointDeadlineMs) > 0 'waiting'
+		let event = pump.nextWithin(DefaultPumpWaitMs, started: started, deadlineMs: EndpointDeadlineMs)
+		event.deliverTo(watch)
+
+		match event 'event'
+			said or
+			closed or
+			broke or
+			silent then continue
+			exhausted then break 'waiting'
+		end 'event'
+	end 'waiting'
+
+	pump.stop()
+
+	return watch
+end 'watchedForEndpoint'
 
 export type HttpMcpAddress
 	export let hostName as String
@@ -637,16 +699,21 @@ export type StreamingHttpMcpServer
 			panic("StreamingHttpMcpServer: `mcp-server {McpHttpOption}` did not spawn: {e.displayReason()}")
 		end 'spawnFailed'
 
-		let line = try spawned.readStdoutLine() otherwise (e) 'noEndpoint'
-			let said = drainedStderr(spawned)
+		let pump = try ChildPump.of(spawned) otherwise (e) 'outputNotTaken'
 			spawned.release()
-			panic("StreamingHttpMcpServer: the server printed no endpoint line ({e.displayReason()}). It said: {said}")
+			panic("StreamingHttpMcpServer: could not take the server's output: {e.displayReason()}")
+		end 'outputNotTaken'
+
+		let watch = watchedForEndpoint(pump)
+
+		let line = try watch.printedLine() otherwise 'noEndpoint'
+			spawned.release()
+			panic("StreamingHttpMcpServer: the server printed no endpoint line. It said: {watch.said()}")
 		end 'noEndpoint'
 
 		let doc = try Json.parse(line.trim()) otherwise 'notJson'
-			let said = drainedStderr(spawned)
 			spawned.release()
-			panic("StreamingHttpMcpServer: the endpoint line is not JSON. Stdout: `{line}`. It said: {said}")
+			panic("StreamingHttpMcpServer: the endpoint line is not JSON. Stdout: `{line}`. It said: {watch.said()}")
 		end 'notJson'
 
 		let endpointText = try doc.getString(doc.root, key: EndpointKey) otherwise 'noKey'
@@ -680,7 +747,7 @@ export type StreamingHttpMcpServer
 	export function stop() throws TestFailure
 		self.server.closeStdin()
 
-		let code = try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise (e) 'noExit'
+		let code = try self.server.wait(WaitDeadline.within(ServerExitDeadlineMs)) otherwise (e) 'noExit'
 			self.server.release()
 			try Expect.fail("`mcp-server {McpHttpOption}` did not exit within {ServerExitDeadlineMs} ms of its stdin closing ({e.displayReason()}), so it was terminated")
 

@@ -35,7 +35,7 @@ module type ToolContext
 	export let compiler as FilePath
 	export let workingDir as FilePath
 	export var repoRootLabel as ActingTree
-	export var timeoutMs as DurationMs
+	export var timeoutMs as WaitDeadlineMs
 
 	static function hostRelative(compiler FilePath) returns ToolContext
 		return Self{compiler: compiler, workingDir: currentDirPath(), repoRootLabel: ActingTree.host, timeoutMs: CompilerChildTimeoutMs}
@@ -45,7 +45,7 @@ module type ToolContext
 		return Self{compiler: compiler, workingDir: repoRoot, repoRootLabel: ActingTree.tree(repoRoot.path), timeoutMs: CompilerChildTimeoutMs}
 	end 'inTree'
 
-	function boundedBy(bound DurationMs) returns ToolContext
+	function boundedBy(bound WaitDeadlineMs) returns ToolContext
 		return Self{compiler: self.compiler, workingDir: self.workingDir, repoRootLabel: self.repoRootLabel.clone(), timeoutMs: bound}
 	end 'boundedBy'
 end 'ToolContext'
@@ -66,7 +66,7 @@ end 'ToolWithin'
 function runCompilerThen(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, what String, answer ToolAnswer) returns String
 	let startTime = Clock.nowMs()
 
-	let res = try Subprocess.run(Executable.path(ctx.compiler), arguments: argv, workingDirectory: WorkingDirectory.at(ctx.workingDir), timeoutMs: ctx.timeoutMs) otherwise (err) 'unfinished'
+	let res = try Subprocess.run(Executable.path(ctx.compiler), arguments: argv, workingDirectory: WorkingDirectory.at(ctx.workingDir), deadline: WaitDeadline.within(ctx.timeoutMs)) otherwise (err) 'unfinished'
 		return toolErrorText(reqDoc, idNode: idNode, message: unfinishedChildReason(err, doing: "run {what}"), repoRoot: ctx.repoRootLabel)
 	end 'unfinished'
 
@@ -408,10 +408,10 @@ module function numberAskOf(reqDoc JsonDoc, args OptionalNode, key String) retur
 	end 'a'
 end 'numberAskOf'
 
-module function childTimeoutMsOf(reqDoc JsonDoc, args OptionalNode, unasked DurationMs) returns DurationMs
+module function childTimeoutMsOf(reqDoc JsonDoc, args OptionalNode, unasked WaitDeadlineMs) returns WaitDeadlineMs
 	return match numberAskOf(reqDoc, args: args, key: ChildTimeoutOption) 'bound'
 		absent gives unasked
-		given(seconds) gives stopTimeoutMsOf(boundSecondsOf(targetSecondsReading(seconds.value as AskedSeconds))) as DurationMs
+		given(seconds) gives stopTimeoutMsOf(boundSecondsOf(targetSecondsReading(seconds.value as AskedSeconds))) as WaitDeadlineMs
 	end 'bound'
 end 'childTimeoutMsOf'
 

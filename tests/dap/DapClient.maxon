@@ -24,14 +24,6 @@ let FirstSequenceNumber = 1
 // sends the awaited one fails the case. An adapter that sends nothing at all still blocks the read.
 let UnaddressedMessageBudget = 256
 
-// `writeStdinLine` appends an LF. Counted, it lands inside the body, where JSON allows trailing
-// whitespace; left outside the frame it would read as a blank header line and desynchronize the
-// stream.
-let LineWriterNewlineByteCount = 1
-
-let ContentLengthHeaderName = "content-length"
-let HeaderFieldSeparator = ":"
-
 export enum DapClientError implements Error
 	transportFailed
 	malformedResponse
@@ -103,6 +95,7 @@ export let FaultCalleeFixtureName = "faultcallee"
 
 export type DapClient
 	var server as StreamingSubprocess
+	var replies as ChildOutputReader
 	var nextSequenceNumber as DapSequenceNumber
 
 	// Messages read while waiting for something else, in arrival order. An event can arrive ahead of
@@ -119,13 +112,18 @@ export type DapClient
 			panic("dap tests: the gate could not run — `{TestedCompilerStem} {DapServerCommandName}` did not spawn ({e.displayReason()})")
 		end 'spawnFailed'
 
-		return Self{server: spawned, nextSequenceNumber: FirstSequenceNumber, stashed: StringArray.create(0)}
+		let replies = try spawned.takeStdout() otherwise (e) 'stdoutNotTaken'
+			spawned.release()
+			panic("dap tests: the gate could not run — the adapter's stdout could not be taken ({e.displayReason()})")
+		end 'stdoutNotTaken'
+
+		return Self{server: spawned, replies: merge replies, nextSequenceNumber: FirstSequenceNumber, stashed: StringArray.create(0)}
 	end 'start'
 
 	export function release() returns DapAdapterExit
 		self.server.closeStdin()
 
-		let code = try self.server.waitWithTimeout(AdapterExitDeadlineMs) otherwise (e) 'noExit'
+		let code = try self.server.wait(WaitDeadline.within(AdapterExitDeadlineMs)) otherwise (e) 'noExit'
 			self.server.release()
 
 			return DapAdapterExit.failed("the adapter did not exit within {AdapterExitDeadlineMs} ms of its stdin closing ({e.displayReason()}), so it was terminated")
@@ -283,58 +281,15 @@ export type DapClient
 	end 'readMessage'
 
 	function writeFrame(body String) throws DapClientError
-		try self.server.writeStdinLine("Content-Length: {body.byteLength() + LineWriterNewlineByteCount}\r\n\r\n{body}") otherwise 'writeFailed'
+		try self.server.writeStdinFrame(body) otherwise 'writeFailed'
 			throw DapClientError.transportFailed
 		end 'writeFailed'
 	end 'writeFrame'
 
-	// The body has no terminator, so it is read by count; a line reader would block for ever on it.
 	function readFrame() returns String throws DapClientError
-		var contentLength = 0 as ByteLimit
-		var haveContentLength = false
-		var inHeaders = true
-
-		while inHeaders 'headers'
-			let line = try self.server.readStdoutLine() otherwise 'headerReadFailed'
-				throw DapClientError.transportFailed
-			end 'headerReadFailed'
-
-			if line.isEmpty() 'blankLine'
-				if not haveContentLength 'noFrame'
-					throw DapClientError.transportFailed
-				end 'noFrame'
-
-				inHeaders = false
-			end 'blankLine' else 'headerField'
-				let parts = line.split(HeaderFieldSeparator)
-				let name = (try parts.get(0) otherwise "").toLower()
-
-				if name == ContentLengthHeaderName 'contentLengthField'
-					let raw = (try parts.get(1) otherwise "").trim()
-					let parsed = try int.fromString(raw) otherwise 'notACount'
-						throw DapClientError.transportFailed
-					end 'notACount'
-
-					if parsed < 0 'negativeCount'
-						throw DapClientError.transportFailed
-					end 'negativeCount'
-
-					contentLength = parsed as ByteLimit
-
-					haveContentLength = true
-				end 'contentLengthField'
-			end 'headerField'
-		end 'headers'
-
-		let body = try self.server.readStdoutBytes(contentLength) otherwise 'bodyReadFailed'
+		return try self.replies.readContentLengthFrame() otherwise 'unframed'
 			throw DapClientError.transportFailed
-		end 'bodyReadFailed'
-
-		if (body.byteLength() as ByteLimit) != contentLength 'truncated'
-			throw DapClientError.transportFailed
-		end 'truncated'
-
-		return body
+		end 'unframed'
 	end 'readFrame'
 end 'DapClient'
 

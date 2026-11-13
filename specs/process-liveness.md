@@ -105,8 +105,16 @@ function main() returns ExitCode
 	argv.push("-Command")
 	argv.push("$PID")
 	let child = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: argv) otherwise return 2
-	let line = try child.readStdoutLine() otherwise return 4
-	let pid = try int.fromString(line.trim()) otherwise return 5
+	let output = try child.takeStdout() otherwise return 4
+	let read = try output.readLine() otherwise return 4
+
+	let printed = match read 'read'
+		line(text) gives text
+		ended or
+		pastTheCap gives ""
+	end 'read'
+
+	let pid = try int.fromString(printed.trim()) otherwise return 5
 	let code = try child.wait() otherwise return 6
 	var answer = 3 as ExitCode
 	if code != 0 'failed'

@@ -477,3 +477,77 @@ end 'main'
 ```stdout
 x
 ```
+
+<!-- test: a-global-built-through-a-constraint-reads-a-global-declared-later -->
+### A global whose initializer dispatches through a `where` constraint settles after the global that dispatch reads
+
+`first` is built by `Holder from "alpha"`, whose `init` builds a `Box with K` and calls `key()` on its element
+through the constraint `T is Keyed`. The initializer names no other global, and neither does `Holder` or `Box`: only
+`K.key`, the witness the constraint dispatches to, reads `second`, which is declared after `first`. Filling the globals in declaration order
+would run `K.key` over `second`'s slot before anything filled it, so `label` would hold the text of a null `Word`
+or the program would fault. Both outcomes are wrong answers to a question the program text settles: `second` is
+filled first and `label` is `alpha-tail`.
+
+```maxon
+interface Keyed
+	function key() returns String
+end 'Keyed'
+
+type Word implements InitableFromStringLiteral
+	export var text as String
+
+	static function init(value String) returns Self
+		return Self{text: value}
+	end 'init'
+end 'Word'
+
+type K implements Keyed
+	export var tag as String
+
+	static function create(tag String) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	function key() returns String
+		return "{self.tag}-{second.text}"
+	end 'key'
+end 'K'
+
+type Box uses T where T is Keyed
+	let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function label() returns String
+		return self.item.key()
+	end 'label'
+end 'Box'
+
+typealias KBox = Box with K
+
+type Holder implements InitableFromStringLiteral
+	export var label as String
+
+	static function init(value String) returns Self
+		let box = KBox.create(K.create(value))
+
+		return Self{label: box.label()}
+	end 'init'
+end 'Holder'
+
+let first = Holder from "alpha"
+let second = Word from "tail"
+
+function main() returns ExitCode
+	print(first.label)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha-tail
+```

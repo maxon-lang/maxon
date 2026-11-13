@@ -31,9 +31,11 @@ end 'nap'
 
 function readOnce(conn TcpClient, idx Integer) returns Integer
 	let tag = "read-{idx}"
-	let heard = try conn.recv(SocketReadBytes) otherwise ""
+	let heard = try conn.readSome(SocketReadBytes) otherwise 'nothingHeard'
+		return tag.byteLength() as Integer
+	end 'nothingHeard'
 
-	return tag.byteLength() as Integer + heard.byteLength() as Integer
+	return tag.byteLength() as Integer + (merge heard).count() as Integer
 end 'readOnce'
 
 function spinFor(ns Integer)

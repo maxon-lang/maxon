@@ -512,7 +512,8 @@ function main() returns ExitCode
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
 	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	_ = try child.readStdoutLine() otherwise return 7
+	let readiness = try child.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
@@ -528,7 +529,7 @@ function main() returns ExitCode
 	end 'result'
 
 	sampled.close()
-	_ = try child.waitWithTimeout(1) otherwise 0
+	_ = try child.wait(WaitDeadline.within(1)) otherwise 0
 	child.release()
 
 	return 0
@@ -631,7 +632,8 @@ function main() returns ExitCode
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
 	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	_ = try child.readStdoutLine() otherwise return 7
+	let readiness = try child.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let captured = captureAndDrop(pid)
 	var status = 0 as ExitCode
@@ -642,7 +644,7 @@ function main() returns ExitCode
 		captured(stack) then status = readAfterTheDrop(stack.window)
 	end 'result'
 
-	_ = try child.waitWithTimeout(1) otherwise 0
+	_ = try child.wait(WaitDeadline.within(1)) otherwise 0
 	child.release()
 
 	return status
@@ -825,12 +827,13 @@ function main() returns ExitCode
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
 	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	_ = try child.readStdoutLine() otherwise return 7
+	let readiness = try child.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = seizeAndDrop(pid)
 	print("traced after the drop {isTraced(pid)}\n")
 	print("pin depth after the drop {Scheduler.pinDepth()}\n")
-	_ = try child.waitWithTimeout(1) otherwise 0
+	_ = try child.wait(WaitDeadline.within(1)) otherwise 0
 	child.release()
 
 	return status
@@ -907,7 +910,8 @@ function main() returns ExitCode
 	let targetArguments = StringArray.create(0)
 	targetArguments.push("target")
 	let target = try StreamingSubprocess.spawn(Executable.path(me), arguments: targetArguments) otherwise return 2
-	_ = try target.readStdoutLine() otherwise return 7
+	let readiness = try target.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try target.processId() otherwise return 3
 	let samplerArguments = StringArray.create(0)
 	samplerArguments.push("sampler")
@@ -1226,11 +1230,12 @@ function main() returns ExitCode
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
 	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	_ = try child.readStdoutLine() otherwise return 7
+	let readiness = try child.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = openAndDrop(pid)
 	print("caller pin depth {Scheduler.pinDepth()}\n")
-	_ = try child.waitWithTimeout(1) otherwise 0
+	_ = try child.wait(WaitDeadline.within(1)) otherwise 0
 	child.release()
 
 	return status
@@ -1272,10 +1277,11 @@ function main() returns ExitCode
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
 	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	_ = try child.readStdoutLine() otherwise return 7
+	let readiness = try child.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = releaseAndDrop(pid)
-	_ = try child.waitWithTimeout(1) otherwise 0
+	_ = try child.wait(WaitDeadline.within(1)) otherwise 0
 	child.release()
 
 	return status
@@ -1320,10 +1326,11 @@ function main() returns ExitCode
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
 	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
-	_ = try child.readStdoutLine() otherwise return 7
+	let readiness = try child.takeStdout() otherwise return 7
+	_ = try readiness.readLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = closeAndDrop(pid)
-	_ = try child.waitWithTimeout(1) otherwise 0
+	_ = try child.wait(WaitDeadline.within(1)) otherwise 0
 	child.release()
 
 	return status

@@ -40,7 +40,7 @@ public type TlsServerOptions
 		verificationTime = TlsVerificationTime.fixed(seconds)
 	end 'setVerificationTime'
 
-	/// How long a connection's handshake may take, from its first `send`, `recv` or `handshake()`,
+	/// How long a connection's handshake may take, from its first `send`, `readSome` or `handshake()`,
 	/// before that call throws `handshakeTimedOut`; `0` waits without a deadline.
 	public function setHandshakeDeadline(milliseconds SocketDeadlineMs)
 		handshakeDeadlineMs = milliseconds
@@ -96,7 +96,7 @@ public type TlsListener
 	end 'port'
 
 	/// The next connection, before its handshake. The handshake's errors surface from the stream's
-	/// first `send`, `recv` or `handshake()`, and the listener goes on accepting.
+	/// first `send`, `readSome` or `handshake()`, and the listener goes on accepting.
 	public function accept() returns TlsStream throws TlsError
 		let transport = try listener.accept() otherwise (failure) 'refused'
 			throw tlsNetworkFailure(failure)

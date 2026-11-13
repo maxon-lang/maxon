@@ -569,6 +569,7 @@ typealias LeftoverReportMap = Map with (FilePath, LeftoverReport)
 // per build, never on `Project`, so a later build names the leftover again.
 type StagingDirectory
 	module let image as FilePath
+
 	// Holds the kind of report, not only the path: a leftover first noted in use at debug level still
 	// gets its warning when a later sweep finds its removal denied.
 	var reported as LeftoverReportMap
@@ -1430,11 +1431,11 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
 	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
 	// slot, so a dependency walk run after it would find every global depending on itself.
-	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals, fileRanks: project.emissionRanks)) otherwise (failure) 'initOrderRefused'
+	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, globals: signatures.managedGlobals(liveGlobals, fileRanks: project.emissionRanks)) otherwise (failure) 'initOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'initOrderRefused'
 
-	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots(project.emissionRanks)) otherwise (failure) 'defaultOrderRefused'
+	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, defaults: signatures.defaultSlots(project.emissionRanks)) otherwise (failure) 'defaultOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'defaultOrderRefused'
 
@@ -1753,6 +1754,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// value and the `match` arms the stdlib writes over it ONE fact — leaving no transcription for a drift
 	// check to hold.
 	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
+	let stdioStreamEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: StdioStreamTypeName, reader: "the streaming subprocess runtime's stream selector")
 
 	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED.**
 	// Lowering is what decides which witness tables and layout descriptors a program gets, so the
@@ -1930,7 +1932,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, descendantArming: descendantArmingOf(usage), requestStagingBytes: serviceRequestStagingBytes(signatures))
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, stdioStream: stdioStreamEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, descendantArming: descendantArmingOf(usage), requestStagingBytes: serviceRequestStagingBytes(signatures))
 	end 'installGt'
 
 	installInterfaceHandleConversions(pipeline.stdModule, globalData: project.globalData, usage: usage, signatures: signatures)

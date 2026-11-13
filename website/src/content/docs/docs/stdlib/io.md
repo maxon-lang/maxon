@@ -14,6 +14,7 @@ sidebar:
 |--------|---------|--------|-------------|
 | `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text, read to its end — bytes appended while it is read are included. |
 | `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes, read the same way. |
+| `File.openRead(path FilePath)` | `FileStreamReader` | `FileReadError` | Open the file for reading through a [StreamReader](#stream): lines, exact byte counts and the rest of the file. A read that fails throws `StreamError.failed`. `reader.source.close()` closes the file early. |
 | `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
 | `File.createText(path FilePath, content String)` | — | `FileWriteError` | Create a file that must not exist yet, then write. An existing file is `alreadyExists` and is left as it was. A failed write deletes the new file and throws the write's error; when that delete fails too, it throws `partialFileLeft`. |
 | `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
@@ -245,26 +246,37 @@ It prints `true true`, then `a.txt false` and `nested true` in the order the OS 
 
 ## Console
 
-`Console.stdin()` returns a buffered reader over standard input. Keep one reader for the life of the
-program: a new reader does not see input an earlier one already buffered.
+`Console.stdin()` returns a [StreamReader](#stream) over standard input, a `StdinReader`. Keep one reader for
+the life of the program: a new reader does not see input an earlier one already buffered.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Console.stdin()` | `Stdin` | — | The standard-input reader. |
-| `Stdin.create()` | `Stdin` | — | A reader with an empty buffer; `Console.stdin()` returns one. |
+| `Console.stdin()` | `StdinReader` | — | A reader over standard input with nothing buffered. Its source is a `StdinSource`, whose `readSome(most ReadCapacity)` reads up to `most` bytes of standard input, an empty array at its end. |
 | `Console.stdoutWantsColor()` | `bool` | — | True when standard output is a terminal, `NO_COLOR` is unset and `TERM` is other than `dumb` (compared case-insensitively): output may then carry ANSI escapes. `NO_COLOR` set to any value turns colour off; Windows reads an empty value as unset. `false` on `wasm32-wasi`. |
-| `readLine()` | `String` | `ConsoleError.endOfFile` | The next line without its `\n`; a `\r` before it is removed too. A last line with no terminator is returned, and the call after it throws. |
-| `readBytes(n BytePos)` | `ByteArray` | — | Up to `n` bytes, unchanged. Fewer than `n` only when input ends first; an empty array at the end of input. It reads from the same buffer as `readLine`. |
+
+`readLine()` answers `LineRead.line(text)` without the `\n` or a `\r` before it, a last line with no
+terminator included, and `ended` once input has ended; `readBytes(n)` answers up to `n` bytes, unchanged, from
+the same buffer.
 
 ```maxon
+function echoLine(stdin StdinReader) returns bool
+	let read = try stdin.readLine() otherwise return false
+
+	match read 'read'
+		line(text) then print("[{text}]\n")
+		ended or
+		pastTheCap then return false
+	end 'read'
+
+	return true
+end 'echoLine'
+
 function main() returns ExitCode
 	let stdin = Console.stdin()
 	var lines = 0 as Count
 
-	while true 'read'
-		let line = try stdin.readLine() otherwise break
+	while echoLine(stdin) 'read'
 		lines = lines + 1
-		print("[{line}]\n")
 	end 'read'
 
 	print("{lines} lines\n")
@@ -273,6 +285,96 @@ end 'main'
 ```
 
 Given `one\r\ntwo\nthree` on stdin, it prints `[one]`, `[two]`, `[three]`, `3 lines`.
+
+## Stream
+
+`StreamReader` is one buffered reader over any byte source: a child process's output stream, a file, a
+`TcpClient`, a `TlsStream` or standard input. It holds its source in the public field `source`, for the
+source's own operations (`send` on a `TcpClient`, `close()` on a `FileSource`), and the bytes read from it but
+not yet handed out.
+
+```maxon
+interface ByteSource
+	function readSome(mutable self, most ReadCapacity) returns isolated ByteArray throws StreamError
+end 'ByteSource'
+
+type StreamReader uses Source where Source is ByteSource
+```
+
+A source's `readSome` answers between one and `most` bytes, parking the calling green thread until one
+arrives, and an empty array only at the end of the stream.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `StreamReader.over(source Source)` | `StreamReader` | — | A reader over `source` with nothing buffered. |
+| `readLine(cap LineCap = DefaultLineCap)` | `LineRead` | `StreamError` | `line(text)` without its LF or a CR before it, a last line with no LF included; `ended` at the end of the stream; `pastTheCap` when no LF arrives within `cap` bytes. |
+| `readUntil(delimiter String, cap LineCap)` | `LineRead` | `StreamError` | The text up to `delimiter`, nothing stripped; the delimiter is consumed. `ended` when the stream ends before a delimiter, and `pastTheCap` as `readLine`. |
+| `readBytes(count BytePos)` | `isolated ByteArray` | `StreamError` | Exactly `count` bytes, fewer only at the end of the stream. |
+| `readToEnd()` | `isolated ByteArray` | `StreamError` | Every byte left. |
+| `unreadBytes()` | `BytePos` | — | The bytes read from the source and not yet handed out. |
+
+`pastTheCap` consumes nothing: the bytes stay buffered and the next read sees them. `DefaultLineCap` is 1 MiB;
+`StreamMessageCap`, 64 MiB, is the cap for a line that carries a whole protocol message.
+
+```maxon
+union LineRead
+	line(text String)
+	ended
+	pastTheCap
+end 'LineRead'
+
+union StreamError implements Error
+	timedOut
+	closed
+	failed(reason String)
+	secure(error TlsError)
+end 'StreamError'
+```
+
+| Case | Meaning |
+|------|---------|
+| `timedOut` | A read deadline set on the source passed |
+| `closed` | The source was closed: a `TlsStream` after `close()`, or a child released while its reader was out |
+| `failed(reason)` | The read failed, for `reason` |
+| `secure(error)` | The TLS session failed, its handshake included, with its `TlsError`: `truncated` for a connection that ended without a close_notify |
+
+`displayReason()` renders any case as one line.
+
+| Source | Reader | From |
+|--------|--------|------|
+| `ChildOutput` | `ChildOutputReader` | `StreamingSubprocess.takeStdout()`, `takeStderr()` ([StreamingSubprocess](#streamingsubprocess)) |
+| `FileSource` | `FileStreamReader` | `File.openRead(path)` ([File](#file)) |
+| `TcpClient` | `TcpStreamReader` | `StreamReader.over(client)` ([TcpClient](/docs/stdlib/network/#tcpclient)) |
+| `TlsStream` | `TlsStreamReader` | `StreamReader.over(stream)` ([TlsStream](/docs/stdlib/network/#tlsstream)) |
+| `StdinSource` | `StdinReader` | `Console.stdin()` ([Console](#console)) |
+
+Each source's `readSome(most ReadCapacity)` is public. `FileSource.close()` closes its file. A `TcpClient` and
+a `TlsStream` are unique, so `StreamReader.over` moves one into the reader, and the program sends through
+`reader.source`.
+
+```maxon
+function main() returns ExitCode
+	let path = FilePath from "notes.txt"
+	try File.writeText(path, content: "one\r\ntwo\n") otherwise return 1
+
+	let reader = try File.openRead(path) otherwise return 2
+	let first = try reader.readLine() otherwise return 3
+	let rest = try reader.readToEnd() otherwise return 4
+	reader.source.close()
+
+	let line = match first 'first'
+		line(text) gives text
+		ended or
+		pastTheCap gives ""
+	end 'first'
+
+	print("{line} {String.from(rest)}")
+	try File.delete(path) otherwise return 5
+	return 0
+end 'main'
+```
+
+It prints `one two` and a newline.
 
 ## CommandLine
 
@@ -603,11 +705,25 @@ With `git` on `PATH`, it prints `true 0 true`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. A `timeoutMs` deadline kills the child's whole process tree ([SubprocessError](#subprocesserror)); `0` waits forever. |
+| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, deadline WaitDeadline = WaitDeadline.none)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each, and wait for the child as `deadline` allows ([WaitDeadline](#waitdeadline)). |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 
 All of them throw `SubprocessError`.
+
+### WaitDeadline
+
+```maxon
+union WaitDeadline
+	none
+	within(timeoutMs WaitDeadlineMs)
+end 'WaitDeadline'
+```
+
+How long a run or a `StreamingSubprocess.wait` waits for the child: `none` until it exits, `within(timeoutMs)`
+at most `timeoutMs` milliseconds, which is at least one (`WaitDeadlineMs` is `int(1 to u64.max)`). A deadline
+that passes kills the child's whole process tree and throws `timeout`, or `treeNotEnded` when that tree cannot
+be fully ended ([SubprocessError](#subprocesserror)).
 
 ### Executable
 
@@ -663,7 +779,7 @@ assign the fields you need, then run it.
 | `standardInput` | `InputSource` | `none` |
 | `standardOutput` | `OutputDestination` | `collect` up to 16 MiB |
 | `standardError` | `OutputDestination` | `collect` up to 16 MiB |
-| `timeoutMs` | `DurationMs` | `0`, no deadline. Non-zero kills the child's whole process tree ([SubprocessError](#subprocesserror)). |
+| `deadline` | [`WaitDeadline`](#waitdeadline) | `none` |
 | `platformOptions` | `PlatformOptions` | `PlatformOptions.defaults()` |
 
 | Method | Returns | Description |
@@ -726,7 +842,7 @@ override's spelling, and a map that names one variable in two spellings makes th
 | `file(path)` | Written to a file |
 
 A run feeds `bytes` input while it drains the child's output, so a child that writes before it
-reads still receives its whole input, and a `timeoutMs` deadline fires while input is still pending.
+reads still receives its whole input, and a deadline fires while input is still pending.
 
 A child inherits only the three standard streams its own configuration gives it; the files this process
 holds open and the pipes of other spawns in progress at the same moment stay with this process.
@@ -767,7 +883,6 @@ union SubprocessError implements Error
 	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
 	detachRefused(osError OsErrorCode)
 	inputTooLarge
-	endOfStream
 	statusLost(stdout String, stderr String)
 end 'SubprocessError'
 ```
@@ -785,7 +900,7 @@ operand.
 
 `timeout` carries the output the child had already produced when the deadline killed it, since that partial
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
-collecting output, which is `StreamingSubprocess.waitWithTimeout`.
+collecting output, which is `StreamingSubprocess.wait`.
 
 A deadline ends the child's whole process tree, and so does [`StreamingSubprocess.endTree()`](#streamingsubprocess).
 On Linux and macOS the tree is the child and every process
@@ -811,18 +926,16 @@ is true for it and `timedOut()` false.
 breakaway. It carries the `GetLastError` code, and its reason says to run the program outside that job or allow
 breakaway on it.
 
-`endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
-
-`statusLost(stdout, stderr)` is what `Subprocess.run` and `StreamingSubprocess.wait()` / `waitWithTimeout()` throw for a
+`statusLost(stdout, stderr)` is what `Subprocess.run` and `StreamingSubprocess.wait` throw for a
 child that has ended while another process took its exit status, so the status is unavailable, before any
 deadline fired; once a deadline has fired the answer is `timeout` or `treeNotEnded` wherever the status went. It carries the
-output `run` collected; `wait()` and `waitWithTimeout()` throw empty fields. Whether the status is available
+output `run` collected; `wait` throws empty fields. Whether the status is available
 depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go.
 
 `displayReason()` renders any case as one line, such as
 `timed out after 5000ms, and the kill was sent to the child's whole process tree`. `timedOut()` is true for
-`timeout`, `deadlineFired()` for `timeout` and `treeNotEnded`, and `endedTheStream()` for `endOfStream`, so a
-caller can test for any of them without a `match`.
+`timeout` and `deadlineFired()` for `timeout` and `treeNotEnded`, so a caller can test for either without a
+`match`.
 
 `SpawnPreparation` — `none`, `standardStream`, `workingDirectory` — names the step of a spawn the runtime
 records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`.
@@ -862,43 +975,30 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory WorkingDirectory, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory and an environment. |
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory WorkingDirectory, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
-| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws on a broken pipe. |
-| `takeStdout()` | `StdoutReader` | `SubprocessError` | Take the child's stdout side out as a `StdoutReader`, which a coroutine can drain beside the child's owner. While the reader is out, the child's own stdout reads (`readStdoutLine`, `readStdoutLineCapped`, `readStdoutBytes`, `tryReadStdoutLine`) throw `ioFailed`. Throws `ioFailed` when the stdout side is already out, and once the handle is released. |
-| `reclaimStdout()` | — | `SubprocessError` | Make the stdout side the child's again, once the coroutine that held the `StdoutReader` has ended. Throws `ioFailed` when the stdout side is not out. |
-| `takeStderr()` | `StderrReader` | `SubprocessError` | As `takeStdout()`, for the child's stderr side: while the `StderrReader` is out, `readStderrLine`, `readStderrLineCapped` and `tryReadStderrLine` throw `ioFailed`. Throws `ioFailed` when the stderr side is already out, and once the handle is released. |
-| `reclaimStderr()` | — | `SubprocessError` | Make the stderr side the child's again, once the coroutine that held the `StderrReader` has ended. Throws `ioFailed` when the stderr side is not out. |
-| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
-| `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
-| `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
-| `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
-| `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | With a cap. |
-| `tryReadStdoutLine()` | `LinePoll` | `SubprocessError` | A line if one is already buffered; never blocks. Throws `ioFailed` while the stdout side is out with a `StdoutReader`. |
-| `tryReadStderrLine()` | `LinePoll` | `SubprocessError` | As above, for stderr. Throws `ioFailed` while the stderr side is out with a `StderrReader`. |
-| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
-| `isReapedElsewhere()` | `bool` | — | Whether another process has taken the child's exit status, so that `pollExit()` answers `running` for ever. Whether a status is available depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go. `false` on Windows and for a released handle. Answers at once. |
+| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws `ioFailed` when the write fails, a broken pipe included. |
+| `writeStdin(text String)` | — | `SubprocessError` | Write `text` exactly as given, NUL bytes included, for a framed protocol. Throws as `writeStdinLine`. |
+| `takeStdout()` | `isolated ChildOutputReader` | `SubprocessError` | Take the child's stdout out as a [`StreamReader`](#stream), once: a second take throws `ioFailed`, and so does a take once the handle is released. The reader shares no data with the child, so a coroutine or a service can read it beside the child's owner. |
+| `takeStderr()` | `isolated ChildOutputReader` | `SubprocessError` | As `takeStdout()`, for the child's stderr. Reading stderr beside stdout keeps a child that writes a lot of it from blocking on a full pipe. |
+| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it: `running`, `exited(code)`, or `reapedElsewhere` when another process has taken its exit status, so this process cannot tell whether it still runs. Whether a status is available depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
-| `streamHasEnded(stream StdioStream)` | `bool` | — | Whether a read of the child's `stdout` or `stderr` has found the end of that stream, answering at once. A read latches the end, so a loop of `tryReadStdoutLine` / `tryReadStderrLine` calls moves this to `true`. A read that failed and a released handle answer `true`. |
+| `streamHasEnded(stream StdioStream)` | `bool` | — | Whether a read of the child's `stdout` or `stderr` has found the end of that stream, answering at once. A read latches the end, so reading the stream through its reader moves this to `true`; a stream nothing reads stays `false`. A read that failed and a released handle answer `true`. |
 | `outputHasEnded()` | `bool` | — | Whether reads have found the end of both `stdout` and `stderr`: `streamHasEnded` for each. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
-| `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. A child whose exit status went to another process throws `statusLost`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
-| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds (its code as `treeNotEnded`'s, [SubprocessError](#subprocesserror)), and `unconfirmed(reason)` when the kill was refused and no wait saw the child end within those five seconds, or the handle is released. |
-| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader` or the stderr side with a `StderrReader`: `reclaimStdout()` or `reclaimStderr()` first. |
-| `handle`, `released` | fields | — | The raw handle and whether it has been released. |
+| `wait(deadline WaitDeadline = WaitDeadline.none)` | exit code | `SubprocessError` | Park the calling green thread until the child exits, or until `deadline` passes ([WaitDeadline](#waitdeadline)): then it throws `timeout` and kills the child's whole process tree, or `treeNotEnded` when that tree cannot be fully ended. A child whose exit status went to another process throws `statusLost`, and a failed wait `ioFailed`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller reading the streams. |
+| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `wait` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds (its code as `treeNotEnded`'s, [SubprocessError](#subprocesserror)), and `unconfirmed(reason)` when the kill was refused and no wait saw the child end within those five seconds, or the handle is released. |
+| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. A reader taken from the child throws `StreamError.closed` afterwards. |
+| `released` | field | — | Whether the handle has been released. |
 
 ```maxon
-union LinePoll
-	line(text String)
-	none
-end 'LinePoll'
-
 union ExitPoll
 	running
+	reapedElsewhere
 	exited(code int(0 to u32.max))
 end 'ExitPoll'
 
 union TerminationPoll
 	running
+	reapedElsewhere
 	ended(status TerminationStatus)
 end 'TerminationPoll'
 
@@ -914,28 +1014,13 @@ enum StdioStream
 end 'StdioStream'
 ```
 
-`LinePoll` exists because a blank line from the child and "nothing buffered" are both `""` once the
-terminator is removed. `none` says nothing about whether the stream has ended; ask `pollExit()` for the
-child, or `streamHasEnded(stream)` for the stream.
-
+`ExitPoll.childIsKnownGone()` is true for `exited` alone: a `reapedElsewhere` child may still be running.
 `TreeEnd.displayReason()` renders the answer as one line for a diagnostic.
 
-### StdoutReader
-
-The stdout side of a `StreamingSubprocess`, taken out with `takeStdout()`. It reads lines and owns nothing
-else: no release and no wait. It is a clean input to `async`, so a coroutine can drain it while the child's
-owner keeps writing stdin and waiting, and the promise of that coroutine may be stored and awaited later.
-Once the coroutine has ended, `reclaimStdout()` makes the stdout side the child's again, and `release()` of
-the child follows.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStdoutLine`, including `endOfStream` when the stream has ended. |
-| `readBytes(count ByteLimit)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; the contract of `StreamingSubprocess.readStdoutBytes`, for a length-framed protocol read in a coroutine. |
-
-`specs/subprocess.md` pins the flow: `subprocess-take-stdout-moves-the-stdout-side-out-of-the-child`,
-`subprocess-release-while-the-stdout-reader-is-out-is-refused` and
-`subprocess-a-reader-whose-drain-ends-is-reclaimed-before-the-child-is-released`.
+A read through a reader parks until bytes or the end of the stream arrive. An owner that must stay
+responsive hands each reader to a service of its own, one per stream, and `awaitAny`s over `async` calls
+awaiting the services' reads beside a timer coroutine; a deadline then ends the child's process tree, which
+ends its streams and the reads parked on them.
 
 ```maxon
 function main() returns ExitCode
@@ -947,9 +1032,13 @@ function main() returns ExitCode
 		return 1
 	end 'spawn'
 
-	let line = try child.readStdoutLine() otherwise (e) 'read'
-		print("{e.displayReason()}\n")
-		return 1
+	let output = try child.takeStdout() otherwise return 1
+	let read = try output.readLine() otherwise return 1
+
+	let line = match read 'read'
+		line(text) gives text
+		ended or
+		pastTheCap gives ""
 	end 'read'
 
 	let code = try child.wait() otherwise (e) 'wait'
@@ -959,6 +1048,7 @@ function main() returns ExitCode
 
 	let state = match child.pollExit() 'poll'
 		running gives "running"
+		reapedElsewhere gives "reaped elsewhere"
 		exited(c) gives "exited {c}"
 	end 'poll'
 
@@ -969,17 +1059,6 @@ end 'main'
 ```
 
 With `git` on `PATH`, it prints `true 0 exited 0`.
-
-### StderrReader
-
-The stderr side of a `StreamingSubprocess`, taken out with `takeStderr()`, on the terms `StdoutReader` has
-for stdout: it reads lines and owns nothing else, a coroutine can drain it beside the child's owner, and
-`reclaimStderr()` makes the stderr side the child's again once that coroutine has ended. Draining stderr
-in its own coroutine keeps a child that writes a lot of it from blocking on a full pipe.
-
-| Member | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStderrLine`, including `endOfStream` when the stream has ended. |
 
 ## SharedMemory
 

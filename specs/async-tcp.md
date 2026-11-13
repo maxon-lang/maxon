@@ -9,7 +9,7 @@ category: concurrency
 
 ## Documentation
 
-Network I/O operations (`TcpClient.connect`, `send`, `recv`, `close`) are non-blocking when called from green threads. The descriptor itself is non-blocking and registered with the scheduler's network poller, so a call that cannot finish at once PARKS its green thread on that descriptor and hands the processor back; the poller readies it when the descriptor becomes readable or writable. A green thread waiting for a peer therefore holds no machine at all. (`specs/netpoll-socket.md` is that mechanism's own oracle.)
+Network I/O operations (`TcpClient.connect`, `send`, `readSome`, `close`) are non-blocking when called from green threads. The descriptor itself is non-blocking and registered with the scheduler's network poller, so a call that cannot finish at once PARKS its green thread on that descriptor and hands the processor back; the poller readies it when the descriptor becomes readable or writable. A green thread waiting for a peer therefore holds no machine at all. (`specs/netpoll-socket.md` is that mechanism's own oracle.)
 
 This enables `async`/`await` with TCP networking:
 
@@ -17,8 +17,8 @@ This enables `async`/`await` with TCP networking:
 function echo() returns ExitCode throws NetworkError
   let client = try TcpClient.connect("host", port: 4242)
   _ = try client.send("Hello\n")
-  let response = try client.recv(1024)
-  print(response)
+  let response = try client.readSome(1024) otherwise return 1
+  print(String.from(response))
   return 0
 end 'echo'
 
@@ -154,9 +154,9 @@ function main() returns ExitCode
 
 	_ = try client.send("ping") otherwise return 4
 
-	let heard = try server.recv(16) otherwise return 5
+	let heard = try server.readSome(16) otherwise return 5
 
-	if heard == "ping" 'echoed'
+	if String.from(heard) == "ping" 'echoed'
 		return 0
 	end 'echoed'
 
@@ -189,8 +189,8 @@ io_resume #1 [net_close]
 function echo() returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("tcpbin.com", port: 4242)
 	_ = try client.send("Hello Async\n")
-	let response = try client.recv(1024)
-	print(response)
+	let response = try client.readSome(1024) otherwise return 1
+	print(String.from(response))
 	return 0
 end 'echo'
 

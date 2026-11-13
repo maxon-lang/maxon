@@ -11,9 +11,9 @@ category: network
 
 `TlsClient.connect(host, port:)` opens a `TcpClient` connection and runs the TLS client handshake over it;
 `TlsListener.bind(host, port:, options:)` and `accept()` do the same on the server side, except that `accept()` returns
-once the TCP connection is accepted and the stream runs its handshake on its first `send`, `recv` or `shutdownWrite`,
+once the TCP connection is accepted and the stream runs its handshake on its first `send`, `readSome` or `shutdownWrite`,
 or on `handshake()`, so a client that stalls holds only its own stream. Both hand back a `TlsStream`
-whose `send`, `recv` and deadlines follow `TcpClient`, whose `close` sends close_notify, and which reports what the
+whose `send`, deadlines and `readSome` (a `ByteSource`, so it reads through `StreamReader`; a failure there is a `StreamError`, `secure` carrying the `TlsError`) follow `TcpClient`, whose `close` sends close_notify, and which reports what the
 handshake negotiated once it has completed: `protocol()`, `cipherSuite()`, `applicationProtocol()` and the peer's chain as
 `peerCertificates()`, each throwing `handshakePending` before then. They drive the sans-IO handshake machines of `specs/tls-handshake.md`,
 `specs/tls-handshake-server.md`, `specs/tls12-handshake.md` and `specs/tls12-handshake-server.md`: the stream reads
@@ -92,6 +92,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -135,9 +144,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -160,9 +170,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -258,6 +269,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -301,9 +321,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -326,9 +347,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -427,6 +449,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -470,9 +501,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -495,9 +527,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -595,6 +628,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -642,9 +684,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -667,9 +710,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -781,6 +825,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -827,9 +880,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -852,9 +906,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -962,6 +1017,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1008,9 +1072,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1033,9 +1098,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -1149,6 +1215,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1193,9 +1268,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1218,9 +1294,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -1236,9 +1313,10 @@ function clientListens(options TlsClientOptions, port NetworkPort) returns Strin
 		return "connect: {describe(error)}"
 	end 'refused'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	return "heard {reply}"
 end 'clientListens'
@@ -1358,6 +1436,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1403,9 +1490,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1428,9 +1516,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -1446,9 +1535,10 @@ function clientListens(options TlsClientOptions, port NetworkPort) returns Strin
 		return "connect: {describe(error)}"
 	end 'refused'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	return "heard {reply}"
 end 'clientListens'
@@ -1570,6 +1660,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1613,9 +1712,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1638,9 +1738,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -1752,6 +1853,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -1797,9 +1907,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -1822,9 +1933,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -2047,7 +2159,7 @@ server saw 0 client certificate(s)
 ```
 
 <!-- test: tls-stream.close-notify-is-observed-by-the-peer -->
-`close` sends close_notify: the peer reads everything sent before it, then `connectionClosed`. A client that drops its stream without closing leaves the TCP connection ending with no close_notify, which the peer reads as `truncated`.
+`close` sends close_notify: the peer reads everything sent before it, then an empty `readSome`, the end of the stream. A client that drops its stream without closing leaves the TCP connection ending with no close_notify, which the peer's read throws as `StreamError.secure(truncated)`.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -2103,6 +2215,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function failure(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives "secure({describe(reason)})"
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'failure'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -2135,11 +2256,15 @@ function readToEnd(listener TlsListener) returns String
 	var heard = ""
 
 	while true 'reading'
-		let chunk = try stream.recv(1024) otherwise (error) 'ended'
-			return "heard [{heard}] then {describe(error)}"
+		let chunk = try stream.readSome(1024) otherwise (error) 'failed'
+			return "heard [{heard}] then {failure(error)}"
+		end 'failed'
+
+		if chunk.isEmpty() 'ended'
+			return "heard [{heard}] then ended"
 		end 'ended'
 
-		heard.append(chunk)
+		heard.append(String.from(chunk))
 	end 'reading'
 
 	panic("readToEnd: the loop returns when the stream ends")
@@ -2199,10 +2324,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13 closed: server heard [goodbye] then connectionClosed
-tls13 dropped: server heard [vanished] then truncated
-tls12 closed: server heard [goodbye] then connectionClosed
-tls12 dropped: server heard [vanished] then truncated
+tls13 closed: server heard [goodbye] then ended
+tls13 dropped: server heard [vanished] then secure(truncated)
+tls12 closed: server heard [goodbye] then ended
+tls12 dropped: server heard [vanished] then secure(truncated)
 ```
 ```exitcode
 0
@@ -2265,6 +2390,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function failure(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives "secure({describe(reason)})"
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'failure'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -2297,14 +2431,18 @@ function answerAfterEnd(listener TlsListener) returns String
 	var request = ""
 
 	while true 'reading'
-		let chunk = try stream.recv(1024) otherwise (error) 'ended'
-			_ = try stream.send("answer to [{request}] after {describe(error)}") otherwise return "send failed"
+		let chunk = try stream.readSome(1024) otherwise (error) 'failed'
+			return "read: {failure(error)}"
+		end 'failed'
+
+		if chunk.isEmpty() 'ended'
+			_ = try stream.send("answer to [{request}] after ended") otherwise return "send failed"
 			stream.close()
 
 			return "answered"
 		end 'ended'
 
-		request.append(chunk)
+		request.append(String.from(chunk))
 	end 'reading'
 
 	panic("answerAfterEnd: the loop returns when the stream ends")
@@ -2327,18 +2465,23 @@ function exchangeOver(listener TlsListener, options TlsClientOptions, protocol T
 		return false
 	end 'refused5x135'
 
-	let answer = try stream.recv(1024) otherwise 'refused6x137'
+	let answer = try stream.readSome(1024) otherwise 'refused6x137'
 		server.cancel()
 		return false
 	end 'refused6x137'
 	let served = await server
-	let after = try stream.recv(1024) otherwise (error) 'ended'
-		print("{protocol.name} client heard [{answer}] then {describe(error)}; server {served}\n")
+	let after = try stream.readSome(1024) otherwise (error) 'failed'
+		print("{protocol.name} client heard [{String.from(answer)}] then {failure(error)}; server {served}\n")
+		return false
+	end 'failed'
+
+	if after.isEmpty() 'ended'
+		print("{protocol.name} client heard [{String.from(answer)}] then ended; server {served}\n")
 		listener.close()
 		return true
 	end 'ended'
 
-	print("unexpected data [{after}]\n")
+	print("unexpected data [{String.from(after)}]\n")
 
 	return false
 end 'exchangeOver'
@@ -2359,8 +2502,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-tls13 client heard [answer to [request] after connectionClosed] then connectionClosed; server answered
-tls12 client heard [answer to [request] after connectionClosed] then connectionClosed; server answered
+tls13 client heard [answer to [request] after ended] then ended; server answered
+tls12 client heard [answer to [request] after ended] then ended; server answered
 ```
 ```exitcode
 0
@@ -2423,6 +2566,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -2466,9 +2618,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -2491,9 +2644,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -2605,6 +2759,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -2648,9 +2811,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -2673,9 +2837,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -2776,6 +2941,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -2819,9 +2993,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -2844,9 +3019,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -2955,6 +3131,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -2989,10 +3174,11 @@ function acceptTwice(listener TlsListener) returns String
 			continue
 		end 'refused'
 
-		let heard = try stream.recv(1024) otherwise (error) 'unheard'
-			report.append("[recv {attempt}: {describe(error)}]")
+		let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+			report.append("[recv {attempt}: {readFault(error)}]")
 			continue
 		end 'unheard'
+		let heard = String.from(heardBytes)
 
 		report.append("[served {attempt}: {heard}]")
 		stream.close()
@@ -3116,6 +3302,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -3157,12 +3352,18 @@ function pattern(count Count, seed Count) returns ByteArray
 	return bytes
 end 'pattern'
 
-function receiveAll(stream TlsStream, total Count) returns ByteArray throws TlsError
+function receiveAll(stream TlsStream, total Count) returns ByteArray throws StreamError
 	let received = ByteArray.create(0)
 	var reads = 0 as Count
 
 	while received.count() < total 'receiving'
-		received.append(try stream.recvBytes(65536))
+		let chunk = try stream.readSome(65536)
+
+		if chunk.isEmpty() 'ended'
+			break
+		end 'ended'
+
+		received.append(merge chunk)
 		reads = reads + 1
 	end 'receiving'
 
@@ -3175,7 +3376,7 @@ function serveBulk(listener TlsListener) returns String
 	end 'refused'
 
 	let upload = try receiveAll(stream, total: uploadBytes) otherwise (error) 'unheard'
-		return "recv upload: {describe(error)}"
+		return "recv upload: {readFault(error)}"
 	end 'unheard'
 
 	_ = try stream.sendBytes(pattern(downloadBytes, seed: 7)) otherwise (error) 'unsent'
@@ -3183,7 +3384,7 @@ function serveBulk(listener TlsListener) returns String
 	end 'unsent'
 
 	let small = try receiveAll(stream, total: smallWrites * smallWriteBytes) otherwise (error) 'unheardSmall'
-		return "recv small: {describe(error)}"
+		return "recv small: {readFault(error)}"
 	end 'unheardSmall'
 
 	stream.close()
@@ -3201,7 +3402,7 @@ function clientBulk(options TlsClientOptions, port NetworkPort) returns String
 	end 'unsent'
 
 	let download = try receiveAll(stream, total: downloadBytes) otherwise (error) 'unheard'
-		return "recv download: {describe(error)}"
+		return "recv download: {readFault(error)}"
 	end 'unheard'
 
 	let small = pattern(smallWrites * smallWriteBytes, seed: 11)
@@ -3673,6 +3874,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -3707,9 +3917,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -3732,9 +3943,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -4049,12 +4261,17 @@ let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502
 
 function holdOpen(silent TcpListener) returns String
 	let connection = try silent.accept() otherwise return "accept failed"
-	let hello = try connection.recv(4096) otherwise return "no hello"
-	let ended = try connection.recv(4096) otherwise (error) 'ended'
-		return "hello {hello.byteLength() > 0}, then {error.name}"
+	let hello = try connection.readSome(4096) otherwise return "no hello"
+	let greeted = hello.count() > 0
+	let more = try connection.readSome(4096) otherwise (error) 'failed'
+		return "hello {greeted}, then {error.name}"
+	end 'failed'
+
+	if more.isEmpty() 'ended'
+		return "hello {greeted}, then ended"
 	end 'ended'
 
-	return "hello {hello.byteLength() > 0}, then {ended.byteLength()} more bytes"
+	return "hello {greeted}, then {more.count()} more bytes"
 end 'holdOpen'
 
 function dial(port NetworkPort, options TlsClientOptions) returns String
@@ -4070,8 +4287,8 @@ function acceptOnce(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	_ = try stream.recv(1024) otherwise (error) 'stalled'
-		return "recv: {describe(error)}"
+	try stream.handshake() otherwise (error) 'stalled'
+		return "handshake: {describe(error)}"
 	end 'stalled'
 
 	return "accepted"
@@ -4109,8 +4326,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-client: handshakeTimedOut; peer: hello true, then connectionClosed
-server: recv: handshakeTimedOut
+client: handshakeTimedOut; peer: hello true, then ended
+server: handshake: handshakeTimedOut
 ```
 ```exitcode
 0
@@ -4222,11 +4439,11 @@ function talk(port NetworkPort, bytes ByteArray) returns String
 
 	_ = try raw.send(String.from(bytes)) otherwise return "send failed"
 
-	let reply = try raw.recv(64) otherwise (error) 'unanswered'
+	let reply = try raw.readSome(64) otherwise (error) 'unanswered'
 		return "no reply: {error.name}"
 	end 'unanswered'
 
-	return toHex(reply.toByteArray())
+	return toHex(reply)
 end 'talk'
 
 function main() returns ExitCode
@@ -4253,7 +4470,7 @@ server: [1: protocolError(unexpectedMessage)][2: protocolError(protocolVersion)]
 ```
 
 <!-- test: tls-stream.a-closed-stream-refuses-further-use -->
-After `close`, `send`, `recv`, `shutdownWrite` and the two deadline setters throw `closed`, and `close` again does nothing.
+After `close`, `send`, `readSome`, `shutdownWrite` and the two deadline setters throw `closed`, and `close` again does nothing.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -4309,6 +4526,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -4341,13 +4567,13 @@ function sendOutcome(stream TlsStream) returns String
 	return "sent"
 end 'sendOutcome'
 
-function recvOutcome(stream TlsStream) returns String
-	_ = try stream.recv(16) otherwise (error) 'refused'
-		return describe(error)
+function readOutcome(stream TlsStream) returns String
+	_ = try stream.readSome(16) otherwise (error) 'refused'
+		return readFault(error)
 	end 'refused'
 
 	return "received"
-end 'recvOutcome'
+end 'readOutcome'
 
 function shutdownOutcome(stream TlsStream) returns String
 	try stream.shutdownWrite() otherwise (error) 'refused'
@@ -4378,9 +4604,10 @@ function serveAndClose(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	stream.close()
 
@@ -4404,7 +4631,7 @@ function main() returns ExitCode
 	stream.close()
 
 	print("send: {sendOutcome(stream)}\n")
-	print("recv: {recvOutcome(stream)}\n")
+	print("readSome: {readOutcome(stream)}\n")
 	print("shutdownWrite: {shutdownOutcome(stream)}\n")
 	print("setReadDeadline: {readDeadlineOutcome(stream)}\n")
 	print("setWriteDeadline: {writeDeadlineOutcome(stream)}\n")
@@ -4416,7 +4643,7 @@ end 'main'
 ```
 ```stdout
 send: closed
-recv: closed
+readSome: closed
 shutdownWrite: closed
 setReadDeadline: closed
 setWriteDeadline: closed
@@ -4483,6 +4710,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function suiteName(suite TlsCipherSuite) returns String
 	return match suite 'suite'
 		tls13(chosen) gives "tls13/{chosen.name}"
@@ -4526,9 +4762,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -4551,9 +4788,10 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	let version = (try stream.protocol() otherwise return "protocol: unavailable").name
 	let suite = suiteName(try stream.cipherSuite() otherwise return "cipherSuite: unavailable")
@@ -4595,13 +4833,17 @@ end 'describeStall'
 function holdOpen(silent TcpListener) returns String
 	let connection = try silent.accept() otherwise return "accept failed"
 
-	_ = try connection.recv(4096) otherwise return "no hello"
+	_ = try connection.readSome(4096) otherwise return "no hello"
 
-	let ended = try connection.recv(4096) otherwise (error) 'ended'
+	let more = try connection.readSome(4096) otherwise (error) 'failed'
 		return "then {error.name}"
+	end 'failed'
+
+	if more.isEmpty() 'ended'
+		return "then ended"
 	end 'ended'
 
-	return "then {ended.byteLength()} more bytes"
+	return "then {more.count()} more bytes"
 end 'holdOpen'
 
 function acceptOnce(listener TlsListener) returns String
@@ -4609,8 +4851,8 @@ function acceptOnce(listener TlsListener) returns String
 		return "accept: {describeStall(error)}"
 	end 'refused'
 
-	_ = try stream.recv(1024) otherwise (error) 'stalled'
-		return "recv: {describeStall(error)}"
+	try stream.handshake() otherwise (error) 'stalled'
+		return "handshake: {describeStall(error)}"
 	end 'stalled'
 
 	return "accepted"
@@ -4673,9 +4915,9 @@ end 'dialOutcome'
 ```
 ```stdout
 nobody connects: accept: timedOut
-a client that says nothing: recv: handshakeTimedOut
+a client that says nothing: handshake: handshakeTimedOut
 a client after it: echo:ping tls13 tls13/chaCha20Poly1305Sha256 alpn=none | served ping tls13 peers=0
-a client dialling a server that never answers: handshakeTimedOut then connectionClosed
+a client dialling a server that never answers: handshakeTimedOut then ended
 ```
 ```exitcode
 0
@@ -4798,9 +5040,13 @@ function hearAll(raw TcpClient) returns String
 	let heard = ByteArray.create(0)
 
 	while true 'reading'
-		let chunk = try raw.recv(1024) otherwise break
+		let chunk = try raw.readSome(1024) otherwise break
 
-		heard.append(chunk.toByteArray())
+		if chunk.isEmpty() 'ended'
+			break
+		end 'ended'
+
+		heard.append(merge chunk)
 	end 'reading'
 
 	return toHex(heard)
@@ -4816,15 +5062,17 @@ function talkMore(port NetworkPort, head String) returns String
 		return "send: {error.name}"
 	end 'headUnsent'
 
-	let alert = try raw.recv(1024) otherwise (error) 'unanswered'
+	let alert = try raw.readSome(1024) otherwise (error) 'unanswered'
 		return "no alert: {error.name}"
 	end 'unanswered'
+
+	let alertHex = toHex(alert)
 
 	_ = try raw.send(padding) otherwise (error) 'unsent'
 		return "send: {error.name}"
 	end 'unsent'
 
-	return "heard {toHex(alert.toByteArray())}{hearAll(raw)}"
+	return "heard {alertHex}{hearAll(raw)}"
 end 'talkMore'
 
 function main() returns ExitCode
@@ -4851,7 +5099,7 @@ server: [1: protocolError(unexpectedMessage)][2: protocolError(unexpectedMessage
 ```
 <!-- test: tls-stream.a-failed-flush-fails-the-write-side-for-good -->
 <!-- runs: alone -->
-A write deadline that passes while a peer that does not read holds the send in the kernel throws `timedOut`, and leaves the stream with part of its records written. The write side is then failed for good: a later `send` or `shutdownWrite` throws the same `timedOut` without writing a byte, even with the deadline cleared and the peer reading again, so the peer never reads a record out of step. `close` still closes, and the peer reads the end of the connection as `truncated`.
+A write deadline that passes while a peer that does not read holds the send in the kernel throws `timedOut`, and leaves the stream with part of its records written. The write side is then failed for good: a later `send` or `shutdownWrite` throws the same `timedOut` without writing a byte, even with the deadline cleared and the peer reading again, so the peer never reads a record out of step. `close` still closes, and the peer's read throws the end of the connection as `StreamError.secure(truncated)`.
 
 ```maxon
 function digit(symbol Byte) returns Byte
@@ -4907,6 +5155,15 @@ function describe(error TlsError) returns String
 		invalidPem gives error.name
 	end 'error'
 end 'describe'
+
+function failure(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives "secure({describe(reason)})"
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'failure'
 
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
@@ -4982,8 +5239,12 @@ end 'laterShutdown'
 
 function drain(stream TlsStream) returns String
 	while true 'draining'
-		_ = try stream.recvBytes(65536) otherwise (error) 'ended'
-			return describe(error)
+		let chunk = try stream.readSome(65536) otherwise (error) 'failed'
+			return failure(error)
+		end 'failed'
+
+		if chunk.isEmpty() 'ended'
+			return "ended"
 		end 'ended'
 	end 'draining'
 
@@ -5023,14 +5284,14 @@ end 'main'
 first send: timedOut
 send after: timedOut
 shutdownWrite after: timedOut
-peer read: truncated
+peer read: secure(truncated)
 ```
 ```exitcode
 0
 ```
 
 <!-- test: tls-stream.a-refused-stream-answers-closed-to-every-call -->
-A server that requires a client certificate answers a client that presented none after the client's handshake is complete, so the client reads the alert from its first `recv`. That stream refused what its peer sent and is closed: every later call, the deadline setters included, throws `closed`.
+A server that requires a client certificate answers a client that presented none after the client's handshake is complete, so the client reads the alert from its first `readSome`. That stream refused what its peer sent and is closed: every later call, the deadline setters included, throws `closed`.
 
 ```maxon
 function digit(symbol Byte) returns Byte
@@ -5087,6 +5348,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -5116,9 +5386,10 @@ function serveEcho(listener TlsListener) returns String
 		return "accept: {describe(error)}"
 	end 'refused'
 
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -5134,13 +5405,13 @@ end 'serveEcho'
 
 let clientRootHex = "3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed"
 
-function recvOutcome(stream TlsStream) returns String
-	_ = try stream.recv(16) otherwise (error) 'refused'
-		return describe(error)
+function readOutcome(stream TlsStream) returns String
+	_ = try stream.readSome(16) otherwise (error) 'refused'
+		return readFault(error)
 	end 'refused'
 
 	return "received"
-end 'recvOutcome'
+end 'readOutcome'
 
 function sendOutcome(stream TlsStream) returns String
 	_ = try stream.send("late") otherwise (error) 'refused'
@@ -5191,8 +5462,8 @@ function main() returns ExitCode
 		return 4
 	end 'refused4x243'
 
-	print("the refusing read: {recvOutcome(stream)}\n")
-	print("recv: {recvOutcome(stream)}\n")
+	print("the refusing read: {readOutcome(stream)}\n")
+	print("readSome: {readOutcome(stream)}\n")
 	print("send: {sendOutcome(stream)}\n")
 	print("shutdownWrite: {shutdownOutcome(stream)}\n")
 	print("setReadDeadline: {readDeadlineOutcome(stream)}\n")
@@ -5204,7 +5475,7 @@ end 'main'
 ```
 ```stdout
 the refusing read: peerAlert(certificateRequired)
-recv: closed
+readSome: closed
 send: closed
 shutdownWrite: closed
 setReadDeadline: closed
@@ -5273,6 +5544,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -5314,10 +5594,11 @@ function serveTwice(listener TlsListener) returns String
 			continue
 		end 'refused'
 
-		let heard = try stream.recv(1024) otherwise (error) 'unheard'
-			report.append("[recv {attempt}: {describe(error)}]")
+		let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+			report.append("[recv {attempt}: {readFault(error)}]")
 			continue
 		end 'unheard'
+		let heard = String.from(heardBytes)
 
 		report.append("[served {attempt}: {heard}]")
 		stream.close()
@@ -5429,6 +5710,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -5471,10 +5761,11 @@ function serveFour(listener TlsListener) returns String
 			continue
 		end 'refused'
 
-		let heard = try stream.recv(1024) otherwise (error) 'unheard'
-			report.append("[recv {attempt}: {describe(error)}]")
+		let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+			report.append("[recv {attempt}: {readFault(error)}]")
 			continue
 		end 'unheard'
+		let heard = String.from(heardBytes)
 
 		report.append("[served {heard}]")
 		stream.close()
@@ -5714,6 +6005,15 @@ function describe(error TlsError) returns String
 	end 'error'
 end 'describe'
 
+function readFault(error StreamError) returns String
+	return match error 'error'
+		secure(reason) gives describe(reason)
+		failed(reason) gives "failed({reason})"
+		timedOut or
+		closed gives error.name
+	end 'error'
+end 'readFault'
+
 function identityOf(chainHex String, keyHex String) returns TlsIdentity
 	return try TlsIdentity.fromDer(ByteArrays from [fromHex(chainHex)], key: fromHex(keyHex)) otherwise panic("the case's identity was refused")
 end 'identityOf'
@@ -5747,9 +6047,10 @@ function patientServer(identity TlsIdentity) returns TlsServerOptions
 end 'patientServer'
 
 function echoOne(stream TlsStream) returns String
-	let heard = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let heardBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let heard = String.from(heardBytes)
 
 	_ = try stream.send("echo:{heard}") otherwise (error) 'unsent'
 		return "send: {describe(error)}"
@@ -5788,9 +6089,10 @@ function dial(options TlsClientOptions, port NetworkPort) returns String
 		return "send: {describe(error)}"
 	end 'unsent'
 
-	let reply = try stream.recv(1024) otherwise (error) 'unheard'
-		return "recv: {describe(error)}"
+	let replyBytes = try stream.readSome(1024) otherwise (error) 'unheard'
+		return "recv: {readFault(error)}"
 	end 'unheard'
+	let reply = String.from(replyBytes)
 
 	stream.close()
 

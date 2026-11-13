@@ -282,7 +282,7 @@ let listerRefusedExit = 1
 #endif
 
 function runTool(tool String, arguments StringArray) returns bool
-	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise return false
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, deadline: WaitDeadline.within(toolTimeoutMs)) otherwise return false
 	return result.succeeded()
 end 'runTool'
 
@@ -293,11 +293,11 @@ function hostRefusesListing(directory FilePath) returns bool
 	arguments.push("-NoProfile")
 	arguments.push("-Command")
 	arguments.push("try \{ [void][System.IO.Directory]::GetFileSystemEntries('{directory.toString()}'); exit 0 \} catch [System.UnauthorizedAccessException] \{ exit {listerRefusedExit} \}")
-	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's lister did not run")
+	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, deadline: WaitDeadline.within(toolTimeoutMs)) otherwise panic("the host's lister did not run")
 	#else
 	arguments.push("-r")
 	arguments.push(directory.toString())
-	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's lister did not run")
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, deadline: WaitDeadline.within(toolTimeoutMs)) otherwise panic("the host's lister did not run")
 	#endif
 
 	if result.succeeded() 'listable'
@@ -319,12 +319,12 @@ function tokenBypassesDenial() returns bool
 	arguments.push("/fo")
 	arguments.push("csv")
 	arguments.push("/nh")
-	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's privilege report did not run")
+	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, deadline: WaitDeadline.within(toolTimeoutMs)) otherwise panic("the host's privilege report did not run")
 
 	return result.succeeded() and (result.stdout.contains("SeBackupPrivilege") or result.stdout.contains("SeRestorePrivilege"))
 	#else
 	arguments.push("-u")
-	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's privilege report did not run")
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, deadline: WaitDeadline.within(toolTimeoutMs)) otherwise panic("the host's privilege report did not run")
 
 	return result.succeeded() and result.stdout.trim() == "0"
 	#endif
@@ -632,7 +632,7 @@ function plantLink(link FilePath, target FilePath) returns bool
 	arguments.push(target.toString())
 	arguments.push(link.toString())
 
-	let result = try Subprocess.run(Executable.name("ln"), arguments: arguments, timeoutMs: linkToolTimeoutMs) otherwise return false
+	let result = try Subprocess.run(Executable.name("ln"), arguments: arguments, deadline: WaitDeadline.within(linkToolTimeoutMs)) otherwise return false
 
 	return result.succeeded()
 end 'plantLink'
@@ -692,7 +692,7 @@ function hostFindsAnEntryAt(path FilePath) returns bool
 	arguments.push("-e")
 	arguments.push(path.toString())
 
-	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: testToolTimeoutMs) otherwise panic("the host's existence test could not run")
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, deadline: WaitDeadline.within(testToolTimeoutMs)) otherwise panic("the host's existence test could not run")
 
 	if result.succeeded() 'found'
 		return true
@@ -881,7 +881,7 @@ function plantDirectoryLink(link FilePath, target FilePath) returns bool
 	let tool = "ln"
 	#endif
 
-	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: linkToolTimeoutMs) otherwise return false
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, deadline: WaitDeadline.within(linkToolTimeoutMs)) otherwise return false
 
 	return result.succeeded()
 end 'plantDirectoryLink'
@@ -944,7 +944,7 @@ let listerRefusedExit = 1
 #endif
 
 function runAccessTool(tool String, arguments StringArray) returns bool
-	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise return false
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise return false
 
 	return result.succeeded()
 end 'runAccessTool'
@@ -956,11 +956,11 @@ function hostRefusesListing(directory FilePath) returns bool
 	arguments.push("-NoProfile")
 	arguments.push("-Command")
 	arguments.push("try \{ [void][System.IO.Directory]::GetFileSystemEntries('{directory.toString()}'); exit 0 \} catch [System.UnauthorizedAccessException] \{ exit {listerRefusedExit} \}")
-	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's lister did not run")
+	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's lister did not run")
 	#else
 	arguments.push("-r")
 	arguments.push(directory.toString())
-	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's lister did not run")
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's lister did not run")
 	#endif
 
 	if result.succeeded() 'listable'
@@ -982,12 +982,12 @@ function tokenBypassesDenial() returns bool
 	arguments.push("/fo")
 	arguments.push("csv")
 	arguments.push("/nh")
-	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's privilege report did not run")
+	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's privilege report did not run")
 
 	return result.succeeded() and (result.stdout.contains("SeBackupPrivilege") or result.stdout.contains("SeRestorePrivilege"))
 	#else
 	arguments.push("-u")
-	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's privilege report did not run")
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's privilege report did not run")
 
 	return result.succeeded() and result.stdout.trim() == "0"
 	#endif
@@ -1095,7 +1095,7 @@ denial binds this process, then restores access and removes what it made. A deni
 let accessToolTimeoutMs = 30000
 
 function runAccessTool(tool String, arguments StringArray) returns bool
-	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise return false
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise return false
 
 	return result.succeeded()
 end 'runAccessTool'
@@ -1122,7 +1122,7 @@ function hostRefusesWriting(directory FilePath) returns bool
 	arguments.push("-w")
 	arguments.push(directory.toString())
 
-	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's access test did not run")
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's access test did not run")
 
 	if result.succeeded() 'writable'
 		return false
@@ -1139,7 +1139,7 @@ function isRoot() returns bool
 	let arguments = StringArray.create(0)
 	arguments.push("-u")
 
-	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's identity report did not run")
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's identity report did not run")
 
 	return result.succeeded() and result.stdout.trim() == "0"
 end 'isRoot'

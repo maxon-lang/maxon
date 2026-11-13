@@ -449,7 +449,8 @@ function verdictOverARunningCopy(copy FilePath) returns ExitCode
 end 'verdictOverARunningCopy'
 
 function verdictWhileItRuns(running StreamingSubprocess, copy FilePath) returns ExitCode
-	_ = try running.readStdoutLine() otherwise return 5
+	let output = try running.takeStdout() otherwise return 5
+	_ = try output.readLine() otherwise return 5
 
 	try File.writeText(copy, content: "") otherwise (e) 'refused'
 		return 42 if e == FileWriteError.busy else (10 + e.ordinal) as ExitCode

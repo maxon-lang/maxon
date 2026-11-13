@@ -39,7 +39,6 @@ module function tlsNetworkFailure(failure NetworkError) returns TlsError
 		resolveFailed gives TlsError.resolveFailed
 		connectFailed gives TlsError.connectFailed
 		sendFailed gives TlsError.sendFailed
-		recvFailed gives TlsError.recvFailed
 		connectionClosed gives TlsError.connectionClosed
 		timedOut gives TlsError.timedOut
 		bindFailed gives TlsError.bindFailed
@@ -48,15 +47,33 @@ module function tlsNetworkFailure(failure NetworkError) returns TlsError
 	end 'failure'
 end 'tlsNetworkFailure'
 
-// A close_notify arrives as a record, so a transport that ends while a record is awaited ended
-// without one.
-module function tlsReadFailure(failure NetworkError) returns TlsError
-	if failure == NetworkError.connectionClosed 'transportEnded'
-		return TlsError.truncated
-	end 'transportEnded'
-
-	return tlsNetworkFailure(failure)
-end 'tlsReadFailure'
+module function streamFaultOfTls(error TlsError) returns StreamError
+	return match error 'error'
+		timedOut gives StreamError.timedOut
+		closed gives StreamError.closed
+		handshakeTimedOut or
+		resolveFailed or
+		connectFailed or
+		bindFailed or
+		acceptFailed or
+		acceptInterrupted or
+		sendFailed or
+		recvFailed or
+		connectionClosed or
+		truncated or
+		handshakePending or
+		trustStoreUnavailable or
+		entropyUnavailable or
+		invalidConfiguration or
+		invalidCertificate or
+		invalidPrivateKey or
+		invalidPem or
+		certificateRejected or
+		protocolError or
+		peerAlert or
+		peerAlertUnrecognised gives StreamError.secure(error)
+	end 'error'
+end 'streamFaultOfTls'
 
 // A refusal is recorded only by the chain check, which ends the handshake, so a recorded one is
 // the cause.

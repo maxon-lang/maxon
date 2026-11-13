@@ -139,11 +139,11 @@ function environmentWithProcessors(procs ProcessorCount) returns Environment
 	return Environment.inheritUpdating(overrides)
 end 'environmentWithProcessors'
 
-export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, standardInput InputSource) returns CollectedOutput
-	return spawnIn(Executable.path(executable), arguments: StringArray.create(0), staged: staged, what: "the staged program at {executable.toString()}", environment: environmentWithProcessors(procs), standardInput: standardInput, timeoutMs: deadlineMs)
+export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs WaitDeadlineMs, standardInput InputSource) returns CollectedOutput
+	return spawnIn(Executable.path(executable), arguments: StringArray.create(0), staged: staged, what: "the staged program at {executable.toString()}", environment: environmentWithProcessors(procs), standardInput: standardInput, deadline: WaitDeadline.within(deadlineMs))
 end 'runStagedForHost'
 
-export function runStagedFedAfterLine(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, afterLine String, feed String) returns FedRun
+export function runStagedFedAfterLine(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs WaitDeadlineMs, afterLine String, feed String) returns FedRun
 	return runFedAfterLine(executable, workingDirectory: staged, environment: environmentWithProcessors(procs), deadlineMs: deadlineMs, afterLine: afterLine, feed: feed)
 end 'runStagedFedAfterLine'
 
@@ -370,7 +370,7 @@ function asciiBytes(name String) returns ByteArray
 	return bytes
 end 'asciiBytes'
 
-module let RunDeadline = 30000 as DurationMs
+module let RunDeadline = 30000 as WaitDeadlineMs
 module let SoleProcessor = 1
 module let TwoProcessors = 2
 module let FourProcessors = 4

@@ -9100,6 +9100,12 @@ module let SubprocessStreamReadFailedCaseName = b"readFailed"
 
 module let SubprocessStreamNoSuchChildCaseName = b"noSuchChild"
 
+module let StdioStreamTypeName = b"StdioStream"
+
+module let StdioStreamStdoutCaseName = b"stdout"
+
+module let StdioStreamStderrCaseName = b"stderr"
+
 // ⭐ **THE COMPILER-OWNED `__ManagedSocket` TYPE** — an 8-byte box holding one raw OS socket handle, with
 // a runtime-owned destructor that closes it on drop. `specs/managed-socket.md`’s "Type Structure" states the
 // single `_handle` field and the RAII contract; it is the `__ManagedFile` handle mechanism one type over,
@@ -20403,10 +20409,10 @@ export type ProgramSignatures
 		let firstSource = 1 if declaration.takesReceiver else 0
 		let written = self.writtenMarkersOf(declaration.site)
 
-		for (iter, capability) in declaration.paramCapabilities.withIterator() 'eachParameter'
-			let position = (iter.index() + firstSource) as ParamCount
+		for index in 0 upto declaration.paramCapabilities.count() 'eachParameter'
+			let position = (index + firstSource) as ParamCount
 
-			if self.capabilityOfSpelledType(capability, spelling: declaration.paramSpellingAt(iter.index()), readerFilePath: declaration.declFilePath) == ParamCapability.isolated and not maskHasParam(written, param: position) 'anOwnedRegion'
+			if self.declaredParamCapability(declaration, position: index) == ParamCapability.isolated and not maskHasParam(written, param: position) 'anOwnedRegion'
 				mask = maskWithParam(mask, param: position)
 			end 'anOwnedRegion'
 		end 'eachParameter'
@@ -30625,6 +30631,11 @@ export type ProgramSignatures
 		return self.aliasCapabilityOf(spelling, readerFilePath: readerFilePath)
 	end 'capabilityOfSpelledType'
 
+	module function declaredParamCapability(declaration SweptDeclaration, position ElementIndex) returns ParamCapability
+		let written = try declaration.paramCapabilities.get(position) otherwise panic("declaredParamCapability: paramCapabilities.get OOB at {position} below {declaration.paramCapabilities.count()} — the sweep records one capability beside every parameter type")
+		return self.capabilityOfSpelledType(written, spelling: declaration.paramSpellingAt(position), readerFilePath: declaration.declFilePath)
+	end 'declaredParamCapability'
+
 	export function aliasCapabilityOf(name ByteArray, readerFilePath FilePath) returns ParamCapability
 		let key = self.bareWrittenKey(name, readerFilePath: readerFilePath)
 
@@ -32874,7 +32885,7 @@ export type ProgramSignatures
 	// `ByteArray.init(managed)` has a rule of its own (the argument's generic instance must EQUAL the
 	// receiver alias's, which is element-agnostic and strictly stronger than the byte rule), so it asks raw
 	// instance equality rather than an aggregate comparison — and therefore inherits none of the rules
-	// above. It refused `stdlib/Console.maxon:68`'s `ByteArray.init(__Builtins.readStdin(n))` with `E3005
+	// above. It refused `StdinSource.readSome`'s `ByteArray.init(__Builtins.readStdin(most))` with `E3005
 	// expected '__ManagedMemory with Byte', got 'Array___ManagedByte'` — a legal module — so it asks THIS
 	// function directly, after its own equality test.
 	// ⚠ **THAT ASYMMETRY IS THE THING TO KEEP IN VIEW WHEN ANOTHER DOOR ARRIVES**: the rest ride
@@ -37875,7 +37886,7 @@ export type ProgramSignatures
 		return false
 	end 'typeMentionsTypeParameter'
 
-	function tupleElementTypesOf(t MaxonType) returns MaxonTypeArray throws MapError
+	export function tupleElementTypesOf(t MaxonType) returns MaxonTypeArray throws MapError
 		return (try self.tupleLayoutOf(t)).fieldTypes
 	end 'tupleElementTypesOf'
 

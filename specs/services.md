@@ -7156,7 +7156,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3200: <fragment>:48:13: 'Pair' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3200: <fragment>:48:13: 'Pair.around(bag)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: deepmove.dag.a-string-and-its-bytes-cross-together -->
@@ -7412,7 +7412,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3196: <fragment>:30:22: cannot store an isolated 'CellArray' into 'Svc.cells', which holds a mutable 'CellArray'; `merge` it first
-error E3200: <fragment>:40:27: 'pairedCellsAround' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3200: <fragment>:40:27: 'pairedCellsAround(kept, pairs: 40)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: borrow.error.a-let-string-read-after-its-awaited-send-is-use-after-move -->
@@ -16847,7 +16847,7 @@ type Echo
 	end 'create'
 
 	export function serve() returns Tally
-		let got = try client.recv(64) otherwise return 0
+		let got = String.from(try client.readSome(64) otherwise return 0)
 		_ = try client.send(got) otherwise return 0
 		client.close()
 
@@ -16867,13 +16867,13 @@ function main() returns ExitCode
 		return 5
 	end 'refused5x26'
 
-	let heard = try out.recv(64) otherwise 'refused6x28'
+	let heard = try out.readSome(64) otherwise 'refused6x28'
 		reply.cancel()
 		return 6
 	end 'refused6x28'
 	let served = await reply
 
-	print("{heard} {served}\n")
+	print("{String.from(heard)} {served}\n")
 
 	return 0
 end 'main'
@@ -16889,7 +16889,7 @@ hello 5
 <!-- procs: 4 -->
 The same hand-off with four processors, so the service's green thread can run on another OS thread than the one that
 accepted the connection and registered the socket with the network poller. The poller's registration belongs to the
-socket, not to a thread, so the service's `recv` parks on it and is woken wherever it runs.
+socket, not to a thread, so the service's `readSome` parks on it and is woken wherever it runs.
 ```maxon
 typealias Tally = int(0 to 1000000)
 
@@ -16904,7 +16904,7 @@ type Echo
 		var total = 0 as Tally
 
 		for _ in 0 upto 3 'eachRound'
-			let got = try client.recv(64) otherwise return 0
+			let got = String.from(try client.readSome(64) otherwise return 0)
 			_ = try client.send(got) otherwise return 0
 			total = total + (got.byteLength() as Tally)
 		end 'eachRound'
@@ -16928,12 +16928,12 @@ function main() returns ExitCode
 			return 5
 		end 'refused5x33'
 
-		let heard = try out.recv(64) otherwise 'refused6x35'
+		let heard = try out.readSome(64) otherwise 'refused6x35'
 			reply.cancel()
 			return 6
 		end 'refused6x35'
 
-		print("{heard}\n")
+		print("{String.from(heard)}\n")
 	end 'eachWord'
 
 	let served = await reply
@@ -17053,7 +17053,7 @@ type Port implements Speaker
 	end 'create'
 
 	function speak() returns Tally
-		let got = try client.recv(64) otherwise return 0
+		let got = String.from(try client.readSome(64) otherwise return 0)
 		_ = try client.send(got) otherwise return 0
 		client.close()
 
@@ -17088,13 +17088,13 @@ function main() returns ExitCode
 		return 5
 	end 'refused5x49'
 
-	let heard = try out.recv(64) otherwise 'refused6x51'
+	let heard = try out.readSome(64) otherwise 'refused6x51'
 		reply.cancel()
 		return 6
 	end 'refused6x51'
 	let performed = await reply
 
-	print("{heard} {performed}\n")
+	print("{String.from(heard)} {performed}\n")
 
 	return 0
 end 'main'
@@ -17142,9 +17142,9 @@ function main() returns ExitCode
 
 	_ = try out.send("accepted") otherwise return 5
 
-	let heard = try served.recv(64) otherwise return 6
+	let heard = try served.readSome(64) otherwise return 6
 
-	print("{heard}\n")
+	print("{String.from(heard)}\n")
 
 	return 0
 end 'main'
@@ -17190,9 +17190,9 @@ function main() returns ExitCode
 
 	_ = try peer.send("dialled") otherwise return 5
 
-	let heard = try dialled.recv(64) otherwise return 6
+	let heard = try dialled.readSome(64) otherwise return 6
 
-	print("{heard}\n")
+	print("{String.from(heard)}\n")
 
 	return 0
 end 'main'

@@ -1399,7 +1399,7 @@ function plainBytesHeard(port NetworkPort) returns String
 		return "send {error.name}"
 	end 'headUnsent'
 
-	let alert = try client.recv(1024) otherwise (error) 'unanswered'
+	let alert = try client.readSome(1024) otherwise (error) 'unanswered'
 		return "no alert {error.name}"
 	end 'unanswered'
 
@@ -1407,12 +1407,16 @@ function plainBytesHeard(port NetworkPort) returns String
 		return "send {error.name}"
 	end 'unsent'
 
-	let heard = alert.toByteArray()
+	let heard = merge alert
 
 	while true 'reading'
-		let chunk = try client.recv(1024) otherwise break
+		let chunk = try client.readSome(1024) otherwise break
 
-		heard.append(chunk.toByteArray())
+		if chunk.isEmpty() 'ended'
+			break
+		end 'ended'
+
+		heard.append(merge chunk)
 	end 'reading'
 
 	return "heard {toHex(heard)}"
@@ -1864,9 +1868,13 @@ function holdOpen(listener TcpListener) returns String
 	let connection = try listener.accept() otherwise return "accept failed"
 
 	while true 'held'
-		_ = try connection.recv(RequestBytes) otherwise (cause) 'left'
+		let chunk = try connection.readSome(RequestBytes) otherwise (cause) 'left'
 			return cause.name
 		end 'left'
+
+		if chunk.isEmpty() 'ended'
+			return "ended"
+		end 'ended'
 	end 'held'
 end 'holdOpen'
 
@@ -1975,7 +1983,7 @@ end 'main'
 ```
 ```stdout
 a server that never answers the hello: error timedOut
-the peer saw the client leave: connectionClosed
+the peer saw the client leave: ended
 after a client that sends nothing: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]
 a stalled handshake, then a request: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]
 with no more connections serve ended: acceptDeadlinePassed
@@ -2120,9 +2128,13 @@ function rawExchange(port NetworkPort, protocols StringArray, request String) re
 	var heard = ""
 
 	while true 'reading'
-		let chunk = try stream.recv(4096) otherwise break
+		let chunk = try stream.readSome(4096) otherwise break
 
-		heard.append(chunk)
+		if chunk.isEmpty() 'ended'
+			break
+		end 'ended'
+
+		heard.append(String.from(chunk))
 	end 'reading'
 
 	let lines = heard.split("\r\n")

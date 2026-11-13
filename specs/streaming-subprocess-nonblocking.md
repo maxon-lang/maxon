@@ -1,46 +1,44 @@
 ---
 feature: streaming-subprocess-nonblocking
 status: experimental
-keywords: [subprocess, streaming, StreamingSubprocess, pollExit, ExitPoll, tryReadStdoutLine, tryReadStderrLine, non-blocking, poll, drain, stdio, pipe]
+keywords: [subprocess, streaming, StreamingSubprocess, pollExit, ExitPoll, streamHasEnded, takeStdout, takeStderr, ChildOutputReader, LineRead, service, spawn, awaitAny, async, non-blocking, poll, stdio, pipe]
 category: system
 ---
 
-# The streaming child a parent can WATCH — `pollExit` and the two `tryRead*Line` doors
+# The streaming child a parent can WATCH — `pollExit`, `streamHasEnded` and a read in a service
 
 ## Documentation
 
-`StreamingSubprocess`'s blocking surface answers every question by committing to it: `readStdoutLine`
-parks until a line or end of stream arrives, and `wait()` parks until the child is gone. A parent that
-must stay RESPONSIVE — draining output while the child still runs, and deciding for itself when to give
-up — cannot ask any of them. These three members are the answers that change nothing and never wait.
+`StreamingSubprocess.wait()` parks until the child is gone, and a `ChildOutputReader`'s read parks until
+bytes or the end of the stream arrive. A parent that must stay RESPONSIVE — doing other work while the
+child still runs, and deciding for itself when to give up — gets its answers two ways:
 
-- `pollExit()` returns `ExitPoll.running` or `ExitPoll.exited(code)`. It does not block and it does not
-  terminate.
-- `tryReadStdoutLine()` / `tryReadStderrLine()` return `LinePoll.line(text)` carrying a complete buffered
-  line with its terminator stripped, or `LinePoll.none` when no complete line is buffered right now.
-  `none` says nothing about end of stream; a caller that needs that distinction asks `pollExit`, because a
-  child that has exited writes no more.
+- `pollExit()` returns `ExitPoll.running`, `ExitPoll.exited(code)`, or `ExitPoll.reapedElsewhere` when
+  another process has taken the child's exit status. It does not block and it does not terminate.
+- `streamHasEnded(stream)` answers `false` until a read of that stream has met its end, and `true` after.
+- A read that may wait runs in a service of its own, one per stream: the reader `takeStdout()` or
+  `takeStderr()` hands out moves into the service's factory through an `isolated` parameter, and the owner
+  `awaitAny`s over `async` calls that await the service's next read, beside a timer coroutine, while it runs on.
 
-⛔ **THE LINE ANSWER IS A UNION BECAUSE A BLANK LINE IS A LINE.** `echo.` writes a line whose text is `""`,
-which is also the only string a `""`-returning door could use for "nothing buffered" — so a caller keyed off
-emptiness silently DROPS every blank line the child writes, and nothing downstream can tell that it did.
-`maxon monitor`, whose whole job is forwarding a traced child's output verbatim, is such a caller.
-`a-blank-line-is-a-line-and-not-an-empty-pipe` is the case that separates the two.
+⛔ **A BLANK LINE IS A LINE.** `echo.` writes a line whose text is `""`, and the read answers
+`LineRead.line("")`; the end of the stream is `LineRead.ended`. A caller that keyed off emptiness would drop
+every blank line the child writes. `a-blank-line-is-a-line-and-not-the-end` is the case that separates the
+two.
 
-⛔ **`waitWithTimeout` IS NOT A POLL, AND REACHING FOR IT AS ONE IS THE TRAP `pollExit` EXISTS TO CLOSE.**
-`waitWithTimeout(0)` means *wait for ever* — 0 is the whole family's convention for no deadline — so it
-is `wait()`. And a caller who supplies a small deadline instead gets the other half of that contract: the
-runtime **TERMINATES** the child when the deadline fires, with exit code **1**. So both readings of
-"just poll it with a timeout" are wrong, one by hanging and one by killing the subject.
+⛔ **`wait(WaitDeadline.within(ms))` IS NOT A POLL, AND REACHING FOR IT AS ONE IS THE TRAP `pollExit` EXISTS TO CLOSE.**
+`wait` takes a `WaitDeadline`: `WaitDeadline.within(ms)` carries a `WaitDeadlineMs`, at least 1, and
+`wait()` is the wait with `WaitDeadline.none`, no deadline. A
+caller who supplies a small deadline gets the contract's other half: the runtime **TERMINATES** the child
+when the deadline fires, with exit code **1**. So both readings of "just poll it with a timeout" are wrong,
+one by hanging (`wait()`) and one by killing the subject.
 `poll-exit-leaves-the-child-alive` is the case that separates them: it drives the child to its OWN exit
 code, and **a `1` there means the poll killed it.**
 
-⚠ **A HANDLE `release()` HAS GIVEN BACK ANSWERS `running`**, and `tryRead*Line` answers `none`, because
-after `release()` there is no child left to report an exit for and no pipe left to read. Neither door
-throws — unlike the blocking readers, which refuse a released handle through `requireLive`.
+⚠ **A HANDLE `release()` HAS GIVEN BACK ANSWERS `running`**, because after `release()` there is no child
+left to report an exit for, and a read through a reader taken before the release throws
+`StreamError.closed`.
 
-**Targets — x64-windows only**, the restriction the whole streaming-subprocess family carries: the
-reader parks its green thread until the Windows I/O completion port answers, and every child here is `cmd`.
+**Targets — x64-windows**, except the case marked POSIX: every child here is `cmd`.
 
 **How these children are built.** Each argument is a separate `argv` token and the runtime joins them
 with single spaces, quoting only a token that is empty or holds a space, a tab or a `"`. So `&` and
@@ -63,6 +61,7 @@ masked-off upper half — is a different number rather than a plausible one.
 function describePoll(poll ExitPoll) returns String
 	return match poll 'seen'
 		running gives "running"
+		reapedElsewhere gives "reapedElsewhere"
 		exited(code) gives "exited {code}"
 	end 'seen'
 end 'describePoll'
@@ -108,9 +107,9 @@ which is deterministic because the child cannot finish before the parent's own l
 finish normally. It must report the exit code IT chose, **42**.
 
 ⛔ **A `1` HERE MEANS THE POLL KILLED THE CHILD.** `1` is the code the runtime stamps on a child it
-terminates when a `waitWithTimeout` deadline fires, so a `pollExit` implemented on top of that path — the
+terminates when a `wait` deadline fires, so a `pollExit` implemented on top of that path — the
 obvious wrong implementation, and the reason this member is not a wrapper — turns this case red with
-`code=1` rather than merely failing to answer. Against THIS child, `waitWithTimeout(50)` throws
+`code=1` rather than merely failing to answer. Against THIS child, `wait(WaitDeadline.within(50))` throws
 `SubprocessError.timeout`, whose rendering opens `timed out after 50ms`, and a following `wait()` answers **1**, so the two outcomes really are
 distinguishable by the number and not only in principle. `exitedSeen` staying `-1` is the second half of
 the same claim: not one of the five polls claimed an exit that had not happened.
@@ -139,6 +138,7 @@ function main() returns ExitCode
 	while polls < 5 'poll'
 		match child.pollExit() 'answer'
 			running then runningSeen = runningSeen + 1
+			reapedElsewhere then return 6
 			exited(code) then exitedSeen = code as SeenCode
 		end 'answer'
 		polls = polls + 1
@@ -160,19 +160,60 @@ runningSeen=5 exitedSeen=-1
 42
 ```
 
-<!-- test: streaming-subprocess-nonblocking.try-read-stdout-answers-none-rather-than-blocking -->
+<!-- test: streaming-subprocess-nonblocking.a-read-in-a-service-leaves-the-owner-running -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-`tryReadStdoutLine()` answers `none` while the child has written nothing, and the line still arrives once
-the child writes it. The parent spins, counting `none` answers, until one comes back a line.
+A stdout reader handed to a service of its own parks there while the child has written nothing, and the owner
+runs on: it waits for the first of the service's next line and a 50 ms timer, the timer arrives first, and only
+then does the owner send the line the child waits for. The service's read then answers the child's line.
 
-⚠ **THE `none` ANSWER IS GUARANTEED BY CONSTRUCTION, NOT BY LUCK** — which is what keeps this case from
-being flaky. The child writes nothing until it has read a line from its standard input, and the parent sends
-that line only after its first poll has answered, so `sawNone` is decided by the order of the two rather than
-by how fast either runs. The spin has no bound: a reader that had begun BLOCKING would never return from its
-first poll, and the runner reports the case TIMED OUT, where a bound in turns would be a margin a slow host
-could exhaust.
+⚠ **THE TIMER WINS BY CONSTRUCTION, NOT BY LUCK.** The child writes nothing until it has read a line from its
+standard input, and the parent sends that line only after the timer has arrived, so `first` is decided by the
+order of the two rather than by how fast either runs. An owner that the read blocked would never see its timer,
+and the runner reports the case TIMED OUT.
 ```maxon
-typealias SpinTally = int(0 to 100000)
+typealias ArrivalPromise = Promise with String
+typealias Arrivals = Array with ArrivalPromise
+
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
+
+type LineService
+	var reader as ChildOutputReader
+
+	static function create(reader isolated ChildOutputReader) returns Self
+		return Self{reader: merge reader}
+	end 'create'
+
+	export function next() returns String
+		let read = try self.reader.readLine() otherwise (e) 'unread'
+			return "threw {e.name}"
+		end 'unread'
+
+		return shown(read)
+	end 'next'
+end 'LineService'
+
+function nextLine(service LineService.handle) returns String
+	return try await service.next() otherwise panic("the line service stopped while its owner held its handle")
+end 'nextLine'
+
+function timerAfter(delay Milliseconds) returns String
+	sleep(delay)
+
+	return "timer"
+end 'timerAfter'
+
+function firstOf(arrivals Arrivals) returns String
+	let ready = arrivals.awaitAny()
+	let arrived = try arrivals.remove(ready) otherwise panic("awaitAny answered a slot of this array")
+
+	return await arrived
+end 'firstOf'
 
 function gatedChildArguments() returns StringArray
 	let argv = StringArray.create(0)
@@ -187,58 +228,88 @@ end 'gatedChildArguments'
 
 function main() returns ExitCode
 	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
+	let reader = try child.takeStdout() otherwise return 4
+	let service = spawn LineService.create(reader)
 
-	var nones = 0 as SpinTally
-	var seen = ""
-	var released = false
-	while seen.isEmpty() 'spin'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then seen = text
-			none then nones = nones + 1
-		end 'polled'
+	let arrivals = Arrivals.create(0)
+	arrivals.push(async nextLine(service))
+	arrivals.push(async timerAfter(50))
 
-		if not released 'release'
-			try child.writeStdinLine("go") otherwise return 5
-			released = true
-		end 'release'
+	let first = firstOf(arrivals)
+	try child.writeStdinLine("go") otherwise panic("the child reads its standard input before it exits")
+	let line = firstOf(arrivals)
 
-		sleep(5)
-	end 'spin'
-
-	let code = try child.wait() otherwise return 4
+	let code = try child.wait() otherwise panic("the child ends once it has echoed its line")
 	child.release()
 
-	print("sawNone={nones > 0} line={seen} code={code}\n")
-	return seen.byteLength() as ExitCode
+	print("first={first} line={line} code={code}\n")
+	return line.byteLength() as ExitCode
 end 'main'
 ```
 ```stdout
-sawNone=true line=latehello code=0
+first=timer line=latehello code=0
 ```
 ```exitcode
 9
 ```
 
-<!-- test: streaming-subprocess-nonblocking.try-read-stdout-keeps-a-partial-line -->
+<!-- test: streaming-subprocess-nonblocking.a-parked-read-keeps-a-partial-line -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⭐ **A `none` ANSWER MUST NOT CONSUME WHAT IS ALREADY BUFFERED.** The child writes `abc` with NO newline
-(`set /p=abc<nul`), then announces on stderr that it has, and `echo def` supplies the terminator only after
-the child has read a line from its standard input. So once the parent has read the announcement the partial
-is certainly in the pipe, and the newline certainly is not until the parent sends its line, whatever the host
-is doing. The first `tryReadStdoutLine()` takes the partial in and the second finds it buffered; both must
-answer `none` — and must leave `abc` where it is. The later read then returns the WHOLE line, `abcdef`.
+⭐ **A READ WAITING FOR THE REST OF A LINE MUST NOT LOSE WHAT IS ALREADY BUFFERED.** The child writes `abc`
+with NO newline (`set /p=abc<nul`), then announces on stderr that it has, and `echo def` supplies the
+terminator only after the child has read a line from its standard input. So once the parent has read the
+announcement the partial is certainly in the pipe, and the newline certainly is not until the parent sends
+its line, whatever the host is doing. The stdout reader runs in a service, whose read takes `abc` in and parks
+for the rest; the owner's 50 ms timer arrives first, the owner sends its line, and the read answers the WHOLE
+line, `abcdef`.
 
-The two halves discriminate in opposite directions. A reader that blocked on the incomplete line would
-hang the first read rather than answering `none`, and the runner reports the case TIMED OUT; a reader that
-answered `none` by DRAINING the buffer would come back with `def`, three bytes and a different exit code,
-rather than a near miss.
+The two halves discriminate in opposite directions. An owner the read blocked would never see its timer, and
+the runner reports the case TIMED OUT; a read that dropped the partial would come back with `def`, three bytes
+and a different exit code, rather than a near miss.
 ```maxon
-function describePoll(poll LinePoll) returns String
-	return match poll 'seen'
-		line(text) gives "line[{text}]"
-		none gives "none"
-	end 'seen'
-end 'describePoll'
+typealias ArrivalPromise = Promise with String
+typealias Arrivals = Array with ArrivalPromise
+
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
+
+type LineService
+	var reader as ChildOutputReader
+
+	static function create(reader isolated ChildOutputReader) returns Self
+		return Self{reader: merge reader}
+	end 'create'
+
+	export function next() returns String
+		let read = try self.reader.readLine() otherwise (e) 'unread'
+			return "threw {e.name}"
+		end 'unread'
+
+		return shown(read)
+	end 'next'
+end 'LineService'
+
+function nextLine(service LineService.handle) returns String
+	return try await service.next() otherwise panic("the line service stopped while its owner held its handle")
+end 'nextLine'
+
+function timerAfter(delay Milliseconds) returns String
+	sleep(delay)
+
+	return "timer"
+end 'timerAfter'
+
+function firstOf(arrivals Arrivals) returns String
+	let ready = arrivals.awaitAny()
+	let arrived = try arrivals.remove(ready) otherwise panic("awaitAny answered a slot of this array")
+
+	return await arrived
+end 'firstOf'
 
 function partialThenRestArguments() returns StringArray
 	let argv = StringArray.create(0)
@@ -257,56 +328,49 @@ end 'partialThenRestArguments'
 
 function main() returns ExitCode
 	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: partialThenRestArguments()) otherwise return 3
+	let announcements = try child.takeStderr() otherwise return 4
+	_ = try announcements.readLine() otherwise return 5
 
-	_ = try child.readStderrLine() otherwise return 5
+	let reader = try child.takeStdout() otherwise return 6
+	let service = spawn LineService.create(reader)
 
-	let taken = describePoll(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
-	let buffered = describePoll(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
+	let arrivals = Arrivals.create(0)
+	arrivals.push(async nextLine(service))
+	arrivals.push(async timerAfter(50))
 
-	try child.writeStdinLine("go") otherwise return 6
+	let first = firstOf(arrivals)
+	try child.writeStdinLine("go") otherwise panic("the child reads its standard input before it exits")
+	let line = firstOf(arrivals)
 
-	var seen = ""
-	while seen.isEmpty() 'spin'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then seen = text
-			none then break
-		end 'polled'
-
-		sleep(5)
-	end 'spin'
-
-	let code = try child.wait() otherwise return 4
+	let code = try child.wait() otherwise panic("the child ends once it has echoed its line")
 	child.release()
 
-	print("partial={taken},{buffered} line={seen} code={code}\n")
-	return seen.byteLength() as ExitCode
+	print("first={first} line={line} code={code}\n")
+	return line.byteLength() as ExitCode
 end 'main'
 ```
 ```stdout
-partial=none,none line=abcdef code=0
+first=timer line=abcdef code=0
 ```
 ```exitcode
 6
 ```
 
-<!-- test: streaming-subprocess-nonblocking.try-read-stderr-and-the-two-streams-do-not-cross -->
+<!-- test: streaming-subprocess-nonblocking.the-two-readers-do-not-cross -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-`tryReadStderrLine()` reads the child's STDERR, and the two streams stay apart. The child writes
-`errline` to stderr and `outline` to stdout — same length, different text, so a case that read one pipe
-twice would still be reporting seven bytes and only the TEXT betrays it. Both are asserted by name, and a
-third stdout read afterwards answers 0 bytes, so no stderr text ever landed in the stdout buffer.
-
-The spin is shared by both streams through one `fromStderr` flag rather than written twice, and it has no
-bound: a line that never arrives leaves the case TIMED OUT, where a bound in turns would be a margin a slow
-host could exhaust before `cmd` has started. The exit code packs both lengths (`7*10 + 7`), so a stream that
-answered nothing shows up as 7 or 70.
+`takeStderr()`'s reader reads the child's STDERR, `takeStdout()`'s its stdout, and the two streams stay apart.
+The child writes `errline` to stderr and `outline` to stdout — same length, different text, so a case that
+read one pipe twice would still be reporting seven bytes and only the TEXT betrays it. Both are asserted by
+name, and a second stdout read answers `ended`, so no stderr text ever landed in the stdout reader. The exit
+code packs both lengths (`7*10 + 7`), so a stream that answered nothing shows up as 7 or 70.
 ```maxon
-function describePoll(poll LinePoll) returns String
-	return match poll 'seen'
-		line(text) gives "line[{text}]"
-		none gives "none"
-	end 'seen'
-end 'describePoll'
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
 
 function bothStreamsArguments() returns StringArray
 	let argv = StringArray.create(0)
@@ -318,25 +382,15 @@ function bothStreamsArguments() returns StringArray
 	return argv
 end 'bothStreamsArguments'
 
-function spinForLine(child StreamingSubprocess, fromStderr bool) returns String
-	while true 'spin'
-		let poll = (try child.tryReadStderrLine() otherwise panic("the child's stderr is out with a StderrReader")) if fromStderr else try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader")
-		match poll 'polled'
-			line(text) then return text
-			none then break
-		end 'polled'
-
-		sleep(5)
-	end 'spin'
-end 'spinForLine'
-
 function main() returns ExitCode
 	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: bothStreamsArguments()) otherwise return 3
+	let out = try child.takeStdout() otherwise return 4
+	let err = try child.takeStderr() otherwise return 5
 
-	let outLine = spinForLine(child, fromStderr: false)
-	let errLine = spinForLine(child, fromStderr: true)
-	let extra = describePoll(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
-	let code = try child.wait() otherwise return 4
+	let outLine = shown(try out.readLine() otherwise return 6)
+	let errLine = shown(try err.readLine() otherwise return 7)
+	let extra = shown(try out.readLine() otherwise return 8)
+	let code = try child.wait() otherwise return 9
 	child.release()
 
 	print("out={outLine} err={errLine} extra={extra} code={code}\n")
@@ -344,20 +398,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-out=outline err=errline extra=none code=0
+out=outline err=errline extra=ended code=0
 ```
 ```exitcode
 77
 ```
 
-<!-- test: streaming-subprocess-nonblocking.after-release-both-doors-answer-instead-of-throwing -->
+<!-- test: streaming-subprocess-nonblocking.after-release-poll-exit-answers-running-and-a-read-answers-closed -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-Neither non-blocking door refuses a handle `release()` has given back, and that asymmetry with the
-blocking readers is deliberate: `readStdoutLine`, `wait` and `writeStdinLine` all throw
-`SubprocessError.ioFailed` there through `requireLive`, because a released handle is a pointer to a freed
-struct on some lanes and asking the runtime about it is already the bug. `pollExit` and the two
-`tryRead*Line` doors answer from the released FLAG without reaching the runtime at all: `running`,
-because there is no child left to report an exit for, and `none`, because there is no pipe left to read.
+A handle `release()` has given back is answered, not faulted on: `pollExit` answers `running`, because there
+is no child left to report an exit for, and a read through either reader taken before the release throws
+`StreamError.closed`, because there is no pipe left to read.
 
 The child runs to completion first, so `running` here is the released answer and not a live one — a
 `pollExit` that consulted the freed handle would report `exited 0` (or fault), and either is a different
@@ -366,16 +417,26 @@ line rather than a near miss.
 function describeExit(poll ExitPoll) returns String
 	return match poll 'seen'
 		running gives "running"
+		reapedElsewhere gives "reapedElsewhere"
 		exited(code) gives "exited {code}"
 	end 'seen'
 end 'describeExit'
 
-function describeLine(poll LinePoll) returns String
-	return match poll 'seen'
-		line(text) gives "line[{text}]"
-		none gives "none"
-	end 'seen'
-end 'describeLine'
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
+
+function afterRelease(reader ChildOutputReader) returns String
+	let read = try reader.readLine() otherwise (e) 'refused'
+		return e.name
+	end 'refused'
+
+	return shown(read)
+end 'afterRelease'
 
 function echoChildArguments() returns StringArray
 	let argv = StringArray.create(0)
@@ -387,49 +448,48 @@ end 'echoChildArguments'
 
 function main() returns ExitCode
 	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: echoChildArguments()) otherwise return 3
-	let line = try child.readStdoutLine() otherwise return 4
-	let code = try child.wait() otherwise return 5
+	let out = try child.takeStdout() otherwise return 4
+	let err = try child.takeStderr() otherwise return 5
+	let line = shown(try out.readLine() otherwise return 6)
+	let code = try child.wait() otherwise return 7
 	child.release()
 
 	let afterPoll = describeExit(child.pollExit())
-	let afterOut = describeLine(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
-	let afterErr = describeLine(try child.tryReadStderrLine() otherwise panic("the child's stderr is out with a StderrReader"))
+	let afterOut = afterRelease(out)
+	let afterErr = afterRelease(err)
 
 	print("line={line} code={code} afterPoll={afterPoll} afterOut={afterOut} afterErr={afterErr}\n")
 	return line.byteLength() as ExitCode
 end 'main'
 ```
 ```stdout
-line=hello code=0 afterPoll=running afterOut=none afterErr=none
+line=hello code=0 afterPoll=running afterOut=closed afterErr=closed
 ```
 ```exitcode
 5
 ```
 
-<!-- test: streaming-subprocess-nonblocking.a-blank-line-is-a-line-and-not-an-empty-pipe -->
+<!-- test: streaming-subprocess-nonblocking.a-blank-line-is-a-line-and-not-the-end -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⭐ **THE CASE THE UNION EXISTS FOR.** The child writes `first`, then a BLANK line (`echo.`), then `last`,
-and the three polls must answer `line[first]`, `line[]`, `line[last]` in that order. The middle one is a
-line whose text is the empty string, which is exactly the value a `""`-returning door would have to use
-for *"nothing is buffered"* — so under such a door the blank line is not merely mis-labelled, it is
-UNREPORTABLE, and every caller drops it.
+⭐ **THE CASE `LineRead` EXISTS FOR.** The child writes `first`, then a BLANK line (`echo.`), then `last`,
+and the four reads must answer `line[first]`, `line[]`, `line[last]` and `ended` in that order. The middle one
+is a line whose text is the empty string; the end of the stream is a different answer, so the blank line is
+reported rather than taken for the end.
 
 ⛔ **THE WRONG ANSWER HERE IS A DROPPED LINE, NOT A CRASH.** A `maxon monitor` keyed off emptiness
-forwards a traced child's `line-one` and `line-three` and silently swallows the blank line between them,
-on both stdout and stderr — an instrument quietly editing the output it exists to relay.
+forwards a traced child's `line-one` and `line-three` and silently swallows the blank line between them —
+an instrument quietly editing the output it exists to relay.
 
-The exit code sums the three descriptions' lengths (`11 + 6 + 10`), so a blank line that came back `none`
-(4 bytes) is **25** rather than 27 as well as a different stdout line. The spin ends on the child's exit
-and not on a count: `nextLine` asks `pollExit` BEFORE each poll, and a poll that answers `none` after the
-child was already gone is final, because a child that has exited writes no more and everything it wrote is
-in the pipe. No turn count or clock decides how long a slow host gets to start `cmd`.
+The exit code sums the three lines' descriptions (`11 + 6 + 10`), so a blank line that came back `ended`
+(5 bytes) is **26** rather than 27 as well as a different stdout line.
 ```maxon
-function hasExited(poll ExitPoll) returns bool
-	return match poll 'seen'
-		running gives false
-		exited gives true
-	end 'seen'
-end 'hasExited'
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives "line[{text}]"
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
 
 function blankBetweenArguments() returns StringArray
 	let argv = StringArray.create(0)
@@ -442,55 +502,38 @@ function blankBetweenArguments() returns StringArray
 	return argv
 end 'blankBetweenArguments'
 
-function nextLine(child StreamingSubprocess) returns String
-	while true 'spin'
-		let gone = hasExited(child.pollExit())
-
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			line(text) then return "line[{text}]"
-			none then break
-		end 'polled'
-
-		if gone 'final'
-			return "none"
-		end 'final'
-
-		sleep(5)
-	end 'spin'
-end 'nextLine'
-
 function main() returns ExitCode
 	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: blankBetweenArguments()) otherwise return 3
+	let reader = try child.takeStdout() otherwise return 4
 
-	let first = nextLine(child)
-	let blank = nextLine(child)
-	let last = nextLine(child)
-	let code = try child.wait() otherwise return 4
+	let first = shown(try reader.readLine() otherwise return 5)
+	let blank = shown(try reader.readLine() otherwise return 6)
+	let last = shown(try reader.readLine() otherwise return 7)
+	let atEnd = shown(try reader.readLine() otherwise return 8)
+	let code = try child.wait() otherwise return 9
 	child.release()
 
-	print("{first} {blank} {last} code={code}\n")
+	print("{first} {blank} {last} {atEnd} code={code}\n")
 	return (first.byteLength() + blank.byteLength() + last.byteLength()) as ExitCode
 end 'main'
 ```
 ```stdout
-line[first] line[] line[last] code=0
+line[first] line[] line[last] ended code=0
 ```
 ```exitcode
 27
 ```
 
-<!-- test: streaming-subprocess-nonblocking.the-ends-of-both-streams-are-seen-without-a-blocking-read -->
+<!-- test: streaming-subprocess-nonblocking.the-ends-of-both-streams-are-latched-by-the-readers -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⭐ **A PARENT THAT NEVER BLOCKS CAN STILL TELL THAT A STREAM HAS ENDED.** `streamHasEnded(StdioStream.stdout)`
+⭐ **`streamHasEnded` ANSWERS WITHOUT A READ ONCE A READ HAS MET THE END.** `streamHasEnded(StdioStream.stdout)`
 and `streamHasEnded(StdioStream.stderr)` answer `false` while a read of that stream may still produce bytes and
-`true` once a read has found its end, so a loop of `tryRead*Line` calls knows when to stop without a blocking
-read that a process still holding the pipe would never end.
+`true` once a read has found its end, so a parent can ask about a stream another coroutine reads.
 
-The child writes `first`, `second` and a last line with no terminator, `tail`. Before any read both streams
-are open. The loop reads both streams with the two non-blocking doors until both report their end: the
-unterminated `tail` is handed over as a line when the end is found, so the text is the three lines in order
-and the loop ends on its own. A pipe the poll could not see the end of would leave the loop spinning until the
-case is reported TIMED OUT.
+The child writes `first`, `second` and a last line with no terminator, `tail`, and nothing on stderr. Before
+any read both streams are open. Each reader reads its stream until `ended`: the unterminated `tail` is handed
+over as a line when the end is found, so the text is the three lines in order, and then both streams report
+their end.
 ```maxon
 function linesArguments() returns StringArray
 	let argv = StringArray.create(0)
@@ -508,40 +551,51 @@ function bothEnded(child StreamingSubprocess) returns bool
 	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
 end 'bothEnded'
 
-function main() returns ExitCode
-	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: linesArguments()) otherwise return 3
-	let openAtStart = not bothEnded(child)
+function drained(reader ChildOutputReader, marker String) returns String
 	var seen = ""
 
-	while not bothEnded(child) 'spin'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polledOut'
-			line(text) then seen.append("{text}|")
-			none then sleep(5)
-		end 'polledOut'
+	while true 'reading'
+		let read = try reader.readLine() otherwise (e) 'failed'
+			return "{seen}threw {e.name}|"
+		end 'failed'
 
-		match try child.tryReadStderrLine() otherwise panic("the child's stderr is out with a StderrReader") 'polledErr'
-			line(text) then seen.append("err[{text}]|")
-			none then sleep(5)
-		end 'polledErr'
-	end 'spin'
+		match read 'read'
+			line(text) then seen.append("{marker}{text}|")
+			ended then return seen
+			pastTheCap then return "{seen}pastTheCap|"
+		end 'read'
+	end 'reading'
 
-	_ = try child.wait() otherwise return 4
+	panic("drained: the loop returns when the stream ends")
+end 'drained'
+
+function main() returns ExitCode
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: linesArguments()) otherwise return 3
+	let openAtStart = not child.streamHasEnded(StdioStream.stdout) and not child.streamHasEnded(StdioStream.stderr)
+	let out = try child.takeStdout() otherwise return 4
+	let err = try child.takeStderr() otherwise return 5
+
+	let fromOut = drained(out, marker: "")
+	let fromErr = drained(err, marker: "err:")
+	let endedAfter = bothEnded(child)
+
+	_ = try child.wait() otherwise return 6
 	child.release()
 
-	print("openAtStart={openAtStart} seen={seen}\n")
+	print("openAtStart={openAtStart} seen={fromOut}{fromErr} endedAfter={endedAfter}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-openAtStart=true seen=first|second|tail|
+openAtStart=true seen=first|second|tail| endedAfter=true
 ```
 ```exitcode
 0
 ```
 
-<!-- test: streaming-subprocess-nonblocking.posix-the-ends-of-both-streams-are-seen-without-a-blocking-read -->
+<!-- test: streaming-subprocess-nonblocking.posix-the-ends-of-both-streams-are-latched-by-the-readers -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->
-`the-ends-of-both-streams-are-seen-without-a-blocking-read` on a POSIX lane, with the child a shell that writes
+`the-ends-of-both-streams-are-latched-by-the-readers` on a POSIX lane, with the child a shell that writes
 `first`, `second` and an unterminated `tail`.
 ```maxon
 function linesArguments() returns StringArray
@@ -555,32 +609,43 @@ function bothEnded(child StreamingSubprocess) returns bool
 	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
 end 'bothEnded'
 
-function main() returns ExitCode
-	let child = try StreamingSubprocess.spawn(Executable.name("sh"), arguments: linesArguments()) otherwise return 3
-	let openAtStart = not bothEnded(child)
+function drained(reader ChildOutputReader, marker String) returns String
 	var seen = ""
 
-	while not bothEnded(child) 'spin'
-		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polledOut'
-			line(text) then seen.append("{text}|")
-			none then sleep(5)
-		end 'polledOut'
+	while true 'reading'
+		let read = try reader.readLine() otherwise (e) 'failed'
+			return "{seen}threw {e.name}|"
+		end 'failed'
 
-		match try child.tryReadStderrLine() otherwise panic("the child's stderr is out with a StderrReader") 'polledErr'
-			line(text) then seen.append("err[{text}]|")
-			none then sleep(5)
-		end 'polledErr'
-	end 'spin'
+		match read 'read'
+			line(text) then seen.append("{marker}{text}|")
+			ended then return seen
+			pastTheCap then return "{seen}pastTheCap|"
+		end 'read'
+	end 'reading'
 
-	_ = try child.wait() otherwise return 4
+	panic("drained: the loop returns when the stream ends")
+end 'drained'
+
+function main() returns ExitCode
+	let child = try StreamingSubprocess.spawn(Executable.name("sh"), arguments: linesArguments()) otherwise return 3
+	let openAtStart = not child.streamHasEnded(StdioStream.stdout) and not child.streamHasEnded(StdioStream.stderr)
+	let out = try child.takeStdout() otherwise return 4
+	let err = try child.takeStderr() otherwise return 5
+
+	let fromOut = drained(out, marker: "")
+	let fromErr = drained(err, marker: "err:")
+	let endedAfter = bothEnded(child)
+
+	_ = try child.wait() otherwise return 6
 	child.release()
 
-	print("openAtStart={openAtStart} seen={seen}\n")
+	print("openAtStart={openAtStart} seen={fromOut}{fromErr} endedAfter={endedAfter}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-openAtStart=true seen=first|second|tail|
+openAtStart=true seen=first|second|tail| endedAfter=true
 ```
 ```exitcode
 0

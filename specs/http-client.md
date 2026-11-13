@@ -262,7 +262,7 @@ let RequestBytes = 4096
 
 function answer(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	let request = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	let request = String.from(try conn.readSome(RequestBytes) otherwise return "recv-failed")
 	_ = try conn.send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi") otherwise return "send-failed"
 	var hostLine = "no-host-line"
 
@@ -316,13 +316,17 @@ let RequestBytes = 4096
 
 function answerAndHold(listener TcpListener, answer String) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send(answer) otherwise return "send-failed"
 
 	while true 'held'
-		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+		let chunk = try conn.readSome(RequestBytes) otherwise (e) 'left'
 			return e.name
 		end 'left'
+
+		if chunk.isEmpty() 'clientLeft'
+			return "connectionClosed"
+		end 'clientLeft'
 	end 'held'
 end 'answerAndHold'
 
@@ -372,7 +376,7 @@ let RequestBytes = 4096
 
 function answer(listener TcpListener, reply String) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send(reply) otherwise return "send-failed"
 	conn.close()
 
@@ -493,9 +497,13 @@ function staySilent(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "unaccepted"
 
 	while true 'held'
-		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+		let chunk = try conn.readSome(RequestBytes) otherwise (e) 'left'
 			return e.name
 		end 'left'
+
+		if chunk.isEmpty() 'clientLeft'
+			return "connectionClosed"
+		end 'clientLeft'
 	end 'held'
 end 'staySilent'
 
@@ -549,7 +557,7 @@ let TenBytes = "0123456789"
 
 function answer(listener TcpListener, reply String) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send(reply) otherwise return "send-failed"
 	conn.close()
 
@@ -619,7 +627,7 @@ let RequestBytes = 4096
 
 function answer(listener TcpListener, reply String, hold bool) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send(reply) otherwise return "send-failed"
 
 	if not hold 'closing'
@@ -628,9 +636,13 @@ function answer(listener TcpListener, reply String, hold bool) returns String
 	end 'closing'
 
 	while true 'held'
-		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+		let chunk = try conn.readSome(RequestBytes) otherwise (e) 'left'
 			return e.name
 		end 'left'
+
+		if chunk.isEmpty() 'clientLeft'
+			return "connectionClosed"
+		end 'clientLeft'
 	end 'held'
 end 'answer'
 
@@ -694,7 +706,7 @@ let EarlyHints = "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\
 
 function answer(listener TcpListener, interimCount InterimCount) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	let reply = StringBuilder.create()
 
 	for _ in 0 upto interimCount 'eachInterim'
@@ -749,12 +761,16 @@ let RequestBytes = 4096
 
 function switchAndHold(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n") otherwise return "send-failed"
 	while true 'held'
-		_ = try conn.recv(RequestBytes) otherwise (e) 'left'
+		let chunk = try conn.readSome(RequestBytes) otherwise (e) 'left'
 			return e.name
 		end 'left'
+
+		if chunk.isEmpty() 'clientLeft'
+			return "connectionClosed"
+		end 'clientLeft'
 	end 'held'
 end 'switchAndHold'
 
@@ -801,7 +817,7 @@ let MostLines = 65536
 
 function streamAHead(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.readSome(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send("HTTP/1.1 200 OK\r\n") otherwise return "send-failed"
 
 	let line = StringBuilder.create()

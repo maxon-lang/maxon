@@ -37,7 +37,7 @@ end 'main'
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](/docs/stdlib/text/#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, FixedArray, Range, Iterators, Interfaces |
-| [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
+| [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, Stream, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
 | [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, TrustStore, Math, Primitive Extensions |
@@ -116,14 +116,16 @@ alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float 
 | `LogGroupPath`, `LogFieldArray` | `Array with String` / `Array with LogField` | Log |
 | `TraceKeyArray` | `Array with String` | TraceCapture |
 | `SocketDeadlineMs` | `int(0 to 4294967295)` — a socket deadline | TcpClient |
-| `RecvCapacity` | `int(1 to i64.max)` | TcpClient |
+| `ReadCapacity` | `int(1 to i64.max)` — the most bytes one `readSome` returns | Stream |
+| `LineCap` | `int(0 to u64.max)`, implementing `BytePos` — the longest line a read takes | Stream |
 | `HttpByteCap` | `int(0 to 1099511627776)` | HttpServer |
 | `HttpAcceptRetryMs` | `int(0 to 1000)` | HttpServer |
 | `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
 | `ExitInt` | `int(0 to u32.max)` | Subprocess |
+| `WaitDeadlineMs` | `int(1 to u64.max)` — the milliseconds a `WaitDeadline.within` allows | Subprocess |
 | `OsErrorCode` | `int(0 to u32.max)` — the Windows error code a `SubprocessError` case carries: `GetLastError` on Windows; on Linux and macOS the errno mapped onto its Windows equivalent, 31 when it has none | Subprocess |
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
-| `StdioKindValue` | `int(0 to 5)` | Subprocess |
+| `StdioKindValue` | `int(0 to 4)` | Subprocess |
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |

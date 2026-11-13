@@ -278,7 +278,7 @@ release's version as its heading when the release is cut.
   visibility modifier is E3008.
   Fix: write the extension bodies for the member the program declares, or rename it to keep the library's.
 - `TlsListener.accept()` returns once the TCP connection is accepted, and the stream runs its handshake on its
-  first `send`, `recv` or `shutdownWrite`, or on the new `handshake()`, as Go's `Conn.Handshake` does. A failed
+  first `send`, `readSome` or `shutdownWrite`, or on the new `handshake()`, as Go's `Conn.Handshake` does. A failed
   handshake is thrown from that call, not from `accept()`, and the options' handshake deadline bounds the
   handshake from that call. A read or write deadline set on the stream before then applies once the handshake
   completes.
@@ -535,16 +535,16 @@ release's version as its heading when the release is cut.
   clause are E3215.
   Fix: rename an interface called `sendable` or `isolated`; bound a generic function's parameter by an
   interface.
-- `StreamingSubprocess.tryReadStdoutLine()` throws `SubprocessError.ioFailed` while the child's stdout is out
-  with a `StdoutReader` (`takeStdout()`), so it is a throwing call, and `release()` panics while the reader is
-  out.
-  Fix: call it with `try`, as in `match try child.tryReadStdoutLine() otherwise …`; call `reclaimStdout()`
-  before `release()` where `takeStdout()` was used.
-- `StreamingSubprocess.tryReadStderrLine()` throws `SubprocessError.ioFailed` while the child's stderr is out
-  with a `StderrReader` (`takeStderr()`), so it is a throwing call, and `release()` panics while that reader is
-  out.
-  Fix: call it with `try`, as in `match try child.tryReadStderrLine() otherwise …`; call `reclaimStderr()`
-  before `release()` where `takeStderr()` was used.
+- A child's output is read through a `StreamReader`: `StreamingSubprocess.readStdoutLine`,
+  `readStdoutLineCapped`, `readStdoutBytes`, `readStderrLine`, `readStderrLineCapped`, `tryReadStdoutLine` and
+  `tryReadStderrLine` are removed, with `LinePoll`, `SubprocessError.endOfStream` and `endedTheStream()`.
+  `takeStdout()` and `takeStderr()` each hand out the stream once, as an `isolated ChildOutputReader`, whose
+  `readLine()` answers a `LineRead` (`line(text)`, `ended`, `pastTheCap`) and throws `StreamError`, and whose
+  `readBytes(n)` answers a `ByteArray`.
+  Fix: take the reader once (`let out = try child.takeStdout()`) and read from it: match `out.readLine()` for
+  `line(text)`, and treat `ended` where `endOfStream` was caught; `String.from(try out.readBytes(n))` for the
+  bytes. Delete `endOfStream` arms. A loop that polled with `tryReadStdoutLine` reads each stream in a service
+  of its own and `awaitAny`s over the replies beside a timer.
 - `maxon test` fails a test that passes but leaves a process running when it ends, naming the process, on
   Windows, Linux and macOS; when no single test of a process leaves it alone, every test of that process
   fails, naming them. `spec-test` fails a case the same way.
@@ -655,10 +655,10 @@ release's version as its heading when the release is cut.
   over `Array with immutable Point`).
   Fix: take a `.clone()` of the element.
 - `SubprocessError` has a new case, `statusLost(stdout, stderr)`, thrown by `Subprocess.run` and by
-  `StreamingSubprocess.wait()` and `waitWithTimeout()` for a child that ended while another process took its exit
+  `StreamingSubprocess.wait` for a child that ended while another process took its exit
   status (on macOS, a program killed while a debugger's stub held it; on Linux, a child reaped by another process). A `match` over `SubprocessError` with no
   `default` that lists every case no longer compiles.
-  Fix: add `statusLost` to the arms that handle `endOfStream`, or `statusLost(stdout, stderr)` where the arm uses
+  Fix: add a `statusLost` arm, or `statusLost(stdout, stderr)` where the arm uses
   the output, or give the `match` a `default throws`.
 - A conformer that binds an associated type to an interface (`type Impl implements Source with Named`) is
   E2015 at that binding when an `extension` of the interface stores the associated type as a container element
@@ -730,6 +730,32 @@ release's version as its heading when the release is cut.
   the `modify` stays legal.
   Fix: copy the value out (for example `.clone()`) before it goes into the payload, or throw only values,
   `immutable` data or fresh `isolated` data.
+- `StreamingSubprocess.waitWithTimeout` is removed: `wait` takes the deadline, `wait(deadline:
+  WaitDeadline.within(ms))`, and with none waits until the child exits. A `WaitDeadlineMs` is at least one.
+  Fix: replace `waitWithTimeout(ms)` with `wait(deadline: WaitDeadline.within(ms))`, and `waitWithTimeout(0)`
+  with `wait()`.
+- `Subprocess.run` takes `deadline WaitDeadline = WaitDeadline.none` where it took `timeoutMs`, and
+  `Configuration.timeoutMs` is `Configuration.deadline`, a `WaitDeadline`.
+  Fix: write `deadline: WaitDeadline.within(ms)` for `timeoutMs: ms` and `config.deadline =
+  WaitDeadline.within(ms)` for `config.timeoutMs = ms`; drop a `timeoutMs` of `0`, which is the default
+  `WaitDeadline.none`.
+- `ExitPoll` and `TerminationPoll` have the case `reapedElsewhere`: another process took the child's exit
+  status, so this process cannot tell whether it still runs. A `match` over either that lists every case no
+  longer covers it.
+  Fix: add a `reapedElsewhere` arm, or ask `pollExit().childIsKnownGone()` where the question is only whether
+  the child has exited.
+- `Console.stdin()` returns a `StdinReader`, a `StreamReader` over standard input: `readLine()` answers a
+  `LineRead` and throws `StreamError`, and `readBytes(n)` throws `StreamError`. `Stdin`, `Stdin.create()` and
+  `ConsoleError` are removed.
+  Fix: match `try stdin.readLine()` for `line(text)` and stop at `ended` where `ConsoleError.endOfFile` was
+  caught; write `StdinReader` for `Stdin`.
+- `TcpClient.recv(bufferSize)` is `readSome(most)`: it answers an `isolated ByteArray`, an empty one once the
+  peer has closed, and throws `StreamError` (`timedOut` past the read deadline, `failed(reason)` for an OS
+  error). `RecvCapacity` is `ReadCapacity`, declared in `stdlib/Stream.maxon`, and `NetworkError.recvFailed` is
+  removed.
+  Fix: write `String.from(try conn.readSome(n))` for `try conn.recv(n)`, treat an empty answer as the peer's
+  close where `connectionClosed` was caught, and handle `StreamError`; read lines with
+  `StreamReader.over(conn)`. Delete `recvFailed` arms.
 
 ## 0.5.0 — 2026-10-08
 

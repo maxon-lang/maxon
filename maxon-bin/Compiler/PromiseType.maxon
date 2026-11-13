@@ -107,6 +107,7 @@ export enum PromiseConsume
 	awaited
 	cancelled
 	movedIntoStorage
+	consumedByMatch
 	siblingReadConsumedTheSlot
 end 'PromiseConsume'
 
@@ -121,6 +122,7 @@ export function promiseConsumeNamesADoor(kind PromiseConsume) returns bool
 		awaited gives true
 		cancelled gives true
 		movedIntoStorage gives false
+		consumedByMatch gives false
 		siblingReadConsumedTheSlot gives false
 	end 'door'
 end 'promiseConsumeNamesADoor'
@@ -131,6 +133,7 @@ export function promiseConsumeMovedItToAnotherOwner(kind PromiseConsume) returns
 		awaited gives false
 		cancelled gives false
 		movedIntoStorage gives true
+		consumedByMatch gives true
 		siblingReadConsumedTheSlot gives false
 	end 'owner'
 end 'promiseConsumeMovedItToAnotherOwner'
@@ -144,6 +147,7 @@ export function promiseConsumeDoorName(kind PromiseConsume) returns immutable By
 		awaited then return PromiseAwaitDoorName
 		cancelled then return PromiseCancelMethodName
 		movedIntoStorage then panic("promiseConsumeDoorName: a promise moved into a container's slot reached no reclaiming door — its later use is the ordinary use-after-move, refused above this sentence")
+		consumedByMatch then panic("promiseConsumeDoorName: a promise a match consumed reached no reclaiming door — its later use is the ordinary use-after-move, refused above this sentence")
 		siblingReadConsumedTheSlot then panic("promiseConsumeDoorName: this read passed through no door at all — another read of its slot consumed the thread, and the door the AUTHOR wrote names itself at `requireConsumedPromiseIsOwned`")
 	end 'door'
 end 'promiseConsumeDoorName'

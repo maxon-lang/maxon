@@ -219,60 +219,654 @@ typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
 // handler roster once rather than once per `spawn`.
 typealias CreditedServiceSet = Set with ByteArray
 typealias ConstrainedOwnerSet = Set with ByteArray
-typealias InstancesByBaseMap = Map with (ByteArray, InstanceBucket)
 
-type InstanceBucket
-	export var ids as GenericInstanceIdArray
+typealias TupleNameSet = Set with TypeNameId
 
-	static function create() returns Self
-		return Self{ids: GenericInstanceIdArray.create(0)}
-	end 'create'
-end 'InstanceBucket'
+enum MentionKind
+	genericInstanceType
+	namedType
+	scalar
+end 'MentionKind'
 
-type ConstrainedOwnerLedger
-	export var seen as ConstrainedOwnerSet
-	export var pending as NameRoster
-	export let instancesByBase as InstancesByBaseMap
+function mentionKindOf(tag ValueTypeTag) returns MentionKind
+	return match tag 'kind'
+		genericInstance gives MentionKind.genericInstanceType
+		named or
+		structRef gives MentionKind.namedType
+		boolean or
+		integer or
+		float or
+		exitCode or
+		unresolved or
+		void or
+		string or
+		function or
+		typeParameter or
+		character or
+		interfaceRef or
+		cstring gives MentionKind.scalar
+	end 'kind'
+end 'mentionKindOf'
+
+type TypeMentions
+	export var instances as GenericInstanceIdArray
+	export var typeIds as TypeNameIdArray
+	export var argumentTypeNames as NameRoster
+	let instanceSeen as FixedBoolArray
+	var tuplesSeen as TupleNameSet
 
 	static function over(signatures ProgramSignatures) returns Self
-		let instancesByBase = InstancesByBaseMap.create()
+		return Self{instances: GenericInstanceIdArray.create(0), typeIds: TypeNameIdArray.create(0), argumentTypeNames: NameRoster.create(0), instanceSeen: FixedBoolArray.create(signatures.genericInstanceCount() as Count), tuplesSeen: TupleNameSet.create()}
+	end 'over'
+
+	function reset()
+		for instance in self.instances 'eachPreviousInstance'
+			try self.instanceSeen.set(instance, value: false) otherwise panic("TypeMentions.reset: instanceSeen.set OOB at instance {instance}")
+		end 'eachPreviousInstance'
+
+		self.instances.clear()
+		self.typeIds.clear()
+		self.argumentTypeNames.clear()
+
+		if self.tuplesSeen.count() > 0 'someTupleWasWalked'
+			self.tuplesSeen = TupleNameSet.create()
+		end 'someTupleWasWalked'
+	end 'reset'
+
+	static function none() returns Self
+		return Self{instances: GenericInstanceIdArray.create(0), typeIds: TypeNameIdArray.create(0), argumentTypeNames: NameRoster.create(0), instanceSeen: FixedBoolArray.create(1), tuplesSeen: TupleNameSet.create()}
+	end 'none'
+
+	function gather(func IrFunction, project Project, signatures ProgramSignatures, skipping LibraryCallResults)
+		self.reset()
+
+		for position in 0 upto func.valueTags.count() 'eachValue'
+			if skipping.holds(position as ValueId) 'aBlamedCallResult'
+				continue
+			end 'aBlamedCallResult'
+
+			self.noteValue(func, value: position as ValueId, project: project, signatures: signatures)
+		end 'eachValue'
+
+		for paramType in func.maxonParamTypes 'eachParam'
+			self.note(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType), project: project, signatures: signatures)
+		end 'eachParam'
+
+		match func.maxonReturnType 'returnPosition'
+			void then break
+			value(inner) then self.note(maxonTypeTag(inner), nameId: typeNameIdOf(inner), project: project, signatures: signatures)
+		end 'returnPosition'
+	end 'gather'
+
+	function gatherValue(func IrFunction, value ValueId, project Project, signatures ProgramSignatures)
+		self.reset()
+		self.noteValue(func, value: value, project: project, signatures: signatures)
+	end 'gatherValue'
+
+	function noteValue(func IrFunction, value ValueId, project Project, signatures ProgramSignatures)
+		let tag = try func.valueTags.get(value) otherwise panic("TypeMentions.noteValue: valueTags.get OOB at v{value} in '{String.from(func.name)}'")
+		let nameId = try func.valueNameIds.get(value) otherwise panic("TypeMentions.noteValue: valueNameIds.get OOB at v{value} in '{String.from(func.name)}'")
+
+		self.note(tag, nameId: nameId, project: project, signatures: signatures)
+	end 'noteValue'
+
+	function note(tag ValueTypeTag, nameId TypeNameId, project Project, signatures ProgramSignatures)
+		match mentionKindOf(tag) 'kind'
+			genericInstanceType then self.noteInstance(nameId as GenericInstanceId, signatures: signatures)
+			namedType then self.noteNamedType(nameId, project: project, signatures: signatures)
+			scalar then break
+		end 'kind'
+	end 'note'
+
+	function noteWithin(argument MaxonType, signatures ProgramSignatures)
+		match mentionKindOf(maxonTypeTag(argument)) 'kind'
+			genericInstanceType then self.noteInstance(genericInstanceIdOf(argument), signatures: signatures)
+			namedType then self.noteTupleElements(argument, signatures: signatures)
+			scalar then break
+		end 'kind'
+	end 'noteWithin'
+
+	function noteInstance(instance GenericInstanceId, signatures ProgramSignatures)
+		let known = try self.instanceSeen.get(instance) otherwise panic("TypeMentions.noteInstance: instanceSeen.get OOB at instance {instance}")
+
+		if known 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		try self.instanceSeen.set(instance, value: true) otherwise panic("TypeMentions.noteInstance: instanceSeen.set OOB at instance {instance}")
+		self.instances.push(instance)
+
+		for position in 0 upto signatures.genericInstanceArgCount(instance) 'eachArgument'
+			let argument = signatures.instanceArgType(instance, position: position)
+
+			if mentionKindOf(maxonTypeTag(argument)) == MentionKind.namedType 'aNamedArgument'
+				self.argumentTypeNames.push(freeze signatures.conformerTypeArgName(instance, position: position).toByteArray())
+			end 'aNamedArgument'
+
+			self.noteWithin(argument, signatures: signatures)
+		end 'eachArgument'
+	end 'noteInstance'
+
+	function noteNamedType(nameId TypeNameId, project Project, signatures ProgramSignatures)
+		self.typeIds.push(nameId)
+
+		if not internedNameIsATupleTypeName(project.typeNames, id: nameId) or self.tuplesSeen.contains(nameId) 'nothingMoreToWalk'
+			return
+		end 'nothingMoreToWalk'
+
+		self.tuplesSeen.insert(nameId)
+
+		let name = try project.typeNames.nameOf(nameId) otherwise panic("TypeMentions.noteNamedType: type-name id {nameId} is not in the project's interner, which every value type of a merged module was folded into")
+		let signatureId = try signatures.typeNameTable().idOf(name) otherwise return
+
+		self.noteTupleElements(MaxonType.structRef(signatureId), signatures: signatures)
+	end 'noteNamedType'
+
+	function noteTupleElements(tuple MaxonType, signatures ProgramSignatures)
+		let elements = try signatures.tupleElementTypesOf(tuple) otherwise return
+
+		for element in elements 'eachTupleElement'
+			if mentionKindOf(maxonTypeTag(element)) == MentionKind.namedType 'aNamedElement'
+				self.argumentTypeNames.push(freeze signatures.conformerNameOfType(element, idsFrom: signatures.typeNameTable(), readerFilePath: CompilerOwnedDeclFilePath).toByteArray())
+			end 'aNamedElement'
+
+			self.noteWithin(element, signatures: signatures)
+		end 'eachTupleElement'
+	end 'noteTupleElements'
+end 'TypeMentions'
+
+typealias ConformerNameById = Map with (TypeNameId, immutable ByteArray)
+typealias InterfacesByEnum = Map with (ByteArray, NameRoster)
+typealias ImplsByName = Map with (ByteArray, CreditedImpls)
+typealias ImplsByInstance = Map with (GenericInstanceId, CreditedImpls)
+typealias ListingStamp = int(0 to u64.max)
+typealias ListingStamps = Map with (ByteArray, ListingStamp)
+
+union WitnessCredit
+	owner(typeName immutable ByteArray)
+	constrainedInstance(instance GenericInstanceId)
+	mentionedEnum(enumName immutable ByteArray)
+	namedInterface(interfaceName immutable ByteArray)
+
+	function growsWithTheWalk() returns bool
+		return match self 'credit'
+			owner or
+			constrainedInstance gives false
+			mentionedEnum or
+			namedInterface gives true
+		end 'credit'
+	end 'growsWithTheWalk'
+end 'WitnessCredit'
+
+union WitnessBlame
+	functionName
+	op(opIndex ElementIndex)
+end 'WitnessBlame'
+
+type WitnessCreditEvent
+	export let credit as WitnessCredit
+	export let blame as WitnessBlame
+
+	static function create(credit WitnessCredit, blame WitnessBlame) returns Self
+		return Self{credit: credit, blame: blame}
+	end 'create'
+end 'WitnessCreditEvent'
+
+module union SubstrateEntryMemo
+	unasked
+	reachesNone
+	reaches(entry immutable ByteArray)
+
+	function prefers(candidate ByteArray) returns bool
+		match self 'memo'
+			unasked then panic("SubstrateEntryMemo.prefers: asked of a memo nothing has settled")
+			reachesNone then return true
+			reaches(incumbent) then return substrateEntryIsPreferred(candidate, incumbent: incumbent)
+		end 'memo'
+	end 'prefers'
+end 'SubstrateEntryMemo'
+
+typealias WitnessCreditArray = Array with WitnessCredit
+typealias WitnessEventArray = Array with WitnessCreditEvent
+typealias EventsByFunction = Map with (ByteArray, WitnessEventArray)
+typealias EntryByOp = Map with (ElementIndex, immutable ByteArray)
+
+type CreditedImpls
+	export let names as NameRoster
+	var substrateEntry as SubstrateEntryMemo
+
+	static function over(names NameRoster) returns Self
+		return Self{names: names, substrateEntry: SubstrateEntryMemo.unasked}
+	end 'over'
+
+	function settleEntry(entries StdlibSubstrateEntryMap)
+		var settled = SubstrateEntryMemo.reachesNone
+
+		for impl in self.names 'eachImpl'
+			let entry = try entries.get(impl) otherwise continue
+
+			if settled.prefers(entry) 'aPreferredEntry'
+				settled = SubstrateEntryMemo.reaches(entry)
+			end 'aPreferredEntry'
+		end 'eachImpl'
+
+		self.substrateEntry = settled
+	end 'settleEntry'
+
+	function settledEntry() returns immutable ByteArray throws AbsentError
+		match self.substrateEntry 'memo'
+			unasked then panic("CreditedImpls.settledEntry: asked before the ledger settled its entries")
+			reachesNone then throw AbsentError.absent
+			reaches(entry) then return entry
+		end 'memo'
+	end 'settledEntry'
+end 'CreditedImpls'
+
+type FunctionScopedSet
+	let stamps as ListingStamps
+	var scope as ListingStamp
+
+	static function create() returns Self
+		return Self{stamps: ListingStamps.create(), scope: 0}
+	end 'create'
+
+	function beginScope()
+		self.scope = self.scope + 1
+	end 'beginScope'
+
+	function claim(name ByteArray) returns bool
+		if let stamp = try self.stamps.get(name) 'listed'
+			if stamp == self.scope 'alreadyClaimed'
+				return false
+			end 'alreadyClaimed'
+		end 'listed'
+
+		self.stamps.upsert(name, value: self.scope)
+
+		return true
+	end 'claim'
+end 'FunctionScopedSet'
+
+type LibraryCallResults
+	export let values as ValueIdArray
+	export let ops as OpIndexArray
+	let held as ValueMarkSet
+
+	static function none() returns Self
+		return Self{values: ValueIdArray.create(0), ops: OpIndexArray.create(0), held: ValueMarkSet.create()}
+	end 'none'
+
+	static function inFunction(func IrFunction, module MaxonModule, stdlib FunctionNameSet) returns Self
+		let values = ValueIdArray.create(0)
+		let ops = OpIndexArray.create(0)
+		let held = ValueMarkSet.create()
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("LibraryCallResults.inFunction: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.bodyOps() 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("LibraryCallResults.inFunction: opRef {opIdx} not in module.ops")
+				let edge = try callEdgeOf(op) otherwise continue
+
+				if not stdlib.contains(edge.0) 'aProgramCallee'
+					continue
+				end 'aProgramCallee'
+
+				let result = try maxonOpDefinedValue(op) otherwise panic("LibraryCallResults.inFunction: a call op defines its result, and op {opIdx} names a callee")
+
+				values.push(result)
+				ops.push(opIdx)
+				held.insert(result)
+			end 'eachOp'
+		end 'eachBlock'
+
+		return Self{values: values, ops: ops, held: held}
+	end 'inFunction'
+
+	function holds(value ValueId) returns bool
+		return self.held.contains(value)
+	end 'holds'
+end 'LibraryCallResults'
+
+module type WitnessCrossings
+	module var atFunction as SubstrateEntryMemo
+	module let opSites as OpIndexArray
+	let opEntries as EntryByOp
+
+	static function none() returns Self
+		return Self{atFunction: SubstrateEntryMemo.reachesNone, opSites: OpIndexArray.create(0), opEntries: EntryByOp.create()}
+	end 'none'
+
+	function noteAtFunction(entry immutable ByteArray)
+		if self.atFunction.prefers(entry) 'aPreferredEntry'
+			self.atFunction = SubstrateEntryMemo.reaches(entry)
+		end 'aPreferredEntry'
+	end 'noteAtFunction'
+
+	function noteAtOp(opIndex ElementIndex, entry immutable ByteArray)
+		if let known = try self.opEntries.get(opIndex) 'alreadyBlamed'
+			if substrateEntryIsPreferred(entry, incumbent: known) 'aPreferredEntry'
+				self.opEntries.upsert(opIndex, value: entry)
+			end 'aPreferredEntry'
+
+			return
+		end 'alreadyBlamed'
+
+		self.opSites.push(opIndex)
+		self.opEntries.upsert(opIndex, value: entry)
+	end 'noteAtOp'
+
+	module function entryAtOp(opIndex ElementIndex) returns immutable ByteArray throws MapError
+		return try self.opEntries.get(opIndex)
+	end 'entryAtOp'
+end 'WitnessCrossings'
+
+module type WitnessEvidenceLedger
+	var pendingImpls as NameRoster
+	let positions as NameRoster
+	let functionEvents as WitnessEventArray
+	let seedConformers as NameRoster
+	let declaredConformers as DeclaredConformanceMap
+	let constrainedBases as ConstrainedOwnerSet
+	let conformerNameById as ConformerNameById
+	let interfacesByEnum as InterfacesByEnum
+	let enumsByInterface as EnumConformersByInterface
+	let ownerImpls as ImplsByName
+	let instanceImpls as ImplsByInstance
+	let enumImpls as ImplsByName
+	let interfaceImpls as ImplsByName
+	let eventsByFunction as EventsByFunction
+	let mentions as TypeMentions
+	let listedEnums as FunctionScopedSet
+	let listedPositions as FunctionScopedSet
+	let noCallResults as LibraryCallResults
+
+	static function over(signatures ProgramSignatures, project Project) returns Self
+		let constrainedBases = ConstrainedOwnerSet.create()
 
 		for instance in 0 upto signatures.genericInstanceCount() 'eachInstance'
 			let baseName = signatures.genericInstanceBaseName(instance)
 
-			if signatures.structWhereConstraints(baseName).isEmpty() 'unconstrained'
-				continue
-			end 'unconstrained'
-
-			if let known = try instancesByBase.get(baseName) 'baseAlreadyIndexed'
-				known.ids.push(instance)
-				continue
-			end 'baseAlreadyIndexed'
-
-			let first = InstanceBucket.create()
-			first.ids.push(instance)
-			instancesByBase.upsert(baseName, value: first)
+			if not signatures.structWhereConstraints(baseName).isEmpty() 'constrained'
+				constrainedBases.insert(baseName)
+			end 'constrained'
 		end 'eachInstance'
 
-		return Self{seen: ConstrainedOwnerSet.create(), pending: NameRoster.create(0), instancesByBase: instancesByBase}
+		let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
+		let declaredConformers = declaredConformanceIndex(project)
+		let conformerNameById = ConformerNameById.create()
+
+		for (conformerName, _) in declaredConformers 'eachDeclaredConformer'
+			if seedConformers.contains(conformerName) 'theSeedOwnsIt'
+				continue
+			end 'theSeedOwnsIt'
+
+			if let id = try project.typeNames.idOf(conformerName) 'interned'
+				conformerNameById.upsert(id, value: conformerName)
+			end 'interned'
+		end 'eachDeclaredConformer'
+
+		let enumsByInterface = enumConformersByInterface(project)
+		let interfacesByEnum = InterfacesByEnum.create()
+
+		for (interfaceName, conformers) in enumsByInterface 'eachInterface'
+			for enumName in conformers 'eachEnum'
+				if let interfaces = try interfacesByEnum.get(enumName) 'alreadyListed'
+					interfaces.push(interfaceName)
+					interfacesByEnum.upsert(enumName, value: interfaces)
+					continue
+				end 'alreadyListed'
+
+				let interfaces = NameRoster.create(0)
+				interfaces.push(interfaceName)
+				interfacesByEnum.upsert(enumName, value: interfaces)
+			end 'eachEnum'
+		end 'eachInterface'
+
+		return Self.holding(seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, mentions: TypeMentions.over(signatures))
 	end 'over'
 
-	function noteOwnerOf(funcName ByteArray)
-		match splitQualifiedName(funcName) 'owner'
-			notQualified then break
-			parts(typeName, _) then self.noteOwner(typeName)
-		end 'owner'
-	end 'noteOwnerOf'
+	static function none() returns Self
+		return Self.holding(NameRoster.create(0), declaredConformers: DeclaredConformanceMap.create(), constrainedBases: ConstrainedOwnerSet.create(), conformerNameById: ConformerNameById.create(), interfacesByEnum: InterfacesByEnum.create(), enumsByInterface: EnumConformersByInterface.create(), mentions: TypeMentions.none())
+	end 'none'
 
-	function noteOwner(typeName ByteArray)
-		if not self.instancesByBase.contains(typeName) or self.seen.contains(typeName) 'nothingToCredit'
+	static function holding(seedConformers NameRoster, declaredConformers DeclaredConformanceMap, constrainedBases ConstrainedOwnerSet, conformerNameById ConformerNameById, interfacesByEnum InterfacesByEnum, enumsByInterface EnumConformersByInterface, mentions TypeMentions) returns Self
+		return Self{pendingImpls: NameRoster.create(0), positions: NameRoster.create(0), functionEvents: WitnessEventArray.create(0), seedConformers: seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, ownerImpls: ImplsByName.create(), instanceImpls: ImplsByInstance.create(), enumImpls: ImplsByName.create(), interfaceImpls: ImplsByName.create(), eventsByFunction: EventsByFunction.create(), mentions: mentions, listedEnums: FunctionScopedSet.create(), listedPositions: FunctionScopedSet.create(), noCallResults: LibraryCallResults.none()}
+	end 'holding'
+
+	function noteFunction(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet)
+		self.functionEvents.clear()
+
+		if let typeName = try witnessOwnerOf(func.name) 'anOwnedFunction'
+			self.noteCredit(WitnessCredit.owner(typeName), blame: WitnessBlame.functionName, project: project, signatures: signatures)
+		end 'anOwnedFunction'
+
+		self.positions.clear()
+		self.listedPositions.beginScope()
+		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: self.positions, listed: self.listedPositions)
+
+		for interfaceName in self.positions 'eachNamedInterface'
+			self.noteCredit(WitnessCredit.namedInterface(interfaceName), blame: WitnessBlame.functionName, project: project, signatures: signatures)
+		end 'eachNamedInterface'
+
+		self.noteMentionsOf(func, module: module, project: project, signatures: signatures, stdlib: stdlib)
+
+		if self.functionEvents.count() == 0 'creditedNothing'
+			return
+		end 'creditedNothing'
+
+		let events = WitnessEventArray.create(0)
+		events.append(self.functionEvents)
+		self.eventsByFunction.upsert(func.name, value: events)
+	end 'noteFunction'
+
+	function takeLiveImpls() returns NameRoster
+		let taken = self.pendingImpls
+		self.pendingImpls = NameRoster.create(0)
+
+		return taken
+	end 'takeLiveImpls'
+
+	function settle(project Project, signatures ProgramSignatures)
+		for enumName in namesIn(self.enumImpls) 'eachMentionedEnum'
+			self.enumImpls.upsert(enumName, value: CreditedImpls.over(self.enumImplsOf(enumName, project: project, signatures: signatures)))
+		end 'eachMentionedEnum'
+
+		for interfaceName in namesIn(self.interfaceImpls) 'eachNamedInterface'
+			self.interfaceImpls.upsert(interfaceName, value: CreditedImpls.over(self.interfaceImplsOf(interfaceName, project: project, signatures: signatures)))
+		end 'eachNamedInterface'
+	end 'settle'
+
+	function settleEntries(entries StdlibSubstrateEntryMap)
+		settleEntriesIn(self.ownerImpls, entries: entries)
+		settleEntriesIn(self.enumImpls, entries: entries)
+		settleEntriesIn(self.interfaceImpls, entries: entries)
+
+		for (_, credited) in self.instanceImpls 'eachConstrainedInstance'
+			credited.settleEntry(entries)
+		end 'eachConstrainedInstance'
+	end 'settleEntries'
+
+	function creditsOf(funcName immutable ByteArray) returns WitnessEventArray
+		return try self.eventsByFunction.get(funcName) otherwise WitnessEventArray.create(0)
+	end 'creditsOf'
+
+	function implsOf(credit WitnessCredit) returns NameRoster
+		let credited = try self.creditedImplsOf(credit) otherwise return NameRoster.create(0)
+		return credited.names
+	end 'implsOf'
+
+	module function liveImplsOf(funcName immutable ByteArray) returns NameRoster
+		let impls = NameRoster.create(0)
+
+		for event in self.creditsOf(funcName) 'eachCredit'
+			impls.append(self.implsOf(event.credit))
+		end 'eachCredit'
+
+		return impls
+	end 'liveImplsOf'
+
+	function substrateEntryOf(credit WitnessCredit) returns immutable ByteArray throws AbsentError
+		let credited = try self.creditedImplsOf(credit)
+		return try credited.settledEntry()
+	end 'substrateEntryOf'
+
+	function creditedImplsOf(credit WitnessCredit) returns CreditedImpls throws AbsentError
+		match credit 'route'
+			owner(typeName) then return try self.ownerImpls.get(typeName) otherwise throw AbsentError.absent
+			constrainedInstance(instance) then return try self.instanceImpls.get(instance) otherwise throw AbsentError.absent
+			mentionedEnum(enumName) then return try self.enumImpls.get(enumName) otherwise throw AbsentError.absent
+			namedInterface(interfaceName) then return try self.interfaceImpls.get(interfaceName) otherwise throw AbsentError.absent
+		end 'route'
+	end 'creditedImplsOf'
+
+	function enumImplsOf(enumName ByteArray, project Project, signatures ProgramSignatures) returns NameRoster
+		let impls = NameRoster.create(0)
+		let interfaces = try self.interfacesByEnum.get(enumName) otherwise panic("WitnessEvidenceLedger.enumImplsOf: '{String.from(enumName)}' was filed because some interface lists it as a conformer")
+
+		for interfaceName in interfaces 'eachDeclaredInterface'
+			if self.interfaceImpls.contains(interfaceName) 'named'
+				impls.append(witnessImplNamesOf(enumName, interfaceName: interfaceName, project: project, signatures: signatures))
+			end 'named'
+		end 'eachDeclaredInterface'
+
+		return impls
+	end 'enumImplsOf'
+
+	function interfaceImplsOf(interfaceName ByteArray, project Project, signatures ProgramSignatures) returns NameRoster
+		let impls = NameRoster.create(0)
+
+		for conformerName in self.seedConformers 'eachSeededConformer'
+			impls.append(witnessImplNamesOf(conformerName, interfaceName: interfaceName, project: project, signatures: signatures))
+		end 'eachSeededConformer'
+
+		if let enumNames = try self.enumsByInterface.get(interfaceName) 'someEnumDeclaresIt'
+			for enumName in enumNames 'eachEnumConformer'
+				if self.enumImpls.contains(enumName) 'aValueMayExist'
+					impls.append(witnessImplNamesOf(enumName, interfaceName: interfaceName, project: project, signatures: signatures))
+				end 'aValueMayExist'
+			end 'eachEnumConformer'
+		end 'someEnumDeclaresIt'
+
+		return impls
+	end 'interfaceImplsOf'
+
+	function mentionCredits(signatures ProgramSignatures) returns WitnessCreditArray
+		let credits = WitnessCreditArray.create(0)
+
+		self.listedEnums.beginScope()
+
+		for instance in self.mentions.instances 'eachInstance'
+			if self.constrainedBases.contains(signatures.genericInstanceBaseName(instance)) 'aConstrainedInstance'
+				credits.push(WitnessCredit.constrainedInstance(instance))
+			end 'aConstrainedInstance'
+		end 'eachInstance'
+
+		for typeId in self.mentions.typeIds 'eachNamedType'
+			if let conformerName = try self.conformerNameById.get(typeId) 'aDeclaredConformer'
+				self.listEnumCredit(conformerName, into: credits)
+			end 'aDeclaredConformer'
+		end 'eachNamedType'
+
+		for typeName in self.mentions.argumentTypeNames 'eachNamedArgument'
+			if self.declaredConformers.contains(typeName) and not self.seedConformers.contains(typeName) 'aDeclaredConformer'
+				self.listEnumCredit(typeName, into: credits)
+			end 'aDeclaredConformer'
+		end 'eachNamedArgument'
+
+		return credits
+	end 'mentionCredits'
+
+	function listEnumCredit(conformerName immutable ByteArray, into WitnessCreditArray)
+		if self.interfacesByEnum.contains(conformerName) and self.listedEnums.claim(conformerName) 'anEnumNotYetListed'
+			into.push(WitnessCredit.mentionedEnum(conformerName))
+		end 'anEnumNotYetListed'
+	end 'listEnumCredit'
+
+	function noteMentionsOf(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet)
+		if self.constrainedBases.count() == 0 and self.declaredConformers.count() == 0 'nothingToCredit'
 			return
 		end 'nothingToCredit'
 
-		self.seen.insert(typeName)
-		self.pending.push(typeName)
-	end 'noteOwner'
-end 'ConstrainedOwnerLedger'
+		let callResults = self.callResultsOf(func, module: module, project: project, stdlib: stdlib)
+
+		for position in 0 upto callResults.values.count() 'eachCallResult'
+			self.mentions.gatherValue(func, value: try callResults.values.get(position) otherwise panic("WitnessEvidenceLedger.noteMentionsOf: values.get OOB at {position}"), project: project, signatures: signatures)
+			self.noteMentionCredits(WitnessBlame.op(try callResults.ops.get(position) otherwise panic("WitnessEvidenceLedger.noteMentionsOf: ops.get OOB at {position}")), project: project, signatures: signatures)
+		end 'eachCallResult'
+
+		self.mentions.gather(func, project: project, signatures: signatures, skipping: callResults)
+		self.noteMentionCredits(WitnessBlame.functionName, project: project, signatures: signatures)
+	end 'noteMentionsOf'
+
+	function callResultsOf(func IrFunction, module MaxonModule, project Project, stdlib FunctionNameSet) returns LibraryCallResults
+		if targetProvidesEveryFacility(project.target) or stdlib.contains(func.name) 'noOpIsBlamed'
+			return self.noCallResults
+		end 'noOpIsBlamed'
+
+		return LibraryCallResults.inFunction(func, module: module, stdlib: stdlib)
+	end 'callResultsOf'
+
+	function noteMentionCredits(blame WitnessBlame, project Project, signatures ProgramSignatures)
+		for credit in self.mentionCredits(signatures) 'eachMentionCredit'
+			self.noteCredit(credit, blame: blame, project: project, signatures: signatures)
+		end 'eachMentionCredit'
+	end 'noteMentionCredits'
+
+	function noteCredit(credit WitnessCredit, blame WitnessBlame, project Project, signatures ProgramSignatures)
+		let impls = self.admit(credit, project: project, signatures: signatures)
+
+		if impls.count() > 0 or credit.growsWithTheWalk() 'aCreditThisFunctionOwes'
+			self.functionEvents.push(WitnessCreditEvent.create(credit, blame: blame))
+		end 'aCreditThisFunctionOwes'
+	end 'noteCredit'
+
+	function admit(credit WitnessCredit, project Project, signatures ProgramSignatures) returns NameRoster
+		if let known = try self.creditedImplsOf(credit) 'alreadyAdmitted'
+			return known.names
+		end 'alreadyAdmitted'
+
+		let impls = self.impliedImpls(credit, project: project, signatures: signatures)
+		self.enrol(credit, impls: impls)
+		self.pendingImpls.append(impls)
+
+		return impls
+	end 'admit'
+
+	function impliedImpls(credit WitnessCredit, project Project, signatures ProgramSignatures) returns NameRoster
+		match credit 'route'
+			owner(typeName) then return ownerWitnessImplNames(typeName, seedConformers: self.seedConformers, project: project, signatures: signatures)
+			constrainedInstance(instance) then return constraintWitnessImplNames(instance, project: project, signatures: signatures)
+			mentionedEnum(enumName) then return self.enumImplsOf(enumName, project: project, signatures: signatures)
+			namedInterface(interfaceName) then return self.interfaceImplsOf(interfaceName, project: project, signatures: signatures)
+		end 'route'
+	end 'impliedImpls'
+
+	function enrol(credit WitnessCredit, impls NameRoster)
+		match credit 'route'
+			owner(typeName) then self.ownerImpls.upsert(typeName, value: CreditedImpls.over(impls))
+			constrainedInstance(instance) then self.instanceImpls.upsert(instance, value: CreditedImpls.over(impls))
+			mentionedEnum(enumName) then self.enumImpls.upsert(enumName, value: CreditedImpls.over(impls))
+			namedInterface(interfaceName) then self.interfaceImpls.upsert(interfaceName, value: CreditedImpls.over(impls))
+		end 'route'
+	end 'enrol'
+end 'WitnessEvidenceLedger'
+
+function namesIn(table ImplsByName) returns NameRoster
+	let names = NameRoster.create(0)
+
+	for (name, _) in table 'eachName'
+		names.push(name)
+	end 'eachName'
+
+	return names
+end 'namesIn'
+
+function settleEntriesIn(table ImplsByName, entries StdlibSubstrateEntryMap)
+	for (_, credited) in table 'eachCredited'
+		credited.settleEntry(entries)
+	end 'eachCredited'
+end 'settleEntriesIn'
 
 // ⭐ THE FACTS ABOUT LIBRARY SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
 // object rather than separate `Project` fields because they are one derivation over one call graph:
@@ -336,15 +930,17 @@ export type LibraryFacts
 
 	let substrateNodes as NameRoster
 
-	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes NameRoster) returns LibraryFacts
-		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, substrateNodes: substrateNodes}
+	module let witnessEvidence as WitnessEvidenceLedger
+
+	static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes NameRoster, witnessEvidence WitnessEvidenceLedger) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, substrateNodes: substrateNodes, witnessEvidence: witnessEvidence}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create(0))
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create(0), witnessEvidence: WitnessEvidenceLedger.none())
 	end 'empty'
 
 	// ⭐⭐ **THE ONE QUESTION EVERY PRE-ELIMINATION PASS ASKS OF A LIBRARY BODY: WILL DEAD-FUNCTION
@@ -385,13 +981,46 @@ export type LibraryFacts
 			end 'eachCompilerCalled'
 		end 'noInstallerMintsAnAllocatorCall'
 
-		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
+		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
 	end 'withCompilerCalledTierUnreached'
 
 	export function withSubstrateEntriesOf(module MaxonModule, target Target) returns LibraryFacts
-		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, target: target)
-		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes)
+		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, evidence: self.witnessEvidence, target: target)
+		self.witnessEvidence.settleEntries(entries)
+
+		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
 	end 'withSubstrateEntriesOf'
+
+	module function witnessCrossingsOf(project Project, module MaxonModule, func IrFunction) returns WitnessCrossings
+		let crossings = WitnessCrossings.none()
+
+		for event in self.witnessEvidence.creditsOf(func.name) 'eachCredit'
+			let entry = try self.witnessEvidence.substrateEntryOf(event.credit) otherwise continue
+
+			match event.blame 'site'
+				functionName then crossings.noteAtFunction(entry)
+				op(opIndex) then self.noteCrossingAtOp(crossings, opIndex: opIndex, entry: entry, project: project, module: module, func: func)
+			end 'site'
+		end 'eachCredit'
+
+		return crossings
+	end 'witnessCrossingsOf'
+
+	function noteCrossingAtOp(crossings WitnessCrossings, opIndex ElementIndex, entry immutable ByteArray, project Project, module MaxonModule, func IrFunction)
+		if opIsTheCompilersOwn(project, func: func, opIndex: opIndex) 'aCallTheCompilerMinted'
+			crossings.noteAtFunction(entry)
+			return
+		end 'aCallTheCompilerMinted'
+
+		let op = try module.ops.get(opIndex) otherwise panic("LibraryFacts.noteCrossingAtOp: ops.get OOB at {opIndex}")
+		let edge = try callEdgeOf(op) otherwise panic("LibraryFacts.noteCrossingAtOp: op {opIndex} was blamed as a call and names no callee")
+
+		if self.substrateEntries.contains(edge.0) 'theCalleeIsRefusedItself'
+			return
+		end 'theCalleeIsRefusedItself'
+
+		crossings.noteAtOp(opIndex, entry: entry)
+	end 'noteCrossingAtOp'
 end 'LibraryFacts'
 
 // ⭐ DERIVE THE REACH FACTS, all but `substrateEntries` (see `withSubstrateEntriesOf`). Runs once
@@ -411,26 +1040,26 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 
 	return match reach 'reach'
 		noLibrarySource gives LibraryFacts.empty()
-		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateNodes: NameRoster.create(0))
-		walked(roster, stdlib, reachable) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: reachable), substrateNodes: roster.names)
+		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateNodes: NameRoster.create(0), evidence: WitnessEvidenceLedger.none())
+		walked(roster, stdlib, reachable, ledger) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: reachable), substrateNodes: roster.names, evidence: ledger)
 	end 'reach'
 end 'deriveLibraryFacts'
 
-function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, split LibraryReachSplit, substrateNodes NameRoster) returns LibraryFacts
-	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, substrateNodes: substrateNodes)
+function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, split LibraryReachSplit, substrateNodes NameRoster, evidence WitnessEvidenceLedger) returns LibraryFacts
+	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, substrateNodes: substrateNodes, witnessEvidence: evidence)
 end 'libraryFactsOf'
 
 module union LibraryReach
 	noLibrarySource
 	unreferenced(roster LibraryFunctionRoster, stdlib FunctionNameSet)
-	walked(roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet)
+	walked(roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet, ledger WitnessEvidenceLedger)
 end 'LibraryReach'
 
 module function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSet
 	return match reach 'reach'
 		noLibrarySource or
 		unreferenced gives FunctionNameSet.create()
-		walked(_, _, reachable) gives reachable
+		walked(_, _, reachable, _) gives reachable
 	end 'reach'
 end 'reachedLibraryNamesOf'
 
@@ -465,20 +1094,23 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 		initCallees.push(name)
 	end 'eachAuditedLibraryFunction'
 
-	// Common-case short-circuit. If no op in user code reaches stdlib, no stdlib function is reachable
-	// at all, so an empty reached set is the exact answer and none can be blamed for a substrate. It
-	// is one allocation-free O(ops) scan, without the O(functions) name->index map and reached-array
-	// the from-`main` walk allocates, and without the substrate fixpoint. That map is the whole
-	// per-compile memory cost of loading stdlib source into a program that never touches it, so
-	// skipping it keeps the cost a per-compile constant instead of growing with the user program. It
-	// stays exact: a stdlib function referenced by nothing is reachable from nothing.
-	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
+	// Common-case short-circuit. If no initializer calls and no op in user code reaches stdlib, no
+	// stdlib function is reachable at all, so an empty reached set is the exact answer and none can be
+	// blamed for a substrate. It is one allocation-free O(ops) scan, without the O(functions)
+	// name->index map and reached-array the from-`main` walk allocates, and without the substrate
+	// fixpoint. That map is the whole per-compile memory cost of loading stdlib source into a program
+	// that never touches it, so skipping it keeps the cost a per-compile constant instead of growing
+	// with the user program. It stays exact: a stdlib function referenced by nothing is reachable from
+	// nothing.
+	if initCallees.count() == 0 and not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
 		return LibraryReach.unreferenced(roster, stdlib: stdlibSet)
 	end 'noneReferenced'
 
-	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
+	let ledger = WitnessEvidenceLedger.over(signatures, project: project)
+	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, ledger: ledger)
+	ledger.settle(project, signatures: signatures)
 
-	return LibraryReach.walked(roster, stdlib: stdlibSet, reachable: reachable)
+	return LibraryReach.walked(roster, stdlib: stdlibSet, reachable: reachable, ledger: ledger)
 end 'libraryReachOf'
 
 // The fixpoint step `queryAllModule` iterates, answering whether the demand grew.
@@ -494,7 +1126,7 @@ module function growStdlibBodyDemand(project Project, reach LibraryReach) return
 		noLibrarySource or
 		unreferenced then return false
 
-		walked(_, _, reachable) then return try demandEveryReachedLibraryFile(project, reachable: reachable)
+		walked(_, _, reachable, _) then return try demandEveryReachedLibraryFile(project, reachable: reachable)
 	end 'reach'
 end 'growStdlibBodyDemand'
 
@@ -764,9 +1396,8 @@ end 'classifyLibraryReach'
 // `requireUnreachableLibraryStayedDead` panic on a correct program (`specs/interface-dispatch.md`'s
 // `dispatch-void-method`).
 //
-// ⇒ **THE WITNESS EDGE IS CREDITED AT THE CONFORMER THIS WALK REACHES** — `markConformerWitnessImpls`,
-// below, which carries the whole argument. **If you are reading a description of the design here rather
-// than at the function, distrust it** — this is the copy that rots.
+// ⇒ **THE WITNESS EDGE IS CREDITED AT THE CONFORMER THIS WALK REACHES** — `WitnessCredit.owner`, which
+// `WitnessEvidenceLedger.noteFunction` records for every reached function of a type.
 //
 // ⚠⚠ **THE CONFORMER KEY RESTS ON TWO PREMISES, NOT ONE, AND ONLY THE FIRST IS SELF-EVIDENT.**
 //
@@ -784,8 +1415,7 @@ end 'classifyLibraryReach'
 //     not a premise at all; the seed below stands in its place.** The conformer key structurally CANNOT
 //     credit a builtin: no `String.<method>` or `int.<method>` module function is ever reached, since those
 //     calls lower to `__str_*`/inline ops. Builtin conformers really do reach tables, and not only through
-//     the container route `markConformerWitnessImpls`'s last paragraph covers: `type Keyed uses T where T
-//     is Hashable` instantiated at `String` and at `int` builds `__witness_String.Hashable` and
+//     a container's key: `type Keyed uses T where T is Hashable` instantiated at `String` and at `int` builds `__witness_String.Hashable` and
 //     `__witness_int.Hashable`. That is harmless only for an impl `BuiltinConformanceRuntime` SYNTHESIZES.
 //     ⇒ **Where a LISTED module declares `extension <builtin> implements <Iface>` with a corpus body, this
 //     key misses it.** Those conformers are carried by `conformersMintedWithoutTheirOwnMethods`, whose
@@ -803,10 +1433,9 @@ end 'classifyLibraryReach'
 // that it is unsound.** `ensureWitnessTable`'s `interfaceName` argument is ALWAYS statically known: a
 // declared interface-typed parameter, a declared interface RETURN, a `where T is I` constraint, or the
 // container key/element's `Hashable`/`Equatable`. Gating on the PAIR — a reached conformer `T` AND an
-// interface the program can statically name — would drop the over-approximation
-// `markConformerWitnessImpls`'s last paragraph measures (a `FilePath` program crediting four impls it never
-// boxes) to nothing. Taking it re-introduces predicting the CALL SITES, the shape the too-broad cut in
-// `markConformerWitnessImpls`' header gets wrong, and its gain is no emitted bytes; and the `extends` case
+// interface the program can statically name — would drop the owner credit's over-approximation (a
+// `FilePath` program crediting impls it never boxes) to nothing. Taking it re-introduces predicting the
+// CALL SITES, and its gain is no emitted bytes; and the `extends` case
 // needs care (a `Base`-typed place against `T implements Derived` builds `__witness_T.Base`, so the filter
 // must walk `extends` rather than test set membership).
 //
@@ -828,7 +1457,7 @@ end 'classifyLibraryReach'
 // stdlib factory named only by an initializer, and the elimination walk reaches the empty function it
 // left: `var sep = FilePath.separator()` would be a `requireUnreachableLibraryStayedDead` panic on a
 // correct program (`specs/top-level-factory-globals.md`'s `stdlib-factory-reached-from-the-initializer`).
-function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns FunctionNameSet throws CompileError
+function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, ledger WitnessEvidenceLedger) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	let reached = FixedBoolArray.create(module.funcCount())
@@ -876,45 +1505,18 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// `int.hash`, then the conformer key would see a REACHED `int.*` and credit every other `int`/`float` impl
 	// — including `Stringable`'s `return "{self}"`, whose float arm drags `stdlib/Builtins.maxon`'s decimal
 	// bignum cone — so the image carries `.rdata` panic literals for bodies the program cannot call.
-	//
-	// ⚠ **IT IS A FIXPOINT BECAUSE BOTH COORDINATES GROW DURING THE WALK**, and either one growing owes the
-	// other's whole list: a newly NAMED interface must be crossed with every conformer already reached, and a
-	// newly REACHED conformer with every interface already named. Both sets only grow and both are bounded by
-	// what the program declares, so it terminates.
-	// ⚠ **BUILT ONCE PER WALK, NOT ONCE PER REACHED FUNCTION.** `markEveryDeclaredWitnessImplOf` asks whether
-	// a conformer is the seed's, and it is asked of EVERY qualified function the drain reaches — so a roster
-	// rebuilt at the ask is a seven-push array plus its doubling reallocations per reached stdlib function.
-	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
-	let enumConformers = enumConformersByInterface(project)
-	let witnessInterfaces = InterfaceNameSet.create()
-	let witnessInterfaceOrder = NameRoster.create(0)
-	var interfacesSeeded = 0 as ElementIndex
 	let creditedServices = CreditedServiceSet.create()
-	let ownerLedger = ConstrainedOwnerLedger.over(signatures)
 
 	while true 'seedRounds'
-		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices, ownerLedger: ownerLedger)
+		drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices, ledger: ledger, stdlib: stdlib)
 
-		markConstraintArgumentImpls(ownerLedger, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+		for impl in ledger.takeLiveImpls() 'eachLiveImpl'
+			markOneReachable(impl, byName: byName, reached: reached, worklist: worklist, names: names)
+		end 'eachLiveImpl'
 
-		if interfacesSeeded == witnessInterfaceOrder.count() and worklist.count() == 0 'nothingLeftToSeedOrDrain'
+		if worklist.count() == 0 'nothingLeftToDrain'
 			break
-		end 'nothingLeftToSeedOrDrain'
-
-		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
-			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
-			interfacesSeeded = interfacesSeeded + 1
-
-			for conformerName in seedConformers 'eachSeededConformer'
-				markWitnessImplsOfConformer(conformerName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			end 'eachSeededConformer'
-
-			if let enumNames = try enumConformers.get(interfaceName) 'someEnumDeclaresIt'
-				for enumName in enumNames 'eachEnumConformer'
-					markWitnessImplsOfConformer(enumName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-				end 'eachEnumConformer'
-			end 'someEnumDeclaresIt'
-		end 'eachNewlyNamedInterface'
+		end 'nothingLeftToDrain'
 	end 'seedRounds'
 
 	return names
@@ -922,7 +1524,7 @@ end 'reachableMaxonFunctionNames'
 
 // ⭐⭐⭐ **THE CONFORMERS THE CONFORMER KEY STRUCTURALLY CANNOT REACH — the seed's membership rule, in one
 // place, because the omission of a name from it is the whole defect this list exists to repair.**
-// `markConformerWitnessImpls` credits a type's requirement impls once the walk reaches ANY function OF that
+// `WitnessCredit.owner` credits a type's requirement impls once the walk reaches ANY function OF that
 // type, which is exact for a type E3076 governs (P1). It is EMPTY for a type the COMPILER MINTS VALUES OF: a
 // `String` and a `Character` are born from literals and every operation on one lowers to `__str_*`, and an
 // `Array` is born from an array literal or `Array.create()` and every operation on one lowers to
@@ -978,8 +1580,8 @@ end 'conformersMintedWithoutTheirOwnMethods'
 // ⚠ **AN ENUM CONFORMER BELONGS TO THE SAME CLASS AND IS DELIBERATELY NOT LISTED ABOVE.** Membership of that
 // list is a property of the COMPILER — those six names are fixed, so crossing them with every named interface
 // is a constant — while which enums declare which interface is a property of the PROGRAM. Crossing the two
-// growing sets would be quadratic in a fixpoint, so the enums are INDEXED by the interface the seed loop
-// already iterates and the inner work stays one row lookup.
+// growing sets would be quadratic in a fixpoint, so the enums are INDEXED by the interface a newly named interface is
+// crossed with, and the inner work stays one row lookup.
 typealias EnumConformersByInterface = Map with (ByteArray, NameRoster)
 
 // ⭐ **THE ENUMS AND UNIONS WHOSE WITNESS SLOTS A NAMED INTERFACE OWES A CREDIT TO** — see P1 at
@@ -1024,19 +1626,12 @@ function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project 
 	byInterface.upsert(interfaceName, value: conformers)
 end 'recordEnumWitnessCredit'
 
-// Drain the worklist to a fixpoint, answering whether anything it reached DEMANDS a witness table. Its own
-// function because the walk runs twice — once to find the demand, once for the bodies the seed adds — and a
-// second copy of the drain is a second place for a marking to be added to one side only.
-// ⚠ **EVERY REACHED FUNCTION IS ASKED, WITH NO SKIP ONCE AN ANSWER IS KNOWN**: the interface a later
-// function names is one the seed still owes. The ask is a qualified-name split and a handful of map lookups.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder NameRoster, creditedServices CreditedServiceSet, ownerLedger ConstrainedOwnerLedger)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet, ledger WitnessEvidenceLedger, stdlib FunctionNameSet)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
-		markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
 		markMaxonCallees(module, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
-		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: witnessInterfaces, order: witnessInterfaceOrder)
-		ownerLedger.noteOwnerOf(func.name)
+		ledger.noteFunction(func, module: module, project: project, signatures: signatures, stdlib: stdlib)
 	end 'walk'
 end 'drainReachableWorklist'
 
@@ -1047,7 +1642,7 @@ end 'drainReachableWorklist'
 // names a CORPUS body.
 //
 // ⭐ **WHY THE CONFORMER KEY CANNOT REACH THESE, AND SO WHY A SEED IS NEEDED AT ALL.**
-// `markConformerWitnessImpls` credits a type's requirement impls once the walk reaches ANY function OF that
+// `WitnessCredit.owner` credits a type's requirement impls once the walk reaches ANY function OF that
 // type — sound for a user type, because E3076 makes a value of it impossible without one. A `String` value
 // is born from a LITERAL and every operation on it lowers to `__str_*`, so **no `String.<method>` module
 // function is ever reached** and the key has nothing to fire on. The table is still built, because
@@ -1066,8 +1661,7 @@ end 'drainReachableWorklist'
 // ⭐⭐⭐ **SO THE SEED IS GATED ON THE QUESTION IT IS THE ANSWER TO: CAN THE REACHED CODE NAME A WITNESS
 // TABLE?** Every table in the emitted image is registered by `LowerMaxonToStd.ensureWitnessTable`, and it has
 // exactly TWO routes in. This asks for the evidence each route needs, of REACHED code only — never for a
-// prediction of which call sites will fire, which is the shape the too-broad cut gets wrong (see
-// `markConformerWitnessImpls`):
+// prediction of which call sites will fire:
 //
 //   • **A `where T is I` CONSTRAINT witness** (`materializeWitnessArg`), carried by every call to a method of
 //     a `where`-constrained type. Its evidence is that method's own DECLARATION, and the reached method is
@@ -1083,7 +1677,7 @@ end 'drainReachableWorklist'
 // `markMaxonCallees`, because nothing declares such a body's parameters.
 //
 // ⇒ **EVERY ROUTE'S EVIDENCE IS A REACHED DECLARATION, so the demand is discovered BY the
-// drain and the drain is simply run twice** — see `reachableMaxonFunctionNames`. The seed stays an
+// drain, and the drain reruns until it credits no new impl** — see `reachableMaxonFunctionNames`. The seed stays an
 // OVER-APPROXIMATION in the CONFORMER (a program that widens only an `int`, or keys a `Set` by one, still
 // credits both byte records), and that is the safe direction by this walk's own rule: *"an OVER-approximation
 // only ever removes names from `unreachable`, and every consumer of that set treats absence as 'compile it
@@ -1130,45 +1724,51 @@ end 'drainReachableWorklist'
 // still credits `int.hash` and `String.hash` alike), which is the cheap half — those are the bodies with no
 // literals.
 //
-// ⚠ **UNDER-APPROXIMATING HERE IS A PANIC, NOT A SILENT WRONG ANSWER**, and the seed loop in
-// `reachableMaxonFunctionNames` is what keeps it exact: a name discovered by a LATER round re-seeds, so a
-// witness position reached only through a seeded body is still covered.
-function collectWitnessPositionInterfaces(func IrFunction, project Project, signatures ProgramSignatures, funcSignatures FuncSignatureMap, into InterfaceNameSet, order NameRoster)
+// ⚠ **UNDER-APPROXIMATING HERE IS A PANIC, NOT A SILENT WRONG ANSWER**, and `WitnessEvidenceLedger.noteNamedInterface`
+// is what keeps it exact: a name discovered by a LATER function credits the seeds and the mentioned enums at
+// that moment, so a witness position reached only through a seeded body is still covered.
+function collectWitnessPositionInterfaces(func IrFunction, project Project, signatures ProgramSignatures, funcSignatures FuncSignatureMap, into NameRoster, listed FunctionScopedSet)
 	for paramType in func.maxonParamTypes 'eachParam'
 		if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'existentialParam'
-			noteWitnessPositionInterface(paramType, project: project, into: into, order: order)
+			noteWitnessPositionInterface(paramType, project: project, into: into, listed: listed)
 		end 'existentialParam'
 	end 'eachParam'
 
 	match func.maxonReturnType 'returnPosition'
 		void then break
-		value(inner) then noteWitnessPositionInterfaceIfExistential(inner, project: project, into: into, order: order)
+		value(inner) then noteWitnessPositionInterfaceIfExistential(inner, project: project, into: into, listed: listed)
 	end 'returnPosition'
 
 	for constraint in witnessConstraintsOfReachedFunction(func, signatures: signatures, funcSignatures: funcSignatures) 'eachConstraint'
-		noteInterfaceName(constraint.interfaceName, into: into, order: order)
+		noteInterfaceName(constraint.interfaceName, into: into, listed: listed)
 	end 'eachConstraint'
 
 	for store in func.existentialFieldStores 'eachFieldStore'
-		noteInterfaceName(store.interfaceName, into: into, order: order)
+		noteInterfaceName(store.interfaceName, into: into, listed: listed)
 	end 'eachFieldStore'
 end 'collectWitnessPositionInterfaces'
 
 // The interface an `interfaceRef` position names, filed once. The ids of a MERGED module's signature types
 // are project-global (`mergeArtifact` remaps them), so the project's interner is the one they live in.
-function noteWitnessPositionInterface(t MaxonType, project Project, into InterfaceNameSet, order NameRoster)
-	noteInterfaceName(interfaceNameOfType(t, typeNames: project.typeNames), into: into, order: order)
+function noteWitnessPositionInterface(t MaxonType, project Project, into NameRoster, listed FunctionScopedSet)
+	noteInterfaceName(interfaceNameOfType(t, typeNames: project.typeNames), into: into, listed: listed)
 end 'noteWitnessPositionInterface'
 
 // The RETURN arm's form: a return type is a `MaxonReturnType`, so the tag test lives past the `value` arm
 // rather than in front of it — `maxonReturnTypeTag` panics on `void` by design.
-function noteWitnessPositionInterfaceIfExistential(t MaxonType, project Project, into InterfaceNameSet, order NameRoster)
+function noteWitnessPositionInterfaceIfExistential(t MaxonType, project Project, into NameRoster, listed FunctionScopedSet)
 	if maxonTypeTag(t) != ValueTypeTag.interfaceRef 'notAnExistential'
 		return
 	end 'notAnExistential'
 
-	noteWitnessPositionInterface(t, project: project, into: into, order: order)
+	noteWitnessPositionInterface(t, project: project, into: into, listed: listed)
 end 'noteWitnessPositionInterfaceIfExistential'
+
+function noteInterfaceName(name ByteArray, into NameRoster, listed FunctionScopedSet)
+	if listed.claim(name) 'notYetNamed'
+		into.push(name)
+	end 'notYetNamed'
+end 'noteInterfaceName'
 
 // ⭐ **THE SHORT-CIRCUIT SCAN'S HALF OF THE PAIR — THE SAME SOURCES, ASKED AS A YES/NO.**
 // `userCodeDemandsAWitnessTable` walks EVERY user function before the demand walk runs and needs no names,
@@ -1191,18 +1791,6 @@ function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSig
 
 	return witnessConstraintsOfReachedFunction(func, signatures: signatures, funcSignatures: funcSignatures).count() > 0
 end 'functionDeclaresAWitnessPosition'
-
-// ⚠ **A SET FOR MEMBERSHIP AND AN ARRAY FOR ORDER, because the seed loop must be able to WALK the names
-// it has not yet acted on** — and it must walk them in a fixed order, so what a compile builds cannot depend
-// on a hash bucket.
-function noteInterfaceName(name ByteArray, into InterfaceNameSet, order NameRoster)
-	if into.contains(name) 'alreadyNamed'
-		return
-	end 'alreadyNamed'
-
-	into.insert(name)
-	order.push(name)
-end 'noteInterfaceName'
 
 // The `where`-clause half of the collector above, kept whole because its two-branch read of the signature
 // map is `functionDeclaresAWitnessPosition`'s own — see the paragraphs above.
@@ -1307,115 +1895,32 @@ function markServiceBehaviourHandlers(op MaxonOp, signatures ProgramSignatures, 
 	creditedServices.insert(typeName)
 end 'markServiceBehaviourHandlers'
 
-// ⭐⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — CREDITED AT THE CONFORMER
-// THE WALK REACHES.** `__witness_<Type>.<Iface>`'s slots are `.rdata` relocations, so the
-// implementation each one names is named by no `call` anywhere in the module. Without this, an interface
-// method whose body calls a stdlib function leaves that function filed `unreachable` while
-// `DeadFunctionElimination` — which DOES follow those relocations — reaches it, and the two derivations
-// disagree exactly as `requireUnreachableLibraryStayedDead` says.
-//
-// ⭐⭐ **THE KEY IS THE CONFORMER, AND THAT IS WHAT MAKES IT NARROW.** `LowerMaxonToStd.ensureWitnessTable`
-// is reached from no single op shape: an existential WIDENING at a call argument
-// (`appendExistentialWitnessArgs`), at a RETURN (`witnessForExistentialValue`) or at a store into an
-// interface-typed field (`existentialWitness`), and a `where T is Iface` CONSTRAINT witness
-// (`materializeWitnessArg`). Rather than predict each from signatures, this asks the question they all
-// share — **a witness table for `T` can only be built if a `T` VALUE EXISTS, and a `T` value can only be
-// produced by a function OF `T`.** A type cannot be constructed from outside its own methods (E3076), so
-// reaching some `T.<method>` is a precondition for every one of them, and it is a precondition this walk
-// already computes.
-//
-// ⇒ Reaching any function of a conforming type credits THAT type's requirement impls, and no others.
-//
-// ⛔⛔ **THE TWO SIMPLER CUTS ARE BOTH WRONG, IN OPPOSITE DIRECTIONS.**
-//   • **TOO NARROW:** keyed on a `witnessDispatch` OP. It covers the dispatched case and leaves the other
-//     two `ensureWitnessTable` callers panicking — a `Thing` boxed into an interface-typed field and never
-//     dispatched, and a `where T is Digest` method that never touches `T`.
-//   • **TOO BROAD:** keyed on a signature predicate, crediting EVERY conformance in the program.
-//     `project.conformances` holds every LISTED STDLIB module's conformances too, so `URL.equals`/
-//     `FilePath.hash` and their whole files' bodies would be demanded by a program that names neither.
-//   ⇒ The conformer key is what makes it exact: a program that never reaches `URL` credits nothing of it.
-//
-// ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, BECAUSE THAT MAP IS
-// EMPTY WHEN IT MATTERS.** The map is filled by `checkConformance`, which runs AFTER `queryAllModule` — and
-// `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT ALL, runs INSIDE it. So
-// the map is empty for every round of the fixpoint and full only by the time `deriveLibraryFacts` asks: the
-// facts come out right and the emitted `@print` is an EMPTY function the program calls — a silent wrong
-// answer in place of a loud one, which is strictly worse.
-// `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
-// together), so they answer the same in both askers, which is the property this walk's header demands.
-// ⇒ The `<Type>.<method>` join `ensureWitnessTable` is forbidden to make is correct HERE for the
-// reason it is wrong there: a name no module function carries is silently skipped by `markOneReachable`, so a
-// join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
-//
-// ⚠ **A CONTAINER'S KEY WITNESS NEEDS NOTHING EXTRA HERE.** A corpus container's key witness is an
-// ordinary dictionary parameter, so it arrives by the CONSTRAINT route like any other: a builtin key is
-// credited by the seed (P2 in this walk's header — `Keyed with String` under `where T is Hashable` builds
-// `__witness_String.Hashable` while no `String.<method>` is ever reached), and a USER-type key by the
-// conformer key above — reaching `Point.create` to put one in a `Set` credits `Point.hash`.
-//
-// ⚠ **THE PRICE IT DOES PAY.** Reaching a conformer is weaker than boxing one, so a program that merely USES
-// a conforming stdlib type credits impls it can never jump to: a `Directory`/`FilePath` program pays
-// `FilePath`'s four requirement impls though it widens nothing. Those bodies are lowered and then dropped, so
-// emitted code is unchanged while the `.rdata` label pool numbers differently. The narrower gate that would
-// remove this cost is named in this walk's header and is not taken.
-// ⚠⚠ **IT CREDITS EVERY CONFORMANCE A REACHED TYPE DECLARES — EXCEPT FOR THE SEED'S OWN CONFORMERS, WHICH
-// ARE CREDITED PER NAMED INTERFACE INSTEAD.** The two routes answer from different evidence and
-// the split is exactly where that evidence runs out:
-//
-//   • **A type the walk REACHED A FUNCTION OF** is evidence about the TYPE and none about which interface a
-//     table will be built for, so every conformance it declares is credited. That total credit is what covers
-//     the shape the interface key CANNOT see: an interface implied by a construct rather than named by a
-//     declaration. **A `where S is Iterable` at a `FixedArray with 3 Int` names `Iterable` and NOTHING ELSE,
-//     while the loop it lowers to calls `Iterator`'s methods on the `ArrayIterator` the corpus
-//     `createIterator` returns** — so keying `ArrayIterator` on the named set alone would leave
-//     `ArrayIterator.current` unmarked, and `requireUnreachableLibraryStayedDead` would panic on it.
-//   • **A SEED conformer is one no reached function can ever belong to** (that is its membership rule), so
-//     the total credit has nothing to fire on and the seed supplies the crediting instead — keyed on the
-//     interfaces the reached code names, which is what keeps `float.toString` and its decimal bignum cone out
-//     of a program whose only constraint is `Hashable`.
-//     Crediting them HERE as well would undo exactly that: the seed marks `int.hash`, the drain reaches it,
-//     and a total credit on `int` pulls in every other impl the type declares.
-module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	match splitQualifiedName(func.name) 'owner'
-		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
-		notQualified then break
-		parts(typeName, _) then markEveryDeclaredWitnessImplOf(typeName, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
+function witnessOwnerOf(funcName immutable ByteArray) returns immutable ByteArray throws AbsentError
+	match splitQualifiedName(funcName) 'owner'
+		notQualified then throw AbsentError.absent
+		parts(typeName, _) then return typeName
 	end 'owner'
-end 'markConformerWitnessImpls'
+end 'witnessOwnerOf'
 
-// The total credit above, for a type the seed does not own.
-function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function ownerWitnessImplNames(typeName ByteArray, seedConformers NameRoster, project Project, signatures ProgramSignatures) returns NameRoster
+	let impls = NameRoster.create(0)
+
 	if seedConformers.contains(typeName) 'theSeedOwnsThisConformer'
-		return
+		return impls
 	end 'theSeedOwnsThisConformer'
 
 	let conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
-		return
+		return impls
 	end 'declaresNoConformance'
 
 	for interfaceName in conformedTo 'eachInterface'
-		markWitnessImplsOfConformer(typeName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+		for impl in witnessImplNamesOf(typeName, interfaceName: interfaceName, project: project, signatures: signatures) 'eachImpl'
+			impls.push(impl)
+		end 'eachImpl'
 	end 'eachInterface'
-end 'markEveryDeclaredWitnessImplOf'
 
-// Credit the impls of every conformer a reached constrained type's instances bind a `where`
-// constraint to. Lowering names those conformances' witness tables — at a call site, or stamped
-// into a layout descriptor — a DATA edge dead-function elimination follows, so a walk that missed
-// them would call live library code dead and `requireUnreachableLibraryStayedDead` panics.
-function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	for owner in ledger.pending 'eachNewlyReachedOwner'
-		let instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
-
-		for instance in instances.ids 'eachInstance'
-			for constraint in signatures.structWhereConstraints(owner) 'eachConstraint'
-				let conformer = signatures.conformerTypeArgName(instance, position: constraint.typeParamIndex).toByteArray()
-				markWitnessImplsOfConformer(conformer, interfaceName: constraint.interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			end 'eachConstraint'
-		end 'eachInstance'
-	end 'eachNewlyReachedOwner'
-
-	ledger.pending = NameRoster.create(0)
-end 'markConstraintArgumentImpls'
+	return impls
+end 'ownerWitnessImplNames'
 
 // Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
 // conformance has no table and nothing to credit, which is almost every type in almost every program.
@@ -1425,32 +1930,48 @@ end 'markConstraintArgumentImpls'
 // walk from a previous merge round's declarations.
 // ⚠ **IT TAKES BOTH COORDINATES — the conformer AND the interface — which is `ensureWitnessTable`'s own
 // argument list.** The conformer alone answers *"everything this type promises"*, while a table is built
-// for an interface the reached code can NAME, and it is the pair that decides which slots exist. See
-// `reachableMaxonFunctionNames`' fixpoint for where the two lists come from and what asking them separately
-// costs.
+// for an interface the reached code can NAME, and it is the pair that decides which slots exist.
 //
 // `typeConformsTo` is the gate rather than a bare membership test because it walks `extends` and admits
 // an INTRINSIC conformance — the two ways a slot can exist without the type's own declaration naming this
 // interface.
-function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function witnessImplNamesOf(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures) returns NameRoster
+	let impls = NameRoster.create(0)
+
 	if not typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(typeName)) 'thisPairHasNoTable'
-		return
+		return impls
 	end 'thisPairHasNoTable'
 
 	let iface = try project.interfaces.entries.get(interfaceName) otherwise 'noSuchInterface'
 		// A witness position naming an interface the program does not declare is E3017's / E3011's, reported
 		// one pass later; a reachability walk has nothing to add and nothing to credit.
-		return
+		return impls
 	end 'noSuchInterface'
 
 	// The TRANSITIVE requirement set, `ensureWitnessTable`'s own list — `iface.methods` alone would miss
 	// every `extends`-inherited slot, which is a slot like any other. It is also what covers the `extends`
 	// case the narrower gate has to get right: a `Base`-typed place against a `T implements Derived` builds
-	// `__witness_T.Base`, whose slots are BASE's, and those are what this marks.
+	// `__witness_T.Base`, whose slots are BASE's, and those are what this names.
 	for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
-		markOneReachable(qualifiedMethodName(typeName, methodName: slot.method.name), byName: byName, reached: reached, worklist: worklist, names: names)
+		impls.push(qualifiedMethodName(typeName, methodName: slot.method.name))
 	end 'eachSlot'
-end 'markWitnessImplsOfConformer'
+
+	return impls
+end 'witnessImplNamesOf'
+
+function constraintWitnessImplNames(instance GenericInstanceId, project Project, signatures ProgramSignatures) returns NameRoster
+	let impls = NameRoster.create(0)
+
+	for constraint in signatures.structWhereConstraints(signatures.genericInstanceBaseName(instance)) 'eachConstraint'
+		let conformer = signatures.conformerTypeArgName(instance, position: constraint.typeParamIndex).toByteArray()
+
+		for impl in witnessImplNamesOf(conformer, interfaceName: constraint.interfaceName, project: project, signatures: signatures) 'eachImpl'
+			impls.push(impl)
+		end 'eachImpl'
+	end 'eachConstraint'
+
+	return impls
+end 'constraintWitnessImplNames'
 
 // Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
 // inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
@@ -1609,7 +2130,7 @@ end 'userCodeDemandsAWitnessTable'
 // witness slot could name at all? Without a declaring module listed, these conformers conform only
 // INTRINSICALLY (`isIntrinsicBuiltinConformance`) and `BuiltinConformanceRuntime` synthesizes every impl, so
 // no witness table can reach stdlib source and the demand question above must not disturb a single program's
-// answer. Read off `declaredConformanceIndex` — the memo `markWitnessImplsOfConformer` marks through — rather
+// answer. Read off `declaredConformanceIndex` — the memo `witnessImplNamesOf` reads through — rather
 // than off a second reading of `project.conformances`, so the gate and the marking cannot disagree about
 // whether there is anything to credit.
 //
@@ -1729,7 +2250,7 @@ end 'anyCalleeIsIn'
 // The UNREACHABLE stdlib functions are left out entirely: they are invisible to this compile, so their
 // substrate is too. That is what keeps a program whose own source never names a host-only reader
 // compiling for wasm.
-function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet, target Target) returns StdlibSubstrateEntryMap
+function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet, evidence WitnessEvidenceLedger, target Target) returns StdlibSubstrateEntryMap
 	let nodeCount = stdlibNames.count()
 	let nodeOf = StdlibNodeByName.create()
 
@@ -1753,6 +2274,10 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 					noteSubstrateEdge(op, callerNode: node, nodeOf: nodeOf, state: state)
 				end 'eachOp'
 			end 'eachBlock'
+
+			for impl in evidence.liveImplsOf(func.name) 'eachLiveImpl'
+				noteSubstrateCallee(impl, callerNode: node, nodeOf: nodeOf, state: state)
+			end 'eachLiveImpl'
 		end 'stdlibFunction'
 	end 'eachFunc'
 
@@ -1806,12 +2331,14 @@ type SubstrateFixpoint
 	// ⛔⛔ ***"The first entry a body names is the one it is reported for: a body naming two is refused for
 	// either, and both are equally true of it"* IS FALSE.**
 	// The entry decides WHICH DIAGNOSTIC the crossing gets, not merely which name it quotes, so two
-	// entries are two different claims with different advice. `SemanticCheck.substrateEntryOutranks` is the
-	// one place that says which wins and why; here it is only obeyed. An entry that outranks the incumbent
-	// REPLACES it and re-queues the node, so the callers that already inherited the weaker one are corrected.
+	// entries are two different claims with different advice. `SemanticCheck.substrateEntryIsPreferred` is the
+	// one place that says which wins and why (rank, then the least entry name, so the answer never depends on
+	// the order the walk met them in); here it is only obeyed. A preferred entry REPLACES the incumbent and
+	// re-queues the node, so the callers that already inherited the other one are corrected.
 	//
-	// ⚠ The upgrade is MONOTONE — a rank only ever rises, and the rank has three levels — so a node is
-	// re-queued at most twice and the fixpoint below stays linear.
+	// ⚠ The replacement is MONOTONE — preference is a strict total order over distinct entries, so a node's
+	// entry only ever improves and a node is re-queued at most once per distinct entry; the fixpoint below
+	// stays linear.
 	//
 	// ⚠ An entry the target provides seeds nothing. A node holds one entry, so a body reaching a provided
 	// entry and a lacking one must record the lacking one, or its crossing passes the gate and the
@@ -1824,7 +2351,7 @@ type SubstrateFixpoint
 
 		let already = try self.marked.get(node) otherwise panic("SubstrateFixpoint.seed: marked.get({node}) outside the node space")
 
-		if already and not substrateEntryOutranks(entry, incumbent: self.entryOf(node)) 'keepTheIncumbent'
+		if already and not substrateEntryIsPreferred(entry, incumbent: self.entryOf(node)) 'keepTheIncumbent'
 			return
 		end 'keepTheIncumbent'
 
@@ -1868,7 +2395,7 @@ type SubstrateFixpoint
 	end 'propagateToCallers'
 
 	// Should `caller` take `seedIndex` as its own — because it has no entry yet, or because this one
-	// OUTRANKS the entry it already inherited (`SemanticCheck.substrateEntryOutranks`)? An unmarked caller is
+	// is PREFERRED to the entry it already inherited (`SemanticCheck.substrateEntryIsPreferred`)? An unmarked caller is
 	// the ordinary case and answers before any name is read; the second question is asked only of a node that
 	// is already marked, so the common propagation pays one bool test.
 	//
@@ -1880,7 +2407,7 @@ type SubstrateFixpoint
 			return true
 		end 'noEntryYet'
 
-		return substrateEntryOutranks(try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.inheritsFrom: seed {seedIndex} does not exist"), incumbent: self.entryOf(caller))
+		return substrateEntryIsPreferred(try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.inheritsFrom: seed {seedIndex} does not exist"), incumbent: self.entryOf(caller))
 	end 'inheritsFrom'
 
 	function requiresSubstrate(node CsrIndex) returns bool

@@ -7,16 +7,16 @@ public union HttpTransportFault implements Error
 	secure(error TlsError)
 end 'HttpTransportFault'
 
-public union HttpTransport
+public union HttpTransport implements ByteSource
 	plain(connection TcpClient)
 	secure(stream TlsStream)
 
-	public function recv(bufferSize RecvCapacity) returns String throws HttpTransportFault
+	public function readSome(most ReadCapacity) returns isolated ByteArray throws StreamError
 		match self 'transport'
-			plain(connection) then return try httpPlainRecv(connection, bufferSize: bufferSize)
-			secure(stream) then return try httpSecureRecv(stream, bufferSize: bufferSize)
+			plain(connection) then return try connection.readSome(most)
+			secure(stream) then return try stream.readSome(most)
 		end 'transport'
-	end 'recv'
+	end 'readSome'
 
 	public function send(data String) throws HttpTransportFault
 		match self 'transport'
@@ -72,7 +72,6 @@ function httpPlainFault(cause NetworkError) returns HttpTransportFault
 	return match cause 'cause'
 		connectionClosed gives HttpTransportFault.closed
 		timedOut gives HttpTransportFault.timedOut
-		recvFailed or
 		sendFailed gives HttpTransportFault.failed
 		resolveFailed or
 		connectFailed or
@@ -114,22 +113,6 @@ function httpPlainCloseAfterDraining(connection TcpClient)
 	lingerForThePeer(connection)
 	connection.close()
 end 'httpPlainCloseAfterDraining'
-
-function httpPlainRecv(connection TcpClient, bufferSize RecvCapacity) returns String throws HttpTransportFault
-	let arrived = try connection.recv(bufferSize) otherwise (cause) 'unread'
-		throw httpPlainFault(cause)
-	end 'unread'
-
-	return arrived
-end 'httpPlainRecv'
-
-function httpSecureRecv(stream TlsStream, bufferSize RecvCapacity) returns String throws HttpTransportFault
-	let arrived = try stream.recv(bufferSize) otherwise (error) 'unread'
-		throw httpSecureFault(error)
-	end 'unread'
-
-	return arrived
-end 'httpSecureRecv'
 
 function httpPlainSend(connection TcpClient, data String) throws HttpTransportFault
 	_ = try connection.send(data) otherwise (cause) 'unsent'

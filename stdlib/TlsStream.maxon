@@ -23,12 +23,12 @@ enum TlsHandshakePhase
 end 'TlsHandshakePhase'
 
 /// A TLS connection. A stream from `TlsClient` is established; one from `TlsListener.accept()` runs
-/// its handshake on its first `send`, `recv` or `shutdownWrite`, or on `handshake()`, and what it
+/// its handshake on its first `send`, `readSome` or `shutdownWrite`, or on `handshake()`, and what it
 /// negotiated is readable once that has completed. Use it through a `var` from one green thread. A
 /// stream that goes out of scope closes its socket without a close_notify, which the peer reads as
 /// `truncated`; `close()` sends one. A failed write ends the write side: every later `send` and
 /// `shutdownWrite` throws the same error, while reads go on.
-public type TlsStream
+public type TlsStream implements ByteSource
 	var transport as TcpClient
 	var endpoint as TlsEndpoint
 
@@ -36,8 +36,7 @@ public type TlsStream
 	var peer as TlsX509Peer
 	var inbound as ByteArray
 	var consumed as BytePos
-	var unread as ByteArray
-	var unreadConsumed as BytePos
+	var unread as ByteBacklog
 	var writeClosed as bool
 
 	// A send that failed part-way may have cut a record, and anything written after it would reach the
@@ -58,10 +57,10 @@ public type TlsStream
 	end 'establish'
 
 	module static function unshaken(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream
-		return Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(0), consumed: 0, unread: ByteArray.create(0), unreadConsumed: 0, writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, phase: TlsHandshakePhase.pending, handshakeDeadlineMs: deadlineMs, readDeadlineMs: NoDeadlineMs, writeDeadlineMs: NoDeadlineMs}
+		return Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(0), consumed: 0, unread: ByteBacklog.create(), writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, phase: TlsHandshakePhase.pending, handshakeDeadlineMs: deadlineMs, readDeadlineMs: NoDeadlineMs, writeDeadlineMs: NoDeadlineMs}
 	end 'unshaken'
 
-	/// Run the handshake if it has not run; returns at once when it has completed. `send`, `recv` and
+	/// Run the handshake if it has not run; returns at once when it has completed. `send`, `readSome` and
 	/// `shutdownWrite` run it first. A failure is thrown here, closes the connection, and every later
 	/// call throws `closed`.
 	public function handshake() throws TlsError
@@ -100,31 +99,34 @@ public type TlsStream
 		return data.count() as BytePos
 	end 'sendBytes'
 
-	/// Receive between one and `bufferSize` bytes of application data.
-	public function recv(bufferSize RecvCapacity) returns String throws TlsError
-		return String.from(try recvBytes(bufferSize))
-	end 'recv'
-
-	/// `recv`, as bytes. Throws `connectionClosed` once the peer's close_notify and the data before it were read, and
-	/// `truncated` when the transport ends without one.
-	public function recvBytes(bufferSize RecvCapacity) returns ByteArray throws TlsError
+	/// Read between one and `most` bytes of application data; empty once the peer's close_notify and the
+	/// data before it were read. A transport that ends without a close_notify throws
+	/// `StreamError.secure(truncated)`.
+	public function readSome(most ReadCapacity) returns isolated ByteArray throws StreamError
 		if closed 'unreadable'
-			throw TlsError.closed
+			throw StreamError.closed
 		end 'unreadable'
 
-		try handshake()
+		try handshake() otherwise (error) 'unshaken'
+			throw streamFaultOfTls(error)
+		end 'unshaken'
 
-		while unreadCount() == 0 'waiting'
+		while unread.unread() == 0 'waiting'
 			if endpoint.session().hasPeerClosed() 'peerFinished'
-				throw TlsError.connectionClosed
+				let nothing = ByteArray.create(0) as isolated ByteArray
+
+				return nothing
 			end 'peerFinished'
 
-			try pump()
+			try pump() otherwise (error) 'unpumped'
+				throw streamFaultOfTls(error)
+			end 'unpumped'
+
 			unread.append(endpoint.session().takeReceived())
 		end 'waiting'
 
-		return takeUnread(bufferSize)
-	end 'recvBytes'
+		return unread.takeAtMost(most as BytePos)
+	end 'readSome'
 
 	/// The TLS version negotiated. Throws `handshakePending` until the handshake has completed.
 	public function protocol() returns TlsProtocol throws TlsError
@@ -191,7 +193,7 @@ public type TlsStream
 		end 'established'
 	end 'setWriteDeadline'
 
-	/// Send close_notify and stop sending; the peer reads the end of the stream while this side can still `recv`.
+	/// Send close_notify and stop sending; the peer reads the end of the stream while this side can still read.
 	public function shutdownWrite() throws TlsError
 		try requireWritable()
 		try handshake()
@@ -411,13 +413,26 @@ public type TlsStream
 				consumed = 0
 			end 'compact'
 
-			let chunk = try transport.recv(tlsReadChunkBytes) otherwise (failure) 'unreadable'
-				throw transportFailure(failure, ordinary: tlsReadFailure(failure))
+			let chunk = try transport.readSome(tlsReadChunkBytes) otherwise (failure) 'unreadable'
+				throw readFailure(failure)
 			end 'unreadable'
 
-			inbound.append(chunk.toByteArray())
+			if chunk.isEmpty() 'transportEnded'
+				throw TlsError.truncated
+			end 'transportEnded'
+
+			inbound.append(merge chunk)
 		end 'filling'
 	end 'fill'
+
+	function readFailure(failure StreamError) returns TlsError
+		return match failure 'failure'
+			timedOut gives transportFailure(NetworkError.timedOut, ordinary: TlsError.timedOut)
+			failed gives TlsError.recvFailed
+			closed gives TlsError.closed
+			secure panic("TlsStream: reading the transport does not throw a TLS failure")
+		end 'failure'
+	end 'readFailure'
 
 	function transportFailure(failure NetworkError, ordinary TlsError) returns TlsError
 		if phase == TlsHandshakePhase.running and failure == NetworkError.timedOut 'stalled'
@@ -426,27 +441,4 @@ public type TlsStream
 
 		return ordinary
 	end 'transportFailure'
-
-	function unreadCount() returns Count
-		return unread.count() - unreadConsumed
-	end 'unreadCount'
-
-	function takeUnread(bufferSize RecvCapacity) returns ByteArray
-		var stop = unreadConsumed + (bufferSize as BytePos)
-
-		if stop > unread.count() 'allOfIt'
-			stop = unread.count() as BytePos
-		end 'allOfIt'
-
-		let taken = tlsRecordPart(unread, start: unreadConsumed, endIndex: stop)
-
-		unreadConsumed = stop
-
-		if unreadConsumed == unread.count() 'drained'
-			unread.clear()
-			unreadConsumed = 0
-		end 'drained'
-
-		return taken
-	end 'takeUnread'
 end 'TlsStream'

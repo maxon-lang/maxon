@@ -1,0 +1,97 @@
+public union StreamFound
+	at(offset BytePos)
+	absent
+end 'StreamFound'
+
+public type ByteBacklog
+	var bytes as ByteArray
+	var consumed as BytePos
+
+	public static function create() returns ByteBacklog
+		return Self{bytes: ByteArray.create(0), consumed: 0}
+	end 'create'
+
+	public function unread() returns BytePos
+		return (self.bytes.count() as BytePos) - self.consumed
+	end 'unread'
+
+	public function byteAt(offset BytePos) returns Byte
+		return try self.bytes.get(self.consumed + offset) otherwise panic("ByteBacklog.byteAt: {offset} is inside the {self.unread()} unread bytes")
+	end 'byteAt'
+
+	public function find(needle String, from BytePos) returns StreamFound
+		return match streamFind(self.bytes, needle: needle, from: self.consumed + from) 'found'
+			at(position) gives StreamFound.at(position - self.consumed)
+			absent gives StreamFound.absent
+		end 'found'
+	end 'find'
+
+	public function append(arrived ByteArray)
+		if self.consumed > 0 'compact'
+			self.bytes = try self.bytes.slice(self.consumed, endIndex: self.bytes.count()) otherwise panic("ByteBacklog.append: the consumed bytes are inside the backlog")
+			self.consumed = 0
+		end 'compact'
+
+		self.bytes.append(arrived)
+	end 'append'
+
+	public function takeAtMost(most BytePos) returns isolated ByteArray
+		return self.take(most if self.unread() > most else self.unread(), skipping: 0)
+	end 'takeAtMost'
+
+	public function take(length BytePos, skipping BytePos) returns isolated ByteArray
+		let part = try self.bytes.slice(self.consumed, endIndex: self.consumed + length) otherwise panic("ByteBacklog.take: {length} bytes are unread from {self.consumed}")
+		let taken = ByteArray.create(0) as isolated ByteArray
+
+		modify taken 'fill'
+			taken.appendMemory(part.managed)
+		end 'fill'
+
+		self.consumed = self.consumed + length + skipping
+
+		if self.consumed == self.bytes.count() 'drained'
+			self.bytes.clear()
+			self.consumed = 0
+		end 'drained'
+
+		return taken
+	end 'take'
+end 'ByteBacklog'
+
+function streamFind(bytes ByteArray, needle String, from BytePos) returns StreamFound
+	let width = needle.byteLength()
+
+	if width == 0 'noNeedle'
+		panic("streamFind: the delimiter is empty")
+	end 'noNeedle'
+
+	let total = bytes.count() as BytePos
+
+	if total < from + width 'tooShort'
+		return StreamFound.absent
+	end 'tooShort'
+
+	let first = needle.byteAtOrPanic(0)
+
+	for position in from to total - width 'eachStart'
+		let candidate = try bytes.get(position) otherwise panic("streamFind: {position} is inside the {total} bytes searched")
+
+		if candidate == first and streamMatchesAt(bytes, position: position, needle: needle) 'found'
+			return StreamFound.at(position)
+		end 'found'
+	end 'eachStart'
+
+	return StreamFound.absent
+end 'streamFind'
+
+function streamMatchesAt(bytes ByteArray, position BytePos, needle String) returns bool
+	for offset in 1 upto needle.byteLength() 'eachByte'
+		let candidate = try bytes.get(position + offset) otherwise panic("streamMatchesAt: {position + offset} is inside the bytes searched")
+
+		if candidate != needle.byteAtOrPanic(offset) 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'streamMatchesAt'

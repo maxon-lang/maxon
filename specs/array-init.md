@@ -69,7 +69,7 @@ receiver alias's, which is element-agnostic and strictly stronger.
 It is not "carries the buffer mark" either, and that is the second half of the choice. The mark
 (`bufferSurfaceValues`) is a per-function fact about a `ValueId`, so it is GONE after a closure capture
 while the record and its stride are unchanged — `a-captured-buffer-adopts-inside-a-closure` is the
-proof. A door keyed on the mark would refuse `stdlib/File.maxon:135`'s shape for a reason having nothing
+proof. A door keyed on the mark would refuse `String.toByteArray`'s shape (`stdlib/String.maxon`) for a reason having nothing
 to do with the stride. So an ORDINARY array of the instance is admitted too
 (`an-ordinary-array-of-the-instance-adopts`), and adopting one is an ordinary co-owning retain.
 
@@ -86,7 +86,7 @@ It is worth writing down because the door looks byte-agnostic and is:
 
 The verdict column names the INSTANCE the buffer minted. The DIAGNOSTIC spells that instance by the
 `typealias` declared for it, which is why the byte row's refusal below reads `got 'ByteArray'` —
-`stdlib/File.maxon`'s own `export typealias ByteArray = Array with Byte` — and the word row's reads
+`stdlib/File.maxon`'s own `public typealias ByteArray = Array with Byte` — and the word row's reads
 `got 'FullRangeIntArray'`, the stdlib's public alias for `Array with FullRangeInt`.
 
 `managedMemoryInstanceForElementSize` mints exactly two instances — `Array with Byte` for width 1
@@ -95,7 +95,7 @@ instance even where its range is the same, exactly as `default-values.md` and `s
 for array literals, so it is refused. A door that keyed on element WIDTH instead would admit those
 only by giving up the soundness the rows above depend on.
 
-`stdlib/File.maxon:135`'s `return ByteArray.init(managed)` is the byte row, which is why this
+`String.toByteArray`'s `return ByteArray.init(ownBytes)`, over a slice of the string's buffer, is the byte row, which is why this
 door admits it.
 
 ## Tests
@@ -275,7 +275,7 @@ end 'main'
 <!-- tier: stdlib -->
 ⭐ **THE HAND-OFF.** The buffer local dies at the end of `build`, lowering the count by one; the
 array it was adopted into is moved OUT and becomes the caller's sole owner. This is the shape
-`stdlib/File.maxon:135`'s `return ByteArray.init(managed)` has, and the one an unbalanced retain
+`String.toByteArray`'s `return ByteArray.init(ownBytes)` has, and the one an unbalanced retain
 turns into a use-after-free rather than a leak.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -302,7 +302,7 @@ end 'main'
 
 <!-- test: a-declared-buffer-parameter-adopts -->
 <!-- tier: stdlib -->
-⭐ **THE `stdlib/File.maxon:135` SHAPE, EXACTLY.** The buffer arrives as a parameter DECLARED
+⭐ **A BUFFER HANDED IN AS A PARAMETER.** The buffer arrives as a parameter DECLARED
 `__ManagedMemory` — which is where the surface mark comes from at a function boundary
 (`markDeclaredBufferSurface`) rather than from a producing call — and the array is handed straight
 back out. The parameter is BORROWED, so the retain is what makes the returned array an owner at
@@ -456,7 +456,7 @@ end 'main'
 per-function fact about a `ValueId`, so a captured `mm` has lost it inside the closure body —
 `mm.length()` there is refused. `ByteArray.init(mm)` nonetheless adopts, because the door asks
 the INSTANCE, which erasure cannot take away. This is the case that makes the door's choice of test a
-correctness property rather than a preference: keyed on the mark, `stdlib/File.maxon:135`'s shape would
+correctness property rather than a preference: keyed on the mark, an adoption like `String.toByteArray`'s would
 stop compiling the day it moved inside a closure.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -717,11 +717,11 @@ reserved element `__ManagedByte`, deliberately a DIFFERENT instance from the use
 a user may declare `Byte`, and a compiler-minted buffer's stride may not follow. Raw instance
 equality would therefore refuse it, and this is the NINTH door of the class
 `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates — and the only one that does not
-ride `aggregatesConflict`, so the other eight do not cover it. `stdlib/Console.maxon`'s `Stdin.fillOnce`
-adopts `__Builtins.readStdin(chunkSize)` with `ByteArray.init`, which without it is an `E3005 argument type
+ride `aggregatesConflict`, so the other eight do not cover it. `stdlib/SharedMemory.maxon`'s `copyOut`
+adopts `__Builtins.sharedMemoryCopyOut(base, offset, byteCount)` with `ByteArray.init`, which without it is an `E3005 argument type
 mismatch for 'managed'` on a module that must compile.
 
-The buffer here is `__ManagedDirectory.currentPath()` rather than a stdin read, deliberately: the
+The buffer here is `__ManagedDirectory.currentPath()` rather than a shared-memory copy, deliberately: the
 subject is the DOOR and not the intrinsic, and this producer is the same four-line shape that
 header uses for the other six. Both producers are library-tier statics, so the case compiles in the
 library tier. It names no lane: every native lane implements `__md_current_path`, and wasm32-wasi

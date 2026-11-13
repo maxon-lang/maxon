@@ -22,15 +22,14 @@ let PosixYear2000Stamp = "200001010000"
 	public let PosixShellPath = "/bin/sh"
 #endif
 
-public let NoTimeoutMs = 0 as DurationMs
 public let CompilerUnderTestName = "the compiler under test"
 
-public function runIn(executable Executable, arguments StringArray, staged FilePath, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput throws SubprocessError
+public function runIn(executable Executable, arguments StringArray, staged FilePath, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput throws SubprocessError
 	let config = Configuration.create(executable, workingDirectory: WorkingDirectory.at(staged))
 	config.arguments = arguments.clone()
 	config.environment = environment
 	config.standardInput = standardInput
-	config.timeoutMs = timeoutMs
+	config.deadline = deadline
 
 	return try config.run()
 end 'runIn'
@@ -39,18 +38,18 @@ public function spawnFailureMessage(what String, failure SubprocessError) return
 	return "the gate could not run — could not spawn {what} ({failure.displayReason()})."
 end 'spawnFailureMessage'
 
-public function spawnIn(executable Executable, arguments StringArray, staged FilePath, what String, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
-	return try runIn(executable, arguments: arguments, staged: staged, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs) otherwise (e) 'spawnFailed'
+public function spawnIn(executable Executable, arguments StringArray, staged FilePath, what String, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput
+	return try runIn(executable, arguments: arguments, staged: staged, environment: environment, standardInput: standardInput, deadline: deadline) otherwise (e) 'spawnFailed'
 		panic("{spawnFailureMessage(what, failure: e)}")
 	end 'spawnFailed'
 end 'spawnIn'
 
-public function runCompiler(arguments StringArray, staged FilePath = Directory.currentPath(), binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput throws SubprocessError
-	return try runIn(Executable.path(binary), arguments: arguments, staged: staged, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs)
+public function runCompiler(arguments StringArray, staged FilePath = Directory.currentPath(), binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput throws SubprocessError
+	return try runIn(Executable.path(binary), arguments: arguments, staged: staged, environment: environment, standardInput: standardInput, deadline: deadline)
 end 'runCompiler'
 
-public function spawnCompiler(arguments StringArray, staged FilePath = Directory.currentPath(), what String = CompilerUnderTestName, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
-	return try runCompiler(arguments, staged: staged, binary: binary, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs) otherwise (e) 'spawnFailed'
+public function spawnCompiler(arguments StringArray, staged FilePath = Directory.currentPath(), what String = CompilerUnderTestName, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput
+	return try runCompiler(arguments, staged: staged, binary: binary, environment: environment, standardInput: standardInput, deadline: deadline) otherwise (e) 'spawnFailed'
 		panic("{spawnFailureMessage(what, failure: e)}")
 	end 'spawnFailed'
 end 'spawnCompiler'
@@ -109,6 +108,29 @@ public function requireTreeEnd(treeEnd TreeEnd, what String)
 		unconfirmed then panic("the gate could not run — the process tree of {what} could not be ended ({treeEnd.displayReason()}).")
 	end 'tree'
 end 'requireTreeEnd'
+
+public function brokenReadMessage(what String, stream StdioStream, reason String) returns String
+	return "the gate could not run — reading {what}'s {stream.name} failed ({reason})."
+end 'brokenReadMessage'
+
+public function refuseBrokenRead(what String, stream StdioStream, reason String)
+	panic("{brokenReadMessage(what, stream: stream, reason: reason)}")
+end 'refuseBrokenRead'
+
+public function waitFailureMessage(what String, failure WaitRefusal) returns String
+	return "the gate could not run — waiting for {what} to exit ended in {failure.displayReason()}."
+end 'waitFailureMessage'
+
+public function lostStatusMessage(what String) returns String
+	return "the gate could not run — the exit status of {what} went to another process."
+end 'lostStatusMessage'
+
+public function requireSurvivorsEnded(survivors SurvivorEnd, what String)
+	match survivors 'survivors'
+		noneHeld then break
+		ended(tree) then requireTreeEnd(tree, what: what)
+	end 'survivors'
+end 'requireSurvivorsEnded'
 
 public function requireDeadlineKill(failure SubprocessError, what String)
 	if not failure.timedOut() 'notAKill'

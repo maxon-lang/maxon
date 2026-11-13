@@ -325,15 +325,15 @@ public type HttpClient
 
 		try boundByTheDeadline(transport, start: start, timeoutMs: limits.timeoutMs)
 
-		let inbound = HttpInbound.over(transport)
+		let inbound = StreamReader.over(transport)
 
 		let response = try exchangeOver(inbound, request: request, rawRequest: rawRequest, limits: limits) otherwise (cause) 'failed'
-			inbound.connection.close()
+			inbound.source.close()
 
 			throw cause
 		end 'failed'
 
-		inbound.connection.close()
+		inbound.source.close()
 
 		return response
 	end 'send'
@@ -374,9 +374,8 @@ let ChunkBlankBytes = " \t"
 let ChunkExtensionIntroducer = ";"
 
 // A close here ends a message before its framing does, so it is a truncated response. The close
-// that ends a close-delimited body is taken by `receiveMoreBeforeTheClose` and never reaches this
-// mapping.
-function clientReadFault(cause HttpTransportFault) returns HttpError
+// that ends a close-delimited body is a short read in `readUntilClosed` and never reaches this mapping.
+function clientReadFault(cause StreamError) returns HttpError
 	return match cause 'which'
 		closed gives HttpError.invalidResponse
 		failed gives HttpError.recvFailed
@@ -443,8 +442,8 @@ function secureTransportOver(client TcpClient, target HttpConnectTarget, tls Tls
 	return HttpTransport.secure(stream)
 end 'secureTransportOver'
 
-function exchangeOver(inbound HttpInbound, request HttpRequest, rawRequest String, limits HttpClientLimits) returns HttpResponse throws HttpError
-	try inbound.connection.send(rawRequest) otherwise (cause) 'sendFail'
+function exchangeOver(inbound HttpTransportReader, request HttpRequest, rawRequest String, limits HttpClientLimits) returns HttpResponse throws HttpError
+	try inbound.source.send(rawRequest) otherwise (cause) 'sendFail'
 		throw clientWriteFault(cause)
 	end 'sendFail'
 
@@ -452,14 +451,13 @@ function exchangeOver(inbound HttpInbound, request HttpRequest, rawRequest Strin
 end 'exchangeOver'
 
 function remainingBudget(start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns SocketDeadlineMs throws HttpError
-	let spentMs = Clock.elapsedMs(start)
-	let budgetMs = timeoutMs as DurationMs
+	let leftMs = Clock.remainingMs(start, deadlineMs: timeoutMs as DurationMs)
 
-	if spentMs >= budgetMs 'spent'
+	if leftMs == 0 'spent'
 		throw HttpError.timedOut
 	end 'spent'
 
-	return (budgetMs - spentMs) as SocketDeadlineMs
+	return leftMs as SocketDeadlineMs
 end 'remainingBudget'
 
 // A `TcpClient` deadline counts from the call that sets it, so both are set once, to what is left of the
@@ -478,9 +476,9 @@ function exceedsCap(cap HttpBodyCap, bodyBytes BytePos) returns bool
 	end 'which'
 end 'exceedsCap'
 
-function receiveResponse(inbound HttpInbound, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
+function receiveResponse(inbound HttpTransportReader, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
 	for _ in 0 to MostInterimResponses 'eachHead'
-		let head = try readDelimited(inbound, delimiter: HttpDelimiter.head, cap: MaxResponseHeadBytes)
+		let head = try readResponseHead(inbound)
 
 		match try httpResponseStatusOf(head) 'status'
 			final(response) then return try withFramedBody(inbound, response: response, method: method, cap: cap)
@@ -491,18 +489,31 @@ function receiveResponse(inbound HttpInbound, method HttpMethod, cap HttpBodyCap
 	throw HttpError.invalidResponse
 end 'receiveResponse'
 
-function readDelimited(inbound HttpInbound, delimiter HttpDelimiter, cap BytePos) returns String throws HttpError
-	let read = try httpReadDelimited(inbound, delimiter: delimiter, cap: cap) otherwise (cause) 'readFailed'
+function readResponseHead(inbound HttpTransportReader) returns String throws HttpError
+	let read = try httpReadHead(inbound, cap: MaxResponseHeadBytes) otherwise (cause) 'readFailed'
 		throw clientReadFault(cause)
 	end 'readFailed'
 
-	match read 'delimited'
-		delimited(text) then return text
-		pastTheCap then throw HttpError.invalidResponse
-	end 'delimited'
-end 'readDelimited'
+	return try clientTextOf(read)
+end 'readResponseHead'
 
-function withFramedBody(inbound HttpInbound, response HttpResponse, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
+function readChunkLine(inbound HttpTransportReader) returns String throws HttpError
+	let read = try inbound.readUntil(HttpLineBreak, cap: MaxChunkLineBytes) otherwise (cause) 'readFailed'
+		throw clientReadFault(cause)
+	end 'readFailed'
+
+	return try clientTextOf(read)
+end 'readChunkLine'
+
+function clientTextOf(read LineRead) returns String throws HttpError
+	match read 'read'
+		line(text) then return text
+		ended or
+		pastTheCap then throw HttpError.invalidResponse
+	end 'read'
+end 'clientTextOf'
+
+function withFramedBody(inbound HttpTransportReader, response HttpResponse, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
 	let body = match try httpResponseFramingOf(response, method: method) 'framing'
 		bodiless gives ""
 		declared(length) gives try readCappedDeclaredBody(inbound, length: length, cap: cap)
@@ -513,7 +524,7 @@ function withFramedBody(inbound HttpInbound, response HttpResponse, method HttpM
 	return HttpResponse.create(response.statusCode(), reasonPhrase: response.reason(), responseHeaders: response.headers(), responseBody: body)
 end 'withFramedBody'
 
-function readDeclaredBody(inbound HttpInbound, length BytePos) returns String throws HttpError
+function readDeclaredBody(inbound HttpTransportReader, length BytePos) returns String throws HttpError
 	let body = try httpReadDeclared(inbound, length: length) otherwise (cause) 'readFailed'
 		throw clientReadFault(cause)
 	end 'readFailed'
@@ -521,7 +532,7 @@ function readDeclaredBody(inbound HttpInbound, length BytePos) returns String th
 	return body
 end 'readDeclaredBody'
 
-function readCappedDeclaredBody(inbound HttpInbound, length BytePos, cap HttpBodyCap) returns String throws HttpError
+function readCappedDeclaredBody(inbound HttpTransportReader, length BytePos, cap HttpBodyCap) returns String throws HttpError
 	if exceedsCap(cap, bodyBytes: length) 'pastTheCap'
 		throw HttpError.bodyTooLarge
 	end 'pastTheCap'
@@ -529,41 +540,37 @@ function readCappedDeclaredBody(inbound HttpInbound, length BytePos, cap HttpBod
 	return try readDeclaredBody(inbound, length: length)
 end 'readCappedDeclaredBody'
 
-function receiveMoreBeforeTheClose(inbound HttpInbound) returns bool throws HttpError
-	try inbound.receiveMore() otherwise (cause) 'recvErr'
-		match cause 'which'
-			closed then return false
-			failed or
-			timedOut or
-			secure then throw clientReadFault(cause)
-		end 'which'
-	end 'recvErr'
-
-	return true
-end 'receiveMoreBeforeTheClose'
-
-function readUntilClosed(inbound HttpInbound, cap HttpBodyCap) returns String throws HttpError
+function readUntilClosed(inbound HttpTransportReader, cap HttpBodyCap) returns String throws HttpError
+	let body = ByteArray.create(0)
 	var open = true
 
 	while open 'drain'
-		open = try receiveMoreBeforeTheClose(inbound)
+		let part = try inbound.readBytes(HttpReadChunkBytes) otherwise (cause) 'unread'
+			throw clientReadFault(cause)
+		end 'unread'
 
-		if inbound.unreadBytes() > HttpLargestBodyBytes 'pastTheLargestBody'
+		open = part.count() == HttpReadChunkBytes
+
+		body.append(merge part)
+
+		let received = body.count() as BytePos
+
+		if received > HttpLargestBodyBytes 'pastTheLargestBody'
 			throw HttpError.invalidResponse
 		end 'pastTheLargestBody'
 
-		if exceedsCap(cap, bodyBytes: inbound.unreadBytes()) 'pastTheCap'
+		if exceedsCap(cap, bodyBytes: received) 'pastTheCap'
 			throw HttpError.bodyTooLarge
 		end 'pastTheCap'
 	end 'drain'
 
-	return inbound.take(inbound.unreadBytes())
+	return String.from(body)
 end 'readUntilClosed'
 
-function readChunkedBody(inbound HttpInbound, cap HttpBodyCap) returns String throws HttpError
+function readChunkedBody(inbound HttpTransportReader, cap HttpBodyCap) returns String throws HttpError
 	let body = StringBuilder.create()
 	var bodyBytes = 0 as BytePos
-	var size = try chunkSizeOf(try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes))
+	var size = try chunkSizeOf(try readChunkLine(inbound))
 
 	while size > 0 'eachChunk'
 		if size > HttpLargestBodyBytes - bodyBytes 'pastTheLargestBody'
@@ -578,13 +585,13 @@ function readChunkedBody(inbound HttpInbound, cap HttpBodyCap) returns String th
 
 		body.append(try readDeclaredBody(inbound, length: size))
 
-		let dataEnd = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
+		let dataEnd = try readChunkLine(inbound)
 
 		if not dataEnd.isEmpty() 'dataOverranItsSize'
 			throw HttpError.invalidResponse
 		end 'dataOverranItsSize'
 
-		size = try chunkSizeOf(try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes))
+		size = try chunkSizeOf(try readChunkLine(inbound))
 	end 'eachChunk'
 
 	try discardTrailerSection(inbound)
@@ -592,9 +599,9 @@ function readChunkedBody(inbound HttpInbound, cap HttpBodyCap) returns String th
 	return body.build()
 end 'readChunkedBody'
 
-function discardTrailerSection(inbound HttpInbound) throws HttpError
+function discardTrailerSection(inbound HttpTransportReader) throws HttpError
 	var trailerBytes = 0 as BytePos
-	var field = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
+	var field = try readChunkLine(inbound)
 
 	while not field.isEmpty() 'eachTrailerField'
 		trailerBytes = trailerBytes + field.byteLength() + HttpLineBreak.byteLength()
@@ -603,7 +610,7 @@ function discardTrailerSection(inbound HttpInbound) throws HttpError
 			throw HttpError.invalidResponse
 		end 'pastTheCap'
 
-		field = try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes)
+		field = try readChunkLine(inbound)
 	end 'eachTrailerField'
 end 'discardTrailerSection'
 

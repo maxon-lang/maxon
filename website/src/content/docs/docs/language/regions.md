@@ -334,6 +334,25 @@ region (`'spare' is mutable outside 'index'; a call into an isolated region take
 isolated`). For an `if` or `while` the open covers the condition alone; a `for` or `match` over the value
 opens it for the whole statement.
 
+### Part Reads and Handed-Back Results
+
+A read of an `isolated` field, element or payload outside a block is a **part read**: data its region still
+holds. A part read becomes no other holder's data, whatever road it takes. Binding it, storing it in a field
+or a variable, returning it, putting it in a tuple, a union or a constructor, capturing it in a closure,
+freezing it, casting it `as isolated`, and handing it to an `async` call, a service message, an `isolated`
+parameter or a parameter that keeps it are **E3198**. The read carries its mark through a join (`if … else`,
+a ternary, a `match` arm, `otherwise`), through a field of it, through the result of a call given it, through
+each element a `for` loop hands out over an `isolated` collection field, and through a closure that captures
+it. `.clone()` and a function that `returns isolated` make a fresh value of a part read, and a value read out
+of one — a number, a count, a comparison — leaves freely.
+
+A method of an opened region that hands back mutable data of that region (`holder.blob.inner()`) gives a
+**handed-back result**, which the same statement consumes: a comparison, a `for` loop over it, or a call
+whose other inputs and whose result are values (`holder.blob.inner().count()`). One still unconsumed at the
+end of the statement is **E3201** (``'inner' hands back mutable data of the isolated region it opens; use it
+inside a `modify` block``). The message quotes the whole argument or receiver that carries the read.
+`specs/regions-soundness.md` pins these.
+
 ### `swap` and `merge`
 
 `swap path with value` takes the region out of an `isolated` field or element and leaves `value` in the slot:

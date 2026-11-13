@@ -509,6 +509,15 @@ end 'ParenGroupFactsTable'
 
 let noParenGroupFacts = ParenGroupFactsTable.unscanned
 
+typealias GroupOpenerMap = Map with (ElementIndex, ElementIndex)
+
+union GroupOpenerTable
+	unscanned
+	entries(openers GroupOpenerMap)
+end 'GroupOpenerTable'
+
+let noGroupOpeners = GroupOpenerTable.unscanned
+
 typealias OpenParenStack = Array with ElementIndex
 typealias OpenParenCommaFlags = Array with bool
 typealias OpenParenBracketDepths = Array with NestingDepth
@@ -523,10 +532,46 @@ end 'shiftInnermostBracketDepth'
 // asked about again and again, and a fresh walk per ask makes the compile superlinear.
 export type ParenGroups
 	var table as ParenGroupFactsTable
+	var openers as GroupOpenerTable
 
 	export static function create() returns ParenGroups
-		return Self{table: noParenGroupFacts}
+		return Self{table: noParenGroupFacts, openers: noGroupOpeners}
 	end 'create'
+
+	export function openOf(tokens TokenArray, close ElementIndex) returns ElementIndex
+		return try self.openersOf(tokens).get(close) otherwise panic("ParenGroups.openOf: token {close} closes no group")
+	end 'openOf'
+
+	function openersOf(tokens TokenArray) returns GroupOpenerMap
+		match self.openers 'state'
+			unscanned then break
+			entries(known) then return known
+		end 'state'
+
+		let fresh = self.scanOpeners(tokens)
+		self.openers = GroupOpenerTable.entries(fresh)
+		return fresh
+	end 'openersOf'
+
+	function scanOpeners(tokens TokenArray) returns GroupOpenerMap
+		let found = GroupOpenerMap.create()
+		let opens = OpenParenStack.create(0)
+		var i = 0 as ElementIndex
+
+		while i < tokens.count() 'eachToken'
+			let kind = tokenKindAt(tokens, index: i)
+
+			if tokenKindOpensAGroup(kind) 'opens'
+				opens.push(i)
+			end 'opens' else if tokenKindClosesAGroup(kind) and not opens.isEmpty() 'closes'
+				found.upsert(i, value: try opens.pop() otherwise panic("ParenGroups.scanOpeners: the stack of open groups is non-empty"))
+			end 'closes'
+
+			i = i + 1
+		end 'eachToken'
+
+		return found
+	end 'scanOpeners'
 
 	// An unterminated group answers the EOF token's index, the one answer at which the token is not a `)`:
 	// callers tell a match from malformed source by that, and the real parse reports the source.

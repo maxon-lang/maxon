@@ -394,4 +394,5 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:7:12: 'Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation
+error E3104: <fragment>:13:17: an `async` spawn lowers to the runtime entry '__gt_spawn', which has no wasm32-wasi implementation
 ```

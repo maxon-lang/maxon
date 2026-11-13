@@ -117,56 +117,35 @@ public enum FilePermission
 	executable  // 0755 - executable permissions (Unix)
 end 'FilePermission'
 
-let ReadChunkBytes = 4096
+let FileReadFailedReason = "reading the file failed"
 
-/// A file handle opened for reading.
-type FileReader
+public type FileSource implements ByteSource
 	let file as __ManagedFile
 
-	/// Open file for reading, throwing if not found
-	static function open(path String) returns FileReader throws FileReadError
+	static function open(path String) returns FileSource throws FileReadError
 		let result = try __ManagedFile.openRead(path.addressableBytes()) otherwise (e) 'openFailed'
 			throw readFailureOf(e)
 		end 'openFailed'
 
-		return FileReader{file: result}
+		return FileSource{file: result}
 	end 'open'
 
-	/// Read entire file into managed memory with extra bytes for null terminator etc.
-	/// It reads until a read returns nothing, past `size()`: a Linux `/proc` file reports a size of 0
-	/// and still holds text (`specs/file-io.md` pins this).
-	function readAll(extraBytes FileSize) returns __ManagedMemory throws FileReadError
-		let size = try file.size() otherwise (e) 'sizeFailed'
-			throw readFailureOf(e)
-		end 'sizeFailed'
+	public function readSome(most ReadCapacity) returns isolated ByteArray throws StreamError
+		let managed = (try __ManagedMemory.create(most, 1) otherwise 'createErr'
+			panic("FileSource.readSome: create — most >= 1 guaranteed")
+		end 'createErr') as isolated __ManagedMemory
 
-		let managed = try __ManagedMemory.create(size + ReadChunkBytes, 1) otherwise 'createErr'
-			panic("File.readAll: create — size + ReadChunkBytes is positive")
-		end 'createErr'
+		_ = try file.readAppending(managed, most) otherwise 'readFailed'
+			throw StreamError.failed(FileReadFailedReason)
+		end 'readFailed'
 
-		while true 'eachChunk'
-			if managed.capacity() - (managed.length() as ReportedCapacity) < (ReadChunkBytes as ReportedCapacity) 'roomForAChunk'
-				try managed.grow((managed.length() as FileSize) + ReadChunkBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
-			end 'roomForAChunk'
+		return ByteArray.init(managed)
+	end 'readSome'
 
-			let got = try file.readAppending(managed, managed.capacity() - (managed.length() as ReportedCapacity)) otherwise (e) 'readFailed'
-				throw readFailureOf(e)
-			end 'readFailed'
-
-			if got == 0 'endOfFile'
-				break
-			end 'endOfFile'
-		end 'eachChunk'
-
+	public function close()
 		file.close()
-
-		if managed.capacity() < ((managed.length() as FileSize) + extraBytes) as ReportedCapacity 'roomForTheExtra'
-			try managed.grow((managed.length() as FileSize) + extraBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
-		end 'roomForTheExtra'
-
-		return managed
-	end 'readAll'
-end 'FileReader'
+	end 'close'
+end 'FileSource'
 
 /// A file handle opened for writing.
 type FileWriter
@@ -212,33 +191,35 @@ end 'openForWriting'
 public type File
 	/// Read text file content as a UTF-8 string
 	public static function readText(path FilePath) returns String throws FileReadError
-		let reader = try FileReader.open(path.path)
-		let managed = try reader.readAll(1)
-		let len = managed.length()
-
-		// Write null terminator: len is within capacity (extraBytes=1) but at the
-		// length boundary, so temporarily extend length to allow setByte at that index
-		try managed.setLength(len + 1) otherwise 'lenErr1'
-			panic("File.readText: setLength(len+1) — extraBytes=1 guarantees capacity")
-		end 'lenErr1'
-
-		try managed.setByte(len, 0) otherwise 'setErr'
-			panic("File.readText: setByte at null terminator — length just extended to len+1")
-		end 'setErr'
-
-		try managed.setLength(len) otherwise 'lenErr2'
-			panic("File.readText: setLength(len) — restoring original length always valid")
-		end 'lenErr2'
-
-		return String.init(managed)
+		return String.from(try readWhole(path))
 	end 'readText'
 
 	/// Read file content as raw bytes
 	public static function readBinary(path FilePath) returns ByteArray throws FileReadError
-		let reader = try FileReader.open(path.path)
-		let managed = try reader.readAll(0)
-		return ByteArray.init(managed)
+		return try readWhole(path)
 	end 'readBinary'
+
+	/// Open a file for reading as a `FileStreamReader`: lines, exact byte counts and the rest of the file.
+	public static function openRead(path FilePath) returns FileStreamReader throws FileReadError
+		return StreamReader.over(try FileSource.open(path.path))
+	end 'openRead'
+
+	static function readWhole(path FilePath) returns ByteArray throws FileReadError
+		let reader = try File.openRead(path)
+
+		let content = try reader.readToEnd() otherwise (cause) 'unread'
+			match cause 'cause'
+				failed then throw FileReadError.failed
+				timedOut or
+				closed or
+				secure then panic("File: reading a file does not throw `{cause.name}`")
+			end 'cause'
+		end 'unread'
+
+		reader.source.close()
+
+		return merge content
+	end 'readWhole'
 
 	/// Write string content to a text file
 	public static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError

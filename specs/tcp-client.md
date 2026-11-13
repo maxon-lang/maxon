@@ -19,7 +19,6 @@ TCP client networking with automatic resource cleanup via the managed memory sys
 - `resolveFailed` — DNS resolution failed
 - `connectFailed` — TCP connection failed
 - `sendFailed` — Send operation failed
-- `recvFailed` — Receive operation failed
 - `connectionClosed` — Remote peer closed the connection
 
 **API:**
@@ -31,8 +30,8 @@ let client = try TcpClient.connect("hostname", port: 4242)
 // Send a string
 let bytesSent = try client.send("Hello\n")
 
-// Receive up to 1024 bytes
-let response = try client.recv(1024)
+// Receive up to 1024 bytes; an empty answer is the end of the connection
+let response = String.from(try client.readSome(1024))
 
 // Explicit close (also happens automatically on scope exit)
 client.close()
@@ -50,8 +49,8 @@ function runEcho() returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("tcpbin.com", port: 4242)
 	let msg = "Hello Maxon\n"
 	_ = try client.send(msg)
-	let response = try client.recv(1024)
-	print(response)
+	let response = try client.readSome(1024) otherwise return 1
+	print(String.from(response))
 	return 0
 end 'runEcho'
 
@@ -163,7 +162,7 @@ let RequestBytes = 64
 
 function echoOnce(listener TcpListener) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
-	let heard = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	let heard = String.from(try conn.readSome(RequestBytes) otherwise return "recv-failed")
 	_ = try conn.send(heard) otherwise return "send-failed"
 
 	return heard
@@ -181,13 +180,13 @@ function reach(spelling String, port NetworkPort, listener TcpListener) returns 
 		peer.cancel()
 		return "send-failed"
 	end 'cancelled17'
-	let answer = try client.recv(RequestBytes) otherwise 'cancelled18'
+	let answer = try client.readSome(RequestBytes) otherwise 'cancelled18'
 		peer.cancel()
 		return "recv-failed"
 	end 'cancelled18'
 	let heard = await peer
 
-	return "{answer}/{heard}"
+	return "{String.from(answer)}/{heard}"
 end 'reach'
 
 function main() returns ExitCode

@@ -27,8 +27,6 @@ public typealias ExitInt = int(0 to u32.max)
 /// macOS the errno mapped onto its Windows equivalent, 31 when it has none.
 public typealias OsErrorCode = int(0 to u32.max)
 
-typealias ExitAnswer = int(-4 to u32.max)
-
 // An OS process id, which is a `pid_t` on POSIX and a DWORD on Windows — never negative, and never
 // wider than the i64 the spawn builtins answer in. Narrowing it makes every `Pid` position a guarded
 // door, so it is worth being exact about where the builtins' `-1` is decoded, because it is NOT
@@ -53,14 +51,36 @@ public typealias Pid = int(0 to u64.max)
 // `String`, so the backing `__ManagedMemory`'s signed machine-word length bounds it.
 public typealias ByteLimit = int(0 to u64.max)
 
+public typealias WaitDeadlineMs = int(1 to u64.max)
+
+public union WaitDeadline
+	none
+	within(timeoutMs WaitDeadlineMs)
+end 'WaitDeadline'
+
+let RuntimeNoDeadlineMs = 0
+
+function runtimeWaitMs(deadline WaitDeadline) returns DurationMs
+	return match deadline 'bound'
+		none gives RuntimeNoDeadlineMs
+		within(timeoutMs) gives timeoutMs as DurationMs
+	end 'bound'
+end 'runtimeWaitMs'
+
+function expiredAfterMs(deadline WaitDeadline) returns DurationMs
+	match deadline 'bound'
+		none then panic("the runtime reported an expired deadline for a wait that has none")
+		within(timeoutMs) then return timeoutMs as DurationMs
+	end 'bound'
+end 'expiredAfterMs'
+
 // Stdin discriminator passed across the builtin boundary. Raw values match
 // the runtime contract (see X86/ARM64 emitters and the parent plan).
 //
-// ⭐ `hold` IS A STDIN PIPE WITH NO PAYLOAD QUEUED — what `StreamingSubprocess` wants. `bytes` cannot
-// say that: its arm always carries a payload, so an empty `bytes` payload is NOT the same request.
-// The number is 4 because that is the value the compiler's runtime decodes; its constant is
-// `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), and a value the language can spell
-// must not answer to a second name inside one compiler.
+// ⭐ `hold` IS A STDIN PIPE WITH NO PAYLOAD QUEUED. `InputSource.bytes` spawns with it too and queues its
+// payload afterwards (`queueStdinPayload`). The number is 4 because that is the value the compiler's
+// runtime decodes; its constant is `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), and
+// a value the language can spell must not answer to a second name inside one compiler.
 //
 // ⚠ `emitSubpStdinKindWantsPipe` is the ONE place the compiler's runtime asks which kinds want a pipe.
 // ⇒ **the divergence to watch for is a NEW kind added to this enum and not to that set.**
@@ -331,12 +351,10 @@ end 'RunProcessError'
 /// `StreamingSubprocess`. Each carries the actionable detail rather than just a
 /// kind tag.
 ///
-/// `endOfStream` is what a line reader throws once the child's stream has ended.
-///
 /// `timeout` carries the output the child had already produced when the
 /// deadline killed it, because that partial text is usually the only evidence
 /// of why it hung. Both fields are empty where the layer that threw was not
-/// collecting output — see `StreamingSubprocess.waitWithTimeout`.
+/// collecting output — see `StreamingSubprocess.wait`.
 ///
 /// `treeNotEnded` is a deadline whose kill could not fully end the child's
 /// process tree. It carries the output as `timeout` does; `deadlineFired()` is
@@ -354,7 +372,6 @@ public union SubprocessError implements Error
 	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
 	detachRefused(osError OsErrorCode)
 	inputTooLarge
-	endOfStream
 	statusLost(stdout String, stderr String)
 
 	/// Human-readable rendering for diagnostics. Centralises the wording so
@@ -369,7 +386,6 @@ public union SubprocessError implements Error
 			treeNotEnded(elapsedMs, _, _, osError) gives "timed out after {elapsedMs}ms, but the child's process tree could not be fully ended: os error {osError}"
 			detachRefused(osError) gives "runDetached: the process could not leave the job this program runs in, because that job does not allow breakaway (os error {osError}); run the program outside that job or allow breakaway on it"
 			inputTooLarge gives "stdin payload too large"
-			endOfStream gives "end of stream"
 			statusLost gives "the child ended, and its exit status went to another process, so it is not available"
 		end 'e'
 	end 'displayReason'
@@ -384,7 +400,6 @@ public union SubprocessError implements Error
 			treeNotEnded or
 			detachRefused or
 			inputTooLarge or
-			endOfStream or
 			statusLost gives false
 		end 'e'
 	end 'timedOut'
@@ -400,25 +415,9 @@ public union SubprocessError implements Error
 			ioFailed or
 			detachRefused or
 			inputTooLarge or
-			endOfStream or
 			statusLost gives false
 		end 'e'
 	end 'deadlineFired'
-
-	/// True for `endOfStream`: a line reader met the end of the child's stream.
-	public function endedTheStream() returns bool
-		return match self 'e'
-			endOfStream gives true
-			executableNotFound or
-			spawnFailed or
-			ioFailed or
-			timeout or
-			treeNotEnded or
-			detachRefused or
-			inputTooLarge or
-			statusLost gives false
-		end 'e'
-	end 'endedTheStream'
 end 'SubprocessError'
 
 // =============================================================================
@@ -483,10 +482,9 @@ public type Configuration
 	public var standardOutput as OutputDestination
 	public var standardError as OutputDestination
 
-	/// 0 means "wait forever". Non-zero is the kill-after deadline, and what it
-	/// kills is the child's whole process TREE: a child that is a shell takes
-	/// every process it started with it.
-	public var timeoutMs as DurationMs
+	/// The kill-after deadline. What it kills is the child's whole process
+	/// TREE: a child that is a shell takes every process it started with it.
+	public var deadline as WaitDeadline
 	public var platformOptions as PlatformOptions
 
 	/// Build a Configuration with sensible defaults: empty argv, the given working directory, inherited
@@ -500,7 +498,7 @@ public type Configuration
 			standardInput: InputSource.none,
 			standardOutput: OutputDestination.collect(defaultCaptureLimit),
 			standardError: OutputDestination.collect(defaultCaptureLimit),
-			timeoutMs: 0,
+			deadline: WaitDeadline.none,
 			platformOptions: PlatformOptions.defaults()
 		}
 	end 'create'
@@ -528,11 +526,11 @@ end 'Configuration'
 // =============================================================================
 
 public type Subprocess
-	/// Run `executable arguments...` and collect output. A timeout of 0 waits indefinitely.
-	public static function run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, timeoutMs DurationMs = 0) returns CollectedOutput throws SubprocessError
+	/// Run `executable arguments...` and collect output.
+	public static function run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput throws SubprocessError
 		let c = Configuration.create(executable, workingDirectory: workingDirectory)
 		c.arguments = arguments
-		c.timeoutMs = timeoutMs
+		c.deadline = deadline
 		return try c.run()
 	end 'run'
 
@@ -549,18 +547,18 @@ public type Subprocess
 
 		let handle = __Builtins.subprocessSpawn(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 
-		if handle == -1 'spawnFailed'
+		if handle == SpawnFailedAnswer 'spawnFailed'
 			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
 
 		queueStdinPayload(handle as StreamingHandle, source: config.standardInput)
 
 		let pid = __Builtins.subprocessGetPid(handle)
-		let result = __Builtins.subprocessWaitCollect(handle, config.timeoutMs)
+		let result = __Builtins.subprocessWaitCollect(handle, runtimeWaitMs(config.deadline))
 
 		let osError = lastOsErrorCode()
 
-		if result < 0 'waitFailed'
+		if result == WaitFailedAnswer 'waitFailed'
 			let reason = lastErrorMessage()
 			__Builtins.subprocessReleaseHandle(handle)
 			throw SubprocessError.ioFailed(reason)
@@ -592,11 +590,19 @@ public type Subprocess
 		let emptyCStr = subprocessEmptyCString()
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, UncollectedStreamLimit, OutputKind.discard.rawValue, emptyCStr, UncollectedStreamLimit, flags)
 
-		if pid < 0 'spawnFailed'
-			throw spawnFailure(operands.executablePath) if pid == -1 else SubprocessError.detachRefused(lastOsErrorCode())
+		if pid == SpawnFailedAnswer 'spawnFailed'
+			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
+
+		if pid == DetachRefusedAnswer 'detachRefused'
+			throw SubprocessError.detachRefused(lastOsErrorCode())
+		end 'detachRefused'
+
+		if pid < 0 'unknownAnswer'
+			panic("Subprocess.runDetachedConfiguration: the runtime answered {pid}, which is none of a process id, {SpawnFailedAnswer} and {DetachRefusedAnswer}")
+		end 'unknownAnswer'
 
 		return pid as Pid
 	end 'runDetachedConfiguration'
@@ -909,11 +915,11 @@ end 'terminationStatusFromKind'
 
 function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 	return match src 's'
-		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: 0)
-		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: 0)
-		bytes gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: "", limit: 0)
-		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: 0)
-		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: 0)
+		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: UncollectedStreamLimit)
+		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: UncollectedStreamLimit)
+		bytes gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: UncollectedStreamLimit)
+		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: UncollectedStreamLimit)
+		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: UncollectedStreamLimit)
 	end 's'
 end 'stdinTripleFromSource'
 
@@ -928,17 +934,17 @@ function queueStdinPayload(handle StreamingHandle, source InputSource)
 end 'queueStdinPayload'
 
 function queuePayload(handle StreamingHandle, data String)
-	if __Builtins.subprocessQueueStdin(handle, data.cstr(), data.byteLength()) != 0 'refused'
+	if __Builtins.subprocessQueueStdin(handle, data.cstr(), data.byteLength()) != StdinAcceptedAnswer 'refused'
 		panic("Subprocess: the runtime refused the stdin payload of handle {handle}, whose spawn has just answered it with a pipe")
 	end 'refused'
 end 'queuePayload'
 
 function outputTripleFromDestination(dst OutputDestination) returns StdioRuntimeTriple
 	return match dst 'o'
-		discard gives StdioRuntimeTriple.create(OutputKind.discard.rawValue, data: "", limit: 0)
-		inherit gives StdioRuntimeTriple.create(OutputKind.inherit.rawValue, data: "", limit: 0)
+		discard gives StdioRuntimeTriple.create(OutputKind.discard.rawValue, data: "", limit: UncollectedStreamLimit)
+		inherit gives StdioRuntimeTriple.create(OutputKind.inherit.rawValue, data: "", limit: UncollectedStreamLimit)
 		collect(limitBytes) gives StdioRuntimeTriple.create(OutputKind.collect.rawValue, data: "", limit: limitBytes)
-		file(path) gives StdioRuntimeTriple.create(OutputKind.file.rawValue, data: path.path, limit: 0)
+		file(path) gives StdioRuntimeTriple.create(OutputKind.file.rawValue, data: path.path, limit: UncollectedStreamLimit)
 	end 'o'
 end 'outputTripleFromDestination'
 
@@ -1009,65 +1015,89 @@ end 'lastErrorMessage'
 // generation grows by one per spawn on a slot, so the range holds 2^57 spawns of one slot.
 typealias StreamingHandle = int(0 to u64.max)
 
-/// The stdout side of a `StreamingSubprocess`, taken out with `takeStdout`. It only reads lines: it has
-/// no `release` and no `wait`. `StreamingSubprocess.reclaimStdout` returns the stdout side to the child
-/// once the coroutine that held the reader has ended.
-public type StdoutReader
+public type ChildOutput implements ByteSource
+	let handle as StreamingHandle
+	let stream as StdioStream
+
+	static function over(handle StreamingHandle, stream StdioStream) returns ChildOutput
+		return Self{handle: handle, stream: stream}
+	end 'over'
+
+	public function readSome(most ReadCapacity) returns isolated ByteArray throws StreamError
+		let raw = __Builtins.subprocessReadAvailable(handle, stream.rawValue, most) as isolated __ManagedMemory
+
+		if raw.length() == 0 'nothingRead'
+			try requireEnded()
+		end 'nothingRead'
+
+		return ByteArray.init(raw)
+	end 'readSome'
+
+	function requireEnded() throws StreamError
+		match streamState(handle, stream: stream) 'state'
+			atEof then return
+			open then throw StreamError.failed("a read on the child's {streamName(stream)} answered nothing with the stream still open")
+			readFailed then throw StreamError.failed("a read on the child's {streamName(stream)} failed")
+			noSuchChild then throw StreamError.closed
+		end 'state'
+	end 'requireEnded'
+end 'ChildOutput'
+
+module type ChildInput
 	let handle as StreamingHandle
 
-	static function over(handle StreamingHandle) returns StdoutReader
+	static function over(handle StreamingHandle) returns ChildInput
 		return Self{handle: handle}
 	end 'over'
 
-	/// Read one line, without its terminator. Same contract as `StreamingSubprocess.readStdoutLine`.
-	public function readLine() returns String throws SubprocessError
-		let raw = __Builtins.subprocessReadStdoutLine(handle, defaultReadLineCap)
-		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
-	end 'readLine'
+	module function write(text String) throws SubprocessError
+		let rc = __Builtins.subprocessWriteStdinBytes(handle, text.cstr(), text.byteLength())
 
-	/// Read exactly `count` bytes, fewer only at end of stream. Same contract as
-	/// `StreamingSubprocess.readStdoutBytes`.
-	public function readBytes(count ByteLimit) returns String throws SubprocessError
-		return try readStdoutBytesOf(handle, count: count)
-	end 'readBytes'
-end 'StdoutReader'
+		if rc == StdinQueuePendingAnswer 'queued'
+			throw SubprocessError.ioFailed(stdinQueuedReason)
+		end 'queued'
 
-/// The stderr side of a `StreamingSubprocess`, taken out with `takeStderr`. It only reads lines: it has no
-/// `release` and no `wait`. `StreamingSubprocess.reclaimStderr` returns the stderr side to the child once
-/// the coroutine that held the reader has ended.
-public type StderrReader
+		if rc != StdinAcceptedAnswer 'writeFailed'
+			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")
+		end 'writeFailed'
+	end 'write'
+end 'ChildInput'
+
+module typealias BlockedPasses = int(0 to 5)
+
+module let BlockedPassesNone = 0 as BlockedPasses
+module let BlockedPassesMax = 5 as BlockedPasses
+
+module type StdinWatch
 	let handle as StreamingHandle
 
-	static function over(handle StreamingHandle) returns StderrReader
+	static function over(handle StreamingHandle) returns Self
 		return Self{handle: handle}
 	end 'over'
 
-	/// Read one line, without its terminator. Same contract as `StreamingSubprocess.readStderrLine`.
-	public function readLine() returns String throws SubprocessError
-		let raw = __Builtins.subprocessReadStderrLine(handle, defaultReadLineCap)
-		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stderr)
-	end 'readLine'
-end 'StderrReader'
+	module function untilWritable(passes BlockedPasses)
+		let answer = __Builtins.subprocessAwaitStdinWritable(handle, passes)
 
-function readStdoutBytesOf(handle StreamingHandle, count ByteLimit) returns String throws SubprocessError
-	let raw = __Builtins.subprocessReadStdoutBytes(handle, count)
-
-	return String.init(try finishRead(handle, raw: raw, wanted: count, stream: StdioStream.stdout))
-end 'readStdoutBytesOf'
+		if answer != StdinAcceptedAnswer 'refused'
+			panic("StdinWatch.untilWritable: the runtime answered {answer} for handle {handle}, which is not {StdinAcceptedAnswer}; the pump cancels its watch before the child is released")
+		end 'refused'
+	end 'untilWritable'
+end 'StdinWatch'
 
 /// A child process whose stdin / stdout / stderr the caller drives by hand.
 ///
 /// Unlike `Subprocess.run(...)` (which fires the process, drains both output
 /// streams from one green thread, and returns a `CollectedOutput` when the
 /// child exits), `StreamingSubprocess` keeps the pipes open and exposes
-/// per-line `writeStdinLine` / `readStdoutLine` / `readStderrLine` operations.
+/// `writeStdinLine` and, through `takeStdout` / `takeStderr`, a `StreamReader` per output stream.
 /// Use it when the parent needs interactive request/response with a long-lived
 /// child — e.g. a worker pool that handles many jobs over its lifetime.
 ///
 /// Lifecycle:
 ///   let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
+///   let output = try child.takeStdout()
 ///   try child.writeStdinLine("JOB:1")
-///   let line = try child.readStdoutLine()
+///   let line = try output.readLine()
 ///   ...
 ///   child.closeStdin()  // optional — signals EOF to child
 ///   let code = try child.wait()  // blocks until child exits
@@ -1085,11 +1115,8 @@ public type StreamingSubprocess is unique
 	// (matches the "treat like file close" contract documented above).
 	public var released as bool
 
-	// True while the child's stdout side is out with a `StdoutReader`; the child's own stdout reads refuse
-	// until `reclaimStdout`.
 	var stdoutTaken as bool
 
-	// The stderr side's twin of `stdoutTaken`.
 	var stderrTaken as bool
 
 	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
@@ -1128,7 +1155,7 @@ public type StreamingSubprocess is unique
 		let flags = SpawnFlag.traced.rawValue if traced else 0
 		let rawHandle = __Builtins.subprocessSpawnStreaming(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), flags, operands.environment.block.addressableBytes(), operands.environment.source)
 
-		if rawHandle == -1 'spawnFailed'
+		if rawHandle == SpawnFailedAnswer 'spawnFailed'
 			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
 
@@ -1140,102 +1167,61 @@ public type StreamingSubprocess is unique
 	/// Write `line + "\n"` to the child's stdin, NUL bytes included. Throws on broken pipe.
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.
 	public function writeStdinLine(line String) throws SubprocessError
-		try requireLive()
-		let withNewline = "{line}\n"
-		let rc = __Builtins.subprocessWriteStdinBytes(handle, withNewline.cstr(), withNewline.byteLength())
-
-		if rc != 0 'writeFailed'
-			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")
-		end 'writeFailed'
+		try self.writeStdin("{line}\n")
 	end 'writeStdinLine'
 
-	/// Read one line from the child's stdout, WITHOUT the trailing newline (the runtime keeps the
-	/// terminating LF and this strips it, along with a stray CR so Windows CRLF never reaches a
-	/// caller). End of stream throws `SubprocessError.endOfStream`, and a refusal throws `ioFailed`;
-	/// an empty string is an empty line.
-	///
-	/// Blocks until a line is available or EOF is reached. Lines longer than
-	/// `maxBytes` are truncated and the remainder is delivered on the next
-	/// call. Default cap is 1 MiB which suits log-line / IPC-frame workloads.
-	public function readStdoutLine() returns String throws SubprocessError
-		return try Self.readStdoutLineCapped(self, maxBytes: defaultReadLineCap)
-	end 'readStdoutLine'
+	/// Write `text` as given, NUL bytes included. Throws on a broken pipe, and while a queued payload
+	/// is still being pushed.
+	public function writeStdin(text String) throws SubprocessError
+		try requireLive()
+		try ChildInput.over(handle).write(text)
+	end 'writeStdin'
 
-	/// Take the child's stdout side out as a `StdoutReader`; the child's own stdout reads refuse until
-	/// `reclaimStdout`. The reader can run in a coroutine beside the child's owner because it shares no
-	/// data with the child.
-	public function takeStdout() returns StdoutReader throws SubprocessError
-		try requireStdoutHere()
+	module function queueStdin(text String) throws SubprocessError
+		try requireLive()
+
+		let rc = __Builtins.subprocessQueueStdin(handle, text.cstr(), text.byteLength())
+
+		if rc == StdinQueuePendingAnswer 'queued'
+			throw SubprocessError.ioFailed(stdinQueuedReason)
+		end 'queued'
+
+		if rc != StdinAcceptedAnswer 'refused'
+			throw SubprocessError.ioFailed(stdinClosedReason)
+		end 'refused'
+	end 'queueStdin'
+
+	module function stdinWatch() returns StdinWatch throws SubprocessError
+		try requireLive()
+
+		return StdinWatch.over(handle)
+	end 'stdinWatch'
+
+	module function pushQueuedStdin() returns BytePos throws SubprocessError
+		try requireLive()
+		let remaining = __Builtins.subprocessPushStdin(handle)
+
+		if remaining == StdinPushRefusedAnswer 'refused'
+			throw SubprocessError.ioFailed(stdinClosedReason)
+		end 'refused'
+
+		return remaining as BytePos
+	end 'pushQueuedStdin'
+
+	/// Take the child's stdout out as a `ChildOutputReader`, once: a second take throws `ioFailed`. The
+	/// reader can run in a coroutine beside the child's owner because it shares no data with the child.
+	public function takeStdout() returns isolated ChildOutputReader throws SubprocessError
+		try requireUntaken(StdioStream.stdout)
 		self.stdoutTaken = true
-		return StdoutReader.over(self.handle)
+		return StreamReader.over(ChildOutput.over(self.handle, stream: StdioStream.stdout))
 	end 'takeStdout'
 
-	/// Make the child's stdout side its own again, once the coroutine that held the `StdoutReader` has ended.
-	/// Refuses a child whose stdout is not out.
-	public function reclaimStdout() throws SubprocessError
-		if not self.stdoutTaken 'notOut'
-			throw SubprocessError.ioFailed("reclaimStdout: this child's stdout is not out")
-		end 'notOut'
-
-		self.stdoutTaken = false
-	end 'reclaimStdout'
-
-	public function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
-		try requireStdoutHere()
-		let raw = __Builtins.subprocessReadStdoutLine(handle, maxBytes)
-		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
-	end 'readStdoutLineCapped'
-
-	/// Read EXACTLY `count` bytes from the child's stdout, blocking until it has
-	/// them. Returns FEWER only at end of stream, and then only what remained; a
-	/// refusal throws. A `count` of 0 returns "" without touching the pipe.
-	///
-	/// This is the reader a FRAMED protocol needs. `Content-Length: N\r\n\r\n` followed
-	/// by N body bytes puts NO newline after the body, so `readStdoutLine` blocks
-	/// for ever on a terminator that never arrives; `readStdoutLineCapped`'s cap is
-	/// a truncation ceiling, not a length, and answers the whole buffered remainder
-	/// once it is exceeded. The two readers share one per-handle buffer, so a
-	/// caller may read headers by line and the body by count on the same stream.
-	///
-	/// No newline is stripped, unlike the line readers: a read that ends at a count
-	/// has no terminator to remove, so a CR or an LF inside the span is part of the
-	/// answer.
-	public function readStdoutBytes(count ByteLimit) returns String throws SubprocessError
-		try requireStdoutHere()
-		return try readStdoutBytesOf(handle, count: count)
-	end 'readStdoutBytes'
-
-	/// Read one line from the child's stderr. Same contract as `readStdoutLine`: the terminator is
-	/// trimmed here, end of stream throws `SubprocessError.endOfStream`, and a refusal throws
-	/// `ioFailed`.
-	public function readStderrLine() returns String throws SubprocessError
-		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
-	end 'readStderrLine'
-
-	/// Take the child's stderr side out as a `StderrReader`; the child's own stderr reads refuse until
-	/// `reclaimStderr`. The reader can run in a coroutine beside the child's owner because it shares no
-	/// data with the child.
-	public function takeStderr() returns StderrReader throws SubprocessError
-		try requireStderrHere()
+	/// Take the child's stderr out as a `ChildOutputReader`, once: a second take throws `ioFailed`.
+	public function takeStderr() returns isolated ChildOutputReader throws SubprocessError
+		try requireUntaken(StdioStream.stderr)
 		self.stderrTaken = true
-		return StderrReader.over(self.handle)
+		return StreamReader.over(ChildOutput.over(self.handle, stream: StdioStream.stderr))
 	end 'takeStderr'
-
-	/// Make the child's stderr side its own again, once the coroutine that held the `StderrReader` has ended.
-	/// Refuses a child whose stderr is not out.
-	public function reclaimStderr() throws SubprocessError
-		if not self.stderrTaken 'notOut'
-			throw SubprocessError.ioFailed("reclaimStderr: this child's stderr is not out")
-		end 'notOut'
-
-		self.stderrTaken = false
-	end 'reclaimStderr'
-
-	public function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
-		try requireStderrHere()
-		let raw = __Builtins.subprocessReadStderrLine(handle, maxBytes)
-		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stderr)
-	end 'readStderrLineCapped'
 
 	/// Close our write end of the child's stdin pipe. After this the child
 	/// will see EOF on its stdin and (for typical line-reading workers) exit
@@ -1249,43 +1235,42 @@ public type StreamingSubprocess is unique
 		end 'stillOpen'
 	end 'closeStdin'
 
-	/// Park the calling green thread until the child exits, then return its
-	/// exit code. Throws `SubprocessError.ioFailed` on a wait error (e.g. the
-	/// runtime can no longer locate the handle).
-	public function wait() returns ExitInt throws SubprocessError
-		return try Self.waitWithTimeout(self, timeoutMs: 0)
-	end 'wait'
-
-	/// Park the calling green thread until the child exits or `timeoutMs`
-	/// elapses (0 = wait forever); other green threads, `async` coroutines of
-	/// the same strand included, keep running meanwhile.
-	/// Returns the exit code on success; throws `SubprocessError.timeout` if
-	/// the timeout fires (the runtime forcibly terminates the child's whole
-	/// process tree in that case), `SubprocessError.treeNotEnded` if the kill
-	/// could not fully end that tree, `SubprocessError.statusLost` for a child whose
-	/// exit status went to another process (with empty output fields), or `SubprocessError.ioFailed` on a wait
-	/// error. Both deadline errors carry empty output fields: a streaming child's bytes belong
-	/// to the caller draining the streams, and this layer never sees them.
-	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
+	/// Park the calling green thread until the child exits or `deadline` elapses; other green threads,
+	/// `async` coroutines of the same strand included, keep running meanwhile. Returns the exit code on
+	/// success; throws `SubprocessError.timeout` if the deadline fires (the runtime forcibly terminates
+	/// the child's whole process tree in that case), `SubprocessError.treeNotEnded` if the kill could not
+	/// fully end that tree, `SubprocessError.statusLost` for a child whose exit status went to another
+	/// process (with empty output fields), or `SubprocessError.ioFailed` on a wait error (e.g. the
+	/// runtime can no longer locate the handle). Both deadline errors carry empty output fields: a
+	/// streaming child's bytes belong to the caller draining the streams, and this layer never sees them.
+	public function wait(deadline WaitDeadline = WaitDeadline.none) returns ExitInt throws SubprocessError
 		try requireLive()
-		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
+		let rc = __Builtins.subprocessWaitExit(handle, runtimeWaitMs(deadline))
 
-		if rc == -2 'timedOut'
-			throw SubprocessError.timeout(timeoutMs, stdout: "", stderr: "")
+		if rc >= 0 'exited'
+			return rc as ExitInt
+		end 'exited'
+
+		if rc == WaitFailedAnswer 'failed'
+			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}")
+		end 'failed'
+
+		if rc == WaitTimedOutAnswer 'timedOut'
+			throw SubprocessError.timeout(expiredAfterMs(deadline), stdout: "", stderr: "")
 		end 'timedOut'
+
+		if rc == WaitTreeSurvivedAnswer 'treeSurvived'
+			throw SubprocessError.treeNotEnded(expiredAfterMs(deadline), stdout: "", stderr: "", osError: lastOsErrorCode())
+		end 'treeSurvived'
 
 		if rc == ReapedElsewhereAnswer 'statusLost'
 			throw SubprocessError.statusLost("", stderr: "")
 		end 'statusLost'
 
-		if rc < 0 'failed'
-			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}") if rc == -1 else SubprocessError.treeNotEnded(timeoutMs, stdout: "", stderr: "", osError: lastOsErrorCode())
-		end 'failed'
+		panic("StreamingSubprocess.wait: the runtime answered {rc}, which is none of an exit code, {WaitFailedAnswer}, {WaitTimedOutAnswer}, {WaitTreeSurvivedAnswer} and {ReapedElsewhereAnswer}")
+	end 'wait'
 
-		return rc as ExitInt
-	end 'waitWithTimeout'
-
-	/// End the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no
+	/// End the child's whole process tree at once, the kill a `wait` deadline sends but with no
 	/// wait to expire, and return once the child itself is gone. The child may already have exited: what it
 	/// left running is the tree. A process started with `runDetached()` is outside it. A handle
 	/// `release()` has given back answers `unconfirmed`.
@@ -1296,12 +1281,19 @@ public type StreamingSubprocess is unique
 
 		let rc = __Builtins.subprocessEndTree(handle)
 
-		match rc 'ended'
-			0 then return TreeEnd.ended
-			-1 then return TreeEnd.unconfirmed(lastErrorMessage())
-			-3 then return TreeEnd.survived(lastOsErrorCode())
-			default panic("StreamingSubprocess.endTree: the runtime answered {rc}, which is none of 0, -1 and -3")
+		if rc == EndTreeEndedAnswer 'ended'
+			return TreeEnd.ended
 		end 'ended'
+
+		if rc == EndTreeUnconfirmedAnswer 'unconfirmed'
+			return TreeEnd.unconfirmed(lastErrorMessage())
+		end 'unconfirmed'
+
+		if rc == EndTreeSurvivedAnswer 'survived'
+			return TreeEnd.survived(lastOsErrorCode())
+		end 'survived'
+
+		panic("StreamingSubprocess.endTree: the runtime answered {rc}, which is none of {EndTreeEndedAnswer}, {EndTreeUnconfirmedAnswer} and {EndTreeSurvivedAnswer}")
 	end 'endTree'
 
 	/// The child's operating-system process id. Throws once the handle is released.
@@ -1318,8 +1310,8 @@ public type StreamingSubprocess is unique
 
 	/// Has the child exited? Answers without blocking and WITHOUT killing it.
 	///
-	/// ⭐ Neither `wait()` nor `waitWithTimeout()` can be asked this: the first blocks until the child ends,
-	/// and the second TERMINATES the child when its deadline fires. A parent that has to stay responsive —
+	/// ⭐ `wait()` cannot be asked this: with no deadline it blocks until the child ends, and with one it
+	/// TERMINATES the child when the deadline fires. A parent that has to stay responsive —
 	/// draining output while the child runs — needs an answer that changes nothing.
 	///
 	/// ⚠ A handle `release()` has given back answers `running`, because after `release()` there is no live
@@ -1329,37 +1321,23 @@ public type StreamingSubprocess is unique
 			return ExitPoll.running
 		end 'gone'
 
-		return exitPollOf(__Builtins.subprocessPollExit(handle) as ExitAnswer)
+		return exitPollOf(__Builtins.subprocessPollExit(handle))
 	end 'pollExit'
-
-	/// Whether another process has taken this child's exit status, so that `pollExit` can never report
-	/// the child's end and answers `running` for ever. Never blocks and never kills. A released handle
-	/// answers `false`. Whether a status is available depends on whether the child finished dying before the
-	/// process holding it, such as a debugger's stub, let it go.
-	public function isReapedElsewhere() returns bool
-		if released 'gone'
-			return false
-		end 'gone'
-
-		let raw = __Builtins.subprocessPollExit(handle) as ExitAnswer
-
-		return raw == ReapedElsewhereAnswer
-	end 'isReapedElsewhere'
 
 	/// Has the child ended, and how? `pollExit`'s answer, naming the signal that killed a child on Linux or
 	/// macOS as `signalled(signal)`. Never blocks and never kills.
 	public function pollTermination() returns TerminationPoll
 		return match self.pollExit() 'polled'
 			running gives TerminationPoll.running
+			reapedElsewhere gives TerminationPoll.reapedElsewhere
 			exited(code) gives TerminationPoll.ended(self.terminationAfterExit(code))
 		end 'polled'
 	end 'pollTermination'
 
 	/// Has a read of this child's `stream` found its end? Never blocks and never kills.
 	///
-	/// A stream's end is latched by a read, so a loop of `tryReadStdoutLine` or `tryReadStderrLine` calls
-	/// is what moves this to `true`; a stream nothing reads stays `false`. A read that failed and a
-	/// released handle also answer `true`.
+	/// A stream's end is latched by a read, so reading the stream is what moves this to `true`; a stream
+	/// nothing reads stays `false`. A read that failed and a released handle also answer `true`.
 	public function streamHasEnded(stream StdioStream) returns bool
 		if released 'gone'
 			return true
@@ -1379,41 +1357,14 @@ public type StreamingSubprocess is unique
 	end 'outputHasEnded'
 
 	function terminationAfterExit(code ExitInt) returns TerminationStatus
-		return match exitPollOf(__Builtins.subprocessExitSignal(handle) as ExitAnswer) 'signal'
-			running panic("StreamingSubprocess.pollTermination: the child answered that it had exited and then that it was running")
+		let signalPoll = exitPollOf(__Builtins.subprocessExitSignal(handle))
+
+		return match signalPoll 'signal'
+			running or
+			reapedElsewhere panic("StreamingSubprocess.pollTermination: the child answered that it had exited and then that it was {signalPoll.name}")
 			exited(signal) gives terminationWithSignal(code, signal: signal)
 		end 'signal'
 	end 'terminationAfterExit'
-
-	/// A line from the child's stdout if one is ALREADY buffered. Never blocks.
-	///
-	/// The terminator is stripped exactly as `readStdoutLine` strips it. ⭐ The answer is a UNION and not a
-	/// string, because a child's own BLANK LINE and a pipe holding nothing are the same bytes once the
-	/// terminator is off: a caller that read emptiness as "nothing yet" drops every blank line the child
-	/// writes, and nothing downstream can tell that it did. `none` says nothing about whether the stream has
-	/// ENDED — a caller that needs that asks `pollExit`, because a child that has exited writes no more.
-	/// Throws while the stdout side is out with a `StdoutReader`.
-	public function tryReadStdoutLine() returns LinePoll throws SubprocessError
-		if released 'gone'
-			return LinePoll.none
-		end 'gone'
-
-		try requireStdoutHere()
-
-		return bufferedLineIn(__Builtins.subprocessTryReadStdoutLine(handle, defaultReadLineCap))
-	end 'tryReadStdoutLine'
-
-	/// A line from the child's stderr if one is ALREADY buffered. Never blocks.
-	/// Same contract as `tryReadStdoutLine`.
-	public function tryReadStderrLine() returns LinePoll throws SubprocessError
-		if released 'gone'
-			return LinePoll.none
-		end 'gone'
-
-		try requireStderrHere()
-
-		return bufferedLineIn(__Builtins.subprocessTryReadStderrLine(handle, defaultReadLineCap))
-	end 'tryReadStderrLine'
 
 	/// Refuse every operation that would reach the runtime with a handle `release()` has given back.
 	/// The check belongs here rather than in a runtime guard because a handle is a raw pointer to a
@@ -1424,21 +1375,18 @@ public type StreamingSubprocess is unique
 		end 'gone'
 	end 'requireLive'
 
-	function requireStdoutHere() throws SubprocessError
+	function requireUntaken(stream StdioStream) throws SubprocessError
 		try requireLive()
 
-		if stdoutTaken 'out'
-			throw SubprocessError.ioFailed("stdout is out with a StdoutReader")
-		end 'out'
-	end 'requireStdoutHere'
+		let taken = match stream 'which'
+			stdout gives stdoutTaken
+			stderr gives stderrTaken
+		end 'which'
 
-	function requireStderrHere() throws SubprocessError
-		try requireLive()
-
-		if stderrTaken 'out'
-			throw SubprocessError.ioFailed("stderr is out with a StderrReader")
-		end 'out'
-	end 'requireStderrHere'
+		if taken 'twice'
+			throw SubprocessError.ioFailed("the child's {streamName(stream)} was already taken")
+		end 'twice'
+	end 'requireUntaken'
 
 	/// Release the OS handles this child owns — its process handle, its pipe
 	/// ends, and the job object naming its process tree where the platform
@@ -1446,17 +1394,9 @@ public type StreamingSubprocess is unique
 	/// using-block or from a guard path. Nothing reaches the runtime with a
 	/// released handle afterwards: the throwing methods refuse it through
 	/// `requireLive`, and `closeStdin` and `release` are idempotent no-ops
-	/// whose postcondition a released child already satisfies. Panics while a `StdoutReader` taken from
-	/// this child is still out: `reclaimStdout` first.
+	/// whose postcondition a released child already satisfies. A reader taken from this child
+	/// answers `StreamError.closed` afterwards.
 	public function release()
-		if stdoutTaken 'readerStillOut'
-			panic("StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first")
-		end 'readerStillOut'
-
-		if stderrTaken 'stderrReaderStillOut'
-			panic("StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first")
-		end 'stderrReaderStillOut'
-
 		if not released 'notYet'
 			__Builtins.subprocessReleaseHandle(handle)
 			released = true
@@ -1488,56 +1428,69 @@ end 'TreeEnd'
 /// signal killed on Linux or macOS is `exited(128 + signal)`; `pollTermination` names the signal.
 public union ExitPoll
 	running
+	reapedElsewhere
 	exited(code ExitInt)
+
+	public function childIsKnownGone() returns bool
+		return match self 'poll'
+			exited gives true
+			running or
+			reapedElsewhere gives false
+		end 'poll'
+	end 'childIsKnownGone'
 end 'ExitPoll'
 
 /// What `pollTermination` found: the child is still running, or how it ended.
 public union TerminationPoll
 	running
+	reapedElsewhere
 	ended(status TerminationStatus)
 end 'TerminationPoll'
 
 // The runtime's answer for a child no signal ended, pinned against `SubprocessRuntime.SubpNoExitSignal` by
 // `checkSubprocessAnswers` on every compile.
 let NoTerminatingSignal = 0
+let SpawnFailedAnswer = -1
+let DetachRefusedAnswer = -2
+let WaitFailedAnswer = -1
+let WaitTimedOutAnswer = -2
+let WaitTreeSurvivedAnswer = -3
 let ReapedElsewhereAnswer = -4
+let EndTreeEndedAnswer = 0
+let EndTreeUnconfirmedAnswer = -1
+let EndTreeSurvivedAnswer = -3
+let StillRunningAnswer = -1
+let NoSuchChildAnswer = -5
+let StdinAcceptedAnswer = 0
+let StdinQueuePendingAnswer = 2
+let StdinPushRefusedAnswer = -1
+let stdinClosedReason = "the child's stdin is closed"
+let stdinQueuedReason = "a payload is already queued for the child's stdin"
+let UncollectedStreamLimit = 0
 
-// A builtin's negative answer is "still running" (-1) or a child another process reaped (-4,
-// `isReapedElsewhere`): an exit code or a signal number is never negative.
-function exitPollOf(raw ExitAnswer) returns ExitPoll
-	if raw < 0 'stillRunning'
+function exitPollOf(raw FullRangeInt) returns ExitPoll
+	if raw >= 0 'exited'
+		return ExitPoll.exited(raw as ExitInt)
+	end 'exited'
+
+	if raw == StillRunningAnswer 'stillRunning'
 		return ExitPoll.running
 	end 'stillRunning'
 
-	return ExitPoll.exited(raw as ExitInt)
+	if raw == ReapedElsewhereAnswer 'reapedElsewhere'
+		return ExitPoll.reapedElsewhere
+	end 'reapedElsewhere'
+
+	if raw == NoSuchChildAnswer 'noSuchChild'
+		panic("exitPollOf: the runtime answered {NoSuchChildAnswer}, naming no live child, for a handle the stdlib had not released")
+	end 'noSuchChild'
+
+	panic("exitPollOf: the runtime answered {raw}, which is none of an exit code, {StillRunningAnswer}, {ReapedElsewhereAnswer} and {NoSuchChildAnswer}")
 end 'exitPollOf'
 
 function terminationWithSignal(code ExitInt, signal ExitInt) returns TerminationStatus
 	return TerminationStatus.exited(code) if signal == NoTerminatingSignal else TerminationStatus.signalled(signal)
 end 'terminationWithSignal'
-
-/// What a non-blocking line read found. A union rather than a string-plus-sentinel because a child's own
-/// BLANK LINE is a line and `""` is the only string that could stand for "nothing buffered".
-public union LinePoll
-	line(text String)
-	none
-end 'LinePoll'
-
-/// The runtime hands a line back WITH its terminating LF, so a buffered blank line is one byte where an
-/// empty pipe is zero — which is the one place the two are still apart, before `stripTrailingCR` makes
-/// them the same string.
-function bufferedLineIn(raw __ManagedMemory) returns LinePoll
-	if (raw.length() as ByteLimit) < lineReaderShortestAnswer 'nothingBuffered'
-		return LinePoll.none
-	end 'nothingBuffered'
-
-	return LinePoll.line(stripTrailingCR(String.init(raw)))
-end 'bufferedLineIn'
-
-// Default per-line truncation cap for the streaming readers. 1 MiB easily
-// holds spec-test IPC frames (typically <2 KiB) without ever truncating; a
-// runaway worker can't OOM the parent by emitting one enormous line.
-let defaultReadLineCap = 1024 * 1024 as ByteLimit
 
 /// One of a streaming child's two output streams.
 public enum StdioStream
@@ -1545,42 +1498,7 @@ public enum StdioStream
 	stderr
 end 'StdioStream'
 
-// The shortest answer a line read can give that is not end of stream. The runtime keeps the
-// terminating LF, so every real line — the empty one included — carries at least that byte.
-let lineReaderShortestAnswer = 1
-
 let usedAfterReleaseReason = "used after release()"
-
-/// Shared decode for the (stdout|stderr) line readers: the runtime returns a fresh __ManagedMemory
-/// holding the line bytes including the terminating LF, or a zero-length buffer at end of stream.
-/// The trailing CR goes with it so Windows CRLF doesn't leak into caller-visible strings.
-function readLineResultToString(handle StreamingHandle, raw __ManagedMemory, stream StdioStream) returns String throws SubprocessError
-	let line = try finishRead(handle, raw: raw, wanted: lineReaderShortestAnswer, stream: stream)
-
-	if (line.length() as ByteLimit) < lineReaderShortestAnswer 'theStreamEnded'
-		throw SubprocessError.endOfStream
-	end 'theStreamEnded'
-
-	return stripTrailingCR(String.init(line))
-end 'readLineResultToString'
-
-/// The one place a reader's answer is judged, for all three of them.
-///
-/// A short answer is end of stream OR a refusal and both are the same bytes, so the stream's own
-/// end-state is what separates them. The reason is composed here rather than read out of
-/// `lastErrorMessage()`, which is process-global and may belong to an earlier call.
-function finishRead(handle StreamingHandle, raw __ManagedMemory, wanted ByteLimit, stream StdioStream) returns __ManagedMemory throws SubprocessError
-	if (raw.length() as ByteLimit) >= wanted 'whole'
-		return raw
-	end 'whole'
-
-	match streamState(handle, stream: stream) 'decide'
-		atEof then return raw
-		open then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} was refused: it answered {raw.length()} of {wanted} bytes with the stream still open")
-		readFailed then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} failed")
-		noSuchChild then throw SubprocessError.ioFailed(usedAfterReleaseReason)
-	end 'decide'
-end 'finishRead'
 
 function streamState(handle StreamingHandle, stream StdioStream) returns __SubprocessStreamState
 	match stream 'ask'
@@ -1595,42 +1513,3 @@ function streamName(stream StdioStream) returns String
 		stderr then return "stderr"
 	end 'name'
 end 'streamName'
-
-/// Drop a trailing LF (and a CR before it, if present) from `s`. The runtime
-/// returns the raw line bytes including the terminator, so this is the
-/// caller-visible boundary that normalises both Unix LF and Windows CRLF line
-/// endings to "no trailing newline". ASCII-only checks are safe because
-/// neither 0x0A nor 0x0D ever appears as a UTF-8 continuation byte.
-function stripTrailingCR(s String) returns String
-	var len = s.byteLength()
-
-	if len == 0 'empty'
-		return s
-	end 'empty'
-
-	// One materialization for the whole scan-and-slice, taken after the empty check so an empty
-	// string never pays for it. See `String.addressableBytes`.
-	let bytes = s.addressableBytes()
-	let last = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
-
-	if last == 10 'hasLf'
-		len = len - 1
-	end 'hasLf'
-
-	if len == 0 'allConsumed'
-		return ""
-	end 'allConsumed'
-
-	let beforeLf = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
-
-	if beforeLf == 13 'hasCr'
-		len = len - 1
-	end 'hasCr'
-
-	if len == s.byteLength() 'noTrim'
-		return s
-	end 'noTrim'
-
-	let trimmed = try bytes.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
-	return String.init(trimmed)
-end 'stripTrailingCR'

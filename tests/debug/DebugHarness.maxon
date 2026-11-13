@@ -301,8 +301,8 @@ function debugBatchArguments(executable FilePath, commands String, extraOptions 
 	return arguments
 end 'debugBatchArguments'
 
-export function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment = Environment.inherit, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
-	return spawnCompiler(debugBatchArguments(executable, commands: commands, extraOptions: extraOptions), staged: staged, what: "`{DebugSubcommandName} {DebugBatchOption}`", environment: environment, timeoutMs: timeoutMs)
+export function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment = Environment.inherit, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput
+	return spawnCompiler(debugBatchArguments(executable, commands: commands, extraOptions: extraOptions), staged: staged, what: "`{DebugSubcommandName} {DebugBatchOption}`", environment: environment, deadline: deadline)
 end 'spawnDebugBatch'
 
 export union BoundedSession
@@ -345,11 +345,11 @@ export union BoundedSession
 	end 'exitText'
 end 'BoundedSession'
 
-export function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs DurationMs) returns BoundedSession
+export function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs WaitDeadlineMs) returns BoundedSession
 	let config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: WorkingDirectory.at(staged))
 	config.arguments = debugBatchArguments(executable, commands: commands, extraOptions: extraOptions)
 	config.environment = environment
-	config.timeoutMs = timeoutMs
+	config.deadline = WaitDeadline.within(timeoutMs)
 
 	let run = try config.run() otherwise (failure) 'notFinished'
 		return cutOffBy(failure)
@@ -367,8 +367,7 @@ function cutOffBy(failure SubprocessError) returns BoundedSession
 		ioFailed or
 		detachRefused or
 		inputTooLarge or
-		statusLost or
-		endOfStream then panic("the gate could not run — the debug session could not run ({failure.displayReason()}).")
+		statusLost then panic("the gate could not run — the debug session could not run ({failure.displayReason()}).")
 	end 'which'
 end 'cutOffBy'
 
@@ -1484,7 +1483,20 @@ export function startedTracee(caseLabel String) returns TracedChild
 	return TracedChild.create(spawned.child, trace: spawned.trace, pid: spawned.pid, threads: roster.lines(), staged: spawned.staged)
 end 'startedTracee'
 
+function traceeSawReady(pump ChildPump) returns bool
+	let event = pump.poll()
+
+	match event 'event'
+		said(stream, text) then return stream == StdioStream.stdout and text == TraceeReadyLine
+		closed or
+		silent or
+		exhausted then return false
+		broke(stream, reason) then panic("tracee: reading the child's {stream.name} failed ({reason})")
+	end 'event'
+end 'traceeSawReady'
+
 function traceeServiced(trace ProcessTrace, child StreamingSubprocess, process DebuggeeProcessId) returns TraceeRoster
+	let pump = try ChildPump.of(child) otherwise panic("tracee: the child's output could not be taken")
 	let roster = TraceeRoster.create()
 	var ready = false
 	var quiet = 0 as TraceeTally
@@ -1497,8 +1509,10 @@ function traceeServiced(trace ProcessTrace, child StreamingSubprocess, process D
 
 		quiet = 0 if report.arrived() else quiet + 1
 		traceeAnswered(trace, report: report, process: process, roster: roster)
-		ready = ready or traceeSaidReady(child)
+		ready = ready or traceeSawReady(pump)
 	end 'untilSettled'
+
+	pump.stop()
 
 	return roster
 end 'traceeServiced'
@@ -1530,32 +1544,23 @@ export function traceeSignalToHandOn(signal DebuggeeSignal, event TraceEvent) re
 	return signal
 end 'traceeSignalToHandOn'
 
-function traceeSaidReady(child StreamingSubprocess) returns bool
-	let polled = try child.tryReadStdoutLine() otherwise LinePoll.none
-
-	return match polled 'polled'
-		line(text) gives text == TraceeReadyLine
-		none gives false
-	end 'polled'
-end 'traceeSaidReady'
-
 #if os(Linux)
 	module let TraceeWaitDeadlineMs = 10000
 	let TraceeHeldObserveBudgetMs = 5000
 
 	typealias TraceeWaitReturnedCell = SharedValue with bool
 
-	function traceeWaitedOn(child StreamingSubprocess, timeoutMs DurationMs, returned TraceeWaitReturnedCell) returns ExitInt
-		let code = try child.waitWithTimeout(timeoutMs) otherwise panic("tracee: the wait on the traced child failed")
+	function traceeWaitedOn(child StreamingSubprocess, deadline WaitDeadline, returned TraceeWaitReturnedCell) returns ExitInt
+		let code = try child.wait(deadline) otherwise panic("tracee: the wait on the traced child failed")
 
 		returned.publish(true)
 
 		return code
 	end 'traceeWaitedOn'
 
-	export function traceeWaitOutcome(tracee TracedChild, timeoutMs DurationMs) returns (bool, ExitInt)
+	export function traceeWaitOutcome(tracee TracedChild, deadline WaitDeadline) returns (bool, ExitInt)
 		let returned = TraceeWaitReturnedCell.create(false)
-		let waiting = async traceeWaitedOn(tracee.child, timeoutMs: timeoutMs, returned: returned.clone())
+		let waiting = async traceeWaitedOn(tracee.child, deadline: deadline, returned: returned.clone())
 		var waitedMs = 0 as TraceeTally
 
 		while not returned.current() and waitedMs < TraceeWaitDeadlineMs 'untilItReturns'
@@ -1577,7 +1582,7 @@ end 'traceeSaidReady'
 
 	export function heldTraceeWaitOutcome(tracee TracedChild, settleMs Milliseconds) returns (bool, bool)
 		let returned = TraceeWaitReturnedCell.create(false)
-		let waiting = async traceeWaitedOn(tracee.child, timeoutMs: 0, returned: returned.clone())
+		let waiting = async traceeWaitedOn(tracee.child, deadline: WaitDeadline.none, returned: returned.clone())
 
 		sleep(settleMs)
 

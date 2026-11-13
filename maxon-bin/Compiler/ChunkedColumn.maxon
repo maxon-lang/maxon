@@ -1,0 +1,175 @@
+let ChunkShift = 6 as ElementIndex
+module let ChunkWidth = (1 as ElementIndex) shl ChunkShift
+let ChunkMask = ChunkWidth - 1
+
+module function chunksHolding(height ElementIndex) returns ElementIndex
+	return (height + ChunkMask) shr ChunkShift
+end 'chunksHolding'
+
+module function chunkFirst(index ElementIndex) returns ElementIndex
+	return index shl ChunkShift
+end 'chunkFirst'
+
+module function chunkStop(index ElementIndex, height ElementIndex) returns ElementIndex
+	let first = chunkFirst(index)
+	return (first + ChunkWidth) if first + ChunkWidth < height else height
+end 'chunkStop'
+
+module function chunkIndexOf(position ElementIndex) returns ElementIndex
+	return position shr ChunkShift
+end 'chunkIndexOf'
+
+module function slotInChunk(position ElementIndex) returns ElementIndex
+	return position and ChunkMask
+end 'slotInChunk'
+
+type ChunkPage uses Chunk
+	typealias ChunkRun = Array with Chunk
+
+	let chunks as ChunkRun
+
+	static function over(chunks ChunkRun) returns Self
+		return Self{chunks: chunks}
+	end 'over'
+
+	static function blank(filler Chunk) returns Self
+		let run = ChunkRun.create(ChunkWidth, zeroed: false)
+		run.growFilled(ChunkWidth, value: filler)
+
+		return Self.over(run)
+	end 'blank'
+
+	function chunkAt(slot ElementIndex) returns Chunk
+		return try self.chunks.get(slot) otherwise panic("ChunkPage.chunkAt: slot {slot} is past the {self.chunks.count()} the page holds")
+	end 'chunkAt'
+
+	function copiedRun() returns ChunkRun
+		let run = ChunkRun.create(ChunkWidth, zeroed: false)
+		run.append(self.chunks)
+
+		return run
+	end 'copiedRun'
+
+	function replacing(slot ElementIndex, chunk Chunk, filler Chunk) returns Self
+		let run = self.copiedRun()
+		run.growFilled(slot + 1, value: filler)
+		try run.set(slot, value: chunk) otherwise panic("ChunkPage.replacing: set OOB at {slot} after growing the run to {slot + 1}")
+
+		return Self.over(run)
+	end 'replacing'
+
+	function paddedToTheWidth(filler Chunk) returns Self
+		if self.chunks.count() == ChunkWidth 'alreadyFull'
+			return self
+		end 'alreadyFull'
+
+		let run = self.copiedRun()
+		run.growFilled(ChunkWidth, value: filler)
+
+		return Self.over(run)
+	end 'paddedToTheWidth'
+end 'ChunkPage'
+
+module type ChunkedColumn uses Chunk
+	typealias HeldPage = ChunkPage with Chunk
+	typealias PageColumn = Array with HeldPage
+
+	let pages as PageColumn
+	let length as ElementIndex
+
+	module static function none() returns Self
+		return Self{pages: PageColumn.create(0), length: 0}
+	end 'none'
+
+	static function over(pages PageColumn, length ElementIndex) returns Self
+		return Self{pages: pages, length: length}
+	end 'over'
+
+	module function count() returns ElementIndex
+		return self.length
+	end 'count'
+
+	function pageAt(index ElementIndex) returns HeldPage
+		return try self.pages.get(index) otherwise panic("ChunkedColumn.pageAt: page {index} is past the {self.pages.count()} the column holds")
+	end 'pageAt'
+
+	module function chunkAt(index ElementIndex) returns Chunk
+		if index >= self.length 'pastTheEnd'
+			panic("ChunkedColumn.chunkAt: chunk {index} is past the {self.length} the column holds")
+		end 'pastTheEnd'
+
+		return self.pageAt(chunkIndexOf(index)).chunkAt(slotInChunk(index))
+	end 'chunkAt'
+
+	module function shares(other Self) returns bool
+		return self.pages is other.pages
+	end 'shares'
+
+	module function replacing(index ElementIndex, chunk Chunk, filler Chunk) returns Self
+		let page = chunkIndexOf(index)
+		let slot = slotInChunk(index)
+		let grown = (index + 1) if index >= self.length else self.length
+		let column = PageColumn.create(self.pages.count() + 1, zeroed: false)
+
+		for held in self.pages 'eachHeldPage'
+			column.push(held)
+		end 'eachHeldPage'
+
+		if page < column.count() 'withinAHeldPage'
+			try column.set(page, value: self.pageAt(page).replacing(slot, chunk: chunk, filler: filler)) otherwise panic("ChunkedColumn.replacing: set OOB at page {page}")
+			return Self.over(column, length: grown)
+		end 'withinAHeldPage'
+
+		if column.count() > 0 'aPartialLastPage'
+			let last = column.count() - 1
+			try column.set(last, value: self.pageAt(last).paddedToTheWidth(filler)) otherwise panic("ChunkedColumn.replacing: set OOB at page {last}")
+		end 'aPartialLastPage'
+
+		let blank = ChunkPage.blank(filler)
+
+		while column.count() < page 'eachGapPage'
+			column.push(blank)
+		end 'eachGapPage'
+
+		column.push(blank.replacing(slot, chunk: chunk, filler: filler))
+
+		return Self.over(column, length: grown)
+	end 'replacing'
+end 'ChunkedColumn'
+
+module type ChunkedColumnBuilder uses Chunk
+	typealias ChunkRun = Array with Chunk
+	typealias HeldPage = ChunkPage with Chunk
+	typealias PageColumn = Array with HeldPage
+	module typealias Built = ChunkedColumn with Chunk
+
+	let pages as PageColumn
+	var run as ChunkRun
+	var length as ElementIndex
+
+	module static function create() returns Self
+		return Self{pages: PageColumn.create(0), run: ChunkRun.create(0), length: 0}
+	end 'create'
+
+	module function push(chunk Chunk)
+		self.run.push(chunk)
+		self.length = self.length + 1
+
+		if self.run.count() == ChunkWidth 'aFullPage'
+			self.flushRun()
+		end 'aFullPage'
+	end 'push'
+
+	function flushRun()
+		self.pages.push(ChunkPage.over(self.run))
+		self.run = ChunkRun.create(0)
+	end 'flushRun'
+
+	module function finished() returns Built
+		if self.run.count() > 0 'aPartialPage'
+			self.flushRun()
+		end 'aPartialPage'
+
+		return ChunkedColumn.over(self.pages, length: self.length)
+	end 'finished'
+end 'ChunkedColumnBuilder'

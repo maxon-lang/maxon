@@ -1,11 +1,6 @@
-// A test project builds from its own directory and `tests/support`, never `maxon-bin`, so this is a
-// second copy of the line polling in `maxon-bin/Debug/ChildStreams.maxon` and of the tail bound in
-// `forwardEndedChildTail`. Keep the two bounds equal to that function's.
-public let FedPollMs = 5
-public let FedTailSilenceMs = 1000 as DurationMs
-public let FedTailCapMs = 10000 as DurationMs
-
-let FedLineEnd = "\n"
+let FedProgram = "the program"
+let FedTailSilenceMs = 1000
+let FedTailCapMs = 10000
 
 public union StagedRunEnd
 	exited(code ExitInt)
@@ -22,149 +17,28 @@ public type FedRun
 	end 'create'
 end 'FedRun'
 
-type FedChild
-	var child as StreamingSubprocess
-	let afterLine as String
-	let feed as String
-	var stdout as String
-	var stderr as String
-	var fed as bool
+function stagedRunEndOf(ending ChildEnd) returns StagedRunEnd
+	return match ending 'ending'
+		exited(code) gives StagedRunEnd.exited(code)
+		deadline gives StagedRunEnd.killedAtDeadline
+		reapedElsewhere panic("{lostStatusMessage(FedProgram)}")
+		waitFailed(e) panic("{waitFailureMessage(FedProgram, failure: e)}")
+	end 'ending'
+end 'stagedRunEndOf'
 
-	static function spawn(executable FilePath, workingDirectory FilePath, environment Environment, afterLine String, feed String) returns FedChild
-		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(executable), arguments: StringArray.create(0), workingDirectory: WorkingDirectory.at(workingDirectory), environment: environment) otherwise (e) 'spawnFailed'
-			panic("the gate could not run — could not spawn the program at {executable.toString()} ({e.displayReason()}).")
-		end 'spawnFailed'
+function fedRunOf(report ChildRunReport) returns FedRun
+	requireSurvivorsEnded(report.survivors, what: "the fed program")
 
-		return FedChild{child: child, afterLine: afterLine, feed: feed, stdout: "", stderr: "", fed: false}
-	end 'spawn'
+	return FedRun.create(stagedRunEndOf(report.ending), stdout: report.stdout, stderr: report.stderr)
+end 'fedRunOf'
 
-	function pollExit() returns ExitPoll
-		return self.child.pollExit()
-	end 'pollExit'
+public function runFedAfterLine(executable FilePath, workingDirectory FilePath, environment Environment, deadlineMs WaitDeadlineMs, afterLine String, feed String) returns FedRun
+	let outcome = try runChildFedAfterLine(Executable.path(executable), argv: StringArray.create(0), workingDirectory: WorkingDirectory.at(workingDirectory), environment: environment, deadlineMs: deadlineMs as DurationMs, endsWhen: RunEndsWhen.childExits, tailSilenceMs: FedTailSilenceMs, tailCapMs: FedTailCapMs, anchor: afterLine, feed: feed) otherwise (e) 'notRun'
+		panic("the gate could not run — could not start the program at {executable.toString()} and take its output ({e.displayReason()}).")
+	end 'notRun'
 
-	function absorbAvailable() returns bool
-		let outMoved = self.absorbStdoutLine()
-		let errMoved = self.absorbStderrLine()
-
-		return outMoved or errMoved
-	end 'absorbAvailable'
-
-	function absorbStdoutLine() returns bool
-		match try self.child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
-			none then return false
-			line(text) then self.take(text)
-		end 'polled'
-
-		return true
-	end 'absorbStdoutLine'
-
-	function absorbStderrLine() returns bool
-		match try self.child.tryReadStderrLine() otherwise panic("the child's stderr is out with a StderrReader") 'polled'
-			none then return false
-			line(text) then self.stderr.append("{text}{FedLineEnd}")
-		end 'polled'
-
-		return true
-	end 'absorbStderrLine'
-
-	function take(text String)
-		self.stdout.append("{text}{FedLineEnd}")
-
-		if self.fed or text != self.afterLine 'nothingToFeed'
-			return
-		end 'nothingToFeed'
-
-		try self.child.writeStdinLine(self.feed) otherwise (e) 'feedFailed'
-			panic("the gate could not run — could not feed the child after it printed `{self.afterLine}` ({e.displayReason()}).")
-		end 'feedFailed'
-
-		self.child.closeStdin()
-		self.fed = true
-	end 'take'
-
-	function drainBuffered() returns bool
-		var moved = false
-		var more = true
-
-		while more 'eachBufferedLine'
-			more = self.absorbAvailable()
-			moved = moved or more
-		end 'eachBufferedLine'
-
-		return moved
-	end 'drainBuffered'
-
-	function streamsEnded() returns bool
-		return self.child.streamHasEnded(StdioStream.stdout) and self.child.streamHasEnded(StdioStream.stderr)
-	end 'streamsEnded'
-
-	function drainTail() returns bool
-		let start = Clock.nowMs()
-		var lastMoved = start
-
-		while true 'untilTheStreamsEnd'
-			let moved = self.drainBuffered()
-
-			if moved 'somethingArrived'
-				lastMoved = Clock.nowMs()
-			end 'somethingArrived'
-
-			if self.streamsEnded() 'drained'
-				return true
-			end 'drained'
-
-			if Clock.elapsedMs(lastMoved) >= FedTailSilenceMs or Clock.elapsedMs(start) >= FedTailCapMs 'boundReached'
-				return false
-			end 'boundReached'
-
-			if not moved 'idle'
-				sleep(FedPollMs)
-			end 'idle'
-		end 'untilTheStreamsEnd'
-
-		panic("FedChild.drainTail: the loop leaves only by returning")
-	end 'drainTail'
-
-	function endTree()
-		requireTreeEnded(self.child, what: "the fed program")
-	end 'endTree'
-
-	function concluded(ending StagedRunEnd) returns FedRun
-		self.child.release()
-
-		return FedRun.create(ending, stdout: self.stdout, stderr: self.stderr)
-	end 'concluded'
-
-	function finishedWithExit(code ExitInt) returns FedRun
-		if not self.drainTail() 'survivorsHoldThePipes'
-			self.endTree()
-		end 'survivorsHoldThePipes'
-
-		return self.concluded(StagedRunEnd.exited(code))
-	end 'finishedWithExit'
-
-	function finishedAtDeadline() returns FedRun
-		self.endTree()
-		_ = self.drainTail()
-
-		return self.concluded(StagedRunEnd.killedAtDeadline)
-	end 'finishedAtDeadline'
-end 'FedChild'
-
-public function runFedAfterLine(executable FilePath, workingDirectory FilePath, environment Environment, deadlineMs DurationMs, afterLine String, feed String) returns FedRun
-	let run = FedChild.spawn(executable, workingDirectory: workingDirectory, environment: environment, afterLine: afterLine, feed: feed)
-	let started = Clock.nowMs()
-
-	while Clock.elapsedMs(started) < deadlineMs 'pumping'
-		let polled = run.pollExit()
-
-		_ = run.drainBuffered()
-
-		match polled 'exitPoll'
-			running then sleep(FedPollMs)
-			exited(code) then return run.finishedWithExit(code)
-		end 'exitPoll'
-	end 'pumping'
-
-	return run.finishedAtDeadline()
+	return match outcome 'outcome'
+		ran(report) gives fedRunOf(report)
+		outputBroken(stream, reason, _) panic("{brokenReadMessage(FedProgram, stream: stream, reason: reason)}")
+	end 'outcome'
 end 'runFedAfterLine'

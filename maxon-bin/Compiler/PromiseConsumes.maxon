@@ -1,0 +1,178 @@
+typealias PromiseKindColumn = Array with PromiseConsume
+
+export type PromiseConsumeRecord
+	export let promise as ValueId
+	export let kind as PromiseConsume
+
+	static function create(promise ValueId, kind PromiseConsume) returns PromiseConsumeRecord
+		return Self{promise: promise, kind: kind}
+	end 'create'
+end 'PromiseConsumeRecord'
+
+export typealias PromiseConsumeRecordArray = Array with PromiseConsumeRecord
+
+type PromiseChunk
+	let kinds as PromiseKindColumn
+	let occupied as ElementIndex
+
+	static function unset() returns PromiseChunk
+		let kinds = PromiseKindColumn.create(ChunkWidth, zeroed: false)
+
+		for _ in 0 upto ChunkWidth 'eachSlot'
+			kinds.push(PromiseConsume.notConsumed)
+		end 'eachSlot'
+
+		return Self{kinds: kinds, occupied: 0}
+	end 'unset'
+
+	static function create(kinds PromiseKindColumn, occupied ElementIndex) returns PromiseChunk
+		return Self{kinds: kinds, occupied: occupied}
+	end 'create'
+
+	function kindAt(slot ElementIndex) returns PromiseConsume
+		return try self.kinds.get(slot) otherwise panic("PromiseChunk.kindAt: slot {slot} is past the chunk")
+	end 'kindAt'
+
+	function holdingBeyond(base PromiseChunk) returns ElementIndex
+		return self.occupied - base.occupied
+	end 'holdingBeyond'
+
+	function recording(slot ElementIndex, kind PromiseConsume) returns PromiseChunk
+		let column = PromiseKindColumn.create(ChunkWidth, zeroed: false)
+
+		for position in 0 upto ChunkWidth 'eachSlot'
+			column.push(kind if position == slot else self.kindAt(position))
+		end 'eachSlot'
+
+		return Self.create(column, occupied: self.occupied + 1)
+	end 'recording'
+
+	function firstWinning(other PromiseChunk) returns PromiseChunk
+		var added = 0 as ElementIndex
+
+		for slot in 0 upto ChunkWidth 'countAdditions'
+			if self.kindAt(slot) == PromiseConsume.notConsumed and other.kindAt(slot) != PromiseConsume.notConsumed 'anAddition'
+				added = added + 1
+			end 'anAddition'
+		end 'countAdditions'
+
+		if added == 0 'nothingToAdd'
+			return self
+		end 'nothingToAdd'
+
+		let column = PromiseKindColumn.create(ChunkWidth, zeroed: false)
+
+		for slot in 0 upto ChunkWidth 'eachSlot'
+			let mine = self.kindAt(slot)
+			column.push(other.kindAt(slot) if mine == PromiseConsume.notConsumed else mine)
+		end 'eachSlot'
+
+		return Self.create(column, occupied: self.occupied + added)
+	end 'firstWinning'
+end 'PromiseChunk'
+
+typealias PromiseChunkColumn = ChunkedColumn with PromiseChunk
+typealias PromiseChunkBuilder = ChunkedColumnBuilder with PromiseChunk
+
+export type PromiseConsumes
+	let chunks as PromiseChunkColumn
+	let consumed as ElementIndex
+
+	export static function none() returns PromiseConsumes
+		return Self{chunks: PromiseChunkColumn.none(), consumed: 0}
+	end 'none'
+
+	static function create(chunks PromiseChunkColumn, consumed ElementIndex) returns PromiseConsumes
+		return Self{chunks: chunks, consumed: consumed}
+	end 'create'
+
+	export function isEmpty() returns bool
+		return self.consumed == 0
+	end 'isEmpty'
+
+	export function kindOf(promise ValueId) returns PromiseConsume
+		let position = promise as ElementIndex
+		let index = chunkIndexOf(position)
+
+		if index >= self.chunks.count() 'noChunkYet'
+			return PromiseConsume.notConsumed
+		end 'noChunkYet'
+
+		return self.chunks.chunkAt(index).kindAt(slotInChunk(position))
+	end 'kindOf'
+
+	export function recorded(promise ValueId, kind PromiseConsume) returns PromiseConsumes
+		if self.kindOf(promise) != PromiseConsume.notConsumed 'firstWins'
+			return self
+		end 'firstWins'
+
+		let position = promise as ElementIndex
+		let index = chunkIndexOf(position)
+		let blank = PromiseChunk.unset()
+		let base = self.chunks.chunkAt(index) if index < self.chunks.count() else blank
+		let column = self.chunks.replacing(index, chunk: base.recording(slotInChunk(position), kind: kind), filler: blank)
+
+		return Self.create(column, consumed: self.consumed + 1)
+	end 'recorded'
+
+	export function unioned(other PromiseConsumes) returns PromiseConsumes
+		if other.consumed == 0 or other.chunks.shares(self.chunks) 'nothingToAdd'
+			return self
+		end 'nothingToAdd'
+
+		let width = other.chunks.count() if other.chunks.count() > self.chunks.count() else self.chunks.count()
+		let merged = PromiseChunkBuilder.create()
+		var total = self.consumed
+		var changed = false
+
+		for index in 0 upto width 'eachChunk'
+			let mine = self.chunks.chunkAt(index) if index < self.chunks.count() else PromiseChunk.unset()
+
+			if index >= other.chunks.count() 'beyondTheirs'
+				merged.push(mine)
+				continue
+			end 'beyondTheirs'
+
+			let theirs = other.chunks.chunkAt(index)
+
+			if mine is theirs 'theSameChunk'
+				merged.push(mine)
+				continue
+			end 'theSameChunk'
+
+			let combined = mine.firstWinning(theirs)
+			total = total + combined.holdingBeyond(mine)
+			changed = changed or not (combined is mine)
+			merged.push(combined)
+		end 'eachChunk'
+
+		if not changed 'theyAddNothing'
+			return self
+		end 'theyAddNothing'
+
+		return Self.create(merged.finished(), consumed: total)
+	end 'unioned'
+
+	export function recordsBeyond(base PromiseConsumes) returns PromiseConsumeRecordArray
+		let records = PromiseConsumeRecordArray.create(0)
+
+		for index in 0 upto self.chunks.count() 'eachChunk'
+			let chunk = self.chunks.chunkAt(index)
+
+			if index < base.chunks.count() and base.chunks.chunkAt(index) is chunk 'sharedWithTheBase'
+				continue
+			end 'sharedWithTheBase'
+
+			for slot in 0 upto ChunkWidth 'eachSlot'
+				let kind = chunk.kindAt(slot)
+				let promise = (chunkFirst(index) + slot) as ValueId
+
+				if kind != PromiseConsume.notConsumed and base.kindOf(promise) == PromiseConsume.notConsumed 'notInTheBase'
+					records.push(PromiseConsumeRecord.create(promise, kind: kind))
+				end 'notInTheBase'
+			end 'eachSlot'
+		end 'eachChunk'
+
+		return records
+	end 'recordsBeyond'
+end 'PromiseConsumes'

@@ -214,6 +214,7 @@ let DarwinSaRestart = 0x02 as MachineWord
 let DarwinSignalBus = 10
 let DarwinSignalSegv = 11
 let DarwinSignalFpe = 8
+let DarwinSignalChld = 20
 
 // ⭐ SIGURG — what an asynchronous preemption is delivered as, and **16 on Darwin where it is 23 on Linux**.
 // Go's choice, for its reason: the default disposition is to ignore it and no program in this tree has a
@@ -556,8 +557,17 @@ function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns Fu
 		arm64EmitDarwinSigactionInstall(asm, handlerName: PreemptHandlerName, signal: DarwinSignalUrg, actSlot: SlotSigaction)
 	end 'itCanStopAThread'
 
+	arm64EmitSigactionDefault(asm, actSlot: SlotSigaction, handlerOffset: DarwinSigactionOffHandler)
+	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalChld, actSlot: SlotSigaction)
+
 	return asm.finishFunction(RuntimeInitName)
 end 'buildArm64DarwinRuntimeInitChunk'
+
+function arm64EmitSigactionDefault(asm Arm64RuntimeAsm, actSlot StackSize, handlerOffset MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: actSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: handlerOffset)
+end 'arm64EmitSigactionDefault'
 
 // Publish `handlerName` for `signal` through the struct already standing in `actSlot`.
 function arm64EmitDarwinSigactionInstall(asm Arm64RuntimeAsm, handlerName ByteArray, signal Imm32, actSlot StackSize)
@@ -619,6 +629,9 @@ function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, targ
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
 		arm64EmitLinuxSigactionInstall(asm, handlerName: PreemptHandlerName, signal: LinuxSignalUrg, actSlot: SlotSigaction)
 	end 'itCanStopAThread'
+
+	arm64EmitSigactionDefault(asm, actSlot: SlotSigaction, handlerOffset: LinuxSigactionOffHandler as MachineWord)
+	arm64EmitLinuxSigactionCall(asm, signal: LinuxSignalChld, actSlot: SlotSigaction)
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildArm64LinuxRuntimeInitChunk'

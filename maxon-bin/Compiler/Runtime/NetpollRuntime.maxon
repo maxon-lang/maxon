@@ -1429,8 +1429,8 @@ end 'buildNetpollPdOpen'
 // life opened. `fd` is NOT cleared: a record's descriptor is what it is for, and the release keeps it for a
 // reader that wants to know whose record this was.
 //
-// A direction word never holds a parked waiter here: a socket handle is `unique`, so the one green thread that
-// can release or reopen its record is not parked on it.
+// A release readies any parked waiter before this runs: a pipe end is closed by its owner while a service
+// thread is parked reading it, and clearing a published waiter strands that thread.
 //
 // The generation bump below is what ends a thread's claim on the words it parked on — a wait begun against an
 // older life answers `NetpollWaitStale` instead of publishing into the new owner's word.
@@ -1459,6 +1459,8 @@ function buildNetpollPdRelease(module StdModule)
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let clear = module.addBlock(func, label: b"npclear", heat: BlockHeat.normal)
 	let unlock = module.addBlock(func, label: b"nprelunlock", heat: BlockHeat.normal)
+	let payWake = module.addBlock(func, label: b"nprelwake", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"npreldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let fd = 0
@@ -1466,14 +1468,29 @@ function buildNetpollPdRelease(module StdModule)
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: fd, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: pd, pred: StdCmpPred.ne, against: 0, whenTrue: clear, whenFalse: unlock, ids: ids)
+	pushBranchEdge(entry, to: unlock, values: argsOf(emitConst(module, block: entry, value: WakeDebtNone, ids: ids)))
 
+	let debt = emitNetpollPdReadyWaiters(module, block: clear, pd: pd, ids: ids)
 	emitNetpollPdClear(module, block: clear, pd: pd, ids: ids)
-	module.setTerminator(clear, op: StdOp.branch(unlock.id))
+	emitBranchCarrying(module, from: clear, to: unlock, values: argsOf(debt))
 
+	let owed = ids.mint()
+	unlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
 	emitSchedLockLeave(module, block: unlock, ids: ids)
-	module.setTerminator(unlock, op: StdOp.retVoid)
+	emitSchedWakeIfOwed(module, cur: unlock, owed: owed, wake: payWake, cont: doneBlock, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildNetpollPdRelease'
+
+function emitNetpollPdReadyWaiters(module StdModule, block IrBlock, pd ValueId, ids ValueMinter) returns ValueId
+	let readDebt = ids.mint()
+	module.appendOp(block, op: StdOp.call(readDebt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: block, value: NetpollModeRead, ids: ids))))
+	let writeDebt = ids.mint()
+	module.appendOp(block, op: StdOp.call(writeDebt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: block, value: NetpollModeWrite, ids: ids))))
+
+	return emitBin(module, block: block, a: readDebt, b: writeDebt, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitNetpollPdReadyWaiters'
 
 // ⭐⭐ **`__np_pd_deadline(fd, mode, ms)` — see `NetpollPdDeadlineName`.** The deadline is ABSOLUTE from the
 // moment it is set, which is Go's semantics: it bounds the WAIT rather than each attempt inside it.

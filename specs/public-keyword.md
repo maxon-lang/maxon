@@ -315,13 +315,13 @@ end 'main'
 
 A `public` function's `throws` clause is part of its surface: a caller that cannot name the error type
 cannot write a function that receives one, so it can only discard what went wrong. `JsonError`
-(`Json.parse`), `JsonAccessError` (the `JsonDoc` accessors) and `ConsoleError` (`Stdin.readLine`) are
+(`Json.parse`), `JsonAccessError` (the `JsonDoc` accessors) and `StreamError` (`StreamReader.readLine`, the read `Console.stdin()` answers) are
 therefore `public` like the APIs that throw them.
 
 <!-- test: stdlib-error-enums-thrown-by-public-api-are-nameable -->
 Each error type is named in a PARAMETER position, which a binding inferred from `otherwise (e)` never
-does, so the case needs the name to be visible and not merely the value. `ConsoleError` is named without
-reading stdin, so the program compiles on every lane including the ones with no console substrate.
+does, so the case needs the name to be visible and not merely the value. `StreamError` is named without
+reading anything, so the program compiles on every lane including the ones with no console substrate.
 ```maxon
 function describeParse(e JsonError) returns String
 	return match e 'kind'
@@ -344,11 +344,14 @@ function describeAccess(e JsonAccessError) returns String
 	end 'kind'
 end 'describeAccess'
 
-function describeConsole(e ConsoleError) returns String
+function describeStream(e StreamError) returns String
 	return match e 'kind'
-		endOfFile gives "endOfFile"
+		timedOut gives "timedOut"
+		closed gives "closed"
+		failed(reason) gives "failed: {reason}"
+		secure gives "secure"
 	end 'kind'
-end 'describeConsole'
+end 'describeStream'
 
 function parseVerdict(text String) returns String
 	let doc = try Json.parse(text) otherwise (e) 'malformed'
@@ -370,10 +373,10 @@ end 'accessVerdict'
 function main() returns ExitCode
 	let parsed = parseVerdict("\{")
 	let accessed = accessVerdict("\{\"a\": 1\}")
-	let consoled = describeConsole(ConsoleError.endOfFile)
+	let streamed = describeStream(StreamError.closed)
 	print("parse: {parsed}\n")
 	print("access: {accessed}\n")
-	print("console: {consoled}\n")
+	print("stream: {streamed}\n")
 	return 0
 end 'main'
 ```
@@ -383,5 +386,5 @@ end 'main'
 ```stdout
 parse: unexpectedEof
 access: wrongType
-console: endOfFile
+stream: closed
 ```

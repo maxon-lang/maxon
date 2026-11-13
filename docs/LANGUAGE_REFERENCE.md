@@ -5449,9 +5449,10 @@ dropped promise has the effects below.
 - A coroutine that has **not started** never runs.
 - A coroutine that has **already started** is not interrupted where it stands: it resumes and runs on, and
   its result is discarded. What it may no longer do is **begin** an operation that waits on a far end. Its
-  next `TcpClient.connect`, `TcpListener.accept`, `send`, `sendFrom`, `recv`, or `TcpListener.bind` to a
-  host **name** throws that operation's own [`NetworkError`](STDLIB_REFERENCE.md#tcpclient) variant at once
-  instead of parking for a wake-up nothing will send. `close()` still completes, and so does a `bind` to a
+  next `TcpClient.connect`, `TcpListener.accept`, `send`, `sendFrom`, or `TcpListener.bind` to a host
+  **name** throws that operation's own [`NetworkError`](STDLIB_REFERENCE.md#tcpclient) variant at once, and
+  its next `readSome` throws [`StreamError.failed`](STDLIB_REFERENCE.md#stream), instead of parking for a
+  wake-up nothing will send. `close()` still completes, and so does a `bind` to a
   numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
   `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
@@ -5910,7 +5911,7 @@ end 'main'
 ### I/O and Waiting
 
 Operations that wait **park** their green thread instead of blocking an OS thread: `sleep`, `await`, socket
-operations (`TcpClient.connect`, `send`, `recv`, `TcpListener.accept`) and waiting on a child process. A
+operations (`TcpClient.connect`, `send`, `readSome`, `TcpListener.accept`) and waiting on a child process. A
 parked green thread holds no processor, so a server waiting in `accept()` costs nothing while idle.
 
 File and directory operations yield to other work before each call into the operating system and are
@@ -6453,6 +6454,25 @@ isolated value, so open one with `modify` or split the statement``), as is mutab
 region (`'spare' is mutable outside 'index'; a call into an isolated region takes values, immutable or
 isolated`). For an `if` or `while` the open covers the condition alone; a `for` or `match` over the value
 opens it for the whole statement.
+
+#### Part Reads and Handed-Back Results
+
+A read of an `isolated` field, element or payload outside a block is a **part read**: data its region still
+holds. A part read becomes no other holder's data, whatever road it takes. Binding it, storing it in a field
+or a variable, returning it, putting it in a tuple, a union or a constructor, capturing it in a closure,
+freezing it, casting it `as isolated`, and handing it to an `async` call, a service message, an `isolated`
+parameter or a parameter that keeps it are **E3198**. The read carries its mark through a join (`if … else`,
+a ternary, a `match` arm, `otherwise`), through a field of it, through the result of a call given it, through
+each element a `for` loop hands out over an `isolated` collection field, and through a closure that captures
+it. `.clone()` and a function that `returns isolated` make a fresh value of a part read, and a value read out
+of one — a number, a count, a comparison — leaves freely.
+
+A method of an opened region that hands back mutable data of that region (`holder.blob.inner()`) gives a
+**handed-back result**, which the same statement consumes: a comparison, a `for` loop over it, or a call
+whose other inputs and whose result are values (`holder.blob.inner().count()`). One still unconsumed at the
+end of the statement is **E3201** (``'inner' hands back mutable data of the isolated region it opens; use it
+inside a `modify` block``). The message quotes the whole argument or receiver that carries the read.
+`specs/regions-soundness.md` pins these.
 
 #### `swap` and `merge`
 

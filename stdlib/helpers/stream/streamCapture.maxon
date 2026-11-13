@@ -1,0 +1,30 @@
+let CapturedLineEnd = "\n"
+
+public union OutputHealth
+	intact
+	failed(stream StdioStream, reason String)
+end 'OutputHealth'
+
+public type StreamCapture implements ChildLineSink
+	public var stdout as String
+	public var stderr as String
+	public var health as OutputHealth
+
+	public static function create() returns Self
+		return Self{stdout: "", stderr: "", health: OutputHealth.intact}
+	end 'create'
+
+	public function heard(stream StdioStream, text String)
+		match stream 'stream'
+			stdout then self.stdout.append("{text}{CapturedLineEnd}")
+			stderr then self.stderr.append("{text}{CapturedLineEnd}")
+		end 'stream'
+	end 'heard'
+
+	public function broken(stream StdioStream, reason String)
+		match self.health 'health'
+			intact then self.health = OutputHealth.failed(stream, reason: reason)
+			failed then break
+		end 'health'
+	end 'broken'
+end 'StreamCapture'

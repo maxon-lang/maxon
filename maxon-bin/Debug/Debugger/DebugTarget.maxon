@@ -3,7 +3,6 @@ export union TargetOutcome
 	exited(code DebugExitCode)
 	crashed(status DebugAddress)
 	terminated
-	statusLost
 end 'TargetOutcome'
 
 export union TargetSettling
@@ -18,11 +17,13 @@ export union TargetSettling
 end 'TargetSettling'
 
 let HandOverBudgetMs = 1000
+let HandOverPollMs = 5
 let WindowsExitCodeMask = 0xFFFFFFFF
 let NtStatusSeverityMask = 0xC0000000
 
 export type DebugTarget
 	var child as StreamingSubprocess
+	var output as ChildPump
 	var routing as ChildOutputRouting
 	var faulted as bool
 	var settled as TargetOutcome
@@ -31,7 +32,9 @@ export type DebugTarget
 		let spawned = try StreamingSubprocess.spawnTraceable(Executable.path(program), arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment), traced: true)
 		spawned.closeStdin()
 
-		return Self{child: spawned, routing: routing, faulted: false, settled: TargetOutcome.running}
+		let output = pumpOfSpawned(spawned)
+
+		return Self{child: spawned, output: output, routing: routing, faulted: false, settled: TargetOutcome.running}
 	end 'launchTraced'
 
 	export function processId() returns Pid
@@ -39,7 +42,7 @@ export type DebugTarget
 	end 'processId'
 
 	export function pump()
-		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
+		self.faulted = forwardChildOutput(self.output, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
 	end 'pump'
 
 	export function hasSettled() returns bool
@@ -51,10 +54,7 @@ export type DebugTarget
 			return true
 		end 'alreadySettled'
 
-		return match self.child.pollExit() 'polled'
-			exited gives true
-			running gives false
-		end 'polled'
+		return self.child.pollExit().childIsKnownGone()
 	end 'hasLeft'
 
 	export function awaitHandOver() returns bool
@@ -65,13 +65,21 @@ export type DebugTarget
 		let started = Clock.nowMs()
 
 		// This process's wait answers ECHILD while the stub holds the program, which
-		// `isReapedElsewhere` reports; `Process.isAlive` cannot tell, a held zombie is not alive.
-		while self.child.isReapedElsewhere() and Clock.elapsedMs(started) < HandOverBudgetMs 'untilItIsOurs'
-			sleep(ChildPollMs)
+		// `ExitPoll.reapedElsewhere` reports; `Process.isAlive` cannot tell, a held zombie is not alive.
+		while not self.statusIsOurs() and Clock.elapsedMs(started) < HandOverBudgetMs 'untilItIsOurs'
+			sleep(HandOverPollMs)
 		end 'untilItIsOurs'
 
-		return not self.child.isReapedElsewhere()
+		return self.statusIsOurs()
 	end 'awaitHandOver'
+
+	function statusIsOurs() returns bool
+		return match self.child.pollExit() 'polled'
+			running or
+			exited gives true
+			reapedElsewhere gives false
+		end 'polled'
+	end 'statusIsOurs'
 
 	export function settle(how TargetSettling) returns TargetOutcome
 		if not targetIsRunning(self.settled) 'alreadySettled'
@@ -92,19 +100,10 @@ export type DebugTarget
 	function settleIfItExited()
 		match self.child.pollExit() 'polled'
 			exited(code) then self.settleAfterExit(code as DebugExitCode)
-			running then self.settleIfItsStatusWentElsewhere()
+			running or
+			reapedElsewhere then break
 		end 'polled'
 	end 'settleIfItExited'
-
-	function settleIfItsStatusWentElsewhere()
-		if not self.child.isReapedElsewhere() 'itIsStillOurs'
-			return
-		end 'itIsStillOurs'
-
-		self.faulted = forwardEndedChildTail(self.child, routing: self.routing, ending: TailEnding.afterExit) or self.faulted
-		self.child.release()
-		self.settled = TargetOutcome.statusLost
-	end 'settleIfItsStatusWentElsewhere'
 
 	function settleEvenIfRunning()
 		self.settleIfItExited()
@@ -120,18 +119,17 @@ export type DebugTarget
 
 		if targetIsRunning(self.settled) 'itRunsOn'
 			self.pump()
-			self.child.release()
+			self.output.release(self.child)
 		end 'itRunsOn'
 	end 'releasedRunning'
 
 	function settleAfterExit(code DebugExitCode)
-		self.faulted = forwardEndedChildTail(self.child, routing: self.routing, ending: TailEnding.afterExit) or self.faulted
-		self.child.release()
+		self.faulted = forwardEndedChildTail(self.child, pump: self.output, routing: self.routing, ending: TailEnding.afterExit) or self.faulted
 		self.settled = self.outcomeOf(code)
 	end 'settleAfterExit'
 
 	function settleAfterKill()
-		self.faulted = endChild(self.child, routing: self.routing) or self.faulted
+		self.faulted = endChild(self.child, pump: self.output, routing: self.routing) or self.faulted
 		self.settled = TargetOutcome.terminated
 	end 'settleAfterKill'
 
@@ -155,6 +153,5 @@ export function targetIsRunning(outcome TargetOutcome) returns bool
 		exited gives false
 		crashed gives false
 		terminated gives false
-		statusLost gives false
 	end 'which'
 end 'targetIsRunning'

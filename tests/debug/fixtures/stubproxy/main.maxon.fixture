@@ -307,15 +307,20 @@ end 'packetBytesFromEnvironment'
 function pull(source TcpClient) returns Pulled
 	try source.setReadDeadline(PollMs) otherwise return Pulled.closed
 
-	let text = try source.recv(ReceiveBytes) otherwise (e) 'nothing'
-		if e == NetworkError.timedOut 'quiet'
-			return Pulled.idle
-		end 'quiet'
-
-		return Pulled.closed
+	let chunk = try source.readSome(ReceiveBytes) otherwise (e) 'nothing'
+		match e 'why'
+			timedOut then return Pulled.idle
+			closed or
+				failed or
+				secure then return Pulled.closed
+		end 'why'
 	end 'nothing'
 
-	return Pulled.data(text)
+	if chunk.isEmpty() 'peerClosed'
+		return Pulled.closed
+	end 'peerClosed'
+
+	return Pulled.data(String.from(chunk))
 end 'pull'
 
 function sent(target TcpClient, text String) returns bool
@@ -401,22 +406,43 @@ function carriesReverseConnect(arguments StringArray) returns bool
 	return false
 end 'carriesReverseConnect'
 
-function lineArrived(poll LinePoll) returns bool
-	return match poll 'which'
-		none gives false
-		line gives true
-	end 'which'
-end 'lineArrived'
+typealias DrainedBytes = int(0 to u64.max)
+typealias DrainReply = Promise with DrainedBytes
 
-function drainedOutput(stub StreamingSubprocess)
-	var moved = true
+type OutputDrain
+	var reader as ChildOutputReader
 
-	while moved 'eachRound'
-		let out = lineArrived(try stub.tryReadStdoutLine() otherwise panic("the real stub's stdout is out with a reader"))
-		let err = lineArrived(try stub.tryReadStderrLine() otherwise panic("the real stub's stderr is out with a reader"))
-		moved = out or err
-	end 'eachRound'
-end 'drainedOutput'
+	static function create(reader isolated ChildOutputReader) returns Self
+		return Self{reader: merge reader}
+	end 'create'
+
+	export function drain() returns DrainedBytes
+		let rest = try self.reader.readToEnd() otherwise return 0
+
+		return rest.count() as DrainedBytes
+	end 'drain'
+end 'OutputDrain'
+
+type StubDrains
+	var stdout as DrainReply
+	var stderr as DrainReply
+
+	static function over(stub StreamingSubprocess) returns StubDrains
+		let outReader = try stub.takeStdout() otherwise panic("the real stub's stdout could not be taken")
+		let errReader = try stub.takeStderr() otherwise panic("the real stub's stderr could not be taken")
+		let outDrain = spawn OutputDrain.create(outReader)
+		let errDrain = spawn OutputDrain.create(errReader)
+		let outReply = try outDrain.drain() otherwise panic("the stub's stdout drain refused its work")
+		let errReply = try errDrain.drain() otherwise panic("the stub's stderr drain refused its work")
+
+		return Self{stdout: outReply, stderr: errReply}
+	end 'over'
+
+	function finish()
+		_ = await self.stdout
+		_ = await self.stderr
+	end 'finish'
+end 'StubDrains'
 
 function probed(arguments StringArray) returns ExitCode
 	let ran = try Subprocess.run(Executable.path(realStub()), arguments: forwardedArguments(arguments, replacing: ReverseConnectOption, by: "")) otherwise panic("the real stub could not run")
@@ -433,26 +459,30 @@ function served(arguments StringArray) returns ExitCode
 	let stub = try StreamingSubprocess.spawn(Executable.path(realStub()), arguments: proxied) otherwise panic("the real stub could not start")
 	stub.closeStdin()
 
+	let drains = StubDrains.over(stub)
+
 	try door.setAcceptDeadline(ConnectBudgetMs) otherwise panic("the stub proxy could not put a deadline on its door")
 	let stubSocket = try door.accept() otherwise panic("the real stub did not connect to the proxy")
 
-	return relayed(stub, stubSocket: stubSocket, driver: driver, scenario: scenarioFromEnvironment())
+	return relayed(stub, stubSocket: stubSocket, driver: driver, scenario: scenarioFromEnvironment(), drains: drains)
 end 'served'
 
-function relayed(stub StreamingSubprocess, stubSocket TcpClient, driver Endpoint, scenario Scenario) returns ExitCode
+function relayed(stub StreamingSubprocess, stubSocket TcpClient, driver Endpoint, scenario Scenario, drains StubDrains) returns ExitCode
 	let driverSocket = try TcpClient.connect(driver.host, port: driver.port, deadlineMs: ConnectBudgetMs) otherwise panic("the stub proxy could not reach the debugger")
 	let relay = Relay.create(driverSocket, stub: stubSocket, scenario: scenario, trace: traceFile())
+	var relaying = true
 
-	while relay.step() 'relaying'
-		drainedOutput(stub)
+	while relaying 'relaying'
+		relaying = relay.step()
 	end 'relaying'
 
 	relay.close()
 
-	try stub.waitWithTimeout(StubExitBudgetMs) otherwise 'late'
+	try stub.wait(WaitDeadline.within(StubExitBudgetMs)) otherwise 'late'
 		_ = stub.endTree()
 	end 'late'
 
+	drains.finish()
 	stub.release()
 
 	return 0

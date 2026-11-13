@@ -856,7 +856,8 @@ DIFFERENCE BETWEEN PINNING THIS RULE AND PINNING A NEIGHBOUR'S.** A legal `async
 suspend (E3073), and `Scheduler.yield` lowers to `__gt_resched`, which is on the SAME target roster — so it
 raises its own E3104 four lines earlier and the case would pass against a compiler that had never heard of
 `awaitAny`. The CPU-parallel checkpoint satisfies E3073 and is deliberately NOT on that roster (its body is
-a void return, which lowers everywhere), so the only refusal left is this one's.
+a void return, which lowers everywhere). The `async` spawn is refused on its own line (`__gt_spawn`), and
+the `__gt_await_any` line after it is this rule's.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -875,5 +876,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3104: <fragment>:13:17: an `async` spawn lowers to the runtime entry '__gt_spawn', which has no wasm32-wasi implementation
 error E3104: <fragment>:14:18: this construct lowers to the runtime entry '__gt_await_any', which has no wasm32-wasi implementation
 ```

@@ -272,22 +272,33 @@ module type GdbRemoteConnection
 			return GdbFill.broken("the debugger could not put a deadline on its read of the debug stub")
 		end 'noDeadline'
 
-		let chunk = try self.socket.recv(GdbRecvCapacity) otherwise (e) 'nothingArrived'
-			if e == NetworkError.timedOut 'theBudgetRanOut'
-				return GdbFill.timedOut
-			end 'theBudgetRanOut'
-
-			self.open = false
-
-			return GdbFill.broken("the debug stub closed its connection ({e.name})")
+		let arrived = try self.socket.readSome(GdbRecvCapacity) otherwise (e) 'nothingArrived'
+			match e 'why'
+				timedOut then return GdbFill.timedOut
+				closed or
+				failed or
+				secure then return self.fillBroken("the debug stub closed its connection ({e.displayReason()})")
+			end 'why'
 		end 'nothingArrived'
 
-		for value in chunk.bytes() 'eachByte'
+		let chunk = merge arrived
+
+		if chunk.isEmpty() 'stubClosed'
+			return self.fillBroken("the debug stub closed its connection")
+		end 'stubClosed'
+
+		for value in chunk 'eachByte'
 			self.pending.push(value)
 		end 'eachByte'
 
 		return GdbFill.filled
 	end 'fill'
+
+	function fillBroken(reason String) returns GdbFill
+		self.open = false
+
+		return GdbFill.broken(reason)
+	end 'fillBroken'
 
 	function consume(count GdbWireIndex)
 		self.pending = gdbSlice(self.pending, from: count, until: self.pending.count() as GdbWireIndex)

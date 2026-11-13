@@ -1,7 +1,10 @@
-let ReplPollMs = 5
+let ReplTailSilenceMs = 300
+let ReplTailCapMs = 5000
+let ReplProcess = "the debug REPL"
 
-export type ReplSession
+export type ReplSession implements ChildLineSink
 	var child as StreamingSubprocess
+	var pump as ChildPump
 	var transcript as String
 	var hungEvidence as String
 	var staged as FilePath
@@ -11,7 +14,11 @@ export type ReplSession
 			panic("the gate could not run — the debug REPL could not be spawned ({e.displayReason()}).")
 		end 'spawnFailed'
 
-		return Self{child: child, transcript: "", hungEvidence: "", staged: staged}
+		let pump = try ChildPump.of(child) otherwise (e) 'outputNotTaken'
+			panic("the gate could not run — the debug REPL's output could not be taken ({e.displayReason()}).")
+		end 'outputNotTaken'
+
+		return Self{child: child, pump: pump, transcript: "", hungEvidence: "", staged: staged}
 	end 'open'
 
 	export function say(command String)
@@ -27,16 +34,10 @@ export type ReplSession
 	export function sayUntilThe(needle String, deadlineMs DurationMs) returns bool
 		let started = Clock.nowMs()
 
-		while Clock.elapsedMs(started) < deadlineMs 'untilItIsSaid'
-			let moved = self.absorbAvailable()
-
-			if self.transcript.contains(needle) 'itWasSaid'
-				return true
-			end 'itWasSaid'
-
-			if not moved 'idle'
-				sleep(ReplPollMs)
-			end 'idle'
+		while Clock.remainingMs(started, deadlineMs: deadlineMs) > 0 and not self.transcript.contains(needle) 'untilItIsSaid'
+			if not self.absorbNext(Clock.remainingMs(started, deadlineMs: deadlineMs)) 'streamsEnded'
+				break
+			end 'streamsEnded'
 		end 'untilItIsSaid'
 
 		return self.transcript.contains(needle)
@@ -45,33 +46,29 @@ export type ReplSession
 	export function finish(deadlineMs DurationMs) returns bool
 		self.child.closeStdin()
 
-		let started = Clock.nowMs()
-		var ended = false
+		let ending = awaitChildEnd(self.pump, child: self.child, into: self, feed: StdinFeed.never(), started: Clock.nowMs(), deadlineMs: deadlineMs, endsWhen: RunEndsWhen.childExits)
+		let inTime = self.endedInTime(ending)
+		let survivors = concludeChild(self.pump, child: self.child, into: self, ending: ending, tailSilenceMs: ReplTailSilenceMs, tailCapMs: ReplTailCapMs)
 
-		while Clock.elapsedMs(started) < deadlineMs and not ended 'untilItEnds'
-			let polled = self.child.pollExit()
+		requireSurvivorsEnded(survivors, what: ReplProcess)
 
-			_ = self.absorbAvailable()
-
-			match polled 'exitPoll'
-				running then sleep(ReplPollMs)
-				exited then ended = true
-			end 'exitPoll'
-		end 'untilItEnds'
-
-		if not ended 'itHung'
-			self.hungEvidence = self.evidenceOfAHang()
-			requireTreeEnded(self.child, what: "the debug REPL")
-		end 'itHung'
-
-		while self.absorbAvailable() 'theTail'
-			continue
-		end 'theTail'
-
-		self.child.release()
-
-		return ended
+		return inTime
 	end 'finish'
+
+	function endedInTime(ending ChildEnd) returns bool
+		match ending 'ending'
+			exited then return true
+			deadline then return self.hungAtTheDeadline()
+			reapedElsewhere then panic("{lostStatusMessage(ReplProcess)}")
+			waitFailed(e) then panic("{waitFailureMessage(ReplProcess, failure: e)}")
+		end 'ending'
+	end 'endedInTime'
+
+	function hungAtTheDeadline() returns bool
+		self.hungEvidence = self.evidenceOfAHang()
+
+		return false
+	end 'hungAtTheDeadline'
 
 	export function processId() returns Pid
 		return try self.child.processId() otherwise panic("the gate could not run — the debug REPL has no process id.")
@@ -87,28 +84,24 @@ export type ReplSession
 		return "{processSnapshot(self.staged.toString())}{LineFeed}The hung REPL, sampled:{LineFeed}{sampledStack(replProcess)}{LineFeed}The debug stubs, sampled:{sampledStubs()}"
 	end 'evidenceOfAHang'
 
-	function absorbAvailable() returns bool
-		let outMoved = self.absorbStdoutLine()
-		let errMoved = self.absorbStderrLine()
+	export function heard(_ StdioStream, text String)
+		self.transcript.append("{text}{LineFeed}")
+	end 'heard'
 
-		return outMoved or errMoved
-	end 'absorbAvailable'
+	export function broken(stream StdioStream, reason String)
+		refuseBrokenRead(ReplProcess, stream: stream, reason: reason)
+	end 'broken'
 
-	function absorbStdoutLine() returns bool
-		match try self.child.tryReadStdoutLine() otherwise panic("the debug REPL's stdout is out with a StdoutReader") 'polled'
-			none then return false
-			line(text) then self.transcript.append("{text}{LineFeed}")
-		end 'polled'
+	function absorbNext(waitMs DurationMs) returns bool
+		let event = self.pump.next(waitMs)
+		event.deliverTo(self)
 
-		return true
-	end 'absorbStdoutLine'
-
-	function absorbStderrLine() returns bool
-		match try self.child.tryReadStderrLine() otherwise panic("the debug REPL's stderr is out with a StderrReader") 'polled'
-			none then return false
-			line(text) then self.transcript.append("{text}{LineFeed}")
-		end 'polled'
-
-		return true
-	end 'absorbStderrLine'
+		return match event 'event'
+			exhausted gives false
+			said or
+			closed or
+			broke or
+			silent gives true
+		end 'event'
+	end 'absorbNext'
 end 'ReplSession'

@@ -327,9 +327,10 @@ dropped promise has the effects below.
 - A coroutine that has **not started** never runs.
 - A coroutine that has **already started** is not interrupted where it stands: it resumes and runs on, and
   its result is discarded. What it may no longer do is **begin** an operation that waits on a far end. Its
-  next `TcpClient.connect`, `TcpListener.accept`, `send`, `sendFrom`, `recv`, or `TcpListener.bind` to a
-  host **name** throws that operation's own [`NetworkError`](/docs/stdlib/network/#tcpclient) variant at once
-  instead of parking for a wake-up nothing will send. `close()` still completes, and so does a `bind` to a
+  next `TcpClient.connect`, `TcpListener.accept`, `send`, `sendFrom`, or `TcpListener.bind` to a host
+  **name** throws that operation's own [`NetworkError`](/docs/stdlib/network/#tcpclient) variant at once, and
+  its next `readSome` throws [`StreamError.failed`](/docs/stdlib/io/#stream), instead of parking for a
+  wake-up nothing will send. `close()` still completes, and so does a `bind` to a
   numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
   `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
@@ -788,7 +789,7 @@ end 'main'
 ## I/O and Waiting
 
 Operations that wait **park** their green thread instead of blocking an OS thread: `sleep`, `await`, socket
-operations (`TcpClient.connect`, `send`, `recv`, `TcpListener.accept`) and waiting on a child process. A
+operations (`TcpClient.connect`, `send`, `readSome`, `TcpListener.accept`) and waiting on a child process. A
 parked green thread holds no processor, so a server waiting in `accept()` costs nothing while idle.
 
 File and directory operations yield to other work before each call into the operating system and are

@@ -2108,8 +2108,16 @@ function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, probesCpu
 		emitX64LinuxSigactionInstall(asm, actFirstSlot: SlotSigaction, handlerName: PreemptHandlerName, signal: LinuxSignalUrg)
 	end 'itCanStopAThread'
 
+	emitX64LinuxSigactionDefault(asm, actFirstSlot: SlotSigaction)
+	emitLinuxSigactionCall(asm, signal: LinuxSignalChld, actFirstSlot: SlotSigaction)
+
 	return asm.finishFunction(RuntimeInitName)
 end 'buildLinuxRuntimeInitChunk'
+
+function emitX64LinuxSigactionDefault(asm X64RuntimeAsm, actFirstSlot StackSize)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxSigactionFieldDisp(asm, actFirstSlot: actFirstSlot, field: LinuxSigactionOffHandler), srcReg: X64Register.rax, wide: true)
+end 'emitX64LinuxSigactionDefault'
 
 function x64LinuxSigactionFieldDisp(asm X64RuntimeAsm, actFirstSlot StackSize, field FullRangeInt) returns Imm32
 	return x64LinuxBufferDisp(asm, firstSlot: actFirstSlot, slotCount: LinuxSigactionSlots) + (field as Imm32)

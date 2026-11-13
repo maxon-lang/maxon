@@ -2721,6 +2721,43 @@ typealias ValueExistentialScopeMap = Map with (ValueId, FilePath)
 typealias UndecidedResultOpMap = Map with (ValueId, ElementIndex)
 typealias LetFieldPromiseNameMap = Map with (ValueId, String)
 
+type IsolatedPartRead
+	export let text as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let handedBack as bool
+
+	static function at(text String, anchor Token) returns Self
+		return Self{text: text, line: anchor.line, column: anchor.column, handedBack: false}
+	end 'at'
+
+	static function handedBackBy(callee String, anchor Token) returns Self
+		return Self{text: callee, line: anchor.line, column: anchor.column, handedBack: true}
+	end 'handedBackBy'
+end 'IsolatedPartRead'
+
+typealias IsolatedPartReadMap = Map with (ValueId, IsolatedPartRead)
+
+type TokenSpan
+	export let startIndex as ElementIndex
+	export let endIndex as ElementIndex
+
+	static function create(startIndex ElementIndex, endIndex ElementIndex) returns Self
+		return Self{startIndex: startIndex, endIndex: endIndex}
+	end 'create'
+end 'TokenSpan'
+
+enum IsolatedRecoverySite
+	freeze
+	declared
+	argument
+end 'IsolatedRecoverySite'
+
+enum CallSpawning
+	direct
+	spawned
+end 'CallSpawning'
+
 typealias MovedIntoCallMap = Map with (ValueId, String)
 
 typealias SettlingOpArray = Array with ElementIndex
@@ -2958,8 +2995,10 @@ type ForSourceFacts
 
 	export var iterated as ValueId
 
-	static function create(limit ValueId, testAnchorIndex ElementIndex) returns ForSourceFacts
-		return Self{iterated: limit, isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, skipsSurrogateBlock: false, isString: false, sourceIsDeferred: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, claimsWithIteratorPromise: false, elementQualifier: GenericArgQualifier.plain}
+	export let sourceEnd as ElementIndex
+
+	static function create(limit ValueId, testAnchorIndex ElementIndex, sourceEnd ElementIndex) returns ForSourceFacts
+		return Self{iterated: limit, sourceEnd: sourceEnd, isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, skipsSurrogateBlock: false, isString: false, sourceIsDeferred: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, claimsWithIteratorPromise: false, elementQualifier: GenericArgQualifier.plain}
 	end 'create'
 end 'ForSourceFacts'
 
@@ -4679,8 +4718,13 @@ union ReceiverArg
 	// NAME (`SourceRange.between`'s stated convention — *"the construct's leading keyword or callee name"*)
 	// while a diagnostic about the RECEIVER argument still has to point at the receiver. One token cannot
 	// be both.
-	value(id ValueId, immutableName immutable ByteArray, anchor Token)
+	value(id ValueId, immutableName immutable ByteArray, anchor Token, extent ReceiverExtent)
 end 'ReceiverArg'
+
+union ReceiverExtent
+	writtenBefore(dotIndex ElementIndex)
+	implicitAt(nameIndex ElementIndex)
+end 'ReceiverExtent'
 
 union SourceBinding
 	none
@@ -8849,9 +8893,9 @@ end 'isCompilerQualifierCallee'
 //     `subprocessResult*` readers of the struct it answers, `subprocessResultRelease` and
 //     `subprocessReleaseHandle`;
 //   • the STREAMING child — `subprocessSpawnStreaming`, `subprocessWriteStdinAll` /
-//     `subprocessWriteStdinBytes`, the two `subprocessRead*Line` readers,
-//     `subprocessReadStdoutBytes` (the EXACT-COUNT reader a framed body needs, whose second argument
-//     is a length where the line readers’ is a ceiling), `subprocessCloseStdin`,
+//     `subprocessWriteStdinBytes`, `subprocessPushStdin` / `subprocessAwaitStdinWritable` (the owner
+//     thread's push of a queued payload), `subprocessReadAvailable` (what a stream has buffered, up to a count,
+//     refilling once when it holds nothing), `subprocessCloseStdin`,
 //     `subprocessWaitExit` and `subprocessEndTree`, which sit on the `__gt_subp_*` handle table rather than on a second
 //     CreateProcess path;
 //   • the HELPERS a caller needs around either — `subprocessResolveOnPath` (PATH + PATHEXT) and
@@ -8875,24 +8919,21 @@ let BuiltinsSubprocessSpawnStreamingName = b"__Builtins.subprocessSpawnStreaming
 let BuiltinsSubprocessWriteStdinAllName = b"__Builtins.subprocessWriteStdinAll"
 let BuiltinsSubprocessWriteStdinBytesName = b"__Builtins.subprocessWriteStdinBytes"
 let BuiltinsSubprocessQueueStdinName = b"__Builtins.subprocessQueueStdin"
-let BuiltinsSubprocessReadStdoutLineName = b"__Builtins.subprocessReadStdoutLine"
-let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine"
-let BuiltinsSubprocessReadStdoutBytesName = b"__Builtins.subprocessReadStdoutBytes"
+let BuiltinsSubprocessPushStdinName = b"__Builtins.subprocessPushStdin"
+let BuiltinsSubprocessAwaitStdinWritableName = b"__Builtins.subprocessAwaitStdinWritable"
+let BuiltinsSubprocessReadAvailableName = b"__Builtins.subprocessReadAvailable"
 let BuiltinsSubprocessCloseStdinName = b"__Builtins.subprocessCloseStdin"
 let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
 let BuiltinsSubprocessEndTreeName = b"__Builtins.subprocessEndTree"
 
-// ⭐ **THE THREE NON-BLOCKING STREAMING MEMBERS.** A parent that drives a child AND stays responsive cannot
-// use their blocking twins: `subprocessWaitExit` with a zero timeout waits FOR EVER (the corpus's own
-// convention for the whole family) and a non-zero one TERMINATES the child when it fires, and the two line
-// readers park until a line arrives. These three ask instead of committing — an exit poll that neither
-// blocks nor kills, and a line read that answers the empty string when the pipe has nothing buffered.
+// ⭐ **THE NON-BLOCKING STREAMING MEMBERS.** A parent that drives a child AND stays responsive cannot
+// use `subprocessWaitExit`: with a zero timeout it waits FOR EVER (the corpus's own convention for the
+// whole family) and a non-zero one TERMINATES the child when it fires. These ask instead of committing —
+// an exit poll that neither blocks nor kills.
 let BuiltinsSubprocessPollExitName = b"__Builtins.subprocessPollExit"
 
 // The signal that ended an exited child, 0 for none, or -1 while it runs — the exit poll's shape.
 let BuiltinsSubprocessExitSignalName = b"__Builtins.subprocessExitSignal"
-let BuiltinsSubprocessTryReadStdoutLineName = b"__Builtins.subprocessTryReadStdoutLine"
-let BuiltinsSubprocessTryReadStderrLineName = b"__Builtins.subprocessTryReadStderrLine"
 
 // ⭐ **THE TWO PER-STREAM STATE QUERIES, AND THEY ARE THE ONLY MEMBERS OF THIS FAMILY THAT ANSWER AN ENUM.**
 // Every other subprocess intrinsic answers a machine word or an owned `__ManagedMemory`; these answer
@@ -12930,10 +12971,10 @@ type MoveMark
 	// (`let q = p`) is in no owned set at all — a promise aliases rather than moves, so `q` enrols nothing
 	// — which left every rewind blind to a name that spells a thread the arm consumed. Keyed on the
 	// promise's own `ValueId` instead, which IS the thread's identity, so the ONE record covers the owner
-	// and every alias of it at once and there is no symbol table to walk. See `PromiseConsumeRecord`.
-	export let consumes as PromiseConsumeRecordArray
+	// and every alias of it at once and there is no symbol table to walk.
+	export let consumes as PromiseConsumes
 
-	static function create(slots MoveSlots, consumes PromiseConsumeRecordArray) returns MoveMark
+	static function create(slots MoveSlots, consumes PromiseConsumes) returns MoveMark
 		return Self{slots: slots, consumes: consumes}
 	end 'create'
 
@@ -12952,30 +12993,9 @@ end 'MoveMark'
 
 typealias LiteralCommaCount = int(0 to u32.max)
 
-// ⭐⭐ **ONE CONSUME OF ONE GREEN THREAD — the fact E3142 is decided from, and the fact a branch rewinds.**
-//
-// Keyed on the promise's `ValueId` and never on a NAME. That value IS the thread's identity: an alias binds
-// it verbatim (`declareInitializedBinding`'s promise arm) and a cross-block read resolves to it, so one
-// record answers for the binding that spawned the thread and for every alias of it together. ⇒ a name is
-// not MARKED when the thread is consumed, it is ASKED at its next use (`Parser.requireBindingLive`), which is
-// what keeps a symbol-table walk off the consume path entirely.
-//
-// The KIND rides because the sentence has to name the door the author actually wrote — telling them their
-// `p.cancel()` had "already been awaited" would describe a line their program does not contain.
-type PromiseConsumeRecord
-	export let promise as ValueId
-	export let kind as PromiseConsume
-
-	static function create(promise ValueId, kind PromiseConsume) returns PromiseConsumeRecord
-		return Self{promise: promise, kind: kind}
-	end 'create'
-end 'PromiseConsumeRecord'
-
-typealias PromiseConsumeRecordArray = Array with immutable PromiseConsumeRecord
-
 // ⭐⭐ **ONE ENUM-ACCESSOR READ, the fact E3097 is decided from.** Keyed on the accessor result's own
 // `ValueId` and never on a NAME — that value IS the read's identity, and a `let o = c.ordinal` binds it
-// verbatim, so one record answers for the read and for every name of it at once. `PromiseConsumeRecord`
+// verbatim, so one record answers for the read and for every name of it at once. `PromiseConsumes`
 // is keyed the same way for the same reason, and it is what keeps a symbol-table walk off the compare path.
 //
 // The MEMBER rides because the diagnostic has to name the accessor the author actually wrote: telling them
@@ -13040,52 +13060,6 @@ union EnumAccessorLookup
 	notAnAccessor
 end 'EnumAccessorLookup'
 
-// ⭐ **WHAT CONSUMED THE THREAD `promise` NAMES, ACCORDING TO `consumes`** — `notConsumed` when nothing in
-// it did. The ONE reader of a consume list's shape, so the membership test is written once for the use
-// guard, the union below and the parser's own live state.
-//
-// A linear scan, and deliberately: the list holds one entry per `await`/`cancel` REACHED SO FAR on the
-// current path, which is zero for every function in the scale corpus and a handful in an async one. A map
-// would allocate per function to index a list that is usually empty.
-function promiseConsumeIn(consumes PromiseConsumeRecordArray, promise ValueId) returns PromiseConsume
-	for record in consumes 'each'
-		if record.promise == promise 'thisThread'
-			return record.kind
-		end 'thisThread'
-	end 'each'
-
-	return PromiseConsume.notConsumed
-end 'promiseConsumeIn'
-
-// ⭐ **UNION `from`'s CONSUMES INTO `into` — "the threads spent on EITHER of these paths".** The merge rule
-// for the consume half, and the same rule `Parser.reconcileMovesAtMerge` applies to `movedFrom`
-// (`binding.movedFrom = anyMoved`): a thread reclaimed on ONE reaching edge is spent past the join, because
-// the join cannot know which edge ran. A thread consumed on two edges by different doors keeps the first
-// edge's word for it — either sentence is true of the path it describes, and the caret is on the use.
-function unionPromiseConsumes(into PromiseConsumeRecordArray, from PromiseConsumeRecordArray)
-	for record in from 'each'
-		if promiseConsumeIn(into, promise: record.promise) == PromiseConsume.notConsumed 'notYetRecorded'
-			into.push(record)
-		end 'notYetRecorded'
-	end 'each'
-end 'unionPromiseConsumes'
-
-// An INDEPENDENT copy of a consume list. Both its callers need one for the same reason: the parser's LIVE
-// list is pushed to as the path continues, so a mark that shared it would have the branch's own consumes
-// leak into the snapshot that exists to rewind them, and a live list restored to a mark's own array would
-// push into a mark. Union with an empty list IS the copy, so the two share one loop.
-function copyPromiseConsumes(consumes PromiseConsumeRecordArray) returns PromiseConsumeRecordArray
-	let copy = PromiseConsumeRecordArray.create(0)
-	unionPromiseConsumes(copy, from: consumes)
-	return copy
-end 'copyPromiseConsumes'
-
-function mergedPromiseConsumes(base PromiseConsumeRecordArray, from PromiseConsumeRecordArray) returns PromiseConsumeRecordArray
-	let merged = copyPromiseConsumes(base)
-	unionPromiseConsumes(merged, from: from)
-	return merged
-end 'mergedPromiseConsumes'
-
 // The union of two move marks' `movedFrom` bits — the move state of a path that ran BOTH the moves `a`
 // records and the moves `b` records. Its one use is the inline-conditional's TRUE path: the true arm's
 // own moves (`a`), plus the unconditionally-evaluated condition's (`b`), which parse in the opposite
@@ -13115,12 +13089,7 @@ function orMoveMarks(a MoveMark, b MoveMark, ledger MoveLedger) returns MoveMark
 		values.push(b.valueAt(position))
 	end 'each'
 
-	// The consume half unions the same way, and PASSES `b`'s list THROUGH when the arm consumed nothing —
-	// which is every ternary in a program that never spawns. A mark is read-only (see `captureMoveMark`), so
-	// two marks may name one list; only the branch that really has something to merge allocates.
-	let consumes = mergedPromiseConsumes(b.consumes, from: a.consumes) if a.consumes.count() > 0 else b.consumes
-
-	return MoveMark.create(ledger.overlay(b.slots, height: b.height(), positions: differing, moved: moved, values: values), consumes: consumes)
+	return MoveMark.create(ledger.overlay(b.slots, height: b.height(), positions: differing, moved: moved, values: values), consumes: b.consumes.unioned(a.consumes))
 end 'orMoveMarks'
 
 // The sub-mark over the FIRST `height` owned bindings — the ones that OUTLIVE a construct whose own
@@ -14260,7 +14229,7 @@ type TryBlockContext
 	export var holdsADeferredValue as bool
 
 	static function create(tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor ElementIndex, windowFloor ElementIndex) returns TryBlockContext
-		return Self{tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, windowFloor: windowFloor, members: TryBlockErrorMemberArray.create(0), routedEdges: RoutedErrorEdgeArray.create(0), unfusableMember: "", edgeMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumeRecordArray.create(0)), conflictingMoveEdge: false, holdsADeferredValue: false}
+		return Self{tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, windowFloor: windowFloor, members: TryBlockErrorMemberArray.create(0), routedEdges: RoutedErrorEdgeArray.create(0), unfusableMember: "", edgeMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumes.none()), conflictingMoveEdge: false, holdsADeferredValue: false}
 	end 'create'
 
 	export function throwsClause() returns ThrowsClause
@@ -14696,7 +14665,7 @@ let ErrorMatchLeavesUnmatchedReason = "a path leaves the handler here without ha
 // error's match obligation, whose move is its match.
 function reclaimedOnABackEdge(scan LoopMoveScan, headerValue ValueId) returns bool
 	for back in scan.backEdges 'eachBackEdge'
-		if promiseConsumeNamesADoor(promiseConsumeIn(back.mark.consumes, promise: headerValue)) 'reclaimedHere'
+		if promiseConsumeNamesADoor(back.mark.consumes.kindOf(headerValue)) 'reclaimedHere'
 			return true
 		end 'reclaimedHere'
 	end 'eachBackEdge'
@@ -17329,6 +17298,31 @@ end 'PayloadBinding'
 
 typealias PayloadBindingArray = Array with PayloadBinding
 
+type ScrutineeStanding
+	export let solelyOwned as bool
+	let slotsMayBeReadAgain as bool
+	let unaliased as bool
+
+	static function create(solelyOwned bool, slotsMayBeReadAgain bool, unaliased bool) returns ScrutineeStanding
+		return Self{solelyOwned: solelyOwned, slotsMayBeReadAgain: slotsMayBeReadAgain, unaliased: unaliased}
+	end 'create'
+
+	function ownsTheBoxAlone() returns bool
+		return self.solelyOwned and not self.slotsMayBeReadAgain
+	end 'ownsTheBoxAlone'
+
+	function ownsItsIsolatedPayloads() returns bool
+		return (self.solelyOwned or self.unaliased) and not self.slotsMayBeReadAgain
+	end 'ownsItsIsolatedPayloads'
+end 'ScrutineeStanding'
+
+enum PayloadTake
+	movedOut
+	consumed
+	partRead
+	borrowed
+end 'PayloadTake'
+
 // ⭐ **THE STRATEGY THRESHOLD — below this many disjoint intervals a `match` dispatches by a linear
 // compare chain, at or above it by a balanced binary search.** Three intervals is at most three
 // compare-and-branch pairs, cheaper than the compare-per-level a search spends before it reaches a
@@ -18236,13 +18230,13 @@ type FunctionBodyState
 	// the closure's own moves need the walk.
 	export var functionMintedValueAliases as bool
 
-	// ⭐⭐ **THE GREEN THREADS THIS FRAME HAS ALREADY HANDED BACK TO THE RUNTIME, ON THE PATH BEING PARSED
-	// RIGHT NOW — the live half of `MoveMark.consumes`, and the whole state E3142 is decided from.**
+	// ⭐⭐ **THE VALUES THIS FRAME HAS ALREADY CONSUMED, ON THE PATH BEING PARSED RIGHT NOW — the live half of
+	// `MoveMark.consumes`, and the state E3142 and a re-read's E3102 are decided from.**
 	//
-	// Appended by `consumePromiseThread` (the one door `await`, `try await` and `.cancel()` all reach) and
-	// rewound at every branch by the same capture/restore/reconcile the owned-binding move bits ride, so
-	// "was this thread spent?" is as path-sensitive as "was this binding moved from?" — a consume in one
-	// `if` arm does not spend the thread on the arm that never ran.
+	// Recorded by `consumePromiseThread` (the one door `await`, `try await` and `.cancel()` all reach) and by
+	// a `match` that consumes its scrutinee, and rewound at every branch by the same capture/restore/reconcile
+	// the owned-binding move bits ride, so "was this thread spent?" is as path-sensitive as "was this binding
+	// moved from?" — a consume in one `if` arm does not spend the thread on the arm that never ran.
 	//
 	// ⚠ **IT IS KEYED ON THE VALUE AND NOT ON THE BINDING, which is exactly what a `VarInfo` column could
 	// not have been.** A promise ALIASES rather than moves, so `let q = p` enrols no second owner and there
@@ -18254,7 +18248,7 @@ type FunctionBodyState
 	//
 	// Re-created per function like `ownedBindings`, for the same reason: a `ValueId` names a value in one
 	// function's SSA space and nothing else.
-	export var promiseConsumes as PromiseConsumeRecordArray
+	export var promiseConsumes as PromiseConsumes
 
 	// ⭐ **THE ENUM-ACCESSOR READS THIS FUNCTION HAS EMITTED** (E3097). Fresh per function for
 	// `promiseConsumes`' reason: a `ValueId` means something else in the next body, so a record carried
@@ -18941,7 +18935,8 @@ type FunctionBodyState
 	export var lastExitBlock as BlockId
 	export var immutableSlotReads as ValueMarkColumn
 	export var storedIntoImmutableSlot as ValueMarkColumn
-	export var isolatedElementReads as ValueMarkColumn
+	export var isolatedPartReads as ValueMarkColumn
+	export let isolatedPartOrigins as IsolatedPartReadMap
 	export var rebindAliasOps as UndecidedResultOpMap
 	export var imagedLetInitializerStart as ElementIndex
 
@@ -19299,7 +19294,7 @@ type FunctionBodyState
 			// `end`.
 			unusedCandidates: UnusedBindingCandidateArray.create(0),
 			functionMintedValueAliases: false,
-			promiseConsumes: PromiseConsumeRecordArray.create(0),
+			promiseConsumes: PromiseConsumes.none(),
 			enumAccessorReads: EnumAccessorReadArray.create(0),
 			nascentSelfWrites: NascentSelfWriteArray.create(0),
 			nascentSelfChecks: NascentSelfCheckArray.create(0),
@@ -19408,7 +19403,8 @@ type FunctionBodyState
 			lastExitBlock: NoExitBlock,
 			immutableSlotReads: noValueMarks,
 			storedIntoImmutableSlot: noValueMarks,
-			isolatedElementReads: noValueMarks,
+			isolatedPartReads: noValueMarks,
+			isolatedPartOrigins: IsolatedPartReadMap.create(),
 			rebindAliasOps: UndecidedResultOpMap.create(),
 			imagedLetInitializerStart: NoImagedLetInitializer,
 			bufferSurfaceValues: noValueMarks,
@@ -20007,18 +20003,6 @@ export type Parser
 	// restores it, so a non-generic type declaration allocates nothing here. Never mutated.
 	var emptyTypeParams as immutable NameRoster
 
-	// ⭐ **THE ONE EMPTY CONSUME LIST EVERY MARK OF A PROMISE-FREE PATH SHARES** — `emptyMoveMark`'s economy
-	// applied to the third column, and it is what keeps this whole mechanism free for the programs that have
-	// no promises in them. A mark is read-only, so one immortal empty list can stand in for all of them
-	// rather than every `if`, `match` and ternary allocating a list to hold nothing.
-	//
-	// ⚠ **IT IS NEVER `promiseConsumes` ITSELF, AND THAT IS A HARD INVARIANT** rather than a coincidence:
-	// `consumePromiseThread` PUSHES into the live list and `reconcileMovesAtMerge` unions into it in place,
-	// so the live list must be private to the parser. Every writer of `promiseConsumes` — the constructor,
-	// the two resets, the closure restore, `restoreMoveMark` — assigns a fresh or previously-private array,
-	// and none of them ever assigns this one or a mark's.
-	let sharedEmptyPromiseConsumes as PromiseConsumeRecordArray
-
 	// The shared empties this parser's columns start from and its copy-on-write tests compare against.
 	var anchors as ParserAnchors
 
@@ -20383,7 +20367,6 @@ export type Parser
 			emptySweptParamTypes: MaxonTypeArray.create(0),
 			emptyParamSpellings: NameRoster.create(0),
 			emptyTypeParams: freeze NameRoster.create(0),
-			sharedEmptyPromiseConsumes: PromiseConsumeRecordArray.create(0),
 			noForkTemps: ValueIdArray.create(0),
 			mintedTests: MintedTestArray.create(0),
 			deferredPatternBindings: TokenArray.create(0),
@@ -20392,7 +20375,7 @@ export type Parser
 			imageNotes: ImageNoteMap.create(),
 			closureEnclosingFrames: ClosureEnclosingFrameArray.create(0),
 			openByRefHandOffs: OpenByRefHandOffArray.create(0),
-			emptyMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumeRecordArray.create(0)),
+			emptyMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumes.none()),
 			runtimeSourceOffence: RuntimeSourceOffence.none,
 			misclosedBlock: MisclosedBlock.none,
 			openRegion: AbandonableRegion.none,
@@ -23472,13 +23455,11 @@ export type Parser
 		for i in opening + 1 upto closing 'eachToken'
 			let kind = self.kindAt(i)
 
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opens'
-				depth = depth + 1
-			end 'opens' else if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closes'
-				depth = depth - 1
-			end 'closes' else if kind == TokenKind.comma and depth == 0 'separates'
+			if kind == TokenKind.comma and depth == 0 'separates'
 				starts.push(i + 1)
 			end 'separates'
+
+			depth = groupNestingAfter(kind, nesting: depth)
 		end 'eachToken'
 
 		return starts
@@ -45640,6 +45621,7 @@ export type Parser
 		self.stateDeclaredLiteralTarget(self.typeOf(result), scopeFilePath: self.job.path, valueStart: otherwiseStart)
 		let otherwiseValue = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		try self.requireOtherwiseInRangedReturn(result, from: otherwiseStart, to: self.pos, tryTok: tryTok)
+		self.noteIsolatedPartOrigin(otherwiseValue, startIndex: otherwiseStart, endIndex: self.pos)
 
 		try self.requireOtherwiseMatchesResult(otherwiseValue, result: result, resultUsed: resultUsed, tryTok: tryTok)
 
@@ -45805,9 +45787,22 @@ export type Parser
 
 	function retagCaughtBox(flag ValueId, eType MaxonType, anchor Token) returns ValueId
 		let box = self.emitRetaggedCastValue(flag, targetType: eType, range: SourceRange.ofToken(anchor))
-		self.markValueOwnsHeap(box, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: self.internedName(typeNameIdOf(eType))))
+		let unionName = self.internedName(typeNameIdOf(eType))
+		self.markValueOwnsHeap(box, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: unionName))
+
+		if self.signatures.isServiceSendError(unionName) and self.sendErrorCarriesAnIsolatedPayload(unionName) 'anIsolatedRegionComesBack'
+			self.setValueCapability(box, capability: ValueCapability.isolated)
+		end 'anIsolatedRegionComesBack'
+
 		return box
 	end 'retagCaughtBox'
+
+	function sendErrorCarriesAnIsolatedPayload(unionName ByteArray) returns bool
+		match self.signatures.enumInAnyFile(unionName) 'registered'
+			declared(layout) then return layout.carriesAnIsolatedPayload()
+			undeclared then panic("sendErrorCarriesAnIsolatedPayload: nothing declares `{String.from(unionName)}`, and a caught send error names the union `mintServiceSendErrorTypes` minted")
+		end 'registered'
+	end 'sendErrorCarriesAnIsolatedPayload'
 
 	// ⭐⭐ **RECOVER THE CAUGHT ERROR INTO `currentBlock` — THE ONE DECODE, SHARED BY EVERY CONSTRUCT THAT
 	// CATCHES.** `try f() otherwise (e) 'err' … end`, `if try f() 'ok' … end 'ok' else (e) 'err' … end` and a
@@ -46033,24 +46028,6 @@ export type Parser
 
 		return self.tokenAt(index).value
 	end 'matchScrutineeBareName'
-
-	function matchScrutineeIsAFieldChain(index ElementIndex) returns bool
-		if self.kindAt(index) != TokenKind.identifier and self.kindAt(index) != TokenKind.self 'notABase'
-			return false
-		end 'notABase'
-
-		var at = index + 1
-
-		if self.kindAt(at) != TokenKind.dot 'noField'
-			return false
-		end 'noField'
-
-		while self.kindAt(at) == TokenKind.dot and self.kindAt(at + 1) == TokenKind.identifier 'eachHop'
-			at = at + 2
-		end 'eachHop'
-
-		return self.kindAt(at) == TokenKind.charLiteral
-	end 'matchScrutineeIsAFieldChain'
 
 	// Parse an `otherwise` handler BLOCK (`otherwise ['(e)'] 'label' … end 'label'`) into the error block.
 	// The caught error is recovered by the shared `declareCaughtError` — the same decode `if try … else (e)`
@@ -48544,9 +48521,9 @@ export type Parser
 	// ⭐ **AND THE CONSUMED GREEN THREADS BESIDE IT, WHICH ARE NOT POSITIONAL AND CANNOT BE.** A promise
 	// ALIASES rather than moves, so a second name for a thread enrols no owned binding — there is no slot in
 	// the positional column for the alias's poison to live in. The consume list is keyed on the thread's own
-	// `ValueId` instead and rides whole — see `markedPromiseConsumes` for what the mark actually gets.
+	// `ValueId` instead and rides whole.
 	function captureMoveMark() returns MoveMark
-		return MoveMark.create(self.syncedMoveSlots(), consumes: self.markedPromiseConsumes())
+		return MoveMark.create(self.syncedMoveSlots(), consumes: self.bodyState.promiseConsumes)
 	end 'captureMoveMark'
 
 	function syncedMoveSlots() returns MoveSlots
@@ -48587,23 +48564,6 @@ export type Parser
 		self.bodyState.ownedBindings.truncate(height)
 	end 'truncateOwnedBindings'
 
-	// ⭐ **THE CONSUME LIST A MARK CARRIES.** The SHARED empty one when nothing has been consumed on this
-	// path — which is every function in a program that never spawns — and an INDEPENDENT COPY otherwise:
-	// the parser's live list is pushed to as the path continues, and a shared reference would let those
-	// pushes leak into the very snapshot that exists to rewind them.
-	//
-	// ⚠ **A MARK'S LIST IS READ-ONLY, AND EVERYTHING HERE RESTS ON IT.** Nothing writes through a mark —
-	// `restoreMoveMark` copies OUT of one, `orMoveMarks` and `reconcileMovesAtMerge` read one — which is
-	// what makes sharing safe both ways: many marks may name the shared empty list, and a trimmed mark
-	// (`moveMarkPrefix`) may name its parent's.
-	function markedPromiseConsumes() returns PromiseConsumeRecordArray
-		if self.bodyState.promiseConsumes.count() == 0 'nothingConsumedOnThisPath'
-			return self.sharedEmptyPromiseConsumes
-		end 'nothingConsumedOnThisPath'
-
-		return copyPromiseConsumes(self.bodyState.promiseConsumes)
-	end 'markedPromiseConsumes'
-
 	// ⭐ **PATH-SENSITIVE MOVE STATE — RESTORE.** Rewind every owned binding's `movedFrom` bit to a
 	// captured mark, undoing the moves a sibling branch made so the next path is parsed against the
 	// pre-branch ownership state (the twin of `restoreBindings`). Written THROUGH the shared `VarInfo`
@@ -48630,13 +48590,7 @@ export type Parser
 		// onto the entry state, which ADDS the consumes that branch made. Replacing the list with an
 		// independent copy of the mark's states "the consume state at this join is exactly what the mark
 		// says" once, for both directions, instead of two rules that could disagree about which way is which.
-		//
-		// The copy is INDEPENDENT for `markedPromiseConsumes`' reason — the live list is pushed to — and is
-		// skipped entirely when there is nothing to settle either way, which is every branch in a program
-		// that never spawns.
-		if self.bodyState.promiseConsumes.count() > 0 or mark.consumes.count() > 0 'consumeStateToSettle'
-			self.bodyState.promiseConsumes = copyPromiseConsumes(mark.consumes)
-		end 'consumeStateToSettle'
+		self.bodyState.promiseConsumes = mark.consumes
 	end 'restoreMoveMark'
 
 	// ⭐⭐ **PATH-SENSITIVE MOVE STATE — RECONCILE AT A JOIN.** Given the edges that REACH a merge (each an
@@ -48692,28 +48646,14 @@ export type Parser
 		// `default then return (await p)` LAST the following `await p` was refused E3142, while the same
 		// match written the other way round compiled and exited 44. The `movedFrom` bits were right in both,
 		// because they are ASSIGNED from `anyMoved` over the reaching edges — which is what this does.
-		//
-		// The scan below is what keeps a promise-free program allocation-free: nothing consumed on any edge
-		// and nothing live means the settled state IS the live state, and there is no list to build.
-		var anyEdgeConsumed = false
+		let firstEdge = try edges.get(0) otherwise panic("reconcileMovesAtMerge: a merge is reconciled only with a reaching edge")
+		var settled = firstEdge.mark.consumes
 
-		for edge in edges 'scanEdgeConsumes'
-			if edge.mark.consumes.count() > 0 'edgeSpentAThread'
-				anyEdgeConsumed = true
-			end 'edgeSpentAThread'
-		end 'scanEdgeConsumes'
+		for edge in edges 'eachEdgesConsumes'
+			settled = settled.unioned(edge.mark.consumes)
+		end 'eachEdgesConsumes'
 
-		if anyEdgeConsumed or self.bodyState.promiseConsumes.count() > 0 'consumeStateToSettle'
-			// A FRESH private list, for `sharedEmptyPromiseConsumes`' hard invariant: whatever lands in
-			// `promiseConsumes` is pushed into and unioned into later, so it may never be a mark's array.
-			let settled = PromiseConsumeRecordArray.create(0)
-
-			for edge in edges 'eachEdgesConsumes'
-				unionPromiseConsumes(settled, from: edge.mark.consumes)
-			end 'eachEdgesConsumes'
-
-			self.bodyState.promiseConsumes = settled
-		end 'consumeStateToSettle'
+		self.bodyState.promiseConsumes = settled
 	end 'reconcileMovesAtMerge'
 
 	function positionsToReconcile(edges ReachingMoveEdgeArray) returns MoveSlotIndexColumn
@@ -49935,7 +49875,7 @@ export type Parser
 	// FOR IT (E3142).** The `movedFrom` bit above answers "does this BINDING still owe a drop?", and
 	// that is all it can answer: an alias (`let q = p`) enrols no owned binding, so there is no bit of `q`'s
 	// to set. The record is keyed on the thread's `ValueId` instead — the identity every name for it shares
-	// — so `promiseConsumeIn` answers for the spawner and for each alias with one entry, and the path-
+	// — so `PromiseConsumes.kindOf` answers for the spawner and for each alias with one entry, and the path-
 	// sensitive machinery rewinds ONE list rather than an unbounded set of names.
 	//
 	// `reclaimedBy` is which door handed the thread back to the RUNTIME. `notConsumed` is the honest answer
@@ -49974,11 +49914,7 @@ export type Parser
 	// The one writer of `promiseConsumes`, and FIRST WINS: a door that reclaimed the thread must not be
 	// overwritten by a later record, or E3142 quotes a door that is not where the thread went.
 	function recordPromiseConsume(promise ValueId, kind PromiseConsume)
-		if promiseConsumeIn(self.bodyState.promiseConsumes, promise: promise) != PromiseConsume.notConsumed 'alreadyRecorded'
-			return
-		end 'alreadyRecorded'
-
-		self.bodyState.promiseConsumes.push(PromiseConsumeRecord.create(promise, kind: kind))
+		self.bodyState.promiseConsumes = self.bodyState.promiseConsumes.recorded(promise, kind: kind)
 	end 'recordPromiseConsume'
 
 	// ⭐ **RECORD THAT `value` WAS READ OUT OF `container[index]` — the read half of a move out of a slot.**
@@ -49999,7 +49935,7 @@ export type Parser
 	end 'promiseValueCarriesAContainerSlot'
 
 	function carriedContainerSlotOf(value ValueId) returns ValueId throws AbsentError
-		if promiseConsumeIn(self.bodyState.promiseConsumes, promise: value) != PromiseConsume.notConsumed 'givenAwayOnThisPath'
+		if self.bodyState.promiseConsumes.kindOf(value) != PromiseConsume.notConsumed 'givenAwayOnThisPath'
 			throw AbsentError.absent
 		end 'givenAwayOnThisPath'
 
@@ -51266,6 +51202,7 @@ export type Parser
 		if owned != value and not self.valueIsCopyableTuple(value) 'anAliasOfTheEdge'
 			self.carryCapabilityToAlias(value, target: owned)
 			self.carryImmutableSlotRead(value, target: owned)
+			self.carryIsolatedPartRead(owned, arm: value)
 		end 'anAliasOfTheEdge'
 
 		self.bodyState.currentBlock = saved
@@ -52865,7 +52802,7 @@ export type Parser
 		// been. A RECORD's fields live in memory and are never promoted, which is exactly what the
 		// diagnostic asks for — and the bundle is not arbitrary: these ten ARE one answer, *what kind of
 		// thing is being iterated*, settled once by the header and read by every phase after it.
-		let src = ForSourceFacts.create(source, testAnchorIndex: forIndex)
+		let src = ForSourceFacts.create(source, testAnchorIndex: forIndex, sourceEnd: self.pos)
 		src.elementQualifier = self.sourceReceiverElementQualifier(source, sourceOpFloor: sourceOpFloor)
 
 		// A source `mintCallResult` deferred has no iterable shape to read, and this parser cannot abandon a
@@ -53276,7 +53213,10 @@ export type Parser
 			loopValue = try self.emitContainerElementAccessor(ManagedGetUncheckedName, container: source, args: twoArgs(source, second: indexPhi), giid: self.valueInstanceId(source), reference: ContainerElementReference.borrowed, range: SourceRange.ofToken(patternTok))
 			self.emitEmptySlotElementGuard(func, source: source, element: loopValue, index: indexPhi, forTok: forTok)
 			self.adaptBorrowedElement(loopValue, receiver: source)
-			loopValue = self.holdLoopElement(loopValue, nameToks: nameToks, range: SourceRange.ofToken(patternTok))
+			self.noteElementReadFromAPart(loopValue, source: source, startIndex: sourceStart, endIndex: src.sourceEnd)
+			let borrowedElement = loopValue
+			loopValue = self.holdLoopElement(borrowedElement, nameToks: nameToks, range: SourceRange.ofToken(patternTok))
+			self.carryIsolatedPartRead(loopValue, arm: borrowedElement)
 		end 'readElement'
 
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
@@ -53301,10 +53241,16 @@ export type Parser
 				self.adaptBorrowedElement(loopValue, receiver: src.iterated)
 			end 'aListElementIsABorrowFromTheList'
 
+			self.noteElementReadFromAPart(loopValue, source: src.iterated, startIndex: sourceStart, endIndex: src.sourceEnd)
+
 			if self.tagOf(loopValue) == ValueTypeTag.typeParameter and src.cursorSurface.dispatchesThroughAWitness() 'aWitnessTableCarriesNoDescriptor'
 				self.bodyState.witnessCursorElements = withValueMarked(self.bodyState.witnessCursorElements, value: loopValue)
 			end 'aWitnessTableCarriesNoDescriptor'
 		end 'readCursorElement'
+
+		// Unconditional: the loop is the handed-back source's consumer, and each element it hands out carries
+		// its own part-read mark (`noteElementReadFromAPart`).
+		self.withdrawHandedBack(argsOf(src.iterated))
 
 		// ⭐⭐ **ONE PATTERN POSITION IS BOUND TO ONE VALUE, AND A DESTRUCTURING HEADER SIMPLY HAS MORE OF
 		// THEM.** A single name takes the element WHOLE; `for (key, value) in m` takes one tuple FIELD
@@ -55868,11 +55814,7 @@ export type Parser
 
 	function settleBackEdgeConsumes(scan LoopMoveScan) throws SourceParseError
 		for back in scan.backEdges 'eachBackEdge'
-			for record in back.mark.consumes 'eachConsume'
-				if promiseConsumeIn(scan.entryMark.consumes, promise: record.promise) != PromiseConsume.notConsumed 'consumedBeforeTheLoop'
-					continue
-				end 'consumedBeforeTheLoop'
-
+			for record in back.mark.consumes.recordsBeyond(scan.entryMark.consumes) 'eachConsume'
 				let read = try scan.headerReadOf(record.promise) otherwise continue
 
 				if promiseConsumeMovedItToAnotherOwner(record.kind) 'givenAway'
@@ -55884,12 +55826,12 @@ export type Parser
 
 	function loopExitEdgeMark(mark MoveMark, scan LoopMoveScan, movedAtTheHeader ValueMarkSet, touched MoveSlotIndexColumn) returns MoveMark
 		let positions = MoveSlotIndexColumn.create(0)
-		let consumes = copyPromiseConsumes(mark.consumes)
+		var consumes = mark.consumes
 
 		for back in scan.backEdges 'eachBackEdge'
-			for record in back.mark.consumes 'eachBackEdgeConsume'
-				if promiseConsumeIn(consumes, promise: record.promise) == PromiseConsume.notConsumed and consumeReachesTheNextHeader(scan, back: back, promise: record.promise) 'carriedAround'
-					consumes.push(record)
+			for record in back.mark.consumes.recordsBeyond(mark.consumes) 'eachBackEdgeConsume'
+				if consumeReachesTheNextHeader(scan, back: back, promise: record.promise) 'carriedAround'
+					consumes = consumes.recorded(record.promise, kind: record.kind)
 				end 'carriedAround'
 			end 'eachBackEdgeConsume'
 		end 'eachBackEdge'
@@ -56549,7 +56491,7 @@ export type Parser
 		end 'enumDispatchSubject'
 
 		// ⭐ **MATCH-CONSUME BOOKKEEPING.** A managed payload BINDING takes its field out of
-		// the box, and `scrutSolelyOwned` plus `scrutMutable` decide HOW: an IMMUTABLE box this frame is the ONLY
+		// the box, and the `ScrutineeStanding` decides HOW: an IMMUTABLE box this frame is the ONLY
 		// owner of is MOVED out of; anything else — a `var` scrutinee, whose slot the arms may still write; a
 		// BORROWED scrutinee (a param/receiver/field read, whose owner is the caller's local); and equally a
 		// CO-OWNED one (a box this frame holds a SECOND reference to) — is RETAINED from instead
@@ -56561,7 +56503,7 @@ export type Parser
 		//
 		// ⛔⛔ **TWO QUESTIONS, TWO PREDICATES, AND MERGING THEM IS A SEGFAULT.** `scrutOwned` below is
 		// *"does this value owe a drop?"* and is what the temporary-scrutinee enrolment needs — a co-owned
-		// temporary owes exactly the same drop a fresh box does. `scrutSolelyOwned` is *"will anything else ever
+		// temporary owes exactly the same drop a fresh box does. `standing.solelyOwned` is *"will anything else ever
 		// read this box's slots?"* and is what the destructive move-out needs. One predicate serving both
 		// faulted six programs; see `OwnedHeapExclusivity`.
 		//
@@ -56575,12 +56517,9 @@ export type Parser
 		// mutually exclusive, so an arm that did not run moved nothing), while an `and fallthrough`
 		// successor INHERITS it, exactly as it inherits `movedFrom`.
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
-		let scrutSolelyOwned = self.valueIsSoleHeapOwner(scrut)
 
-		// Whether the scrutinee's slots can be read again after this match, and so may not be emptied by a
-		// move-out — read BEFORE the temporary-scrutinee enrolment below, so it is asked of the author's own
-		// bindings. See `scrutineeBindingIsMutable`.
-		let scrutMutable = self.scrutineeBindingIsMutable(scrut, isAParameter: valueIsAParameter(scrut, paramCount: func.paramCount)) or self.matchScrutineeIsAFieldChain(scrutStart) or self.matchScrutineeIsAMutableParameter(scrutStart)
+		// Read BEFORE the temporary-scrutinee enrolment below, so it is asked of the author's own bindings.
+		let standing = self.scrutineeStandingOf(scrut, scrutStart: scrutStart, isAParameter: valueIsAParameter(scrut, paramCount: func.paramCount))
 
 		// "Some reaching path left the scrutinee consumed" — the merge-level union of the per-arm bit, which
 		// is NOT the same as "some arm of THIS match moved a payload out": a nested `match m` in an arm body
@@ -56969,7 +56908,7 @@ export type Parser
 					if deferredScrutinee 'deferredScrutineeBindings'
 						try self.declareDeferredPatternBindings(deferredBindings)
 					end 'deferredScrutineeBindings' else 'payloadSlotBindings'
-						let armMovedManaged = try self.declarePayloadBindings(arm.bindings, scrutBox: payloadBox, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(arm.payloadEnum))
+						let armMovedManaged = try self.declarePayloadBindings(arm.bindings, scrutBox: payloadBox, standing: standing, layout: requireEnumLayout(arm.payloadEnum))
 
 						if armMovedManaged 'consumed'
 							// The scrutinee is dead for the rest of this arm from here: its slot is nulled, so the arm
@@ -56977,7 +56916,7 @@ export type Parser
 							//
 							// The merge-level bit is read off the arm's exit state — by the next arm's
 							// `beginFreshArm`, and for the last arm by the single read after the loop.
-							self.setBindingPartiallyMoved(scrut, value: true)
+							self.consumeScrutinee(scrut)
 						end 'consumed'
 					end 'payloadSlotBindings'
 				end 'openArmBindings'
@@ -57247,7 +57186,7 @@ export type Parser
 	// `match <a constructed union>` off the destructive move-out and onto the retain, a refcount change on a
 	// common path.
 	//
-	// ⚠ This is membership, and `scrutSolelyOwned` is provenance; they disagree on the loop-carried phi. A
+	// ⚠ This is membership, and `ScrutineeStanding.solelyOwned` is provenance; they disagree on the loop-carried phi. A
 	// `var` union matched inside the loop that reassigns it answers `true` here, so `declarePayloadBindings`
 	// retains its payloads and the box keeps its own reference.
 	function scrutineeBindingIsMutable(scrut ValueId, isAParameter bool) returns bool
@@ -57267,6 +57206,21 @@ export type Parser
 		let info = self.bodyState.scope.getInfo(name)
 		return info.isParameter and info.cellCrossesByReference
 	end 'matchScrutineeIsAMutableParameter'
+
+	function scrutineeStandingOf(scrut ValueId, scrutStart ElementIndex, isAParameter bool) returns ScrutineeStanding
+		let slotsMayBeReadAgain = self.scrutineeBindingIsMutable(scrut, isAParameter: isAParameter) or self.valueIsASlotRead(scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)
+		let unaliased = self.valueIsSolelyOwnedHere(scrut) or self.valueIsAnOwnedIsolatedLocal(scrut)
+
+		return ScrutineeStanding.create(self.valueIsSoleHeapOwner(scrut), slotsMayBeReadAgain: slotsMayBeReadAgain, unaliased: unaliased)
+	end 'scrutineeStandingOf'
+
+	function consumeScrutinee(scrut ValueId)
+		self.setBindingPartiallyMoved(scrut, value: true)
+
+		if self.moveOfValueEscapesLoop(scrut) 'laterLapsReadIt'
+			self.recordPromiseConsume(scrut, kind: PromiseConsume.consumedByMatch)
+		end 'laterLapsReadIt'
+	end 'consumeScrutinee'
 
 	// Parse ONE arm's body, in one of THREE shapes. An EXPRESSION arm is either a `gives` — a single
 	// expression, whose value feeds the merge phi — or a DIVERGING terminal form (`panic("…")` /
@@ -57319,7 +57273,7 @@ export type Parser
 
 			match destination 'destination'
 				returned(returnAnchor) then return try self.returnedArmBody(func, give: value, valueStart: valueStart, anchor: returnAnchor)
-				merged then break
+				merged then self.noteIsolatedPartOrigin(value, startIndex: valueStart, endIndex: self.pos)
 			end 'destination'
 
 			let exitBlock = self.bodyState.currentBlock
@@ -58039,7 +57993,7 @@ export type Parser
 	end 'settleArmGive'
 
 	function valueIsAnOwnedIsolatedLocal(value ValueId) returns bool
-		return self.effectiveCapabilityOf(value) == ValueCapability.isolated and not self.valueIsASlotRead(value) and self.valueIsOwnedHeap(value)
+		return self.valueIsAnOwnedIsolatedRegion(value) and self.valueIsOwnedHeap(value)
 	end 'valueIsAnOwnedIsolatedLocal'
 
 	// The four clauses of `settleArmGive`'s question, named so the sentence above is the code: the arm holds
@@ -59606,7 +59560,7 @@ export type Parser
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
 	// (`setBindingPartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// box, and marking it moved would make the other owner's later re-read a false E3102.
-	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, layout EnumLayout) returns bool throws SourceParseError
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, standing ScrutineeStanding, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
 		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
 
@@ -59660,7 +59614,7 @@ export type Parser
 			// payload twin of `__managed_vacate`, and the union's slot is nulled by the same store the managed
 			// move-out uses.
 			if payloadClassIsAGreenThread(class) 'aGreenThreadPayload'
-				if not scrutSolelyOwned 'borrowedScrutinee'
+				if not standing.solelyOwned 'borrowedScrutinee'
 					throw SourceParseError.promiseCannotBeBorrowed(String.from(binding.field.name), cure: "A promise payload is MOVED out of the union when it is bound, and this scrutinee is only borrowed — there is nothing to move out of. `match` on the binding that owns the union", line: binding.nameTok.line, column: binding.nameTok.column)
 				end 'borrowedScrutinee'
 
@@ -59671,18 +59625,22 @@ export type Parser
 				// A word's payload is never emptied out of it, but the match still consumes a solely-owned
 				// immutable scrutinee on the condition the box's move-out uses, so a later read is E3102 in
 				// either representation.
-				movedManaged = movedManaged or (scrutSolelyOwned and not scrutMutable and not self.valueHoldsAUniqueRecord(loaded))
+				let take = self.payloadTakeOf(standing, loaded: loaded, slot: binding.field.capability, slotIsEmptiable: true)
 				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range)
+				movedManaged = self.settlePayloadTake(take, loaded: loaded) or movedManaged
 			end 'aWordPayload' else if payloadClassIsManaged(class) 'managedPayload'
 				// A `var` union's slot is read again by its next `match`, so the bind borrows it rather than
 				// emptying it: a move-out would hand the record to a binding that frees it at the arm's exit,
 				// leaving the box holding a null the author never emptied. A `let` union is never read after
 				// the match consumes it, so an arm may take its payload for good.
-				if scrutSolelyOwned and not scrutMutable and not self.valueHoldsAUniqueRecord(loaded) and not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared) 'ownedMoveOut'
+				let take = self.payloadTakeOf(standing, loaded: loaded, slot: binding.field.capability, slotIsEmptiable: not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared))
+
+				if take == PayloadTake.movedOut 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: layout.name), range: range)
 					movedManaged = true
 				end 'ownedMoveOut' else 'borrowed'
 					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range)
+					movedManaged = self.settlePayloadTake(take, loaded: loaded) or movedManaged
 				end 'borrowed'
 			end 'managedPayload'
 		end 'each'
@@ -59768,6 +59726,26 @@ export type Parser
 		self.emitIncref(loaded, range: range)
 		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'retainBorrowedPayload'
+
+	function payloadTakeOf(standing ScrutineeStanding, loaded ValueId, slot ParamCapability, slotIsEmptiable bool) returns PayloadTake
+		if standing.ownsTheBoxAlone() and slotIsEmptiable and not self.valueHoldsAUniqueRecord(loaded) 'theOnlyOwnerTakesIt'
+			return PayloadTake.movedOut
+		end 'theOnlyOwnerTakesIt'
+
+		if slot != ParamCapability.isolated 'notAnIsolatedPayload'
+			return PayloadTake.borrowed
+		end 'notAnIsolatedPayload'
+
+		return PayloadTake.consumed if standing.ownsItsIsolatedPayloads() else PayloadTake.partRead
+	end 'payloadTakeOf'
+
+	function settlePayloadTake(take PayloadTake, loaded ValueId) returns bool
+		if take == PayloadTake.partRead 'theSlotStaysReachable'
+			self.noteIsolatedPartRead(loaded)
+		end 'theSlotStaysReachable'
+
+		return take == PayloadTake.movedOut or take == PayloadTake.consumed
+	end 'settlePayloadTake'
 
 	function borrowPayload(bindingInfo VarInfo, loaded ValueId, name ByteArray, range SourceRange)
 		if not self.holdReplacesItsSource(loaded) 'heldRead'
@@ -61576,7 +61554,7 @@ export type Parser
 		// THREADS, and restoring the shared empty one onto a path that has already awaited something wipes
 		// that record — the arm's rewind un-spending a thread the statement before it consumed. The scale
 		// corpus is all scalar and spawns nothing, so it still allocates none.
-		if markOwnedCount > 0 or self.bodyState.promiseConsumes.count() > 0 'moveStateToRewind'
+		if markOwnedCount > 0 or not self.bodyState.promiseConsumes.isEmpty() 'moveStateToRewind'
 			preMoveMark = self.captureMoveMark()
 		end 'moveStateToRewind'
 
@@ -61609,6 +61587,8 @@ export type Parser
 		if self.at(TokenKind.if) 'ternary'
 			self.releaseCompletedOperand()
 			self.bodyState.operandOrder.stashSince(markOperandCount)
+
+			self.noteIsolatedPartOrigin(value, startIndex: armStart, endIndex: self.pos)
 
 			// The TRUE arm's blame, taken while its own tokens are still the ones the cursor last moved over
 			// — the condition and the false arm both clobber that answer, and both parse below.
@@ -61812,6 +61792,7 @@ export type Parser
 		let falseOrderFloor = self.assumeOrders(orders.whenFalse)
 		let falseValue = try self.parseExpression(func, block: falseBranch)
 		self.bodyState.orderFacts.forgetAbove(falseOrderFloor)
+		self.noteIsolatedPartOrigin(falseValue, startIndex: falseArmStart, endIndex: self.pos)
 		let falseBlame = self.expressionImmutableBlame(falseArmTok, valueStart: falseArmStart)
 		let falseExit = self.bodyState.currentBlock
 
@@ -63464,7 +63445,7 @@ export type Parser
 		end 'aValue'
 
 		if self.effectiveCapabilityOf(operand) != ValueCapability.immutable 'notYetFrozen'
-			try self.recoverIsolated(operand, startIndex: operandStart, forFreeze: true)
+			try self.recoverIsolated(operand, startIndex: operandStart, site: IsolatedRecoverySite.freeze)
 		end 'notYetFrozen'
 
 		try self.requireNotUniqueFor(operand, verb: "frozen", anchor: self.tokenAt(operandStart))
@@ -63513,9 +63494,9 @@ export type Parser
 	function parseMerge(func IrFunction, opTok Token) returns ValueId throws SourceParseError
 		let operandStart = self.pos
 		let operand = try self.parseUnclaimedUnary(func)
-		let capability = self.effectiveCapabilityOf(operand)
+		try self.requireNotAnIsolatedSlotRead(operand, startIndex: operandStart, endIndex: self.pos, anchor: opTok)
 
-		if self.valueIsAValueType(operand) or capability != ValueCapability.isolated or self.valueIsASlotRead(operand) 'notIsolated'
+		if self.valueIsAValueType(operand) or self.effectiveCapabilityOf(operand) != ValueCapability.isolated 'notIsolated'
 			throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{self.pathTextOf(operandStart)}' is not an isolated value; `merge` moves an isolated region into the current one", line: opTok.line, column: opTok.column)
 		end 'notIsolated'
 
@@ -63545,7 +63526,7 @@ export type Parser
 		try self.consume(TokenKind.with)
 		let valueStart = self.pos
 		let replacement = try self.parseUnclaimedUnary(func)
-		try self.recoverIsolated(replacement, startIndex: valueStart, forFreeze: false)
+		try self.recoverIsolated(replacement, startIndex: valueStart, site: IsolatedRecoverySite.declared)
 
 		self.notePassedParamNeed(func, value: origin.holder, mutable: true, line: opTok.line)
 		self.emitIncref(old, range: SourceRange.ofToken(opTok))
@@ -63584,9 +63565,62 @@ export type Parser
 		return match receiver 'shape'
 			none or
 			unavailable gives fallback
-			value(_, _, tok) gives tok
+			value(_, _, tok, _) gives tok
 		end 'shape'
 	end 'receiverTokenOf'
+
+	function receiverSpanOf(receiver ReceiverArg) returns TokenSpan
+		return match receiver 'shape'
+			none or
+			unavailable panic("receiverSpanOf: a call with no receiver has no receiver span — every caller asks only after `receiverIsPassed`")
+			value(_, _, _, extent) gives self.receiverExtentSpan(extent)
+		end 'shape'
+	end 'receiverSpanOf'
+
+	function receiverExtentSpan(extent ReceiverExtent) returns TokenSpan
+		return match extent 'shape'
+			writtenBefore(dotIndex) gives TokenSpan.create(self.receiverStartBefore(dotIndex), endIndex: dotIndex)
+			implicitAt(nameIndex) gives TokenSpan.create(nameIndex, endIndex: nameIndex + 1)
+		end 'shape'
+	end 'receiverExtentSpan'
+
+	function writtenReceiver(value ValueId, immutableName immutable ByteArray, anchor Token) returns ReceiverArg
+		return ReceiverArg.value(value, immutableName: immutableName, anchor: anchor, extent: ReceiverExtent.writtenBefore(self.pos - 1))
+	end 'writtenReceiver'
+
+	function receiverStartBefore(dotIndex ElementIndex) returns ElementIndex
+		var start = dotIndex
+
+		while start > 0 'eachChainPart'
+			let last = start - 1
+			let kind = self.kindAt(last)
+
+			if tokenKindClosesAGroup(kind) 'aGroup'
+				start = self.parenGroups.openOf(self.tokens, close: last)
+
+				if start == 0 or not self.chainContinuesBefore(start) 'theGroupOpensTheChain'
+					break
+				end 'theGroupOpensTheChain'
+			end 'aGroup' else if tokenKindIsPostfixChainPart(kind) and kind != TokenKind.dot 'aName'
+				start = last
+
+				if start == 0 or self.kindAt(start - 1) != TokenKind.dot 'theNameOpensTheChain'
+					break
+				end 'theNameOpensTheChain'
+
+				start = start - 1
+			end 'aName' else 'notPartOfTheChain'
+				break
+			end 'notPartOfTheChain'
+		end 'eachChainPart'
+
+		return start
+	end 'receiverStartBefore'
+
+	function chainContinuesBefore(opener ElementIndex) returns bool
+		let kind = self.kindAt(opener - 1)
+		return tokenKindClosesAGroup(kind) or (tokenKindIsPostfixChainPart(kind) and kind != TokenKind.dot)
+	end 'chainContinuesBefore'
 
 	function declaredResultCapability(callee ByteArray, declaration SweptDeclaration) returns ResultCapability
 		if declaration.returnCapability != ResultCapability.unmarked 'writtenOnTheFunction'
@@ -63604,8 +63638,7 @@ export type Parser
 
 	function declaredArgumentCapability(declaration SweptDeclaration, argColumn ParamCount, label ByteArray) returns ParamCapability
 		let position = try argSlotPosition(declaration.paramNames, argIndex: argColumn, label: label) otherwise return ParamCapability.unmarked
-		let written = try declaration.paramCapabilities.get(position) otherwise ParamCapability.unmarked
-		return self.signatures.capabilityOfSpelledType(written, spelling: declaration.paramSpellingAt(position), readerFilePath: declaration.declFilePath)
+		return self.signatures.declaredParamCapability(declaration, position: position)
 	end 'declaredArgumentCapability'
 
 	function parameterIsOpaque(declaration SweptDeclaration, argColumn ParamCount, label ByteArray) returns bool
@@ -63614,36 +63647,40 @@ export type Parser
 		return maxonTypeTag(paramType) == ValueTypeTag.typeParameter
 	end 'parameterIsOpaque'
 
-	function checkCallCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, receiver ReceiverArg, anchor Token) returns bool throws SourceParseError
+	function checkCallCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, receiver ReceiverArg, anchor Token, spawning CallSpawning) returns bool throws SourceParseError
 		let declaration = try self.declarationNameableHere(callee) otherwise return false
 		let receiverFirst = self.receiverIsPassed(receiver)
-		let receiverTok = self.receiverTokenOf(receiver, fallback: anchor)
 
 		if receiverFirst and declaration.selfCapability == ParamCapability.immutable 'aFrozenSelf'
 			self.notePassedParamNeed(func, value: try args.get(0) otherwise panic("checkCallCapabilities: a call with a receiver carries it at argument 0"), mutable: false, line: anchor.line)
 		end 'aFrozenSelf'
 
-		let opensAnIsolatedValue = try self.openIsolatedPositions(args, declaration: declaration, argAnchors: argAnchors, argLabels: argLabels, receiverFirst: receiverFirst, receiverTok: receiverTok)
+		let opensAnIsolatedValue = try self.openIsolatedPositions(callee, args: args, declaration: declaration, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, spawning: spawning)
 		let firstSource = 1 if receiverFirst else 0
 
 		for position in firstSource upto args.count() 'eachSourceArgument'
 			let argument = try args.get(position) otherwise panic("checkCallCapabilities: args.get OOB at {position} below the count just read")
 			let column = (position - firstSource) as ParamCount
 			let declared = self.declaredArgumentCapability(declaration, argColumn: column, label: try argLabels.get(position) otherwise EmptySourceText)
+			let writtenAtTheCall = position < argAnchors.count()
 
-			if declared == ParamCapability.isolated and position < argAnchors.count() and not self.declarationByRefConvention(callee).takesArgumentByRef(position as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText) 'aMovedArgument'
+			if declared == ParamCapability.isolated and writtenAtTheCall and not self.declarationByRefConvention(callee).takesArgumentByRef(position as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText) 'aMovedArgument'
 				try self.requireByReferenceIsolatedStaysPut(func, value: argument, at: self.tokenAt(try argAnchors.get(position) otherwise panic("checkCallCapabilities: argAnchors.get OOB at {position} below the count just checked")))
 			end 'aMovedArgument'
 
-			if declared == ParamCapability.immutable and position < argAnchors.count() and self.parameterIsOpaque(declaration, argColumn: column, label: try argLabels.get(position) otherwise EmptySourceText) 'aFrozenOpaqueParameter'
+			if declared == ParamCapability.immutable and writtenAtTheCall and self.parameterIsOpaque(declaration, argColumn: column, label: try argLabels.get(position) otherwise EmptySourceText) 'aFrozenOpaqueParameter'
 				try self.requireArgumentFrozen(func, callee: callee, declaration: declaration, argument: argument, anchorIndex: try argAnchors.get(position) otherwise panic("checkCallCapabilities: argAnchors.get OOB at {position} below the count just checked"), argColumn: column, label: try argLabels.get(position) otherwise EmptySourceText)
 				self.noteStoredIntoImmutableSlot(argument)
 			end 'aFrozenOpaqueParameter'
 
+			if declared == ParamCapability.isolated and writtenAtTheCall 'anIsolatedArgument'
+				try self.recoverIsolated(argument, startIndex: try argAnchors.get(position) otherwise panic("checkCallCapabilities: argAnchors.get OOB at {position} below the count just checked"), site: IsolatedRecoverySite.argument)
+			end 'anIsolatedArgument'
+
 			match declared 'declared'
 				immutable then self.notePassedParamNeed(func, value: argument, mutable: false, line: anchor.line)
 				mutable then self.notePassedParamNeed(func, value: argument, mutable: true, line: anchor.line)
-				isolated then try self.recoverIsolatedArgument(argument, anchorIndex: try argAnchors.get(position) otherwise panic("checkCallCapabilities: argAnchors.get OOB at {position}"))
+				isolated or
 				unmarked then break
 			end 'declared'
 		end 'eachSourceArgument'
@@ -63654,7 +63691,7 @@ export type Parser
 	function positionOpensItsValue(args ValueIdArray, declaration SweptDeclaration, argLabels NameRoster, receiverFirst bool, position ElementIndex) returns bool
 		let argument = try args.get(position) otherwise panic("positionOpensItsValue: args.get OOB at {position}")
 
-		if self.valueIsAValueType(argument) or self.effectiveCapabilityOf(argument) != ValueCapability.isolated 'notAnIsolatedRegion'
+		if not self.valueIsIsolatedRegionData(argument) 'notAnIsolatedRegion'
 			return false
 		end 'notAnIsolatedRegion'
 
@@ -63677,29 +63714,31 @@ export type Parser
 		throw AbsentError.absent
 	end 'nextOpenedPosition'
 
-	function requireNoIsolatedArgumentInAnAsyncCall(callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster) throws SourceParseError
-		let declaration = try self.declarationNameableHere(callee) otherwise return
-		let opened = try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: false, start: 0) otherwise return
-		let argTok = self.tokenAt(try argAnchors.get(opened) otherwise panic("requireNoIsolatedArgumentInAnAsyncCall: argAnchors.get OOB at {opened}"))
-		throw self.regionRefusal(ErrorCode.semanticArgumentCapabilityRefused, message: "'{String.from(unqualifiedMemberOf(genericTemplateName(callee)))}' is spawned with `async`, and '{String.from(argTok.value)}' is isolated; an `async` call takes an isolated value only in an `isolated` parameter, which moves it", line: argTok.line, column: argTok.column)
-	end 'requireNoIsolatedArgumentInAnAsyncCall'
-
-	function openedPositionToken(position ElementIndex, argAnchors TokenIndexArray, receiverFirst bool, receiverTok Token) returns Token
-		if receiverFirst and position == 0 'theReceiver'
-			return receiverTok
+	function openedPositionSpan(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns TokenSpan
+		if self.receiverIsPassed(receiver) and position == 0 'theReceiver'
+			return self.receiverSpanOf(receiver)
 		end 'theReceiver'
 
-		return self.tokenAt(try argAnchors.get(position) otherwise panic("openedPositionToken: argAnchors.get OOB at {position}"))
-	end 'openedPositionToken'
+		let startIndex = try argAnchors.get(position) otherwise panic("openedPositionSpan: argAnchors.get OOB at {position}")
+		return TokenSpan.create(startIndex, endIndex: self.argumentEndIndex(startIndex))
+	end 'openedPositionSpan'
 
-	function openIsolatedPositions(args ValueIdArray, declaration SweptDeclaration, argAnchors TokenIndexArray, argLabels NameRoster, receiverFirst bool, receiverTok Token) returns bool throws SourceParseError
+	function openIsolatedPositions(callee ByteArray, args ValueIdArray, declaration SweptDeclaration, argAnchors TokenIndexArray, argLabels NameRoster, receiver ReceiverArg, spawning CallSpawning) returns bool throws SourceParseError
+		let receiverFirst = self.receiverIsPassed(receiver)
 		let first = try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: 0) otherwise return false
 		let firstValue = try args.get(first) otherwise panic("openIsolatedPositions: args.get OOB at {first}")
-		let firstTok = self.openedPositionToken(first, argAnchors: argAnchors, receiverFirst: receiverFirst, receiverTok: receiverTok)
+		let firstSpan = self.openedPositionSpan(first, argAnchors: argAnchors, receiver: receiver)
+		let firstTok = self.tokenAt(firstSpan.startIndex)
+
+		match spawning 'spawning'
+			spawned then throw self.regionRefusal(ErrorCode.semanticArgumentCapabilityRefused, message: "'{calleeSourceName(callee)}' is spawned with `async`, and '{String.from(firstTok.value)}' is isolated; an `async` call takes an isolated value only in an `isolated` parameter, which moves it", line: firstTok.line, column: firstTok.column)
+			direct then break
+		end 'spawning'
+
 		let rootName = self.openedRootName(firstValue, openedTok: firstTok)
 
 		if let second = try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: first + 1) 'aSecondRegion'
-			let secondTok = self.openedPositionToken(second, argAnchors: argAnchors, receiverFirst: receiverFirst, receiverTok: receiverTok)
+			let secondTok = self.tokenAt(self.openedPositionSpan(second, argAnchors: argAnchors, receiver: receiver).startIndex)
 			let secondName = self.openedRootName(try args.get(second) otherwise panic("openIsolatedPositions: args.get OOB at {second}"), openedTok: secondTok)
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: self.twoRootsMessage(rootName, second: secondName), line: secondTok.line, column: secondTok.column)
 		end 'aSecondRegion'
@@ -63711,8 +63750,9 @@ export type Parser
 				continue
 			end 'staysInsideOrIsClean'
 
-			let argTok = self.openedPositionToken(position, argAnchors: argAnchors, receiverFirst: receiverFirst, receiverTok: receiverTok)
-			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{String.from(argTok.value)}' is mutable outside '{String.from(rootName)}'; a call into an isolated region takes values, immutable or isolated", line: argTok.line, column: argTok.column)
+			let span = self.openedPositionSpan(position, argAnchors: argAnchors, receiver: receiver)
+			let argTok = self.tokenAt(span.startIndex)
+			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{self.tokenTextFrom(span.startIndex, endIndex: span.endIndex)}' is mutable outside '{String.from(rootName)}'; a call into an isolated region takes values, immutable or isolated", line: argTok.line, column: argTok.column)
 		end 'eachOtherArgument'
 
 		return true
@@ -63752,7 +63792,7 @@ export type Parser
 	end 'notePassedParamNeed'
 
 	function checkSendArgumentCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, anchor Token) throws SourceParseError
-		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: anchor)
+		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: anchor, spawning: CallSpawning.direct)
 		let declaration = try self.declarationNameableHere(callee) otherwise return
 
 		for position in 0 upto argAnchors.count() 'eachSourceArgument'
@@ -63783,11 +63823,11 @@ export type Parser
 		let paramName = displayParamName(try declaration.paramNames.get(slot) otherwise panic("requireArgumentFrozen: paramNames.get OOB at {slot}"))
 
 		if self.valueIsAnUndecidedResult(argument) 'settledAfterParsing'
-			self.fileResultUse(argument, slot: ParamCapability.immutable, sends: true, judged: true, place: "'{String.from(unqualifiedMemberOf(callee))}' takes `immutable` '{paramName}'; '{String.from(argTok.value)}' is ", line: argTok.line, column: argTok.column)
+			self.fileResultUse(argument, slot: ParamCapability.immutable, sends: true, judged: true, place: "'{calleeSourceName(callee)}' takes `immutable` '{paramName}'; '{String.from(argTok.value)}' is ", line: argTok.line, column: argTok.column)
 			return
 		end 'settledAfterParsing'
 
-		throw self.regionRefusal(ErrorCode.semanticArgumentCapabilityRefused, message: "'{String.from(unqualifiedMemberOf(callee))}' takes `immutable` '{paramName}'; {frozenSubject("'{String.from(argTok.value)}'", capability: given)} is {word}{freezeAdvice(given, phrase: ". Freeze it first")}", line: argTok.line, column: argTok.column)
+		throw self.regionRefusal(ErrorCode.semanticArgumentCapabilityRefused, message: "'{calleeSourceName(callee)}' takes `immutable` '{paramName}'; {frozenSubject("'{String.from(argTok.value)}'", capability: given)} is {word}{freezeAdvice(given, phrase: ". Freeze it first")}", line: argTok.line, column: argTok.column)
 	end 'requireArgumentFrozen'
 
 	function pausedOperandsOf(args ValueIdArray) returns ParamPositionMask
@@ -64174,7 +64214,7 @@ export type Parser
 	function isolateIfPossible(value ValueId) returns bool
 		let capability = self.effectiveCapabilityOf(value)
 
-		if self.valueIsAValueType(value) or (capability == ValueCapability.isolated and not self.valueIsASlotRead(value)) 'alreadyIsolated'
+		if self.valueIsAValueType(value) or self.valueIsAnOwnedIsolatedRegion(value) 'alreadyIsolated'
 			return true
 		end 'alreadyIsolated'
 
@@ -64186,22 +64226,7 @@ export type Parser
 		return false
 	end 'isolateIfPossible'
 
-	function recoverIsolatedArgument(value ValueId, anchorIndex ElementIndex) throws SourceParseError
-		if self.isolateIfPossible(value) 'isolated'
-			return
-		end 'isolated'
-
-		let tok = self.tokenAt(anchorIndex)
-		let text = String.from(tok.value)
-
-		if self.effectiveCapabilityOf(value) == ValueCapability.isolated 'aSlotRead'
-			throw self.isolatedSlotReadRefusal(text, at: tok)
-		end 'aSlotRead'
-
-		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: isolatedRecoveryRefusal("'{text}'", advice: "; pass a copy"), line: tok.line, column: tok.column)
-	end 'recoverIsolatedArgument'
-
-	function noteCallResultCapability(result ValueId, callee ByteArray, args ValueIdArray, opensAnIsolatedValue bool, opFloor ElementIndex, anchor Token, argLabels NameRoster, receiver ReceiverArg) throws SourceParseError
+	function noteCallResultCapability(result ValueId, callee ByteArray, args ValueIdArray, opensAnIsolatedValue bool, opFloor ElementIndex, anchor Token, argLabels NameRoster, receiver ReceiverArg)
 		if self.valueIsAValueType(result) 'aValue'
 			return
 		end 'aValue'
@@ -64223,13 +64248,20 @@ export type Parser
 			return
 		end 'aFrozenResult'
 
-		if opensAnIsolatedValue 'leavesTheOpenedRegion'
-			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{String.from(unqualifiedMemberOf(callee))}' hands back mutable data of the isolated region it opens; use it inside a `modify` block", line: anchor.line, column: anchor.column)
+		let returnsFresh = self.signatures.returnsFreshValue(callee)
+
+		if opensAnIsolatedValue and not qualifiedMemberIs(callee, member: CloneMethodName) 'leavesTheOpenedRegion'
+			self.noteHandedBackResult(result, callee: callee, args: args, anchor: anchor)
+			return
 		end 'leavesTheOpenedRegion'
 
 		let sources = self.argumentsThatCanReachTheResult(callee, args: args, argLabels: argLabels, receiver: receiver)
 
-		if not self.signatures.returnsFreshValue(callee) 'mayHandBackAnArgument'
+		if not returnsFresh 'mayHandBackAnArgument'
+			if self.carryPartReadThroughACall(result, sources: sources) 'aPartReadReachesTheResult'
+				return
+			end 'aPartReadReachesTheResult'
+
 			if let readOnly = try self.readOnlyInputCapability(sources, resultKeepsItsItemCapabilities: self.valueHoldsAFrozenTupleItem(result)) 'readsReadOnlyData'
 				self.setValueCapability(result, capability: readOnly)
 
@@ -64243,13 +64275,23 @@ export type Parser
 
 				return
 			end 'readsReadOnlyData'
-		end 'mayHandBackAnArgument'
+		end 'mayHandBackAnArgument' else if not qualifiedMemberIs(callee, member: CloneMethodName) and self.carryPartReadThroughACall(result, sources: sources) 'aFreshRecordHoldingAPartRead'
+			return
+		end 'aFreshRecordHoldingAPartRead'
 
-		self.markFreshWhenInputsClean(result, inputs: sources)
+		let inputsAreClean = self.inputsAreClean(sources)
 
-		let aFreshRecordHoldingItsArguments = self.signatures.returnsFreshValue(callee) and not qualifiedMemberIs(callee, member: CloneMethodName) and not self.signatures.isArrayInstanceAt(self.tagOf(result), nameId: self.valueNameId(result)) and self.anyArgumentConstrainsTheResult(sources)
+		if inputsAreClean and self.callResultMayViewItsInputs(result, callee: callee) 'aViewIsNotFresh'
+			return
+		end 'aViewIsNotFresh'
 
-		if (not self.signatures.returnsFreshValue(callee) and self.capabilityOfValue(result) != ValueCapability.temporary) or aFreshRecordHoldingItsArguments 'judgedOnceEveryBodyIsRead'
+		if inputsAreClean 'allClean'
+			self.markFresh(result)
+		end 'allClean'
+
+		let aFreshRecordHoldingItsArguments = returnsFresh and not qualifiedMemberIs(callee, member: CloneMethodName) and not self.signatures.isArrayInstanceAt(self.tagOf(result), nameId: self.valueNameId(result)) and self.anyArgumentConstrainsTheResult(sources)
+
+		if (not returnsFresh and self.capabilityOfValue(result) != ValueCapability.temporary) or aFreshRecordHoldingItsArguments 'judgedOnceEveryBodyIsRead'
 			self.noteUndecidedResult(result, opFloor: opFloor)
 		end 'judgedOnceEveryBodyIsRead'
 	end 'noteCallResultCapability'
@@ -64407,16 +64449,22 @@ export type Parser
 		end 'aResultTheClosureKeeps'
 	end 'noteClosureCapture'
 
-	function carryReadOnlyCaptures(closure ValueId, captured CapturedValueArray)
+	function carryReadOnlyCaptures(closure ValueId, captured CapturedValueArray, captureNames NameRoster, captureAnchors TokenArray)
 		var meet = ValueCapability.immutable
 		var capturesRecordData = false
 		var capturesUncleanData = false
 
-		for slot in captured 'eachCapture'
+		for (iter, slot) in captured.withIterator() 'eachCapture'
 			let value = try self.capturedRecordOf(slot) otherwise continue
 			capturesRecordData = true
 			meet = meetOfCaptureCapabilities(meet, captured: self.effectiveCapabilityOf(value))
 			capturesUncleanData = capturesUncleanData or not self.valueIsCleanInput(value)
+
+			if self.valueIsAnIsolatedSlotRead(value) and not self.bodyState.isolatedPartOrigins.contains(closure) 'capturesAPartRead'
+				let name = try captureNames.get(iter.index()) otherwise panic("carryReadOnlyCaptures: captureNames.get OOB at {iter.index()} — filled in lockstep with the captured values")
+				let anchor = try captureAnchors.get(iter.index()) otherwise panic("carryReadOnlyCaptures: captureAnchors.get OOB at {iter.index()} — filled in lockstep with the captured values")
+				self.noteIsolatedPartReadAt(closure, read: IsolatedPartRead.at(displayParamName(name), anchor: anchor))
+			end 'capturesAPartRead'
 		end 'eachCapture'
 
 		if not capturesUncleanData 'theClosureHoldsNothingTheCallerWrites'
@@ -64469,7 +64517,7 @@ export type Parser
 		if capabilityIsReadOnly(given) 'readOnlyContainer'
 			self.setValueCapability(result, capability: given)
 		end 'readOnlyContainer' else if given == ValueCapability.isolated 'anIsolatedContainer'
-			self.bodyState.isolatedElementReads = withValueMarked(self.bodyState.isolatedElementReads, value: result)
+			self.noteIsolatedPartRead(result)
 		end 'anIsolatedContainer'
 
 		self.carryUndecidedResult(receiver, target: result)
@@ -64533,15 +64581,25 @@ export type Parser
 		self.setValueCapability(value, capability: ValueCapability.temporary)
 	end 'markFresh'
 
-	function markFreshWhenInputsClean(value ValueId, inputs ValueIdArray)
+	function inputsAreClean(inputs ValueIdArray) returns bool
 		for input in inputs 'eachInput'
 			if not self.valueIsCleanInput(input) 'anUncleanInput'
-				return
+				return false
 			end 'anUncleanInput'
 		end 'eachInput'
 
-		self.markFresh(value)
+		return true
+	end 'inputsAreClean'
+
+	function markFreshWhenInputsClean(value ValueId, inputs ValueIdArray)
+		if self.inputsAreClean(inputs) 'allClean'
+			self.markFresh(value)
+		end 'allClean'
 	end 'markFreshWhenInputsClean'
+
+	function callResultMayViewItsInputs(result ValueId, callee ByteArray) returns bool
+		return self.valueIsBufferSurface(result) and not self.signatures.returnsFreshValue(callee)
+	end 'callResultMayViewItsInputs'
 
 	function layoutOfOrigin(origin FieldOrigin) returns StructLayout
 		match self.signatures.structFor(origin.layoutName, readerFilePath: self.job.path) 'declaration'
@@ -64728,6 +64786,8 @@ export type Parser
 	end 'deferRegionRefusal'
 
 	function requireNoDeferredRefusal() throws SourceParseError
+		try self.requireNoHandedBackResult()
+
 		match self.regionFactsForWrite().deferredRefusal 'state'
 			none then return
 			at(line, column, code, message) then throw self.regionRefusal(code, message: message, line: line, column: column)
@@ -67204,7 +67264,12 @@ export type Parser
 		// `ct == ContentType.json` reach the compare identically. Only one side can ever move: a case
 		// coerced against a byte record leaves a byte record behind, and the other side was one already.
 		let left = try self.enumCaseAtItsBacking(lhs, against: self.tagOf(rhs), opTok: opTok)
-		return try self.emitComparableCompare(left, rhs: try self.enumCaseAtItsBacking(rhs, against: self.tagOf(left), opTok: opTok), op: op, opTok: opTok)
+		let verdict = try self.emitComparableCompare(left, rhs: try self.enumCaseAtItsBacking(rhs, against: self.tagOf(left), opTok: opTok), op: op, opTok: opTok)
+
+		// Unconditional, unlike `dischargeHandedBack`: E3187 forbids an `equals` or `compare` that writes or
+		// keeps either operand, so the verdict holds nothing of a handed-back region.
+		self.withdrawHandedBack(twoArgs(lhs, second: rhs))
+		return verdict
 	end 'emitCompare'
 
 	// ⭐⭐ **A CHAR- OR STRING-BACKED ENUM CASE COMPARES AT ITS RAW VALUE.** For an INT-backed enum the tag
@@ -76428,8 +76493,21 @@ export type Parser
 			self.markFresh(result)
 		end 'aDeepCopy'
 
+		self.dischargeHandedBackOperands(result, opFloor: firstOp)
 		return result
 	end 'dispatchMethodOnReceiver'
+
+	function dischargeHandedBackOperands(result ValueId, opFloor ElementIndex)
+		if self.regionFactsForRead().handedBack.isEmpty() 'nothingHandedBack'
+			return
+		end 'nothingHandedBack'
+
+		let opIdx = try firstOpDefiningSince(self.artifact.module, value: result, floor: opFloor) otherwise return
+		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("dischargeHandedBackOperands: ops.get OOB at {opIdx}")
+		let operands = ValueIdArray.create(0)
+		maxonOpOperandValues(op, into: operands)
+		self.dischargeHandedBack(operands, result: result)
+	end 'dischargeHandedBackOperands'
 
 	function cloneOfReceiverIsACompilerCopy(recv MethodReceiver) returns bool
 		if recv.tag == ValueTypeTag.function or recv.tag == ValueTypeTag.interfaceRef or recv.tag == ValueTypeTag.typeParameter 'noGeneratedCopy'
@@ -76972,7 +77050,7 @@ export type Parser
 
 		match self.enumGrantedConformanceMethod(enumName, memberName: memberTok.value) 'granted'
 			supplied(method) then return try self.dispatchEnumConformanceMethod(func, recv: recv, enumName: enumName, method: method, memberTok: memberTok)
-			notSupplied then return try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+			notSupplied then return try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: self.writtenReceiver(recv.value, immutableName: recv.immutableName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 		end 'granted'
 	end 'dispatchEnumMethod'
 
@@ -77345,7 +77423,7 @@ export type Parser
 		// E3036 there too (`method-calls:19:4` over `\tc.increment(5)`).
 		// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver; the head above came from
 		// `base.layout`, so no token at this call site spells it.
-		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.resolvedTypeQualifier)
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: self.writtenReceiver(base.box, immutableName: base.immutableName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.resolvedTypeQualifier)
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 
 		if producesAByteView 'aFoldableByteView'
@@ -79172,6 +79250,7 @@ export type Parser
 	function emitOwnedManagedMemoryResult(callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
 		let result = self.emitOwnedRuntimeResult(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance() as TypeNameId, range: range)
 		self.markBufferSurface(result, origin: EmptySourceText)
+		self.markFresh(result)
 		return result
 	end 'emitOwnedManagedMemoryResult'
 
@@ -79337,6 +79416,7 @@ export type Parser
 		let createArgs = twoArgs(count, second: self.emitInstanceElementSize(instance, range: range)) if signedNarrowInstance else args
 		let created = self.emitOwnedRuntimeResult(ManagedMemCreateName, args: createArgs, resultTag: ValueTypeTag.genericInstance, resultNameId: (instance as TypeNameId), range: range)
 		self.markBufferSurface(created, origin: EmptySourceText)
+		self.markFresh(created)
 		return created
 	end 'parseManagedMemoryCreate'
 
@@ -79905,7 +79985,7 @@ export type Parser
 			// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver, and no token at this call
 			// site spells the type — `dispatchMethodOnBase`'s mint, for its reason. `ConstructorInstance.none`
 			// because a primitive has no box for a constructor to have built.
-			return try self.parseCallNamed(func, callee: declaredCallee, anchor: methodTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+			return try self.parseCallNamed(func, callee: declaredCallee, anchor: methodTok, receiver: self.writtenReceiver(recv.value, immutableName: recv.immutableName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 		end 'theProgramDeclaresItsOwn'
 
 		// The peek above only READ the name; the arms below all consume it, and this is the one place they
@@ -81806,15 +81886,32 @@ export type Parser
 	// bit `retainBorrowedAggregate` sets is not enough. See that door for why the two halves travel together.
 	function parseArrayInitStatic(func IrFunction, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.leftParen)
+		let argumentStart = self.pos
 		let managed = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		try self.requireSameArrayInstance(managed, giid: giid, anchor: methodTok)
+		try self.requireNotAnIsolatedSlotRead(managed, startIndex: argumentStart, endIndex: self.pos, anchor: self.tokenAt(argumentStart))
 		try self.consume(TokenKind.rightParen)
 
-		let adopted = self.coOwnAggregateAsTemp(managed, range: range)
+		let adopted = self.adoptManagedAsArray(managed, range: range)
 		self.unmarkBufferSurface(adopted)
 		try self.bodyState.valueBrandIds.set(adopted, value: UnnamedTypeId) otherwise panic("parseArrayInitStatic: v{adopted} has no brand slot — every SSA value is minted through mintValue, which seeds the column")
+
+		if not capabilityIsReadOnly(self.effectiveCapabilityOf(managed)) 'writableBuffer'
+			self.markFreshWhenInputsClean(adopted, inputs: argsOf(managed))
+		end 'writableBuffer'
+
 		return adopted
 	end 'parseArrayInitStatic'
+
+	function adoptManagedAsArray(managed ValueId, range SourceRange) returns ValueId
+		if self.valueIsAnOwnedIsolatedLocal(managed) 'movesIntoTheArray'
+			self.moveOwnedValueOut(managed)
+			self.trackOwnedTemp(managed, exclusivity: OwnedHeapExclusivity.coOwned)
+			return managed
+		end 'movesIntoTheArray'
+
+		return self.coOwnAggregateAsTemp(managed, range: range)
+	end 'adoptManagedAsArray'
 
 	// ⭐ **THE `init(managed)` ARGUMENT RULE IS SAME-INSTANCE — AND THE OBVIOUS DOOR IS THE WRONG ONE.**
 	// `String.init` checks its argument with `requireManagedMemoryValue`, which is BYTE-ONLY
@@ -81859,7 +81956,7 @@ export type Parser
 	// A COMPILER-SYNTHESIZED byte buffer wears the reserved element `__ManagedByte`, deliberately a DIFFERENT
 	// instance from the user-visible `Byte` (`SignatureIndex`'s two-names roster: a user may declare `Byte`,
 	// and a compiler-minted buffer's stride may not follow). Raw instance EQUALITY therefore refuses it, and
-	// `stdlib/Console.maxon:68` is exactly that program: `ByteArray.init(__Builtins.readStdin(n))`, refused
+	// `StdinSource.readSome` is exactly that program: `ByteArray.init(__Builtins.readStdin(most))`, refused
 	// `E3005 argument type mismatch for 'managed': expected '__ManagedMemory with Byte', got
 	// 'Array___ManagedByte'` — MEASURED on a module the BOOTSTRAP
 	// compiles.
@@ -89779,7 +89876,7 @@ export type Parser
 		// ⚠ **A THIRD KIND REACHES NEITHER TEST ON PURPOSE.** A read retired because a SIBLING read of its
 		// slot was consumed had nothing done to it, so both sentences here would be false of it; it is
 		// refused at the door it is carried to, where the message can name the slot.
-		let consumedBy = promiseConsumeIn(self.bodyState.promiseConsumes, promise: binding.boundValue)
+		let consumedBy = self.bodyState.promiseConsumes.kindOf(binding.boundValue)
 
 		if promiseConsumeNamesADoor(consumedBy) 'threadAlreadyReclaimed'
 			throw SourceParseError.promiseAlreadyConsumed(String.from(promiseConsumeDoorName(consumedBy)), line: nameTok.line, column: nameTok.column)
@@ -90316,12 +90413,179 @@ export type Parser
 		return self.regionFactsForRead().fieldOrigins.contains(value)
 	end 'valueIsASlotRead'
 
+	function valueIsAnIsolatedSlotRead(value ValueId) returns bool
+		if not valueIsMarked(self.bodyState.isolatedPartReads, value: value) and not self.valueIsASlotRead(value) 'neverReadAPart'
+			return false
+		end 'neverReadAPart'
+
+		return self.isolatedSlotReadGiven(value, capability: self.effectiveCapabilityOf(value), isValueType: self.valueIsAValueType(value))
+	end 'valueIsAnIsolatedSlotRead'
+
+	function isolatedSlotReadGiven(value ValueId, capability ValueCapability, isValueType bool) returns bool
+		if isValueType 'aValue'
+			return false
+		end 'aValue'
+
+		return valueIsMarked(self.bodyState.isolatedPartReads, value: value) or (self.valueIsASlotRead(value) and capability == ValueCapability.isolated)
+	end 'isolatedSlotReadGiven'
+
+	function valueIsIsolatedRegionData(value ValueId) returns bool
+		if self.valueIsAValueType(value) 'aValue'
+			return false
+		end 'aValue'
+
+		return self.effectiveCapabilityOf(value) == ValueCapability.isolated or valueIsMarked(self.bodyState.isolatedPartReads, value: value)
+	end 'valueIsIsolatedRegionData'
+
+	function valueIsAnOwnedIsolatedRegion(value ValueId) returns bool
+		return self.valueIsIsolatedRegionData(value) and not self.valueIsAnIsolatedSlotRead(value)
+	end 'valueIsAnOwnedIsolatedRegion'
+
+	function noteIsolatedPartRead(value ValueId)
+		self.bodyState.isolatedPartReads = withValueMarked(self.bodyState.isolatedPartReads, value: value)
+	end 'noteIsolatedPartRead'
+
+	function noteIsolatedPartOrigin(value ValueId, startIndex ElementIndex, endIndex ElementIndex)
+		if self.bodyState.isolatedPartOrigins.contains(value) or not self.valueIsAnIsolatedSlotRead(value) 'nothingToCarry'
+			return
+		end 'nothingToCarry'
+
+		self.bodyState.isolatedPartOrigins.upsert(value, value: IsolatedPartRead.at(self.tokenTextFrom(startIndex, endIndex: endIndex), anchor: self.tokenAt(startIndex)))
+	end 'noteIsolatedPartOrigin'
+
+	function noteIsolatedPartReadAt(value ValueId, read IsolatedPartRead)
+		self.noteIsolatedPartRead(value)
+		self.bodyState.isolatedPartOrigins.upsert(value, value: read)
+	end 'noteIsolatedPartReadAt'
+
+	function copyIsolatedPartRead(target ValueId, source ValueId)
+		self.noteIsolatedPartRead(target)
+
+		if let origin = try self.bodyState.isolatedPartOrigins.get(source) 'aSourceReadAtItsSite'
+			self.bodyState.isolatedPartOrigins.upsert(target, value: origin)
+		end 'aSourceReadAtItsSite'
+	end 'copyIsolatedPartRead'
+
+	function noteElementReadFromAPart(element ValueId, source ValueId, startIndex ElementIndex, endIndex ElementIndex)
+		if not self.valueIsAnIsolatedSlotRead(source) or self.valueIsAValueType(element) or self.bodyState.isolatedPartOrigins.contains(element) 'notReadFromAPart'
+			return
+		end 'notReadFromAPart'
+
+		if self.bodyState.isolatedPartOrigins.contains(source) 'theSourceWasReadAtItsOwnSite'
+			self.copyIsolatedPartRead(element, source: source)
+			return
+		end 'theSourceWasReadAtItsOwnSite'
+
+		self.noteIsolatedPartReadAt(element, read: IsolatedPartRead.at(self.tokenTextFrom(startIndex, endIndex: endIndex), anchor: self.tokenAt(startIndex)))
+	end 'noteElementReadFromAPart'
+
+	function carryIsolatedPartRead(phi ValueId, arm ValueId)
+		if self.bodyState.isolatedPartOrigins.contains(phi) 'alreadyCarried'
+			return
+		end 'alreadyCarried'
+
+		if not self.valueIsAnIsolatedSlotRead(arm) 'notAPartRead'
+			return
+		end 'notAPartRead'
+
+		self.copyIsolatedPartRead(phi, source: arm)
+		self.handOverHandedBack(arm, phi: phi)
+	end 'carryIsolatedPartRead'
+
+	function handOverHandedBack(arm ValueId, phi ValueId)
+		let pending = self.regionFactsForRead().handedBack
+
+		if not pending.contains(arm) 'armNotHandedBack'
+			return
+		end 'armNotHandedBack'
+
+		let moved = ValueIdArray.create(pending.count(), zeroed: false)
+
+		for held in pending 'eachPending'
+			moved.push(phi if held == arm else held)
+		end 'eachPending'
+
+		let table = self.regionFactsForWrite()
+		table.handedBack = moved
+	end 'handOverHandedBack'
+
+	function noteHandedBackResult(result ValueId, callee ByteArray, args ValueIdArray, anchor Token)
+		_ = self.carryPartReadThroughACall(result, sources: args)
+
+		if self.bodyState.isolatedPartOrigins.contains(result) 'aPartReadOfItsOwnSite'
+			return
+		end 'aPartReadOfItsOwnSite'
+
+		self.noteIsolatedPartReadAt(result, read: IsolatedPartRead.handedBackBy(calleeSourceName(callee), anchor: anchor))
+		self.regionFactsForWrite().handedBack.push(result)
+	end 'noteHandedBackResult'
+
+	function dischargeHandedBack(inputs ValueIdArray, result ValueId)
+		let pending = self.regionFactsForRead().handedBack
+
+		if pending.isEmpty() or self.tagOf(result) == ValueTypeTag.void or not self.valueIsCleanInput(result) 'nothingToDischarge'
+			return
+		end 'nothingToDischarge'
+
+		for input in inputs 'eachInput'
+			if not pending.contains(input) and not self.valueIsCleanInput(input) 'anInputThatMayKeepTheRegion'
+				return
+			end 'anInputThatMayKeepTheRegion'
+		end 'eachInput'
+
+		self.withdrawHandedBack(inputs)
+	end 'dischargeHandedBack'
+
+	function withdrawHandedBack(consumed ValueIdArray)
+		let pending = self.regionFactsForRead().handedBack
+
+		if pending.isEmpty() 'nothingHandedBack'
+			return
+		end 'nothingHandedBack'
+
+		let remaining = ValueIdArray.create(pending.count(), zeroed: false)
+
+		for held in pending 'eachPending'
+			if not consumed.contains(held) 'stillHandedBack'
+				remaining.push(held)
+			end 'stillHandedBack'
+		end 'eachPending'
+
+		let table = self.regionFactsForWrite()
+		table.handedBack = remaining
+	end 'withdrawHandedBack'
+
+	function requireNoHandedBackResult() throws SourceParseError
+		let pending = self.regionFactsForRead().handedBack
+
+		if pending.isEmpty() 'nothingHandedBack'
+			return
+		end 'nothingHandedBack'
+
+		let value = try pending.get(0) otherwise panic("requireNoHandedBackResult: a non-empty column has an element 0")
+		let read = try self.bodyState.isolatedPartOrigins.get(value) otherwise panic("requireNoHandedBackResult: v{value} was filed as handed back with its origin")
+		throw self.isolatedPartReadRefusal(read)
+	end 'requireNoHandedBackResult'
+
+	function carryPartReadThroughACall(result ValueId, sources ValueIdArray) returns bool
+		for source in sources 'eachSource'
+			if self.valueIsAnIsolatedSlotRead(source) 'aPartReadReachesTheResult'
+				self.carryIsolatedPartRead(result, arm: source)
+				return true
+			end 'aPartReadReachesTheResult'
+		end 'eachSource'
+
+		return false
+	end 'carryPartReadThroughACall'
+
 	function valueIsCleanInput(value ValueId) returns bool
 		if self.tagOf(value) == ValueTypeTag.function and self.regionFactsForRead().cleanFunctionValues.contains(value) 'aClosureCarryingNothingTheCallerWrites'
 			return true
 		end 'aClosureCarryingNothingTheCallerWrites'
 
-		return isCleanInput(self.effectiveCapabilityOf(value), isValueType: self.valueIsAValueType(value), isSlotRead: self.valueIsASlotRead(value))
+		let capability = self.effectiveCapabilityOf(value)
+		let isValueType = self.valueIsAValueType(value)
+		return isCleanInput(capability, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: capability, isValueType: isValueType))
 	end 'valueIsCleanInput'
 
 	function noteMutableUse(value ValueId, line LineNumber)
@@ -90357,6 +90621,10 @@ export type Parser
 	end 'armIsAnUndecidedParameter'
 
 	function joinMergeCapability(phi ValueId, arms ValueIdArray, func IrFunction, anchor Token) throws SourceParseError
+		for arm in arms 'eachPartReadArm'
+			self.carryIsolatedPartRead(phi, arm: arm)
+		end 'eachPartReadArm'
+
 		if self.valueIsAValueType(phi) 'nothingToJoin'
 			return
 		end 'nothingToJoin'
@@ -90521,6 +90789,8 @@ export type Parser
 			return
 		end 'nothingToJoin'
 
+		self.carryIsolatedPartRead(phi, arm: incoming)
+
 		let flags = self.joinArmFlagsOf(self.bodyFunction(), arm: incoming)
 		self.noteJoinedArm(self.bodyFunction(), phi: phi, incoming: incoming, flags: flags)
 
@@ -90613,53 +90883,77 @@ export type Parser
 	end 'pathTextOf'
 
 	function spanIsAPostfixChain(startIndex ElementIndex) returns bool
-		var depth = 0 as ElementIndex
+		var nesting = 0 as NestingDepth
 
 		for index in startIndex upto self.pos 'eachToken'
 			let kind = self.kindAt(index)
 
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensAGroup'
-				depth = depth + 1
-			end 'opensAGroup' else if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesAGroup'
-				depth = depth - 1
-			end 'closesAGroup' else if depth == 0 and not tokenKindIsPostfixChainPart(kind) 'breaksTheChain'
+			if nesting == 0 and not tokenKindIsPostfixChainPart(kind) and not tokenKindOpensAGroup(kind) 'breaksTheChain'
 				return false
 			end 'breaksTheChain'
+
+			nesting = groupNestingAfter(kind, nesting: nesting)
 		end 'eachToken'
 
 		return true
 	end 'spanIsAPostfixChain'
 
-	function isolatedSlotReadRefusal(text String, at Token) returns SourceParseError
-		return self.regionRefusal(ErrorCode.semanticIsolatedReadOutsideBlock, message: "'{text}' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`", line: at.line, column: at.column)
+	function isolatedSlotReadRefusal(value ValueId, startIndex ElementIndex, endIndex ElementIndex, anchor Token) returns SourceParseError
+		let read = try self.bodyState.isolatedPartOrigins.get(value) otherwise IsolatedPartRead.at(self.tokenTextFrom(startIndex, endIndex: endIndex), anchor: anchor)
+		return self.isolatedPartReadRefusal(read)
 	end 'isolatedSlotReadRefusal'
 
-	function requireNotAnIsolatedSlotRead(value ValueId, startIndex ElementIndex) throws SourceParseError
-		if (self.effectiveCapabilityOf(value) == ValueCapability.isolated and self.valueIsASlotRead(value)) or valueIsMarked(self.bodyState.isolatedElementReads, value: value) 'anOpenedSlotReadBare'
-			throw self.isolatedSlotReadRefusal(self.pathTextOf(startIndex), at: self.tokenAt(startIndex))
-		end 'anOpenedSlotReadBare'
+	function isolatedPartReadRefusal(read IsolatedPartRead) returns SourceParseError
+		if read.handedBack 'aResultHandedBack'
+			return self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: handedBackRefusal(read.text), line: read.line, column: read.column)
+		end 'aResultHandedBack'
+
+		return self.regionRefusal(ErrorCode.semanticIsolatedReadOutsideBlock, message: "'{read.text}' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`", line: read.line, column: read.column)
+	end 'isolatedPartReadRefusal'
+
+	function requireNotAnIsolatedSlotRead(value ValueId, startIndex ElementIndex, endIndex ElementIndex, anchor Token) throws SourceParseError
+		if self.valueIsAnIsolatedSlotRead(value) 'aSlotRead'
+			throw self.isolatedSlotReadRefusal(value, startIndex: startIndex, endIndex: endIndex, anchor: anchor)
+		end 'aSlotRead'
 	end 'requireNotAnIsolatedSlotRead'
 
-	function recoverIsolated(value ValueId, startIndex ElementIndex, forFreeze bool) throws SourceParseError
+	function recoverIsolated(value ValueId, startIndex ElementIndex, site IsolatedRecoverySite) throws SourceParseError
 		if self.isolateIfPossible(value) 'isolated'
 			return
 		end 'isolated'
 
-		let capability = self.effectiveCapabilityOf(value)
 		let anchor = self.tokenAt(startIndex)
-		let text = self.pathTextOf(startIndex)
+		let endIndex = self.argumentEndIndex(startIndex) if site == IsolatedRecoverySite.argument else self.pos
+		try self.requireNotAnIsolatedSlotRead(value, startIndex: startIndex, endIndex: endIndex, anchor: anchor)
 
-		if capability == ValueCapability.isolated 'aSlotRead'
-			throw self.isolatedSlotReadRefusal(text, at: anchor)
-		end 'aSlotRead'
-
-		if forFreeze 'aFreeze'
-			let operand = text if self.spanIsAPostfixChain(startIndex) else "({text})"
-			throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{text}' is used as mutable{self.mutableUseSuffix(value)}; freeze a copy: `freeze {operand}.clone()`", line: anchor.line, column: anchor.column)
-		end 'aFreeze'
-
-		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: isolatedRecoveryRefusal("'{text}'", advice: ". Declare it `as isolated {self.valueDisplayTypeName(value)}`, or pass a copy"), line: anchor.line, column: anchor.column)
+		let text = self.tokenTextFrom(startIndex, endIndex: endIndex)
+		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: self.isolatedRecoveryMessage(value, site: site, text: text, startIndex: startIndex), line: anchor.line, column: anchor.column)
 	end 'recoverIsolated'
+
+	function argumentEndIndex(startIndex ElementIndex) returns ElementIndex
+		let closing = self.pos - 1
+		let opening = self.parenGroups.openOf(self.tokens, close: closing)
+
+		for start in self.argumentStartsOf(opening) 'eachArgument'
+			if start > startIndex 'theNextArgumentBegins'
+				return start - 1
+			end 'theNextArgumentBegins'
+		end 'eachArgument'
+
+		return closing
+	end 'argumentEndIndex'
+
+	function isolatedRecoveryMessage(value ValueId, site IsolatedRecoverySite, text String, startIndex ElementIndex) returns String
+		return match site 'site'
+			freeze gives "'{text}' is used as mutable{self.mutableUseSuffix(value)}; freeze a copy: `freeze {self.freezeOperandText(text, startIndex: startIndex)}.clone()`"
+			declared gives isolatedRecoveryRefusal("'{text}'", advice: ". Declare it `as isolated {self.valueDisplayTypeName(value)}`, or pass a copy")
+			argument gives isolatedRecoveryRefusal("'{text}'", advice: "; pass a copy")
+		end 'site'
+	end 'isolatedRecoveryMessage'
+
+	function freezeOperandText(text String, startIndex ElementIndex) returns String
+		return text if self.spanIsAPostfixChain(startIndex) else "({text})"
+	end 'freezeOperandText'
 
 	function mutableUseSuffix(value ValueId) returns String
 		let line = try self.regionFactsForRead().mutableUseLines.get(value) otherwise return ""
@@ -90672,11 +90966,11 @@ export type Parser
 		try self.requireBindingMayLeaveItsStatementWindow(value, rhsStart: rhsStart)
 
 		if pending == ParamCapability.isolated 'declaredIsolated'
-			try self.recoverIsolated(value, startIndex: rhsStart, forFreeze: false)
+			try self.recoverIsolated(value, startIndex: rhsStart, site: IsolatedRecoverySite.declared)
 			return
 		end 'declaredIsolated'
 
-		try self.requireNotAnIsolatedSlotRead(value, startIndex: rhsStart)
+		try self.requireNotAnIsolatedSlotRead(value, startIndex: rhsStart, endIndex: self.pos, anchor: self.tokenAt(rhsStart))
 
 		if self.valueIsAValueType(value) 'aValue'
 			return
@@ -90951,6 +91245,7 @@ export type Parser
 			fits then self.promoteWhenHeld(value, holder: holder)
 			recovers then self.recoverAsIsolated(value)
 			notRecoverable or
+			isolatedPartRead or
 			mutableIntoImmutable or
 			isolatedIntoMutable or
 			immutableIntoMutable or
@@ -91051,16 +91346,19 @@ export type Parser
 			return StoreVerdict.fits
 		end 'aHandleCarriesNoAuthority'
 
-		if slot != ParamCapability.isolated and self.valueSettlesAfterParsing(value) 'settledAfterParsing'
+		let isValueType = self.valueIsAValueType(value)
+		let isSlotRead = self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType)
+
+		if slot != ParamCapability.isolated and not isSlotRead and self.valueSettlesAfterParsing(value) 'settledAfterParsing'
 			return StoreVerdict.fits
 		end 'settledAfterParsing'
 
-		if slot != ParamCapability.isolated and self.valueIsAnUndecidedParameter(func, value: value, capability: given) and not (slot == ParamCapability.immutable and self.valueHasOtherPath(value)) 'judgedAgainstItsFinalClass'
+		if slot != ParamCapability.isolated and not isSlotRead and self.valueIsAnUndecidedParameter(func, value: value, capability: given) and not (slot == ParamCapability.immutable and self.valueHasOtherPath(value)) 'judgedAgainstItsFinalClass'
 			self.notePassedParamNeed(func, value: value, mutable: slot != ParamCapability.immutable, line: line)
 			return StoreVerdict.fits
 		end 'judgedAgainstItsFinalClass'
 
-		return storeVerdict(slot, value: given, isValueType: self.valueIsAValueType(value), isSlotRead: self.valueIsASlotRead(value))
+		return storeVerdict(slot, value: given, isValueType: isValueType, isSlotRead: isSlotRead)
 	end 'slotStoreVerdictGiven'
 
 	function readOnlyReasonOf(joinedAtALoop bool) returns String
@@ -91083,12 +91381,19 @@ export type Parser
 		end 'nothingToRefuse'
 
 		let valueTok = self.tokenAt(valueStart)
+
+		if verdict == StoreVerdict.isolatedPartRead 'aPartRead'
+			throw self.isolatedSlotReadRefusal(value, startIndex: valueStart, endIndex: valueEnd, anchor: valueTok)
+		end 'aPartRead'
+
 		let refusal = try storeRefusalOf(verdict, fieldName: fieldName, valueType: self.valueDisplayTypeName(value), readOnlyReason: self.readOnlyReasonOf(joinedAtALoop), subject: "'{self.tokenTextFrom(valueStart, endIndex: valueEnd)}'", holderNoun: holderNounOf(fieldName)) otherwise panic("requireStoreVerdictFits: a {verdict.name} verdict is no refusal")
 		throw self.regionRefusal(refusal.0, message: refusal.1, line: valueTok.line, column: valueTok.column)
 	end 'requireStoreVerdictFits'
 
 	function requireAssignmentFitsVariable(binding VarInfo, value ValueId, valueStart ElementIndex, valueEnd ElementIndex) throws SourceParseError
-		let verdict = assignmentVerdict(self.capabilityOfValue(binding.boundValue), value: self.effectiveCapabilityOf(value), isValueType: self.valueIsAValueType(value), isSlotRead: self.valueIsASlotRead(value))
+		let given = self.effectiveCapabilityOf(value)
+		let isValueType = self.valueIsAValueType(value)
+		let verdict = assignmentVerdict(self.capabilityOfValue(binding.boundValue), value: given, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType))
 		try self.requireStoreVerdictFits(verdict, fieldName: String.from(binding.name), value: value, valueStart: valueStart, valueEnd: valueEnd, joinedAtALoop: false)
 
 		if verdict == StoreVerdict.recovers 'aFreshValueTakenByAnIsolatedVariable'
@@ -91288,7 +91593,7 @@ export type Parser
 		end 'anUnknownResult'
 
 		try self.requireNoUniqueAlias(value, action: "return", anchor: self.tokenAt(retStart))
-		try self.requireNotAnIsolatedSlotRead(value, startIndex: retStart)
+		try self.requireNotAnIsolatedSlotRead(value, startIndex: retStart, endIndex: self.pos, anchor: self.tokenAt(retStart))
 		let declared = self.bodyState.declaredReturnCapability
 		let retTok = self.tokenAt(retStart)
 
@@ -91303,7 +91608,7 @@ export type Parser
 		try self.requireValueMayLeaveWindows(value, startIndex: retStart)
 
 		if declared == ResultCapability.isolated 'declaredIsolated'
-			try self.recoverIsolated(value, startIndex: retStart, forFreeze: false)
+			try self.recoverIsolated(value, startIndex: retStart, site: IsolatedRecoverySite.declared)
 		end 'declaredIsolated' else if declared == ResultCapability.immutable and not self.valueIsAValueType(value) 'declaredImmutable'
 			if fromParameters != NoParamPositions and not alsoLocalData and (self.effectiveCapabilityOf(value) != ValueCapability.immutable or self.regionFactsForRead().paramSources.joinedParams.contains(value)) 'aParametersData'
 				self.notePassedParamNeed(func, value: value, mutable: false, line: retTok.line)
@@ -91471,6 +91776,10 @@ export type Parser
 			end 'windowState'
 
 			self.regionFactsForWrite().fieldOrigins.upsert(loaded, value: FieldOrigin.create(box, layoutName: layout.name, field: index, slot: layout.fieldTypeSites.capabilityAt(index)))
+
+			if valueIsMarked(self.bodyState.isolatedPartReads, value: box) 'aFieldOfAPartRead'
+				self.carryIsolatedPartRead(loaded, arm: box)
+			end 'aFieldOfAPartRead'
 
 			if read.typeIsUnknown 'theFieldTypeDenotesNothing'
 				self.retypeValue(loaded, valueType: MaxonType.unresolved)
@@ -94031,7 +94340,7 @@ export type Parser
 		let releasedSlots = try self.handCapturesOver(captureNamesSnapshot, capturedValues: capturedValuesSnapshot, captureAnchors: captureAnchorsSnapshot, closureName: closureName, envPosition: ownEnvSlot)
 		let destructor = self.closureEnvDestructor(closureName, releasedSlots: releasedSlots, captureNames: captureNamesSnapshot, capturedTypes: capturedTypesSnapshot, closureLayout: lifted.closureLayout, anchor: functionTok)
 		let result = self.buildClosureEnv(closureName, captureCount: captureCount as EnvSlotIndex, capturedValues: capturedValuesSnapshot, capturedTypes: capturedTypesSnapshot, destructor: destructor, anchor: functionTok)
-		self.carryReadOnlyCaptures(result, captured: capturedValuesSnapshot)
+		self.carryReadOnlyCaptures(result, captured: capturedValuesSnapshot, captureNames: captureNamesSnapshot, captureAnchors: captureAnchorsSnapshot)
 		return result
 	end 'parseClosureExpression'
 
@@ -95417,7 +95726,7 @@ export type Parser
 
 		// The anchor IS the callee token here — an implicit-self sibling call writes no receiver, so the
 		// only token either half of the call can point at is the name the author wrote.
-		return ReceiverArg.value(try self.readReceiverValue(anchor), immutableName: EmptySourceText, anchor: anchor)
+		return ReceiverArg.value(try self.readReceiverValue(anchor), immutableName: EmptySourceText, anchor: anchor, extent: ReceiverExtent.implicitAt(self.pos))
 	end 'implicitSelfReceiver'
 
 	function requireInstanceMethodHasAReceiver(callee ByteArray, anchor Token, firstArgumentMayBeTheReceiver bool) throws SourceParseError
@@ -95725,7 +96034,7 @@ export type Parser
 		match receiver 'prependReceiver'
 			none or
 			unavailable then break
-			value(id, immutableName, receiverTok) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName, anchorIndex: self.pos)
+			value(id, immutableName, receiverTok, _) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName, anchorIndex: self.pos)
 		end 'prependReceiver'
 
 		// ⭐ THE ONE DOOR WHERE A BUILTIN — BARE OR `__Builtins.`-QUALIFIED — CAN ARRIVE, so it is the one
@@ -95749,7 +96058,7 @@ export type Parser
 			try self.requireFirstArgLabelHasDefault(resolvedCallee, firstParam: receiverArgs as ParamCount, argLabels: argLabels, argRanges: argRanges, receiverArgs: receiverArgs)
 		end 'firstLabelNeedsADefault'
 
-		let opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor)
+		let opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor, spawning: CallSpawning.direct)
 		let instantiated = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
 		let storedSlots = self.storedSlotCandidates(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, constructorInstance: instantiated)
 
@@ -96396,6 +96705,14 @@ export type Parser
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpQueueStdinName, arity: SubprocessThreeArgArity, shape: IntrinsicArgShape.cstringSecond, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessQueueStdin'
 
+			if callee.equals(BuiltinsSubprocessPushStdinName) 'subprocessPushStdin'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpPushStdinName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subprocessPushStdin'
+
+			if callee.equals(BuiltinsSubprocessAwaitStdinWritableName) 'subprocessAwaitStdinWritable'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpAwaitStdinWritableName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subprocessAwaitStdinWritable'
+
 			if callee.equals(BuiltinsSubprocessResultStatusKindName) 'subprocessResultStatusKind'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpResultKindName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessResultStatusKind'
@@ -96439,33 +96756,9 @@ export type Parser
 				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResultStderrName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
 			end 'subprocessResultStderr'
 
-			if callee.equals(BuiltinsSubprocessReadStdoutLineName) 'subprocessReadStdoutLine'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadOutBytesName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
-			end 'subprocessReadStdoutLine'
-
-			if callee.equals(BuiltinsSubprocessReadStderrLineName) 'subprocessReadStderrLine'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadErrBytesName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
-			end 'subprocessReadStderrLine'
-
-			// The NON-BLOCKING twins of the two readers above, and the difference lives wholly in the reader
-			// being wrapped: these peek the pipe before committing to a refill and answer the empty string when
-			// it holds nothing, where their twins park on it. The conversion to an owned `__ManagedMemory` is the
-			// same one.
-			if callee.equals(BuiltinsSubprocessTryReadStdoutLineName) 'subprocessTryReadStdoutLine'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpTryReadOutBytesName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
-			end 'subprocessTryReadStdoutLine'
-
-			if callee.equals(BuiltinsSubprocessTryReadStderrLineName) 'subprocessTryReadStderrLine'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpTryReadErrBytesName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
-			end 'subprocessTryReadStderrLine'
-
-			// The EXACT-COUNT stdout reader. Its second argument is a LENGTH where the two line readers' is a
-			// ceiling, which is the whole of the difference: `readStdoutLineCapped(maxBytes)` answers the buffered
-			// remainder once it is over the cap, so it can never say "the next four bytes". A framed body — the LSP
-			// `Content-Length` payload, which carries no trailing newline — has no other way to be read.
-			if callee.equals(BuiltinsSubprocessReadStdoutBytesName) 'subprocessReadStdoutBytes'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadExactOutBytesName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
-			end 'subprocessReadStdoutBytes'
+			if callee.equals(BuiltinsSubprocessReadAvailableName) 'subprocessReadAvailable'
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadAvailableOutBytesName, arity: SubprocessThreeArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
+			end 'subprocessReadAvailable'
 
 			if callee.equals(BuiltinsSubprocessResolveOnPathName) 'subprocessResolveOnPath'
 				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResolvePathName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.cstringFirst, calleeTok: anchor)
@@ -96756,7 +97049,8 @@ export type Parser
 			self.leaveCallGuard(SourceRange.ofToken(rparenTok))
 		end 'leaveTheGuard'
 
-		try self.noteCallResultCapability(called, callee: resolvedCallee, args: args, opensAnIsolatedValue: opensAnIsolatedValue, opFloor: callOpFloor, anchor: anchor, argLabels: argLabels, receiver: receiver)
+		self.noteCallResultCapability(called, callee: resolvedCallee, args: args, opensAnIsolatedValue: opensAnIsolatedValue, opFloor: callOpFloor, anchor: anchor, argLabels: argLabels, receiver: receiver)
+		self.dischargeHandedBack(args, result: called)
 
 		if let opIdx = try emittedCall.opIndex() 'aCallWasEmitted'
 			self.fileCallNotes(func, opIdx: opIdx, args: args, argAnchors: argAnchors, stored: storedSlots, receiver: receiver, anchor: anchor)
@@ -97666,8 +97960,7 @@ export type Parser
 		let callArgs = ValueIdArray.create(2, zeroed: false)
 		callArgs.push(handle)
 
-		// ⭐ **THE PER-LINE CAP IS A PARAMETER OF THE ENTRY POINT**, because
-		// `__Builtins.subprocessReadStdoutLine(h, maxBytes)` names its own, and this builtin's one
+		// ⭐ **THE PER-LINE CAP IS A PARAMETER OF THE ENTRY POINT**, and this builtin's one
 		// argument is a HANDLE — so the cap is supplied here, as `SubpMaxLineBytes`.
 		callArgs.push(self.emitLiteral(SubpMaxLineBytes as FullRangeInt, valueType: MaxonType.integer, range: SourceRange.ofToken(calleeTok)))
 		return self.emitOwnedRuntimeResult(runtimeName, args: callArgs, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
@@ -99716,7 +100009,7 @@ export type Parser
 	function emitDefaultHelperCall(name ByteArray, anchor Token) returns ValueId throws SourceParseError
 		let opFloor = self.artifact.module.ops.count()
 		let value = try self.emitCall(name, anchor: anchor, args: ValueIdArray.create(0), argLabels: NameRoster.create(0), argRanges: SourceRangeArray.create(0), argImmutableNames: NameRoster.create(0), rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.paramDefaultHelper)
-		try self.noteCallResultCapability(value, callee: name, args: ValueIdArray.create(0), opensAnIsolatedValue: false, opFloor: opFloor, anchor: anchor, argLabels: NameRoster.create(0), receiver: ReceiverArg.none)
+		self.noteCallResultCapability(value, callee: name, args: ValueIdArray.create(0), opensAnIsolatedValue: false, opFloor: opFloor, anchor: anchor, argLabels: NameRoster.create(0), receiver: ReceiverArg.none)
 
 		if not self.valueIsAValueType(value) and not self.valueIsAnUndecidedResult(value) and self.resultCapabilityDeclaredFor(name) == ResultCapability.unmarked 'judgedOnceTheHelperIsRead'
 			self.noteUndecidedResult(value, opFloor: opFloor)
@@ -100729,7 +101022,7 @@ export type Parser
 		let callee = try self.genericInstanceCallee(target.name, anchor: target.anchor, args: args, argLabels: argLabels, mint: target.mint)
 		try self.requireFirstArgLabelHasDefault(callee, firstParam: 0, argLabels: argLabels, argRanges: argRanges, receiverArgs: 0)
 
-		try self.requireNoIsolatedArgumentInAnAsyncCall(callee, args: args, argAnchors: argAnchors, argLabels: argLabels)
+		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: target.anchor, spawning: CallSpawning.spawned)
 
 		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is
 		// the `async` keyword's, so E3073's caret lands on the first character of the text it quotes.
@@ -100774,7 +101067,7 @@ export type Parser
 		let table = self.regionFactsForRead()
 
 		for lent in table.lentLocals 'eachLend'
-			if lent.binding is binding and promiseConsumeIn(self.bodyState.promiseConsumes, promise: lent.promise) == PromiseConsume.notConsumed 'stillLent'
+			if lent.binding is binding and self.bodyState.promiseConsumes.kindOf(lent.promise) == PromiseConsume.notConsumed 'stillLent'
 				throw self.regionRefusal(ErrorCode.useAfterMove, message: "use of moved value '{String.from(nameTok.value)}': it is lent to the coroutine of the `async` call at {lent.line}:{lent.column} until that promise is awaited or cancelled", line: nameTok.line, column: nameTok.column)
 			end 'stillLent'
 		end 'eachLend'
@@ -101901,6 +102194,7 @@ export type Parser
 			self.carryCapability(argValue, target: transferred)
 			self.carryUndecidedResult(argValue, target: transferred)
 			self.carryImmutableSlotRead(argValue, target: transferred)
+			self.carryIsolatedPartRead(transferred, arm: argValue)
 		end 'aReferenceOfItsOwn'
 	end 'carryFactsToTheHandedReference'
 

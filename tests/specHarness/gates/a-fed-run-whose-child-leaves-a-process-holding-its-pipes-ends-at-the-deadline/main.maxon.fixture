@@ -1,9 +1,12 @@
 // Drives `runProcessFedAfter` from `maxon-bin/Testing/SpecFedRun.maxon`, staged beside this file as it stands
-// in the checkout.
+// in the checkout, and the standard library's `runChildFedAfterLine`.
 //
 // `holder` runs a child that exits after it is fed while a process it started still holds its standard output.
 // `chatty` is `holder` with a survivor that writes without pause.
 // `clean` runs a child that exits after it is fed with every one of its pipes closed.
+// `unread` feeds a 1 MiB line to a child that exits without reading it.
+// `sleeping` feeds the same line to a child that sleeps past the deadline without reading it.
+// `chattyexit` runs `chatty`'s child through `runChildFedAfterLine`, ending at the child's exit.
 // A scenario prints one line, and the line is what the gate pins.
 
 export typealias ExitCodeValue = int(0 to u32.max)
@@ -22,7 +25,12 @@ let ModeArgument = 1
 let HolderScenario = "holder"
 let ChattyScenario = "chatty"
 let CleanScenario = "clean"
+let UnreadScenario = "unread"
+let SleepingScenario = "sleeping"
+let ChattyExitScenario = "chattyexit"
 let ChildMode = "child"
+let SleepingChildMode = "sleeping-child"
+let DeafChildMode = "deaf-child"
 let ChattyChildMode = "chatty-child"
 let SurvivorMode = "survivor"
 let ChattySurvivorMode = "chatty-survivor"
@@ -30,6 +38,8 @@ let NoiseLine = "noise"
 let QuietChildMode = "quiet-child"
 let AnchorLine = "anchor"
 let FeedWord = "hello"
+let UnreadFeedChunk = "0123456789abcdef"
+let UnreadFeedChunks = 65536
 let SurvivorLine = "survivor "
 let SurvivorLifeMs = 90000
 let HolderDeadlineMs = 4000
@@ -103,7 +113,17 @@ function runChild(mode String) returns ExitCode
 	end 'withSurvivor'
 
 	print("{AnchorLine}\n")
-	_ = try Console.stdin().readLine() otherwise ""
+
+	if mode == SleepingChildMode 'sleeps'
+		sleep(SurvivorLifeMs)
+
+		return 0
+	end 'sleeps'
+
+	if mode != DeafChildMode 'reads'
+		_ = try Console.stdin().readLine() otherwise LineRead.ended
+	end 'reads'
+
 	print("done\n")
 
 	if mode == QuietChildMode 'unterminated'
@@ -141,18 +161,17 @@ function holderVerdict(chatty bool) returns String
 
 	let begun = Clock.nowMs()
 
-	try runProcessFedAfter(holderExecutable(), argv: holderChild(chatty),workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: HolderDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'expired'
+	try runProcessFedAfter(holderExecutable(), argv: holderChild(chatty), workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: HolderDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'expired'
 		timedOut = e.timedOut()
 		partial = match e 'kind'
 			timeout(_, out, _) gives out
 			treeNotEnded(_, out, _, _) gives out
 			statusLost(out, _) gives out
 			executableNotFound or
-				spawnFailed or
-				ioFailed or
-				inputTooLarge or
-				detachRefused or
-				endOfStream gives ""
+			spawnFailed or
+			ioFailed or
+			inputTooLarge or
+			detachRefused gives ""
 		end 'kind'
 	end 'expired'
 
@@ -167,17 +186,77 @@ function holderVerdict(chatty bool) returns String
 	return "deadline error after the deadline {elapsed >= HolderDeadlineMs}, before the survivor's life ends {elapsed < PromptBoundMs}, survivor ended {endsWithinGrace(survivor)}"
 end 'holderVerdict'
 
-function cleanVerdict(me FilePath) returns String
+function unreadFeed() returns String
+	var feed = ""
+
+	for _ in 0 upto UnreadFeedChunks 'chunks'
+		feed.append(UnreadFeedChunk)
+	end 'chunks'
+
+	return feed
+end 'unreadFeed'
+
+function fedVerdict(me FilePath, childMode String, feed String) returns String
 	let begun = Clock.nowMs()
 
-	let capture = try runProcessFedAfter(Executable.path(me), argv: StringArray from [QuietChildMode], workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: CleanDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'failed'
+	let capture = try runProcessFedAfter(Executable.path(me), argv: StringArray from [childMode], workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: CleanDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: feed) otherwise (e) 'failed'
 		return "the run threw: {e.displayReason()}"
 	end 'failed'
 
 	let elapsed = Clock.elapsedMs(begun)
 
 	return "exit {capture.exitCode}, stdout {capture.stdout.replace("\n", with: "|")}, prompt {elapsed < PromptBoundMs}"
-end 'cleanVerdict'
+end 'fedVerdict'
+
+function sleepingVerdict(me FilePath) returns String
+	let begun = Clock.nowMs()
+	var timedOut = false
+
+	try runProcessFedAfter(Executable.path(me), argv: StringArray from [SleepingChildMode], workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: HolderDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: unreadFeed()) otherwise (e) 'expired'
+		timedOut = e.timedOut()
+	end 'expired'
+
+	let elapsed = Clock.elapsedMs(begun)
+
+	return "deadline error {timedOut}, after the deadline {elapsed >= HolderDeadlineMs}, before the child's sleep ends {elapsed < PromptBoundMs}"
+end 'sleepingVerdict'
+
+function treeEnded(tree TreeEnd) returns bool
+	return match tree 'tree'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'tree'
+end 'treeEnded'
+
+function exitVerdictOf(report ChildRunReport) returns String
+	let ending = match report.ending 'ending'
+		exited(code) gives "exited {code}"
+		reapedElsewhere gives "reaped elsewhere"
+		deadline gives "deadline"
+		waitFailed(e) gives "wait failed ({e.displayReason()})"
+	end 'ending'
+
+	let survivorsEnded = match report.survivors 'survivors'
+		noneHeld gives false
+		ended(tree) gives treeEnded(tree)
+	end 'survivors'
+
+	let survivor = try survivorIdIn(report.stdout) otherwise panic("the survivor prints its id before the child exits: {report.stdout}")
+
+	return "ending {ending}, survivors ended {survivorsEnded}, survivor gone {endsWithinGrace(survivor)}"
+end 'exitVerdictOf'
+
+function chattyExitVerdict(me FilePath) returns String
+	let outcome = try runChildFedAfterLine(Executable.path(me), argv: StringArray from [ChattyChildMode], workingDirectory: WorkingDirectory.at(Directory.currentPath()), environment: Environment.inherit, deadlineMs: HolderDeadlineMs, endsWhen: RunEndsWhen.childExits, tailSilenceMs: EndedGraceMs, tailCapMs: EndedGraceMs, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'failed'
+		return "the run threw: {e.displayReason()}"
+	end 'failed'
+
+	return match outcome 'outcome'
+		ran(report) gives exitVerdictOf(report)
+		outputBroken(stream, reason, _) gives "reading the {stream.name} failed ({reason})"
+	end 'outcome'
+end 'chattyExitVerdict'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
@@ -197,7 +276,7 @@ function main() returns ExitCode
 		return 0
 	end 'chattySurvivor'
 
-	if mode == ChildMode or mode == ChattyChildMode or mode == QuietChildMode 'child'
+	if mode == ChildMode or mode == ChattyChildMode or mode == QuietChildMode or mode == DeafChildMode or mode == SleepingChildMode 'child'
 		return runChild(mode)
 	end 'child'
 
@@ -208,8 +287,14 @@ function main() returns ExitCode
 	end 'holder' else if mode == ChattyScenario 'chatty'
 		print("{holderVerdict(true)}\n")
 	end 'chatty' else if mode == CleanScenario 'clean'
-		print("{cleanVerdict(me)}\n")
-	end 'clean' else 'unknown'
+		print("{fedVerdict(me, childMode: QuietChildMode, feed: FeedWord)}\n")
+	end 'clean' else if mode == UnreadScenario 'unread'
+		print("{fedVerdict(me, childMode: DeafChildMode, feed: unreadFeed())}\n")
+	end 'unread' else if mode == SleepingScenario 'sleeping'
+		print("{sleepingVerdict(me)}\n")
+	end 'sleeping' else if mode == ChattyExitScenario 'chattyExit'
+		print("{chattyExitVerdict(me)}\n")
+	end 'chattyExit' else 'unknown'
 		print("unknown scenario {mode}\n")
 
 		return 3

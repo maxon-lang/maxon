@@ -16,6 +16,7 @@ and time of day use `WallClock`.
 | `Clock.elapsedNanos(since InstantNanos)` | `DurationNanos` | Nanoseconds since a `nowNanos()` reading; `0` if the clock appears to go backwards. |
 | `Clock.nowMs()` | `InstantMs` | The same clock in milliseconds. |
 | `Clock.elapsedMs(since InstantMs)` | `DurationMs` | Milliseconds since a `nowMs()` reading. |
+| `Clock.remainingMs(started InstantMs, deadlineMs DurationMs)` | `DurationMs` | What is left of a `deadlineMs` budget measured from the `nowMs()` reading `started`; `0` once it has passed. |
 | `Clock.osTickMs()` | `InstantMs` | How long the machine has been up, in milliseconds, from the operating system's tick count. It moves in host ticks, up to 16 ms apart on `x64-windows`. |
 | `Clock.threadCpuTicks()` | `ThreadCpuTicks` | CPU time the calling thread has consumed. It advances only while the thread runs on a core, so a difference of two readings is that thread's cost alone, whatever else the machine runs. |
 

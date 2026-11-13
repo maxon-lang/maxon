@@ -1,7 +1,6 @@
 let FedRunProbeFixtureDir = "tests/specHarness/gates/a-fed-run-whose-child-leaves-a-process-holding-its-pipes-ends-at-the-deadline"
 let FedRunProbeDirName = "fed-run-probe"
 let FedRunProbeSourcePath = "maxon-bin/Testing/SpecFedRun.maxon"
-let FedRunProbeStreamsPath = "maxon-bin/Debug/ChildStreams.maxon"
 let FedRunProbeExecuteWord = "execute"
 let FedRunProbeCacheDirName = "cache"
 let FedRunProbeSourcesDirName = "sources"
@@ -19,10 +18,8 @@ function fedRunProbe(scenario String) returns CollectedOutput
 
 	stageStoredTree(fixtureDir(FedRunProbeFixtureDir), into: sources)
 
-	for sourcePath in [FedRunProbeSourcePath, FedRunProbeStreamsPath] 'eachSource'
-		let source = Directory.currentPath().join(sourcePath)
-		writeStagedFile(sources.join(source.filename()), content: fileText(source))
-	end 'eachSource'
+	let source = Directory.currentPath().join(FedRunProbeSourcePath)
+	writeStagedFile(sources.join(source.filename()), content: fileText(source))
 
 	let argv = StringArray.create(0)
 	argv.push(FedRunProbeExecuteWord)
@@ -35,7 +32,7 @@ function fedRunProbe(scenario String) returns CollectedOutput
 	return run
 end 'fedRunProbe'
 
-function collectUnlessSaid(scenario String, verdict String, broken StringArray)
+module function collectUnlessSaid(scenario String, verdict String, broken StringArray)
 	let run = fedRunProbe(scenario)
 
 	if not run.stdout.contains(verdict) 'unsaid'

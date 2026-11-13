@@ -60,9 +60,13 @@ function stubHeard(socket TcpClient, needle String) returns String
 			return heard
 		end 'answered'
 
-		let chunk = try socket.recv(StubReapedReceiveBytes) otherwise return heard
+		let chunk = try socket.readSome(StubReapedReceiveBytes) otherwise return heard
 
-		heard.append(chunk)
+		if chunk.isEmpty() 'peerClosed'
+			return heard
+		end 'peerClosed'
+
+		heard.append(String.from(chunk))
 	end 'eachRead'
 
 	return heard
@@ -86,7 +90,7 @@ function heardAfterInterrupt(socket TcpClient) returns String
 end 'heardAfterInterrupt'
 
 function waitVerdict(program StreamingSubprocess) returns String
-	let code = try program.waitWithTimeout(StubReapedWaitMs) otherwise (e) 'notEnded'
+	let code = try program.wait(WaitDeadline.within(StubReapedWaitMs)) otherwise (e) 'notEnded'
 		return e.displayReason()
 	end 'notEnded'
 
@@ -104,12 +108,20 @@ end 'stubGone'
 function awaitedHandBack(program StreamingSubprocess) returns bool
 	let started = Clock.nowMs()
 
-	while program.isReapedElsewhere() and Clock.elapsedMs(started) < StubReapedHandOverMs 'untilItIsOurs'
+	while not statusIsOurs(program) and Clock.elapsedMs(started) < StubReapedHandOverMs 'untilItIsOurs'
 		sleep(StubReapedHandOverLookMs)
 	end 'untilItIsOurs'
 
-	return not program.isReapedElsewhere()
+	return statusIsOurs(program)
 end 'awaitedHandBack'
+
+function statusIsOurs(program StreamingSubprocess) returns bool
+	return match program.pollExit() 'polled'
+		running or
+		exited gives true
+		reapedElsewhere gives false
+	end 'polled'
+end 'statusIsOurs'
 
 function heldProgramKilledThenAskedToKill(entitled FilePath, staged FilePath, round Count) throws TestFailure
 	let log = roundStubLog(staged, round: round)

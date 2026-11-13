@@ -1,0 +1,83 @@
+let FrameHeaderLineCap = 8192 as LineCap
+let FrameHeaderBlockCap = 64 * 1024 as BytePos
+
+public union FrameError implements Error
+	ended
+	malformed(detail String)
+
+	public function displayReason() returns String
+		return match self 'e'
+			ended gives "the stream ended before a message's headers did"
+			malformed(detail) gives detail
+		end 'e'
+	end 'displayReason'
+end 'FrameError'
+
+extension StreamReader where Source is ByteSource
+	public function readContentLengthFrame() returns String throws FrameError
+		let lines = try self.readHeaderLines()
+
+		match httpHeaderBlockLength(lines, bound: StreamMessageCap as UrlDecimalBound) 'length'
+			undeclared then throw FrameError.malformed("message header carries no Content-Length")
+			malformedBlock then throw FrameError.malformed("message header block is malformed: a field line is not a valid `name: value`, is folded, or repeats a header that may not be repeated")
+			notADecimal(spelled) then throw FrameError.malformed("Content-Length is not a byte count: '{spelled}'")
+			aboveTheBound then throw FrameError.malformed("a message was announced past the {StreamMessageCap}-byte limit on one")
+			value(length) then return try self.readFrameBody(length)
+		end 'length'
+	end 'readContentLengthFrame'
+
+	function readHeaderLines() returns StringArray throws FrameError
+		let lines = StringArray.create(0)
+		var blockBytes = 0 as BytePos
+		var line = try self.readHeaderLine()
+
+		while not line.isEmpty() 'headers'
+			blockBytes = blockBytes + line.byteLength()
+
+			if blockBytes > FrameHeaderBlockCap 'tooLong'
+				throw FrameError.malformed("the message header block ran past the {FrameHeaderBlockCap}-byte limit")
+			end 'tooLong'
+
+			lines.push(line)
+			line = try self.readHeaderLine()
+		end 'headers'
+
+		return lines
+	end 'readHeaderLines'
+
+	function readHeaderLine() returns String throws FrameError
+		let read = try self.readLine(FrameHeaderLineCap) otherwise (e) 'unread'
+			throw FrameError.malformed("reading the stream failed: {e.displayReason()}")
+		end 'unread'
+
+		match read 'read'
+			line(text) then return text
+			ended then throw FrameError.ended
+			pastTheCap then throw FrameError.malformed("a header line ran past the {FrameHeaderLineCap}-byte limit")
+		end 'read'
+	end 'readHeaderLine'
+
+	function readFrameBody(length BytePos) returns String throws FrameError
+		let received = try self.readBytes(length) otherwise (e) 'unread'
+			throw FrameError.malformed("reading the stream failed: {e.displayReason()}")
+		end 'unread'
+
+		let body = merge received
+
+		if (body.count() as BytePos) != length 'truncated'
+			throw FrameError.malformed("stream ended after {body.count()} of {length} body bytes")
+		end 'truncated'
+
+		return String.from(body)
+	end 'readFrameBody'
+end 'StreamReader'
+
+public function contentLengthFrame(body String) returns String
+	return "{SentContentLengthName}: {body.byteLength()}\r\n\r\n{body}"
+end 'contentLengthFrame'
+
+extension StreamingSubprocess
+	public function writeStdinFrame(body String) throws SubprocessError
+		try self.writeStdin(contentLengthFrame(body))
+	end 'writeStdinFrame'
+end 'StreamingSubprocess'

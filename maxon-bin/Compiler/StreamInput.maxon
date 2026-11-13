@@ -1,0 +1,17 @@
+export enum InputLineEnd implements Error
+	ended
+	tooLong
+	unreadable
+end 'InputLineEnd'
+
+extension StreamReader where Source is ByteSource
+	export function readInputLine() returns String throws InputLineEnd
+		let read = try self.readLine(StreamMessageCap) otherwise throw InputLineEnd.unreadable
+
+		match read 'read'
+			line(text) then return text
+			ended then throw InputLineEnd.ended
+			pastTheCap then throw InputLineEnd.tooLong
+		end 'read'
+	end 'readInputLine'
+end 'StreamReader'

@@ -17,6 +17,7 @@ test 'a poll of a traced child whose threads died while their tracer was not wai
 		while not seen and waitedMs < TracedPollDeadlineMs 'untilItIsSeen'
 			match tracee.child.pollExit() 'polled'
 				running then sleep(TracedPollSliceMs)
+				reapedElsewhere then Expect.fail("The traced child's exit status went to another process, which nothing in this case does.")
 				exited(code) then seen = code == TracedPollExitCode
 			end 'polled'
 

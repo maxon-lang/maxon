@@ -14,21 +14,12 @@
 // API. This file does not use it.
 //
 // ============================================================================================
-// ⭐⭐ THIS PROCESS RUNS MAXON ON EXACTLY ONE M — AND ⛔ NOT BECAUSE "the compiler IS SINGLE-M"
+// ONE SERVICE PER WORKER READS ITS STDOUT, FOR THE WORKER'S WHOLE LIFE
 // ============================================================================================
 //
-// Two notes below lean on there being ONE OS thread running this file's Maxon — `drainResultsThunk`
-// and the `spokeAt` slot array's declaration. ⛔ NOT because the
-// scheduler is single-M: the default processor count is the machine's, and a green-thread program
-// really does run on several Ms.
-//
-// What holds instead holds at EVERY `MAXON_MAX_PROCS`: a green thread and its coroutines form a STRAND,
-// and one machine runs one member of a strand at a time. **This harness spawns no service.** Its only
-// concurrency is `async`, and an `async` frame is a COROUTINE of the green thread that created it — a
-// member of its strand. `SchedRuntime.maxon`'s header states the invariant.
-//
-// ⇒ the dispatcher and its drains interleave only at the drains' own yield points, which is exactly what
-// the two notes need. **A `spawn` added to this harness would end both at once.**
+// A worker's stdout reader buffers what it read past a job's WORKER_READY, so the same reader must
+// serve every job the worker runs. It lives in the worker's `WorkerOutput` service, and a job's drain
+// is a coroutine awaiting that service's `drain` reply.
 //
 // ============================================================================================
 // THE CONTRACT: `--workers=1` AND `--workers=N` PRINT BYTE-IDENTICAL STDOUT
@@ -147,8 +138,8 @@
 //   the slab). See `shutdownAndDrainStderr`. ⚠ **THAT IS ALSO WHY THE BREADCRUMB IS ON STDOUT AND
 //   NOT ON STDERR.** Nothing reads a worker's stderr until it dies or shuts down, so a line per
 //   compile there would fill a pipe nobody is draining — hundreds of them per worker — and block
-//   the worker inside a write. On stdout it rides a stream the drain green thread is already
-//   reading line by line, and the drain is the one place that needs it.
+//   the worker inside a write. On stdout it rides a stream the worker's `WorkerOutput` service is
+//   already reading line by line, and the drain is the one place that needs it.
 // * NO RETRY, EVER. A dead worker's job is FAILED, not re-run. See `deadJobResults`.
 
 // --- The CLI the pool speaks -----------------------------------------------------------------
@@ -250,7 +241,7 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // ⭐ How long a worker gets to leave on its own once it has been given up on, before the runtime kills
 // it.
 //
-// ⚠ **`waitWithTimeout` IS THE ONLY WAY THIS HARNESS CAN TERMINATE A CHILD, AND ITS EXPIRY IS EXACTLY
+// ⚠ **`wait` WITH A DEADLINE IS THE ONLY WAY THIS HARNESS CAN TERMINATE A CHILD, AND ITS EXPIRY IS EXACTLY
 // THE WANTED BEHAVIOUR**: *"throws `SubprocessError.timeout` if the timeout fires (the runtime forcibly
 // terminates the child's whole process tree in that case)"* — so a worker that spawned test binaries of its
 // own takes them with it. `__Builtins.subprocessKill` is deliberately NOT among the
@@ -259,8 +250,7 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // one act.
 //
 // It is SHORT because a worker that has gone silent for its whole progress bound is not about to answer
-// in the next 50 ms, and the progress sweep waits this long for each slot it gives up on, in turn. It is
-// not zero because zero means "wait for ever" to `waitWithTimeout`.
+// in the next 50 ms, and the progress sweep waits this long for each slot it gives up on, in turn.
 let JobKillGraceMs = 50
 
 // The headroom the pool's idleness bound keeps over the interval it measures. The two guards are
@@ -304,7 +294,7 @@ function progressDeadlineMs(tests TestTally, strategy RunStrategy) returns Durat
 		individually or
 		noneHere gives TestProgressDeadlineMs
 		wslBatch or
-		orbBatch gives TestProgressDeadlineMs + batchDeadlineMs(tests)
+		orbBatch gives TestProgressDeadlineMs + batchDeadlineMs(tests) as DurationMs
 		inGuest panic("SpecWorkerPool: a delegated suite runs no workers on this host (see SpecTestRunner.runSuiteInGuest), so there is no worker silence to bound — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
 	end 'lane'
 end 'progressDeadlineMs'
@@ -343,6 +333,8 @@ let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
 // wide enough that no healthy shutdown can reach it and finite enough that an unhealthy one is
 // reported instead of waited on forever.
 let WorkerShutdownTimeoutMs = 30 * MillisecondsPerSecond
+
+let WorkerHelloDeadlineMs = 60 * MillisecondsPerSecond
 
 // The bytes `encodeRecordPayload` escapes and `decodeRecordPayload` puts back. Named rather than
 // written as character literals so the escape table reads as one table.
@@ -661,7 +653,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 	print("{WorkerReadyMarker}\n")
 
 	while true 'jobLoop'
-		let line = try stdin.readLine() otherwise 'parentGone'
+		let line = try stdin.readInputLine() otherwise 'parentGone'
 			// EOF on stdin: the parent exited without sending EXIT. Nothing left to serve.
 			break
 		end 'parentGone'
@@ -1140,7 +1132,7 @@ typealias DrainPromiseArray = Array with DrainPromise
 //     other says the whole pool stalled at once, while one slot far older than the rest names the
 //     single worker that stopped answering.
 //   * WHEN THAT SLOT'S WORKER LAST SPOKE — its SILENCE, which is what `progressDeadlineMs` bounds.
-//     Written by the drain green thread, on every line it reads.
+//     Written by the slot's `WorkerOutput` service, on every line it reads.
 //
 // ⚠ THE SECOND IS NOT DERIVABLE FROM THE FIRST, and a run where they diverge is the normal case: a
 // 161-test spec is dispatched once and speaks 161 times. Reporting both is what separates "this worker
@@ -1172,49 +1164,142 @@ typealias SpokeCellArray = Array with SpokeCell
 //
 // A FREE FUNCTION, not a method on PersistentWorkerHandle, and deliberately so: `async
 // handle.drain()` would capture the handle STRUCT, which the dispatcher must keep mutating while
-// the green thread runs. Passing the inner `child` by value hands the GT its own copy —
-// StreamingSubprocess copies share the runtime-side pipe by handle, so the GT and the parent still
-// address the same OS object.
+// the coroutine runs. The reader itself lives in the worker's `WorkerOutput` service for the worker's
+// whole life, so the bytes it buffered past one job's READY are still there for the next job.
 //
-// ⭐⭐ **IT PUBLISHES PROGRESS AS IT READS, AND THAT IS THE ONLY WAY THE PARENT CAN SEE ANY.** A job's
-// lines are handed back in one array when the job ENDS, so without this the dispatcher could not
-// tell a worker two seconds into a compile from one that stopped four minutes ago. `spokeAt` is the
-// parent's own array, handed to this thread by the spawn: `async` gives a managed PARAMETER passed
-// on its OWN REFERENCE to the same heap object (`Parser.emitAsyncCall`), and this drain is a
-// COROUTINE of the dispatcher green thread — a member of its
-// strand, which runs one member at a time (see the section at the top of this file). So a write here is
-// visible to the dispatcher by its next turn — this GT yields only inside `readStdoutLine`.
+// ⭐⭐ **THE SERVICE PUBLISHES PROGRESS AS IT READS, AND THAT IS THE ONLY WAY THE PARENT CAN SEE ANY.** A
+// job's lines are handed back in one array when the job ENDS, so without this the dispatcher could not
+// tell a worker two seconds into a compile from one that stopped four minutes ago. `spoke` is a
+// `SharedValue`, so the stamp is visible to the dispatcher from the service's own thread.
 //
 // ⚠ IT STAMPS A CLOCK RATHER THAN COUNTING LINES, and the alternative is why: a counter would need the
 // dispatcher to remember the previous count AND when it changed — two more per-slot arrays and a second
 // place that decides what progress is. The instant IS the answer, written by the one party that knows
 // it. The cost is one clock read per line, against ~2 lines per test.
-function drainResultsThunk(reader StdoutReader, spoke SpokeCell) returns StringArray throws SubprocessError
-	let lines = StringArray.create(0)
+function drainResultsThunk(output WorkerOutput.handle, spoke SpokeCell) returns StringArray throws SubprocessError
+	let drained = try await output.drain(spoke) otherwise panic("drainResultsThunk: a worker's output reader stopped while the pool still held its handle")
 
-	while true 'lineLoop'
-		let line = try reader.readLine() otherwise (e) 'unread'
-			if not e.endedTheStream() 'aReadFailure'
-				throw e
-			end 'aReadFailure'
+	match drained 'drained'
+		lines(collected) then return merge collected
+		unreadable(reason) then throw SubprocessError.ioFailed(reason)
+	end 'drained'
+end 'drainResultsThunk'
+
+union WorkerDrain
+	lines(lines isolated StringArray)
+	unreadable(reason String)
+end 'WorkerDrain'
+
+enum WorkerDrainStep
+	more
+	finished
+	tooLong
+end 'WorkerDrainStep'
+
+type WorkerOutput
+	var reader as ChildOutputReader
+
+	static function create(reader isolated ChildOutputReader) returns WorkerOutput
+		return Self{reader: merge reader}
+	end 'create'
+
+	export function drain(spoke SpokeCell) returns isolated WorkerDrain
+		let lines = StringArray.create(0) as isolated StringArray
+
+		while true 'lineLoop'
+			let read = try self.reader.readLine(StreamMessageCap) otherwise (e) 'unread'
+				return WorkerDrain.unreadable(e.displayReason())
+			end 'unread'
 
 			// End of stream is evidence from the worker too. Unstamped, a dead worker's last stamp goes
 			// stale until the dispatcher serves this drain, and the sweep terminates a worker that is
 			// already gone and accuses it of silence.
 			spoke.publish(Clock.nowMs())
-			return lines
-		end 'unread'
 
-		spoke.publish(Clock.nowMs())
-		lines.push(line)
+			match drainStepOf(read, lines: lines) 'step'
+				more then continue
+				finished then return WorkerDrain.lines(lines)
+				tooLong then return WorkerDrain.unreadable("a line of the worker's output ran past the {StreamMessageCap}-byte limit")
+			end 'step'
+		end 'lineLoop'
 
-		if line.trim() == WorkerReadyMarker 'jobDone'
-			return lines
-		end 'jobDone'
-	end 'lineLoop'
+		panic("WorkerOutput.drain: the loop above is only left by `return`")
+	end 'drain'
+end 'WorkerOutput'
 
-	panic("drainResultsThunk: the loop above is only left by `return` or `throw`")
-end 'drainResultsThunk'
+function drainStepOf(read LineRead, lines StringArray) returns WorkerDrainStep
+	return match read 'read'
+		line(text) gives drainedLine(text, lines: lines)
+		ended gives WorkerDrainStep.finished
+		pastTheCap gives WorkerDrainStep.tooLong
+	end 'read'
+end 'drainStepOf'
+
+union OverdueHeard
+	nothing
+	lines(text String)
+	unreadable(reason String)
+	unseen(reason String)
+end 'OverdueHeard'
+
+union WorkerHello
+	ready
+	said(line String)
+	endedSilent
+	unreadable(reason String)
+	overdue(heard OverdueHeard)
+end 'WorkerHello'
+
+function overdueHeardFrom(drain DrainPromise) returns OverdueHeard
+	let lines = try await drain otherwise (e) 'unreadable'
+		return OverdueHeard.unreadable(e.displayReason())
+	end 'unreadable'
+
+	if lines.count() == 0 'saidNothing'
+		return OverdueHeard.nothing
+	end 'saidNothing'
+
+	let said = TextJoiner.create()
+
+	for line in lines 'eachLine'
+		said.push(line)
+	end 'eachLine'
+
+	return OverdueHeard.lines(said.build())
+end 'overdueHeardFrom'
+
+function overdueAccount(heard OverdueHeard) returns String
+	return match heard 'heard'
+		nothing gives "it said nothing within {WorkerHelloDeadlineMs} ms"
+		lines(text) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms; it said '{text}'"
+		unreadable(reason) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms, and its output could not be read afterwards ({reason})"
+		unseen(reason) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms, and ending its process tree was not confirmed ({reason}), so what it said was not read"
+	end 'heard'
+end 'overdueAccount'
+
+function helloAfterDrain(drain DrainPromise) returns WorkerHello
+	let lines = try await drain otherwise (e) 'unreadable'
+		return WorkerHello.unreadable(e.displayReason())
+	end 'unreadable'
+
+	let first = try lines.get(0) otherwise return WorkerHello.endedSilent
+
+	if first.trim() != WorkerReadyMarker 'notReady'
+		return WorkerHello.said(first)
+	end 'notReady'
+
+	return WorkerHello.ready
+end 'helloAfterDrain'
+
+function drainedLine(text String, lines StringArray) returns WorkerDrainStep
+	lines.push(text)
+
+	if text.trim() == WorkerReadyMarker 'jobDone'
+		return WorkerDrainStep.finished
+	end 'jobDone'
+
+	return WorkerDrainStep.more
+end 'drainedLine'
 
 // Did this drain end the way a FINISHED job ends? See `drainResultsThunk`: the terminator rides in the
 // lines, so its presence is the whole question and an empty drain (a worker that died before saying
@@ -1287,11 +1372,11 @@ end 'recordLinesOf'
 // worker it would block until that worker exited. It stops on EOF or on the first read error — a
 // read error here means the handle is already gone, and there is nothing left to say about a worker
 // whose pipe we can no longer read.
-function drainChildStderr(child StreamingSubprocess) returns String
+function drainChildStderr(reader ChildOutputReader) returns String
 	let out = TextJoiner.create()
 
 	while true 'lineLoop'
-		let line = try child.readStderrLine() otherwise break
+		let line = try reader.readInputLine() otherwise break
 		out.push(line)
 	end 'lineLoop'
 
@@ -1305,6 +1390,8 @@ end 'drainChildStderr'
 type PersistentWorkerHandle
 	export var child as StreamingSubprocess
 	export let workerId as WorkerId
+	export let output as WorkerOutput.handle
+	export var errorReader as ChildOutputReader
 
 	// Spawn the child without waiting for its WORKER_READY hello: the caller fires all N spawns before
 	// draining the hellos, so the workers' process creation and runtime init overlap.
@@ -1340,7 +1427,11 @@ type PersistentWorkerHandle
 		argv.push("{WorkerRunDirFlagPrefix}{specRunWorkingDir().filename()}")
 
 		let child = try StreamingSubprocess.spawn(Executable.path(harnessExe), arguments: argv)
-		return Self{child: child, workerId: workerId}
+		let stdout = try child.takeStdout()
+		let stderr = try child.takeStderr()
+		let output = spawn WorkerOutput.create(stdout)
+
+		return Self{child: child, workerId: workerId, output: output, errorReader: merge stderr}
 	end 'spawnNoWait'
 
 	// Drain the startup hello. Pairs with `spawnNoWait`'s two-phase startup.
@@ -1350,16 +1441,53 @@ type PersistentWorkerHandle
 	// hello is a worker nobody will hold a handle to again, and the caller's job is to report that,
 	// not to clean up after this one.
 	function awaitReady() throws SubprocessError
-		let hello = try child.readStdoutLine() otherwise (e) 'helloUnreadable'
-			child.release()
-			throw e
-		end 'helloUnreadable'
-
-		if hello.trim() != WorkerReadyMarker 'badHello'
-			child.release()
-			throw SubprocessError.ioFailed("worker {workerId} startup: expected {WorkerReadyMarker}, got '{hello}'")
-		end 'badHello'
+		match self.hello() 'hello'
+			ready then return
+			said(line) then try self.refuseHello("expected {WorkerReadyMarker}, got '{line}'")
+			endedSilent then try self.refuseHello("its stdout ended before it said {WorkerReadyMarker}")
+			unreadable(reason) then try self.refuseHello(reason)
+			overdue(heard) then try self.refuseHello(overdueAccount(heard))
+		end 'hello'
 	end 'awaitReady'
+
+	function refuseHello(why String) throws SubprocessError
+		child.release()
+
+		throw SubprocessError.ioFailed("worker {workerId} startup: {why}")
+	end 'refuseHello'
+
+	function hello() returns WorkerHello
+		let started = Clock.nowMs()
+		let drain = async drainResultsThunk(output.clone(), spoke: SpokeCell.create(started))
+
+		while not drain.isComplete() 'waitingForHello'
+			if Clock.remainingMs(started, deadlineMs: WorkerHelloDeadlineMs) == 0 'deadlineReached'
+				if drain.isComplete() 'arrivedAtTheDeadline'
+					break
+				end 'arrivedAtTheDeadline'
+
+				return WorkerHello.overdue(self.heardAfterEndingTheTree(drain))
+			end 'deadlineReached'
+
+			sleep(PollYieldMs)
+		end 'waitingForHello'
+
+		return helloAfterDrain(drain)
+	end 'hello'
+
+	function heardAfterEndingTheTree(drain DrainPromise) returns OverdueHeard
+		let tree = child.endTree()
+
+		match tree 'tree'
+			ended then return overdueHeardFrom(drain)
+			survived or
+			unconfirmed then break
+		end 'tree'
+
+		drain.cancel()
+
+		return OverdueHeard.unseen(tree.displayReason())
+	end 'heardAfterEndingTheTree'
 
 	function sendJob(jobLine String) throws SubprocessError
 		try child.writeStdinLine(jobLine)
@@ -1386,7 +1514,7 @@ type PersistentWorkerHandle
 			throw e
 		end 'shutdownFailed'
 
-		let stderr = drainChildStderr(child)
+		let stderr = drainChildStderr(errorReader)
 
 		if not stderr.isEmpty() 'workerSpoke'
 			printError("{stderr}\n")
@@ -1401,24 +1529,24 @@ type PersistentWorkerHandle
 	// that path can release the handle before it rethrows.
 	//
 	// ⚠ THE WAIT CARRIES A DEADLINE, and it is the same argument the dispatch loop's watchdog rests
-	// on, applied to the one blocking wait that sits OUTSIDE that loop. `child.wait()` is
-	// `waitWithTimeout(0)` — wait forever — so a worker that stops responding after its last job
+	// on, applied to the one blocking wait that sits OUTSIDE that loop. `child.wait()`
+	// waits forever, so a worker that stops responding after its last job
 	// hangs the suite HERE, past the watchdog's reach, with the run's every verdict already computed
 	// and no symptom but a gate that never returns. That is precisely the failure this slice exists
 	// to abolish, and it does not stop being one because it happens two lines after the loop.
-	// `waitWithTimeout` forcibly terminates the child's whole process tree when the deadline fires, so the
+	// `wait` forcibly terminates the child's whole process tree when its deadline fires, so the
 	// timeout leaves no orphan — not the worker, and not the test binaries it had running;
 	// `shutdownPool` turns the throw into a named per-worker error and a non-zero suite.
 	function requestExitAndWait() returns ExitInt throws SubprocessError
 		try child.writeStdinLine(ExitCommand)
 		child.closeStdin()
-		return try child.waitWithTimeout(WorkerShutdownTimeoutMs)
+		return try child.wait(WaitDeadline.within(WorkerShutdownTimeoutMs))
 	end 'requestExitAndWait'
 
 	// ⭐⭐ **MAKE SURE THIS WORKER'S PROCESS IS GONE — the only termination this harness has — AND ANSWER
 	// WITH THE STATUS IT LEFT.**
 	//
-	// `waitWithTimeout` IS the kill: *"throws `SubprocessError.timeout` if the timeout fires (the
+	// A wait with a deadline IS the kill: *"throws `SubprocessError.timeout` if the timeout fires (the
 	// runtime forcibly terminates the child's whole process tree in that case)"*. An already-exited child
 	// answers with its exit code before the grace elapses and nothing is terminated; a live one is, and so is
 	// anything it started. (`__Builtins.subprocessKill` is deliberately not among the compiler's intrinsics;
@@ -1437,7 +1565,7 @@ type PersistentWorkerHandle
 	// stack trace live there — and a released handle addresses whatever process next takes the slot.
 	// Killing DOES close the worker's stdout, which is what makes its drain complete.
 	function terminateAndReap() returns WorkerExit
-		let code = try child.waitWithTimeout(JobKillGraceMs) otherwise (e) 'notReaped'
+		let code = try child.wait(WaitDeadline.within(JobKillGraceMs)) otherwise (e) 'notReaped'
 			return WorkerExit.unavailable(e.displayReason())
 		end 'notReaped'
 
@@ -1494,7 +1622,7 @@ end 'abortOnDeadWorker'
 // print it and both need the empty case named: "the worker said nothing" and "nobody looked" read
 // identically on a stream, and only one of them is true.
 function deadWorkerStderr(handle PersistentWorkerHandle) returns String
-	let stderr = drainChildStderr(handle.child)
+	let stderr = drainChildStderr(handle.errorReader)
 
 	if stderr.isEmpty() 'silent'
 		return "(the worker wrote nothing to stderr before dying)"
@@ -2031,10 +2159,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// guard — so a slot is never observable as busy with a stale job, a missing promise or a bound
 	// somebody else's job already fired.
 	//
-	// ⚠ `spokeAt` IS THE ONE THIS LOOP DOES NOT OWN ALONE: each slot's drain green thread stamps its own
-	// entry as lines arrive (`drainResultsThunk`), which is the only way the parent can see a worker
-	// making progress before its job ends. What makes that safe is that the drain runs on the dispatcher's
-	// own M and yields only inside `readStdoutLine` — see there, and the one-M section at the top.
+	// ⚠ `spokeAt` IS THE ONE THIS LOOP DOES NOT OWN ALONE: each slot's `WorkerOutput` service stamps its
+	// own cell as lines arrive (`drainResultsThunk`), which is the only way the parent can see a worker
+	// making progress before its job ends. What makes that safe is that a cell is a `SharedValue`.
+	//
 	// HOW THIS LANE PERFORMS A SPEC'S EXECUTIONS, asked ONCE — see `progressDeadlineMs`, which is the
 	// only reader and is asked per busy slot per park.
 	let runStrategy = runStrategyFor(effectiveTarget)
@@ -2154,8 +2282,6 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				abortOnDeadWorker(try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction"), job: job, reason: "the parent could not read its stdout: {e.displayReason()}")
 			end 'stdoutUnreadable'
 
-			try (try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")).child.reclaimStdout() otherwise panic("runSpecPool: the stdout of slot {readySlot}'s worker was not out after its drain ended")
-
 			let plan = try plans.get(job.planIndex) otherwise panic("runSpecPool: plans.get({job.planIndex}) is in bounds by construction")
 
 			// ⭐⭐ **DEAD-WORKER RECOVERY.** No WORKER_READY terminator means this worker died with the
@@ -2250,8 +2376,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: (jobQueue.count() + aloneQueue.count()) as JobTally, dispatched: dispatched, completed: completed)
 		end 'wedged'
 
-		// Park, so the scheduler can run the drain green threads — every one of them blocked on an
-		// overlapped read of its worker's stdout.
+		// Park, so the scheduler can run the drain coroutines — every one of them awaiting its worker's
+		// `WorkerOutput` reply.
 		sleep(PollYieldMs)
 	end 'dispatchLoop'
 
@@ -2546,11 +2672,9 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	try inFlight.set(slot, value: job) otherwise panic("sendAndDrain: inFlight.set({slot}) is in bounds by construction")
 	try expired.set(slot, value: false) otherwise panic("sendAndDrain: expired.set({slot}) is in bounds by construction")
 
-	// The spawn hands the green thread its OWN REFERENCE to `spokeAt` (see `drainResultsThunk`), so the
-	// stamps it writes land in the array this loop reads. It is the parent's array throughout: the drain
-	// only ever writes its own slot, and only the dispatcher ever reads one.
-	let reader = try (try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")).child.takeStdout() otherwise panic("sendAndDrain: the stdout of slot {slot}'s worker is already out")
-	let drain = async drainResultsThunk(reader, spoke: (try spokeAt.get(slot) otherwise panic("sendAndDrain: spokeAt.get({slot}) is in bounds by construction")).clone())
+	// The stamps the service writes land in the cell this loop reads: the cell is shared, the drain only
+	// ever writes its own slot's, and only the dispatcher ever reads one.
+	let drain = async drainResultsThunk((try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")).output.clone(), spoke: (try spokeAt.get(slot) otherwise panic("sendAndDrain: spokeAt.get({slot}) is in bounds by construction")).clone())
 
 	if slot == drains.count() as WorkerId 'firstDispatchToThisSlot'
 		drains.push(drain)
@@ -2605,7 +2729,7 @@ function findIdleSlot(busy FixedBoolArray, cursor WorkerId) returns WorkerId thr
 	throw NoSlot.none
 end 'findIdleSlot'
 
-// The next BUSY slot at or after `cursor` whose drain green thread has already COMPLETED — a
+// The next BUSY slot at or after `cursor` whose drain coroutine has already COMPLETED — a
 // non-blocking peek at the promise, which is what lets the loop serve whoever finished first
 // instead of whoever it happened to await first.
 function findReadyDrain(busy FixedBoolArray, drains DrainPromiseArray, cursor WorkerId) returns WorkerId throws NoSlot

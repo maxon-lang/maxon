@@ -12,7 +12,6 @@ let RelaySlotPollMs = 500
 let RelayChildExitDeadlineMs = 2000
 let RelayReapDeadlineMs = 3000
 let RelayStderrPendingCapBytes = 16384
-let RelayAppendedLineFeedBytes = 1
 let RelayLanguageId = "maxon"
 let RelayLanguageIdKey = "languageId"
 let RelayInitializedMethod = "initialized"
@@ -178,15 +177,15 @@ typealias LspChildProcessList = List with LspChildProcess
 
 module type LspChildLink
 	module let generation as LspChildGeneration
-	module let reader as StdoutReader
-	module let errorReader as StderrReader
+	module let reader as LspChildStdoutReader.handle
+	module let errorReader as ChildLineReader.handle
 	module let swallowed as LspRelayIdSet
 	module var stdoutOpen as bool
 	module var stderrOpen as bool
 	module var pendingStderr as String
 	module var omittedStderrLines as Count
 
-	module static function create(generation LspChildGeneration, reader StdoutReader, errorReader StderrReader) returns LspChildLink
+	module static function create(generation LspChildGeneration, reader LspChildStdoutReader.handle, errorReader ChildLineReader.handle) returns LspChildLink
 		return Self{generation: generation, reader: reader, errorReader: errorReader, swallowed: LspRelayIdSet.create(), stdoutOpen: true, stderrOpen: true, pendingStderr: "", omittedStderrLines: 0}
 	end 'create'
 
@@ -367,7 +366,7 @@ module type LspRelay
 	function childStderr(generation LspChildGeneration, line String, workspace LspWorkspaceState)
 		let link = self.linkOf(generation)
 		link.noteStderrLine(line)
-		workspace.arrivals.push(async nextChildStderrArrival(link.errorReader, generation: generation))
+		self.rearmStderr(link, workspace: workspace)
 	end 'childStderr'
 
 	function childStderrEnded(generation LspChildGeneration, workspace LspWorkspaceState)
@@ -391,7 +390,7 @@ module type LspRelay
 	function awaitExit(held LspChildProcess, workspace LspWorkspaceState)
 		held.process.closeStdin()
 
-		try held.process.waitWithTimeout(RelayChildExitDeadlineMs) otherwise (failure) 'notExited'
+		try held.process.wait(WaitDeadline.within(RelayChildExitDeadlineMs)) otherwise (failure) 'notExited'
 			self.report("the compiler at {self.slot.path} did not end when its input closed: {failure.displayReason()}", workspace: workspace)
 		end 'notExited'
 	end 'awaitExit'
@@ -411,21 +410,15 @@ module type LspRelay
 	end 'processPosition'
 
 	function sendTo(generation LspChildGeneration, body String)
-		try (try self.processes.get(self.processPosition(generation)) otherwise panic("LspRelay.sendTo: a link names a child process the relay no longer holds")).process.writeStdinLine("Content-Length: {body.byteLength() + RelayAppendedLineFeedBytes}\r\n\r\n{body}") otherwise ignore
+		try (try self.processes.get(self.processPosition(generation)) otherwise panic("LspRelay.sendTo: a link names a child process the relay no longer holds")).process.writeStdinFrame(body) otherwise ignore
 	end 'sendTo'
 
 	function reapProcess(generation LspChildGeneration)
 		let position = self.processPosition(generation)
 
-		self.releaseChild(try self.processes.get(position) otherwise panic("LspRelay.reapProcess: the position was just found in the process list"))
-		_ = try self.processes.remove(position) otherwise panic("LspRelay.reapProcess: the position was just found in the process list")
-	end 'reapProcess'
-
-	function releaseChild(held LspChildProcess)
-		try held.process.reclaimStdout() otherwise panic("LspRelay.releaseChild: the stdout of a child whose output ended was not out with its reader")
-		try held.process.reclaimStderr() otherwise panic("LspRelay.releaseChild: the stderr of a child whose error output ended was not out with its reader")
+		let held = try self.processes.remove(position) otherwise panic("LspRelay.reapProcess: the position was just found in the process list")
 		held.process.release()
-	end 'releaseChild'
+	end 'reapProcess'
 
 	function retireLink(link LspChildLink, workspace LspWorkspaceState)
 		let treeEnd = (try self.processes.get(self.processPosition(link.generation)) otherwise panic("LspRelay.retireLink: a link names a child process the relay no longer holds")).process.endTree()
@@ -467,17 +460,19 @@ module type LspRelay
 			return LspAttachOutcome.failed("could not start the compiler at {self.slot.path}: {e.displayReason()}")
 		end 'spawnFailed'
 
-		let reader = try process.takeStdout() otherwise panic("LspRelay.attach: the stdout of a child that was just spawned was already out")
-		let errorReader = try process.takeStderr() otherwise panic("LspRelay.attach: the stderr of a child that was just spawned was already out")
+		let stdout = try process.takeStdout() otherwise panic("LspRelay.attach: the stdout of a child that was just spawned was already out")
+		let stderr = try process.takeStderr() otherwise panic("LspRelay.attach: the stderr of a child that was just spawned was already out")
 		self.nextGeneration = self.nextGeneration + 1
+		let reader = spawn LspChildStdoutReader.create(stdout, generation: self.nextGeneration)
+		let errorReader = spawn ChildLineReader.create(stderr, stream: StdioStream.stderr)
 		let link = LspChildLink.create(self.nextGeneration, reader: reader, errorReader: errorReader)
 		self.processes.append(LspChildProcess.create(self.nextGeneration, process: process))
 
 		self.retireCurrent(workspace)
 		self.current = LspRelayChild.running(link)
 		self.attached = stamp
-		workspace.arrivals.push(async nextChildArrival(reader, generation: link.generation))
-		workspace.arrivals.push(async nextChildStderrArrival(errorReader, generation: link.generation))
+		self.rearm(link, workspace: workspace)
+		self.rearmStderr(link, workspace: workspace)
 		self.replay(link, initial: initial)
 
 		if not initial 'announceTheSwitch'
@@ -598,8 +593,12 @@ module type LspRelay
 	end 'tellStderr'
 
 	function rearm(link LspChildLink, workspace LspWorkspaceState)
-		workspace.arrivals.push(async nextChildArrival(link.reader, generation: link.generation))
+		workspace.arrivals.push(async nextChildArrival(link.reader.clone()))
 	end 'rearm'
+
+	function rearmStderr(link LspChildLink, workspace LspWorkspaceState)
+		workspace.arrivals.push(async nextChildStderrArrival(link.errorReader.clone(), generation: link.generation))
+	end 'rearmStderr'
 
 	function linkOf(generation LspChildGeneration) returns LspChildLink
 		let live = try self.currentLink() otherwise 'detached'

@@ -9510,6 +9510,18 @@ export type EnumLayout
 		return self.maxPayloadArity() > 0
 	end 'carriesPayloads'
 
+	export function carriesAnIsolatedPayload() returns bool
+		for payloads in self.casePayloads 'eachCase'
+			for field in payloads 'eachPayload'
+				if field.capability == ParamCapability.isolated 'anIsolatedSlot'
+					return true
+				end 'anIsolatedSlot'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return false
+	end 'carriesAnIsolatedPayload'
+
 	// The payload bytes `__mm_alloc` must be asked for: the tag word plus one slot per payload field
 	// of the widest case. THE one place the box size is computed, so the allocation and the stores
 	// that fill it cannot come to disagree about how big it is.
@@ -12286,7 +12298,6 @@ export type UnknownTypeReports
 	export function reportedUnknownName(typeName ByteArray, readerFilePath FilePath) returns bool
 		return self.reportedNames.holds(String.from(typeName), readerFilePath: readerFilePath)
 	end 'reportedUnknownName'
-
 end 'UnknownTypeReports'
 
 export type Project
@@ -12375,10 +12386,6 @@ export type Project
 
 	// `findingStandingOf` owns which codes ride this roster and when they print.
 	export var secondaryDiagnostics as DiagnosticArray
-
-	// Whether the roster holds a target refusal, asked per spawn op so the roster is never scanned. Only
-	// `fileSecondaryFinding` and `resetSecondaryFindings` keep it in step; a direct push leaves it stale.
-	export var targetRefusalFiled as bool
 
 	// ⭐ Every declaration a type-name COLLISION was reported for (E3061/E3006,
 	// `reportTypeNameCollision`) — the suppression set the unused-typealias drain reads, so one mistake
@@ -12872,7 +12879,6 @@ export type Project
 			unknownTypeReports: UnknownTypeReports.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
 			secondaryDiagnostics: DiagnosticArray.create(0),
-			targetRefusalFiled: false,
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(0),
 			pendingBrandRecords: PendingBrandRecordArray.create(0),

@@ -111,13 +111,13 @@ end 'HttpConnectionSecurity'
 
 /// One accepted connection: the request that arrived and the response owed for it.
 public type HttpExchange
-	var inbound as HttpInbound
+	var inbound as HttpTransportReader
 	let parsed as HttpRequest
 	var progress as ExchangeProgress
 	let writeDeadlineMs as SocketDeadlineMs
 	let leftoverArrived as bool
 
-	static function create(inbound HttpInbound, parsed HttpRequest, writeDeadlineMs SocketDeadlineMs, leftoverArrived bool) returns HttpExchange
+	static function create(inbound HttpTransportReader, parsed HttpRequest, writeDeadlineMs SocketDeadlineMs, leftoverArrived bool) returns HttpExchange
 		return HttpExchange{inbound: inbound, parsed: parsed, progress: ExchangeProgress.create(), writeDeadlineMs: writeDeadlineMs, leftoverArrived: leftoverArrived}
 	end 'create'
 
@@ -129,7 +129,7 @@ public type HttpExchange
 
 	/// Whether the request arrived over TLS, and what the handshake settled.
 	public function security() returns HttpConnectionSecurity
-		return try self.inbound.connection.security() otherwise panic("HttpExchange.security: the request arrived over a connection whose handshake completed")
+		return try self.inbound.source.security() otherwise panic("HttpExchange.security: the request arrived over a connection whose handshake completed")
 	end 'security'
 
 	function stage() returns ResponseStage
@@ -148,7 +148,7 @@ public type HttpExchange
 		let sendsContent = self.parsed.method() != HttpMethod.head and httpStatusAllowsContent(response.statusCode())
 		let wire = "{head}{response.body()}" if sendsContent else head
 
-		try sendAndClose(self.inbound.connection, wire: wire, writeDeadlineMs: self.writeDeadlineMs, lingering: self.leftoverArrived) otherwise 'writeFailed'
+		try sendAndClose(self.inbound.source, wire: wire, writeDeadlineMs: self.writeDeadlineMs, lingering: self.leftoverArrived) otherwise 'writeFailed'
 			self.progress.stage = ResponseStage.abandoned
 
 			throw HttpServerError.sendFailed
@@ -367,10 +367,10 @@ type ServerConnection
 	end 'over'
 
 	function arrive(transport HttpTransport) returns ConnectionArrival throws HttpServerError
-		let inbound = HttpInbound.over(transport)
+		let inbound = StreamReader.over(transport)
 
 		let arrived = try self.readArrival(inbound) otherwise (fault) 'protocolFault'
-			answerProtocolFault(inbound.connection, fault: fault, writeDeadlineMs: self.limits.writeDeadlineMs)
+			answerProtocolFault(inbound.source, fault: fault, writeDeadlineMs: self.limits.writeDeadlineMs)
 
 			throw fault
 		end 'protocolFault'
@@ -381,10 +381,10 @@ type ServerConnection
 		end 'arrival'
 	end 'arrive'
 
-	function readArrival(inbound HttpInbound) returns RequestArrival throws HttpServerError
-		try inbound.connection.setReadDeadline(self.limits.readDeadlineMs) otherwise throw HttpServerError.connectionClosed
+	function readArrival(inbound HttpTransportReader) returns RequestArrival throws HttpServerError
+		try inbound.source.setReadDeadline(self.limits.readDeadlineMs) otherwise throw HttpServerError.connectionClosed
 
-		let head = try httpParseRequestHead(try readRequestHead(inbound, cap: self.limits.maxHeaderBytes as BytePos), scheme: self.scheme)
+		let head = try httpParseRequestHead(try readRequestHead(inbound, cap: self.limits.maxHeaderBytes as LineCap), scheme: self.scheme)
 
 		match head 'target'
 			wholeServer(headers) then return RequestArrival.forTheServer((try self.bodyAfter(headers, inbound: inbound)).leftoverArrived)
@@ -392,7 +392,7 @@ type ServerConnection
 		end 'target'
 	end 'readArrival'
 
-	function resourceArrival(method HttpMethod, url URL, headers HttpHeaders, inbound HttpInbound) returns RequestArrival throws HttpServerError
+	function resourceArrival(method HttpMethod, url URL, headers HttpHeaders, inbound HttpTransportReader) returns RequestArrival throws HttpServerError
 		let arrived = try self.bodyAfter(headers, inbound: inbound)
 		let request = HttpRequest.parsed(method, url: url, headers: headers)
 		request.setBody(arrived.body)
@@ -400,13 +400,13 @@ type ServerConnection
 		return RequestArrival.forResource(request, leftoverArrived: arrived.leftoverArrived)
 	end 'resourceArrival'
 
-	function answeredServerWide(inbound HttpInbound, leftoverArrived bool) returns ConnectionArrival
-		self.answerServerWideOptions(inbound.connection, leftoverArrived: leftoverArrived)
+	function answeredServerWide(inbound HttpTransportReader, leftoverArrived bool) returns ConnectionArrival
+		self.answerServerWideOptions(inbound.source, leftoverArrived: leftoverArrived)
 
 		return ConnectionArrival.answered
 	end 'answeredServerWide'
 
-	function bodyAfter(headers HttpHeaders, inbound HttpInbound) returns ArrivedBody throws HttpServerError
+	function bodyAfter(headers HttpHeaders, inbound HttpTransportReader) returns ArrivedBody throws HttpServerError
 		let declared = try httpDeclaredBodyLength(headers, cap: self.limits.maxBodyBytes)
 
 		let body = try httpReadDeclared(inbound, length: declared) otherwise (cause) 'readFailed'
@@ -498,13 +498,14 @@ function awaitAll(inFlight ConnectionPromises)
 	end 'eachConnection'
 end 'awaitAll'
 
-function readRequestHead(inbound HttpInbound, cap BytePos) returns String throws HttpServerError
-	let read = try httpReadDelimited(inbound, delimiter: HttpDelimiter.head, cap: cap) otherwise (cause) 'readFailed'
+function readRequestHead(inbound HttpTransportReader, cap LineCap) returns String throws HttpServerError
+	let read = try httpReadHead(inbound, cap: cap) otherwise (cause) 'readFailed'
 		throw serverReadFault(cause)
 	end 'readFailed'
 
 	match read 'head'
-		delimited(text) then return text
+		line(text) then return text
+		ended then throw HttpServerError.connectionClosed
 		pastTheCap then throw HttpServerError.headersTooLarge
 	end 'head'
 end 'readRequestHead'
@@ -739,7 +740,7 @@ function closeConnection(connection HttpTransport, lingering bool)
 	end 'peerHasSaidItAll'
 end 'closeConnection'
 
-function serverReadFault(cause HttpTransportFault) returns HttpServerError
+function serverReadFault(cause StreamError) returns HttpServerError
 	return match cause 'which'
 		timedOut gives HttpServerError.readTimedOut
 		closed or

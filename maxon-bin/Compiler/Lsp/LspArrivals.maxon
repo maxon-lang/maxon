@@ -20,14 +20,14 @@ module typealias ResolutionTicket = int(0 to u64.max)
 module let LspFrameSlot = 0 as ElementIndex
 
 module type LspStdinReader
-	var stdin as Stdin
+	var stdin as StdinReader
 
 	module static function create() returns LspStdinReader
 		return Self{stdin: Console.stdin()}
 	end 'create'
 
 	export function next() returns isolated LspArrival
-		return match readLspMessage(self.stdin) 'incoming'
+		return match self.stdin.readLspMessage() 'incoming'
 			message(body) gives LspArrival.framed(body)
 			endOfStream gives LspArrival.endOfStream
 			framingError(detail) gives LspArrival.framingError(detail)
@@ -35,20 +35,39 @@ module type LspStdinReader
 	end 'next'
 end 'LspStdinReader'
 
-module function nextChildArrival(reader StdoutReader, generation LspChildGeneration) returns LspArrival
-	return match readChildMessage(reader) 'incoming'
-		message(body) gives LspArrival.childFramed(generation, body: body)
-		endOfStream gives LspArrival.childEnded(generation, reason: "its output ended")
-		framingError(detail) gives LspArrival.childEnded(generation, reason: detail)
-	end 'incoming'
+module type LspChildStdoutReader
+	let generation as LspChildGeneration
+	var reader as ChildOutputReader
+
+	module static function create(reader isolated ChildOutputReader, generation LspChildGeneration) returns LspChildStdoutReader
+		return Self{generation: generation, reader: merge reader}
+	end 'create'
+
+	export function next() returns isolated LspArrival
+		return match self.reader.readLspMessage() 'incoming'
+			message(body) gives LspArrival.childFramed(self.generation, body: body)
+			endOfStream gives LspArrival.childEnded(self.generation, reason: "its output ended")
+			framingError(detail) gives LspArrival.childEnded(self.generation, reason: detail)
+		end 'incoming'
+	end 'next'
+end 'LspChildStdoutReader'
+
+module function nextChildArrival(reader LspChildStdoutReader.handle) returns LspArrival
+	let arrival = try await reader.next() otherwise panic("a child's output reader stopped while the relay still held its handle")
+
+	return merge arrival
 end 'nextChildArrival'
 
-module function nextChildStderrArrival(reader StderrReader, generation LspChildGeneration) returns LspArrival
-	let line = try reader.readLine() otherwise (e) 'unread'
-		return LspArrival.childStderrEnded(generation) if e.endedTheStream() else LspArrival.childStderrFailed(generation, reason: e.displayReason())
-	end 'unread'
+module function nextChildStderrArrival(reader ChildLineReader.handle, generation LspChildGeneration) returns LspArrival
+	let event = try await reader.next() otherwise panic("a child's error reader stopped while the relay still held its handle")
 
-	return LspArrival.childStderr(generation, line: line)
+	return match event 'event'
+		said(_, text) gives LspArrival.childStderr(generation, line: text)
+		closed gives LspArrival.childStderrEnded(generation)
+		broke(_, reason) gives LspArrival.childStderrFailed(generation, reason: reason)
+		silent or
+		exhausted panic("nextChildStderrArrival: a stream's reader answered {event.name}")
+	end 'event'
 end 'nextChildStderrArrival'
 
 module function slotTickAfter(pauseMs Milliseconds) returns LspArrival

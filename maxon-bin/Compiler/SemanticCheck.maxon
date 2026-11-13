@@ -591,6 +591,7 @@ export enum FrozenCarry
 	opaqueElement
 	valuesOnly
 	alreadyFrozen
+
 	// A holder behind a call result carries a write need only: freezing it for an element read would freeze
 	// the whole container.
 	writtenOnly
@@ -2108,6 +2109,7 @@ function alreadyConsumedMessage(first PromiseConsume) returns String
 		awaited then return "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice"
 		cancelled then return "this promise has already been cancelled: 'cancel' reclaims the green thread's struct, so awaiting or cancelling it again reads a struct the scheduler may already have handed to another spawn"
 		movedIntoStorage then panic("alreadyConsumedMessage: a move into a container's slot emits no await, tryAwait or drop op, so this walk can collect no site of that kind — a later use of the moved name is refused in the parser as a use-after-move")
+		consumedByMatch then panic("alreadyConsumedMessage: a match that consumes its scrutinee emits no await, tryAwait or drop op, so this walk can collect no site of that kind — a later use of the scrutinee is refused in the parser as a use-after-move")
 		siblingReadConsumedTheSlot then panic("alreadyConsumedMessage: a read retired by another read of its slot emits no op at all, so this walk can collect no site of that kind — the door it is carried through refuses it in the parser")
 	end 'first'
 end 'alreadyConsumedMessage'
@@ -2617,6 +2619,8 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
+	try requireTargetSupportsLiveWitnesses(project, module: module, signatures: signatures)
 end 'checkCalls'
 
 // An `async` spawn: validate its arguments exactly like a plain call, then refuse a callee
@@ -3827,32 +3831,13 @@ function reportSpawnOfNonYielding(project Project, callee ByteArray, opIndex Ele
 	let calleeYieldsSomewhere = try yields.get(calleeIndex) otherwise panic("reportSpawnOfNonYielding: yields.get({calleeIndex}) OOB below count {yields.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")
 
 	if calleeYieldsSomewhere 'itCanSuspend'
-		requireTargetHostsSpawn(project, func: func, opIndex: opIndex)
+		requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: blameTargetErrorsIn(project, func: func))
 		return
 	end 'itCanSuspend'
 
 	let site = try project.asyncSpawnSites.get(opIndex) otherwise return
 	reportPositioned(project, code: ErrorCode.asyncNonYielding, message: "'{String.from(site.text)}' — function never yields; 'async' is for I/O-concurrent work only", line: site.line, column: site.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'reportSpawnOfNonYielding'
-
-// ⭐⭐ **THE SPAWN'S TARGET REFUSAL, AND IT IS A BACKSTOP RATHER THAN A GATE — WHICH IS WHY IT SPEAKS ONLY
-// INTO A COMPILE THAT WOULD OTHERWISE REACH THE BACKEND.** Its whole job is to turn a backend panic into a
-// diagnostic; a program already carrying a diagnostic never reaches a backend, so there is no panic left to
-// pre-empt and a second line would only make one rejection read as two. A target refusal on the secondary
-// roster (`project.targetRefusalFiled`) counts the same way: it is reported unless something else is, and
-// either way the backend is not reached.
-//
-// ⚠ MEASURED, both directions: without the guard, `await-any.md`'s and `promise-peek.md`'s wasm refusal
-// cases — each of which pins the ONE E3104 its own construct earns — grew a second line about the spawn
-// beneath it; with it, `async compute()` on `--target=x64-linux` answers E3104 rather than dying
-// at `StdToX64Conversion.lowerTlsAlloc`.
-function requireTargetHostsSpawn(project Project, func IrFunction, opIndex ElementIndex)
-	if projectHasErrors(project) or project.targetRefusalFiled 'alreadyRefused'
-		return
-	end 'alreadyRefused'
-
-	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: blameTargetErrorsIn(project, func: func))
-end 'requireTargetHostsSpawn'
 
 // ⭐⭐ **WHAT ONE FILED SITE EARNED — THE TWO ARMS OF ONE VERDICT.** A pure callee's result may not be
 // dropped in any position (E3064); an impure one's may, but only through the `_ =` the message names, so a
@@ -4741,7 +4726,7 @@ end 'namedDoorPlace'
 // opposite case and IS quoted: its name is exactly what the user wrote.
 let TargetUnsupportedUnnamedSubject = "this construct"
 
-function opIsTheCompilersOwn(project Project, func IrFunction, opIndex ElementIndex) returns bool
+module function opIsTheCompilersOwn(project Project, func IrFunction, opIndex ElementIndex) returns bool
 	return authoredFileOf(project, func: func, opIndex: opIndex).isEmpty()
 end 'opIsTheCompilersOwn'
 
@@ -4804,55 +4789,108 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex E
 	// One bool cannot be right for two families on a target that has landed only one — see
 	// `Compiler/TargetFacilities.maxon`.
 	if calleeNeedsFacilityTargetLacks(project.target, callee: callee) 'compilerOwnedEntry'
-		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: TargetUnsupportedUnnamedSubject, entry: callee)
+		reportTargetUnsupportedCallee(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), subject: TargetUnsupportedUnnamedSubject, entry: callee)
 		return
 	end 'compilerOwnedEntry'
 
 	if let entry = try project.libraryFacts.substrateEntries.get(callee) 'stdlibCrossing'
-		// ⭐⭐ **E3074 TAKES THE CROSSING AHEAD OF E3104 WHEN THE TARGET CAN NEVER HOST A CHILD PROCESS.**
-		// The two codes are two DIFFERENT facts about one call and both have to survive: E3104 says this
-		// target has not lowered the entry yet — a statement about this compiler's progress — while E3074
-		// says subprocess can NEVER exist here, a permanent property of WASI, and so carries advice
-		// (`#if not os(Wasi)`) instead of a runtime entry name.
-		//
-		// ⚠ **IT IS THIS ARM AND NOT THE `compilerOwnedEntry` ONE ABOVE, WHICH IS THE SPEC'S OWN BOUND**:
-		// `specs/subprocess-unsupported.md` scopes the check to *"user call sites into the public
-		// subprocess API (`Subprocess.run`, `Configuration.run`, `StreamingSubprocess.spawn`, etc.)"*, and
-		// a crossing into stdlib is exactly what those are. A bare `__Builtins.subprocessSpawn` — or
-		// `__Builtins.runProcess`, or the seven `subp*` builtins — is the INTRINSIC FLOOR rather than the API, it
-		// reaches the arm above, and it keeps answering E3104 with the entry named
-		// (`subprocess-builtins.rejected-on-wasm`, `async-subprocess.error.rejected-on-wasm`).
-		//
-		// ⚠ **THE RULE IS ABOUT THE API AND THE TEST IS ABOUT AN ENTRY BAND, AND THOSE ARE NOT THE SAME SET —
-		// SAID HERE, where the rule is, rather than left to be discovered at the predicate.**
-		// `isSubprocessRuntimeCallee` is the `__gt_subp_` prefix, and `__Builtins.runProcess`/`spawnReadLine` are
-		// subprocess surfaces whose entries live in the SCHEDULER band instead
-		// (`TargetFacilities.calleeHostFacility` names them individually for the same reason). Today no stdlib
-		// function wraps either, so the two sets agree on every crossing that exists; one that did would be a
-		// stdlib crossing answering E3104. That is the direction this fails in — a WEAKER, still-true diagnostic
-		// rather than a missing one — and the day a stdlib module wraps `__Builtins.runProcess`, this test becomes
-		// `is this entry a process spawn?` rather than `is it in the subprocess band?`.
-		//
-		// It is positioned at the call exactly as E3104 is, because it fires once per user call site and a
-		// program with several has to be told which one each report is about.
-		if isSubprocessRuntimeCallee(entry) and not targetCanHostSubprocess(project.target) 'noProcessSpawnPrimitive'
-			let callRange = project.opRanges.get(opIndex)
-			fileSecondary(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
-			return
-		end 'noProcessSpawnPrimitive'
-
-		// ⭐⭐ **A `__Raw` ENTRY IS REPORTED IN ITS OWN WORDS, BECAUSE IT NAMES NO SYMBOL.** The crossing is
-		// the same crossing and the code is the same E3104; what differs is that there is no runtime entry
-		// between a raw row and the machine, so the ordinary sentence would send the reader looking for a
-		// symbol that does not exist.
-		if isRawIntrinsicCallee(entry) 'aRawMachineOperation'
-			reportRawIntrinsicUnsupported(project, func: func, opIndex: opIndex, subject: "'{String.from(noun)}'", intrinsic: rawIntrinsicNamed(entry))
-			return
-		end 'aRawMachineOperation'
-
-		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: "'{String.from(noun)}'", entry: entry)
+		reportSubstrateCrossing(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), noun: noun, entry: entry)
 	end 'stdlibCrossing'
 end 'requireTargetSupportsCallee'
+
+function requireTargetSupportsLiveWitnesses(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+	if targetProvidesEveryFacility(project.target) or project.libraryFacts.substrateEntries.count() == 0 'nothingRefusableHere'
+		return
+	end 'nothingRefusableHere'
+
+	for funcIndex in 0 upto module.functions.count() 'eachFunc'
+		try requireStillWanted(project)
+		let func = try module.functions.get(funcIndex) otherwise panic("requireTargetSupportsLiveWitnesses: functions.get OOB at {funcIndex} below its own count")
+
+		if not blameTargetErrorsIn(project, func: func) 'notUserSource'
+			continue
+		end 'notUserSource'
+
+		let crossings = project.libraryFacts.witnessCrossingsOf(project, module: module, func: func)
+
+		match crossings.atFunction 'functionSite'
+			reaches(entry) then reportSubstrateCrossing(project, site: BlameSite.ofFunctionName(func), noun: signatures.diagnosticCalleeSpelling(func.name), entry: entry)
+			reachesNone then break
+			unasked then panic("requireTargetSupportsLiveWitnesses: the crossings of '{String.from(func.name)}' left their function site unasked")
+		end 'functionSite'
+
+		for opIndex in crossings.opSites 'eachOpSite'
+			let entry = try crossings.entryAtOp(opIndex) otherwise panic("requireTargetSupportsLiveWitnesses: op {opIndex} is listed as a crossing site yet holds no entry")
+			let op = try module.ops.get(opIndex) otherwise panic("requireTargetSupportsLiveWitnesses: ops.get OOB at {opIndex} for a crossing site of '{String.from(func.name)}'")
+			let edge = try callEdgeOf(op) otherwise panic("requireTargetSupportsLiveWitnesses: op {opIndex} is a crossing site and names no callee")
+			reportSubstrateCrossing(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), noun: callDiagnosticNoun(signatures.declaredNameOf(edge.0), mint: maxonOpCalleeMint(op)), entry: entry)
+		end 'eachOpSite'
+	end 'eachFunc'
+end 'requireTargetSupportsLiveWitnesses'
+
+type BlameSite
+	let line as LineNumber
+	let column as ColumnNumber
+	let filePath as FilePath
+
+	static function ofOp(project Project, func IrFunction, opIndex ElementIndex) returns Self
+		let range = project.opRanges.get(opIndex)
+
+		return Self{line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex)}
+	end 'ofOp'
+
+	static function ofFunctionName(func IrFunction) returns Self
+		return Self{line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath}
+	end 'ofFunctionName'
+
+	function file(project Project, code ErrorCode, message String)
+		fileSecondary(project, code: code, message: message, line: self.line, column: self.column, filePath: self.filePath)
+	end 'file'
+end 'BlameSite'
+
+function reportSubstrateCrossing(project Project, site BlameSite, noun ByteArray, entry ByteArray)
+	// ⭐⭐ **E3074 TAKES THE CROSSING AHEAD OF E3104 WHEN THE TARGET CAN NEVER HOST A CHILD PROCESS.**
+	// The two codes are two DIFFERENT facts about one call and both have to survive: E3104 says this
+	// target has not lowered the entry yet — a statement about this compiler's progress — while E3074
+	// says subprocess can NEVER exist here, a permanent property of WASI, and so carries advice
+	// (`#if not os(Wasi)`) instead of a runtime entry name.
+	//
+	// ⚠ **IT IS THIS ARM AND NOT THE `compilerOwnedEntry` ONE ABOVE, WHICH IS THE SPEC'S OWN BOUND**:
+	// `specs/subprocess-unsupported.md` scopes the check to *"user call sites into the public
+	// subprocess API (`Subprocess.run`, `Configuration.run`, `StreamingSubprocess.spawn`, etc.)"*, and
+	// a crossing into stdlib is exactly what those are. A bare `__Builtins.subprocessSpawn` — or
+	// `__Builtins.runProcess`, or the seven `subp*` builtins — is the INTRINSIC FLOOR rather than the API, it
+	// reaches the arm above, and it keeps answering E3104 with the entry named
+	// (`subprocess-builtins.rejected-on-wasm`, `async-subprocess.error.rejected-on-wasm`).
+	//
+	// ⚠ **THE RULE IS ABOUT THE API AND THE TEST IS ABOUT AN ENTRY BAND, AND THOSE ARE NOT THE SAME SET —
+	// SAID HERE, where the rule is, rather than left to be discovered at the predicate.**
+	// `isSubprocessRuntimeCallee` is the `__gt_subp_` prefix, and `__Builtins.runProcess`/`spawnReadLine` are
+	// subprocess surfaces whose entries live in the SCHEDULER band instead
+	// (`TargetFacilities.calleeHostFacility` names them individually for the same reason). Today no stdlib
+	// function wraps either, so the two sets agree on every crossing that exists; one that did would be a
+	// stdlib crossing answering E3104. That is the direction this fails in — a WEAKER, still-true diagnostic
+	// rather than a missing one — and the day a stdlib module wraps `__Builtins.runProcess`, this test becomes
+	// `is this entry a process spawn?` rather than `is it in the subprocess band?`.
+	//
+	// It is positioned at the call exactly as E3104 is, because it fires once per user call site and a
+	// program with several has to be told which one each report is about.
+	if isSubprocessRuntimeCallee(entry) and not targetCanHostSubprocess(project.target) 'noProcessSpawnPrimitive'
+		site.file(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).")
+		return
+	end 'noProcessSpawnPrimitive'
+
+	// ⭐⭐ **A `__Raw` ENTRY IS REPORTED IN ITS OWN WORDS, BECAUSE IT NAMES NO SYMBOL.** The crossing is
+	// the same crossing and the code is the same E3104; what differs is that there is no runtime entry
+	// between a raw row and the machine, so the ordinary sentence would send the reader looking for a
+	// symbol that does not exist.
+	if isRawIntrinsicCallee(entry) 'aRawMachineOperation'
+		reportRawIntrinsicUnsupported(project, site: site, subject: "'{String.from(noun)}'", intrinsic: rawIntrinsicNamed(entry))
+		return
+	end 'aRawMachineOperation'
+
+	reportTargetUnsupportedCallee(project, site: site, subject: "'{String.from(noun)}'", entry: entry)
+end 'reportSubstrateCrossing'
 
 // ⭐⭐ **THE TARGET GATE FOR A CONSTRUCT WHOSE RUNTIME ENTRY IS MINTED AT LOWERING** —
 // `requireTargetSupportsCallee`'s twin for the ops that carry no callee name. The split is exactly
@@ -4883,24 +4921,21 @@ function requireTargetSupportsServiceEntry(project Project, func IrFunction, opI
 		return
 	end 'theSubstrateIsHere'
 
-	reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: subject, entry: entry)
+	reportTargetUnsupportedCallee(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), subject: subject, entry: entry)
 end 'requireTargetSupportsServiceEntry'
 
 // ⚠ **THE `__Raw` FLOOR'S OWN WIRE FORMAT, AND IT DOES NOT NAME A RUNTIME ENTRY.** That difference is the
 // whole of what `__Raw` is: there is no symbol between a row and the machine, so the sentence below would
 // send the reader looking for something that does not exist. The CODE is the same E3104 and the span is the
 // same crossing — only the noun differs.
-function reportRawIntrinsicUnsupported(project Project, func IrFunction, opIndex ElementIndex, subject String, intrinsic RawIntrinsic)
-	let callRange = project.opRanges.get(opIndex)
-	fileSecondary(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+function reportRawIntrinsicUnsupported(project Project, site BlameSite, subject String, intrinsic RawIntrinsic)
+	site.file(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide")
 end 'reportRawIntrinsicUnsupported'
 
 // The one wire format of E3104 for a callee, so the two subjects cannot drift into two spellings of one
-// rejection. The span is materialized HERE rather than at the gate because `SourceRangeTable.get` builds a
-// heap `SourceRange` and this is the cold path — the gate itself runs over every call op of every function.
-function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex ElementIndex, subject String, entry ByteArray)
-	let callRange = project.opRanges.get(opIndex)
-	fileSecondary(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+// rejection.
+function reportTargetUnsupportedCallee(project Project, site BlameSite, subject String, entry ByteArray)
+	site.file(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation")
 end 'reportTargetUnsupportedCallee'
 
 // What this pass has to say about taking a named function's ADDRESS: the target gate every call op gets, and
@@ -4961,18 +4996,11 @@ end 'requireFunctionValueTargetTakesNoWitness'
 // ⭐⭐ **WHICH OF TWO SUBSTRATE ENTRIES A STDLIB BODY REACHES IS THE ONE ITS CROSSING IS REPORTED FOR — AND
 // THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**
 //
-// `StdlibSource.SubstrateFixpoint` records ONE entry per stdlib function, and *"the first a body names wins,
-// because a body naming two is refused for either and both are equally true of it"* holds only while every
-// entry produces the same E3104 differing in the name it quotes. It does not:
-// `requireTargetSupportsCallee` reads the entry to CHOOSE THE
-// DIAGNOSTIC — a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist here*, with a `#if`
-// to write) and every other answers E3104 (*this target has no lowering for the entry yet*). Those are
-// different claims with different advice, so a body reaching both must not have its code decided by which
-// seed the worklist drained first.
-//
-// ⚠ **NO STDLIB BODY IN THE CORPUS REACHES BOTH BANDS TODAY, so the old rule was stable BY ACCIDENT OF THE
-// CORPUS rather than by construction** — which is exactly the kind of accident this project keeps paying for.
-// The rank is stated here, beside the arm that reads the entry, so the choice and its reason are one fact.
+// `StdlibSource.SubstrateFixpoint` records ONE entry per stdlib function, and `requireTargetSupportsCallee`
+// reads it to CHOOSE THE DIAGNOSTIC — a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist
+// here*, with a `#if` to write) and every other answers E3104 (*this target has no lowering for the entry
+// yet*). Those are different claims with different advice, so a body reaching both must not have its code
+// decided by which seed the worklist drained first.
 //
 // The permanent claim outranks the provisional one: E3074 is a fact about WASI that no compiler
 // change can alter, while E3104 is a statement about this compiler's progress. Telling a user "not
@@ -4981,11 +5009,22 @@ end 'requireFunctionValueTargetTakesNoWitness'
 // ⭐ **AND A `__Raw` ROW RANKS BELOW A NAMED ENTRY, FOR THE SAME KIND OF REASON READ THE OTHER WAY.** A row
 // is the floor under a runtime entry rather than a peer of one, so a body that reaches both is better
 // described by the entry: that sentence names a SYMBOL the reader can look up, where the row's names an
-// instruction. The rank also keeps this landing behaviour-neutral for every crossing that already had an
-// answer — a raw seed can only ever take a node no named entry reached.
-export function substrateEntryOutranks(candidate ByteArray, incumbent ByteArray) returns bool
+// instruction, and a raw seed can only ever take a node no named entry reached.
+function substrateEntryOutranks(candidate ByteArray, incumbent ByteArray) returns bool
 	return substrateEntryRank(candidate) > substrateEntryRank(incumbent)
 end 'substrateEntryOutranks'
+
+export function substrateEntryIsPreferred(candidate ByteArray, incumbent ByteArray) returns bool
+	if substrateEntryOutranks(candidate, incumbent: incumbent) 'aHigherClaim'
+		return true
+	end 'aHigherClaim'
+
+	if substrateEntryOutranks(incumbent, incumbent: candidate) 'aLowerClaim'
+		return false
+	end 'aLowerClaim'
+
+	return compareBytesOrdinally(candidate, right: incumbent) == Ordering.lessThan
+end 'substrateEntryIsPreferred'
 
 // The three claims a substrate entry can make, ordered by which sentence serves the reader of a crossing
 // best. Named rather than compared inline so the order is one statement instead of a chain of tests whose
