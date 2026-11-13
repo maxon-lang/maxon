@@ -20,16 +20,11 @@ let ProfileSavedFrameCodeBytesOffsetName = "ProfileSavedFrameCodeBytesOffset"
 let ProfileSavedFrameSlotBaseOffsetName = "ProfileSavedFrameSlotBaseOffset"
 let ProfileSavedFrameRecordFieldOffsetName = "ProfileSavedFrameRecordFieldOffset"
 let ProfileSavedFrameCopyOffsetName = "ProfileSavedFrameCopyOffset"
-let ProfileSavedFrameRecordBytesName = "ProfileSavedFrameRecordBytes"
 let ProfileSavedFramePcWordName = "ProfileSavedFramePcWord"
 let ProfileSavedFrameSpWordName = "ProfileSavedFrameSpWord"
 let ProfileSavedFrameFpWordName = "ProfileSavedFrameFpWord"
 let ProfileSavedFrameWindowBytesOffsetName = "ProfileSavedFrameWindowBytesOffset"
-let ProfileSavedFrameThreadInfoOffsetName = "ProfileSavedFrameThreadInfoOffset"
-let ProfileSavedFrameWordsOffsetName = "ProfileSavedFrameWordsOffset"
-let ProfileSavedFrameRegionOffsetName = "ProfileSavedFrameRegionOffset"
 let ProfileSavedFrameFixedRecordOffsetName = "ProfileSavedFrameFixedRecordOffset"
-let ProfileSavedFrameRecordAddressOffsetName = "ProfileSavedFrameRecordAddressOffset"
 let ProfileSavedFrameWindowAddressOffsetName = "ProfileSavedFrameWindowAddressOffset"
 let ProfileSampleThreadGoneName = "ProfileSampleThreadGone"
 let ProfileSampleNoRegistersName = "ProfileSampleNoRegisters"
@@ -52,6 +47,10 @@ let StackReadChunkBytesName = "StackReadChunkBytes"
 
 let Win64MbiBaseAddressOffset = 0
 let Win64MbiRegionSizeOffset = 24
+let Win64SavedFrameThreadInfoOffset = 128
+let Win64SavedFrameWordsOffset = 176
+let Win64SavedFrameRegionOffset = 192
+let Win64SavedFrameRecordAddressOffset = 248
 let MachArmThreadState64 = 6
 let MachArmThreadState64Words = 68
 let SeizedTablePidOffset = 0
@@ -69,7 +68,9 @@ let TraceStopBudgetMillisName = "TraceStopBudgetMillis"
 
 // The Win64 `CONTEXT` and region-record layout, the Mach thread-state layout and the ptrace seized-thread
 // table that the runtime shares with `stdlib/Debuggee.maxon` and `stdlib/Sampler.maxon`, read from those
-// files' own constants so the compiler holds no second copy to drift. Which sampler layout a lane reads is
+// files' own constants so the compiler holds no second copy to drift. The saved-frame scratch offsets
+// (`Win64SavedFrame*Offset`) and the record size are the exception: they are held here and checked
+// against the sampler's own words. Which sampler layout a lane reads is
 // `ProfileRuntime.profileHostShapeOf`'s answer, the one the entries are built by.
 export type HostContextLayout
 	export var contextFlagsOffset as FullRangeInt
@@ -174,20 +175,24 @@ export type HostContextLayout
 		self.savedFrameSlotBaseOffset = signatures.integerConstantIn(ProfileSavedFrameSlotBaseOffsetName, filePath: sampler)
 		self.savedFrameRecordFieldOffset = signatures.integerConstantIn(ProfileSavedFrameRecordFieldOffsetName, filePath: sampler)
 		self.savedFrameCopyOffset = signatures.integerConstantIn(ProfileSavedFrameCopyOffsetName, filePath: sampler)
-		self.savedFrameRecordBytes = signatures.integerConstantIn(ProfileSavedFrameRecordBytesName, filePath: sampler)
+		self.savedFrameRecordBytes = (MOffSavedFrameFp - MOffSavedFramePc + MachineWordBytes) as FullRangeInt
 		self.savedFramePcWord = signatures.integerConstantIn(ProfileSavedFramePcWordName, filePath: sampler)
 		self.savedFrameSpWord = signatures.integerConstantIn(ProfileSavedFrameSpWordName, filePath: sampler)
 		self.savedFrameWindowBytesOffset = signatures.integerConstantIn(ProfileSavedFrameWindowBytesOffsetName, filePath: sampler)
-		self.savedFrameThreadInfoOffset = signatures.integerConstantIn(ProfileSavedFrameThreadInfoOffsetName, filePath: sampler)
-		self.savedFrameWordsOffset = signatures.integerConstantIn(ProfileSavedFrameWordsOffsetName, filePath: sampler)
-		self.savedFrameRegionOffset = signatures.integerConstantIn(ProfileSavedFrameRegionOffsetName, filePath: sampler)
 		self.savedFrameFixedRecordOffset = signatures.integerConstantIn(ProfileSavedFrameFixedRecordOffsetName, filePath: sampler)
-		self.savedFrameRecordAddressOffset = signatures.integerConstantIn(ProfileSavedFrameRecordAddressOffsetName, filePath: sampler)
 		self.savedFrameWindowAddressOffset = signatures.integerConstantIn(ProfileSavedFrameWindowAddressOffsetName, filePath: sampler)
+		self.savedFrameThreadInfoOffset = Win64SavedFrameThreadInfoOffset
+		self.savedFrameWordsOffset = Win64SavedFrameWordsOffset
+		self.savedFrameRegionOffset = Win64SavedFrameRegionOffset
+		self.savedFrameRecordAddressOffset = Win64SavedFrameRecordAddressOffset
 
-		if (MOffSavedFrameSp - MOffSavedFramePc) as FullRangeInt != self.savedFrameSpWord - self.savedFramePcWord or (MOffSavedFrameFp - MOffSavedFramePc) as FullRangeInt != signatures.integerConstantIn(ProfileSavedFrameFpWordName, filePath: sampler) - self.savedFramePcWord or self.savedFrameRecordBytes != (MOffSavedFrameFp - MOffSavedFramePc + MachineWordBytes) as FullRangeInt 'savedFrameDrifted'
+		if (MOffSavedFrameSp - MOffSavedFramePc) as FullRangeInt != self.savedFrameSpWord - self.savedFramePcWord or (MOffSavedFrameFp - MOffSavedFramePc) as FullRangeInt != signatures.integerConstantIn(ProfileSavedFrameFpWordName, filePath: sampler) - self.savedFramePcWord or self.savedFrameCopyOffset + self.savedFrameRecordBytes > self.savedFrameWindowBytesOffset 'savedFrameDrifted'
 			panic("HostContextLayout.readWin32Sampler: {SamplerStdlibFileName} lays out the saved frame's program counter, stack pointer and frame pointer differently from the machine record in SchedRuntime — `__prof_sample` copies the record's words into its scratch as one block, so the two layouts must agree")
 		end 'savedFrameDrifted'
+
+		if self.savedFrameThreadInfoOffset < self.savedFrameWindowBytesOffset + (MachineWordBytes as FullRangeInt) or self.savedFrameRegionOffset + self.regionRecordBytes > self.savedFrameFixedRecordOffset or self.savedFrameRecordAddressOffset + (MachineWordBytes as FullRangeInt) > self.savedFrameWindowAddressOffset 'savedFrameScratchOverlaps'
+			panic("HostContextLayout.readWin32Sampler: the scratch words `__prof_sample` keeps for the saved frame (thread information, slot words, second region record, record address) overlap the ones {SamplerStdlibFileName} reads — the two files share one scratch block, so the offsets must not collide")
+		end 'savedFrameScratchOverlaps'
 
 		self.sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
 		self.sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
