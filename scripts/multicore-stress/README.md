@@ -136,10 +136,11 @@ family a program is in decides what its rows mean**, so it is the first column h
   victim service, 400 times with a varying head start. Every message the send accepted must run:
   the victim's tally must equal the sender's accepted count. Exit 3 is a lost message, 4 a queue that
   never drained.
-- **`cown-send-wait-torture.maxon`** — eight sender services each send 2,500 messages, with a 1 ms or a
-  50 ms `sendTimeout:`, to one sink of capacity 4. Every send is delivered or handed back
+- **`cown-send-wait-torture.maxon`** — eight coroutines of `main` (a message cannot make a timed send,
+  E3221) each send 1,000 messages, with a 1 ms or a 50 ms `sendTimeout:`, to one sink of capacity 4
+  whose handler does a fixed amount of work per message. Every send is delivered or handed back
   `mailboxFull`, and the sink must run exactly the delivered ones. Exit 3 is a delivered message the
-  sink never ran, 4 a send neither delivered nor refused.
+  sink never ran, 4 a send neither delivered nor refused, 5 a refusal that handed no payload back.
 - **`cown-multi-torture.maxon`** — `CownTorture.violations`, the multi-cown acquire's mutual-exclusion
   check ([`CownTorture`](../../docs/STDLIB_REFERENCE.md#cowntorture)). Exit 1 is a violation.
 - **`refcount-service-refused.maxon`** — a **MUST-NOT-COMPILE** entry: `refcount-torture` written

@@ -2,18 +2,22 @@
 // delivered or handed back, and the sink's `taken` must equal `delivered`. The even-numbered senders
 // use the 1 ms timeout so timer expiry races admission of a waiting sender; the others wait 50 ms.
 typealias Integer = int(i64.min to i64.max)
-typealias Tally = SharedValue with Integer
-typealias SenderHandleArray = Array with Sender.handle
+typealias BurstPromise = Promise with Burst
+typealias BurstPromiseArray = Array with BurstPromise
 
 let senderCount = 8
-let messagesPerSender = 2500
+let messagesPerSender = 1000
 let attempted = senderCount * messagesPerSender
 let sinkCapacity = 4
 let quickTimeoutMs = 1
 let patientTimeoutMs = 50
+let sinkWorkSteps = 40000
+let workMultiplier = 31
+let workModulus = 1000003
 let pollLimit = 400000
 let exitLost = 3
 let exitUnbalanced = 4
+let exitNotHandedBack = 5
 
 type Sink
 	var taken as Integer
@@ -26,6 +30,13 @@ type Sink
 	export function take(s String)
 		self.taken = self.taken + 1
 		self.bytes = self.bytes + (s.byteLength() as Integer)
+
+		var step = 0 as Integer
+
+		while step < sinkWorkSteps 'work'
+			self.bytes = (self.bytes * workMultiplier + step) mod workModulus
+			step = step + 1
+		end 'work'
 	end 'take'
 
 	export function reportTaken() returns Integer
@@ -33,84 +44,74 @@ type Sink
 	end 'reportTaken'
 end 'Sink'
 
-type Sender
-	var id as Integer
-	var delivered as Tally
-	var refused as Tally
-	var handedBack as Integer
+type Burst
+	export var delivered as Integer
+	export var refused as Integer
+	export var handedBack as Integer
 
-	static function create(id Integer, delivered Tally, refused Tally) returns Self
-		return Self{id: id, delivered: delivered, refused: refused, handedBack: 0}
+	static function create(delivered Integer, refused Integer, handedBack Integer) returns Self
+		return Self{delivered: delivered, refused: refused, handedBack: handedBack}
 	end 'create'
+end 'Burst'
 
-	export function run(sink Sink.handle, count Integer, quick bool)
-		let timeoutMs = quickTimeoutMs if quick else patientTimeoutMs
-		var deliveredHere = 0 as Integer
-		var refusedHere = 0 as Integer
-		var r = 0 as Integer
+function sendBurst(sink Sink.handle, id Integer, count Integer, quick bool) returns Burst
+	let timeoutMs = quickTimeoutMs if quick else patientTimeoutMs
+	var delivered = 0 as Integer
+	var refused = 0 as Integer
+	var handedBack = 0 as Integer
+	var r = 0 as Integer
 
-		while r < count 'eachMessage'
-			let payload = "wait {self.id}:{r}"
+	while r < count 'eachMessage'
+		let payload = "wait {id}:{r}"
 
-			try sink.take(payload, sendTimeout: timeoutMs) otherwise (e) 'refused'
-				match e 'why'
-					mailboxFull(back) then self.handedBack = self.handedBack + (back.byteLength() as Integer)
-					serviceStopped(back) then self.handedBack = self.handedBack + (back.byteLength() as Integer)
-				end 'why'
+		try sink.take(payload, sendTimeout: timeoutMs) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then handedBack = handedBack + (back.byteLength() as Integer)
+				serviceStopped(back) then handedBack = handedBack + (back.byteLength() as Integer)
+			end 'why'
 
-				refusedHere = refusedHere + 1
-				r = r + 1
-				continue
-			end 'refused'
-
-			deliveredHere = deliveredHere + 1
+			refused = refused + 1
 			r = r + 1
-		end 'eachMessage'
+			continue
+		end 'refused'
 
-		self.add(self.delivered, by: deliveredHere)
-		self.add(self.refused, by: refusedHere)
-	end 'run'
+		delivered = delivered + 1
+		r = r + 1
+	end 'eachMessage'
 
-	function add(cell Tally, by Integer)
-		while true 'retry'
-			let seen = cell.current()
-
-			if cell.publish(seen + by, replacing: seen) 'landed'
-				break
-			end 'landed'
-		end 'retry'
-	end 'add'
-end 'Sender'
+	return Burst.create(delivered, refused: refused, handedBack: handedBack)
+end 'sendBurst'
 
 function main() returns ExitCode
 	let sink = spawn(capacity: sinkCapacity) Sink.create()
-	let delivered = Tally.create(0 as Integer)
-	let refused = Tally.create(0 as Integer)
-	let senders = SenderHandleArray.create(0)
+	let bursts = BurstPromiseArray.create(0)
 	var i = 0 as Integer
 
-	while i < senderCount 'spawnEach'
-		senders.push(spawn Sender.create(i, delivered: delivered.clone(), refused: refused.clone()))
+	while i < senderCount 'startEach'
+		bursts.push(async sendBurst(sink.clone(), id: i, count: messagesPerSender, quick: i mod 2 == 0))
 		i = i + 1
-	end 'spawnEach'
-
-	var k = 0 as ElementIndex
-
-	while k < senderCount 'startEach'
-		let sender = try senders.get(k) otherwise panic("cown-send-wait-torture: senders.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		try sender.run(sink.clone(), count: messagesPerSender, quick: k mod 2 == 0) otherwise panic("cown-send-wait-torture: a fresh sender refused its only message")
-		k = k + 1
 	end 'startEach'
 
-	var polls = 0 as Integer
+	var delivered = 0 as Integer
+	var refused = 0 as Integer
+	var handedBack = 0 as Integer
 
-	while delivered.current() + refused.current() < attempted and polls < pollLimit 'waitForTheSenders'
-		Scheduler.yield()
-		polls = polls + 1
-	end 'waitForTheSenders'
+	for burst in bursts 'collect'
+		let done = await burst
 
-	if delivered.current() + refused.current() != attempted 'unbalanced'
-		print("delivered={delivered.current()} refused={refused.current()} attempted={attempted}\n")
+		delivered = delivered + done.delivered
+		refused = refused + done.refused
+		handedBack = handedBack + done.handedBack
+	end 'collect'
+
+	if refused > 0 and handedBack == 0 'neverHandedBack'
+		print("refused={refused} handedBack={handedBack}\n")
+
+		return exitNotHandedBack
+	end 'neverHandedBack'
+
+	if delivered + refused != attempted 'unbalanced'
+		print("delivered={delivered} refused={refused} attempted={attempted}\n")
 
 		return exitUnbalanced
 	end 'unbalanced'
@@ -118,19 +119,19 @@ function main() returns ExitCode
 	var taken = 0 as Integer
 	var settles = 0 as Integer
 
-	while taken != delivered.current() and settles < pollLimit 'waitForTheSink'
-		let pending = try sink.reportTaken() otherwise panic("cown-send-wait-torture: a running sink with room takes the send")
+	while taken != delivered and settles < pollLimit 'waitForTheSink'
+		let pending = try sink.reportTaken(sendTimeout: ForeverMs) otherwise panic("cown-send-wait-torture: a running sink takes the send once the senders have finished")
 		taken = await pending
 		Scheduler.yield()
 		settles = settles + 1
 	end 'waitForTheSink'
 
-	print("delivered={delivered.current()}\n")
-	print("refused={refused.current()}\n")
+	print("delivered={delivered}\n")
+	print("refused={refused}\n")
 	print("taken={taken}\n")
 	print("procs={Scheduler.processorCount()}\n")
 
-	if taken != delivered.current() 'lost'
+	if taken != delivered 'lost'
 		return exitLost
 	end 'lost'
 
