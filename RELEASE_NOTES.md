@@ -43,6 +43,14 @@ release's version as its heading when the release is cut.
   Fix: pass the handle as an argument to the call that needs it instead of capturing it, or keep the function value
   out of the service's state.
 
+- A service type's state may not hold an interface value while a generic builds a conformer of that interface at a
+  type parameter. `Wrap with T` that returns a `Gen with T` as a `Sink` makes, for `Wrap with Echo.handle`, a
+  `Gen with Echo.handle` that no source text spells, so a state field `var sink as Sink` reaches the handle of every
+  service, and a cycle through it is E4014. The rule does not trace which instantiation is stored, so it also refuses
+  a program whose interface field and parametric conformer never meet.
+  Fix: pass the handle as an argument to the call that needs it, keep the interface value out of the service's state,
+  or build the conformer at a concrete type instead of a type parameter.
+
 - A message or a `spawn` factory that may wait on another party while it holds its own service is E3221, and E3139,
   the await-cycle check, is removed. Waiting is an `await` of a message reply or of a promise whose coroutine the
   compiler cannot see, `awaitAny`, a send with a positive `sendTimeout:`, an `acquire`, the spawn of a throwing

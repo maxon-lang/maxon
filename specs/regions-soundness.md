@@ -9193,3 +9193,145 @@ true false
 ```exitcode
 0
 ```
+
+<!-- test: error.a-match-over-a-union-parameter-with-an-isolated-payload-leaves-the-modify-root-read-only -->
+`u` is lent to the function, so the `match` over it opens the payload's region for the whole statement and the arm cannot write the root of the enclosing `modify bx`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Bx
+	export var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+function viaParam(bx isolated Bx, u Ub)
+	modify bx 'w'
+		match u 'm'
+			u0 then print("none\n")
+			u1(b) then bx.n = b.n
+		end 'm'
+	end 'w'
+end 'viaParam'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	viaParam(bx, u: Ub.u1(Bx.create(1)))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:21:15: cannot write 'n' through 'bx', which is read-only while 'the isolated value' is open
+```
+
+<!-- test: error.a-match-over-a-field-with-an-isolated-payload-leaves-the-modify-root-read-only -->
+`h` is outer data inside `modify bx`, so `h.slot` is read-only there, and the `match` over it still opens the payload's region: the arm cannot write the root.
+```maxon
+typealias Code = int(0 to 999)
+
+type Bx
+	export var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Hd
+	export var slot as Ub
+
+	static function create() returns Self
+		return Self{slot: Ub.u1(Bx.create(1))}
+	end 'create'
+end 'Hd'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let h = Hd.create()
+
+	modify bx 'w'
+		match h.slot 'm'
+			u0 then print("none\n")
+			u1(b) then bx.n = b.n
+		end 'm'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:32:15: cannot write 'n' through 'bx', which is read-only while 'the isolated value' is open
+```
+
+<!-- test: error.a-match-arm-over-a-union-with-an-isolated-payload-cannot-wait-once-it-has-read-the-payload -->
+Reading `b.n` opens the payload's region for the statement, and `waits(s)` in the same statement may park the coroutine while it is open.
+```maxon
+typealias Code = int(0 to 999)
+
+type Bx
+	export var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Hd
+	export var slot as Ub
+
+	static function create() returns Self
+		return Self{slot: Ub.u1(Bx.create(1))}
+	end 'create'
+end 'Hd'
+
+type S
+	var served as Code
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function plain() returns Code
+		return 5
+	end 'plain'
+end 'S'
+
+function waits(s S.handle) returns Code
+	return try await s.plain() otherwise 0
+end 'waits'
+
+function fieldReadFirst(h Hd, s S.handle) returns Code
+	return match h.slot 'm'
+		u0 gives 0
+		u1(b) gives b.n + waits(s)
+	end 'm'
+end 'fieldReadFirst'
+
+function main() returns ExitCode
+	let s = spawn S.create()
+	let h = Hd.create()
+	print("{fieldReadFirst(h, s: s)}\n")
+	s.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3205: <fragment>:44:21: cannot call 'waits' inside 'the isolated value'; it may wait (it awaits a reply from 'S' at line 38). Call it before or after the block
+```

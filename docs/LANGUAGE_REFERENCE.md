@@ -5640,9 +5640,12 @@ factory `await`s or `.cancel()`s the coroutines it starts before it returns, and
 state that holds a handle to the service itself keeps it alive for ever. That is
 [E4014](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e4014), with the cycle in the message: a field `var me as
 Echo.handle`; two services whose states hold each other's handles (`Ping` holds a `Pong.handle` and `Pong` holds a
-`Ping.handle`); an interface handle whose conformers include the service; and a function-valued field, union
+`Ping.handle`); an interface handle whose conformers include the service; a function-valued field, union
 payload or container element while some closure in the program captures a handle that reaches the service,
-because a function type does not say what its closure captured. Pass the handle with each message
+because a function type does not say what its closure captured; and an interface-typed field, union payload or
+container element while some generic instance that implements the interface is built at a type parameter (a
+`Wrap with T` that hands out a `Gen with T` as a `Sink`), because the instance a caller's `T` makes is written
+nowhere and may hold any handle. Pass the handle with each message
 (`start(oracle Oracle.handle, me Asker.handle)`), which keeps it only for the message, or give the services
 distinct types. A chain of distinct services, each holding the next one's handle, is not a cycle.
 

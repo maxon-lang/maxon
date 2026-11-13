@@ -60,6 +60,8 @@ end 'TypeCycleTarget'
 
 let ClosureValueNodeName = b"function value"
 
+let TypeArgumentNodeName = b"type argument"
+
 // The node a `MaxonType` interned in `typeNames` points at. `named` and `structRef` are ONE arm because the
 // split between them is about how a value is TAGGED (a union value carries `named`, a struct `structRef`)
 // and this check asks only what the reference NAMES — the same question `ProgramSignatures.namedIdentityOf` answers one
@@ -553,6 +555,7 @@ function buildTypeReferenceGraph(project Project, module MaxonModule, signatures
 	end 'eachInterfaceHandleName'
 
 	graph.declareAggregate(ClosureValueNodeName)
+	graph.declareAggregate(TypeArgumentNodeName)
 
 	for (name, layout) in project.structTypes 'eachStruct'
 		let owner = graph.nodeOfDeclaredAggregate(name)
@@ -623,8 +626,13 @@ end 'claimCapturedNodes'
 function addServiceHandleEdges(signatures ProgramSignatures, graph TypeCycleGraph)
 	let serviceHandles = signatures.serviceHandleNames()
 
+	let typeArgument = graph.nodeOfDeclaredAggregate(TypeArgumentNodeName)
+
 	for handleName in serviceHandles 'eachServiceHandle'
-		graph.addEdge(graph.nodeOfDeclaredAggregate(handleName), target: TypeCycleTarget.aggregate(signatures.serviceOfHandle(handleName)), label: TypeCycleEdgeLabel.element)
+		let handle = graph.nodeOfDeclaredAggregate(handleName)
+
+		graph.addEdge(handle, target: TypeCycleTarget.aggregate(signatures.serviceOfHandle(handleName)), label: TypeCycleEdgeLabel.element)
+		graph.pushEdge(typeArgument, held: handle, label: TypeCycleEdgeLabel.element)
 	end 'eachServiceHandle'
 
 	for interfaceHandle in signatures.interfaceHandleNames() 'eachInterfaceHandle'
@@ -739,6 +747,10 @@ function addInstanceConformerEdges(project Project, signatures ProgramSignatures
 
 		// A mangled instance name is claimed by no `implements` and no intrinsic row — the property that makes
 		// a non-conforming array fail E3017 — so nothing may widen from it and it owes no edge.
-		unreduced then break
+		unreduced then return
 	end 'reduction'
+
+	if signatures.instanceIsBuiltOnATypeParameter(id) 'aParametricConformer'
+		graph.addEdge(conformer, target: TypeCycleTarget.aggregate(TypeArgumentNodeName), label: TypeCycleEdgeLabel.element)
+	end 'aParametricConformer'
 end 'addInstanceConformerEdges'

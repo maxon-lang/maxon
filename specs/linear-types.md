@@ -4096,3 +4096,236 @@ error E3213: <fragment>:30:2: this drops a promise that was never awaited, cance
 error E3213: <fragment>:32:2: this drops 'p', which was never awaited, cancelled, stored or returned: `await p`, call `p.cancel()`, store it or return it
 error E3223: <fragment>:32:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
+
+<!-- test: an-outer-linear-union-matched-in-a-modify-block-cannot-hand-its-payload-to-a-keeping-parameter -->
+`u` is declared outside `modify bx`, so inside the block it and the payload its `match` binds are read-only, and `giveS` keeps its parameter: the payload would become part of a union built inside the open region.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Bag
+	var n as Code
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Bag'
+
+function giveS(r Resp) returns Sent
+	return Sent.notSent(r)
+end 'giveS'
+
+function useS(s Sent)
+	match s 'm'
+		ok then print("ok\n")
+		notSent(r) then r.fin()
+	end 'm'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bag.create() as isolated Bag
+	let u = Sent.notSent(Resp.create(1))
+
+	modify bx 'w'
+		match u 'm'
+			ok then print("ok\n")
+			notSent(q) then useS(giveS(q))
+		end 'm'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:48:31: 'giveS' needs a writable parameter 'r' at line 31; 'q' is read-only while 'w' is open
+```
+
+<!-- test: an-outer-linear-union-matched-in-a-modify-block-cannot-hand-its-payload-to-a-consuming-receiver-that-keeps-it -->
+`wrap` takes `consuming self` and returns it inside a new union, so its receiver is a parameter it keeps, and the payload bound from the outer `u` is read-only inside `modify bx`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+
+	function wrap(consuming self) returns Sent
+		return Sent.notSent(self)
+	end 'wrap'
+end 'Resp'
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Bag
+	var n as Code
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Bag'
+
+function useS(s Sent)
+	match s 'm'
+		ok then print("ok\n")
+		notSent(r) then r.fin()
+	end 'm'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bag.create() as isolated Bag
+	let u = Sent.notSent(Resp.create(1))
+
+	modify bx 'w'
+		match u 'm'
+			ok then print("ok\n")
+			notSent(q) then useS(q.wrap())
+		end 'm'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:48:25: 'wrap' needs a writable receiver at line 17; 'q' is read-only while 'w' is open
+```
+
+<!-- test: an-outer-linear-union-matched-in-a-modify-block-cannot-build-a-union-around-its-payload -->
+Building `Sent.notSent(q)` inside `modify bx` stores the read-only payload into a value of the open region.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Bag
+	var n as Code
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Bag'
+
+function useS(s Sent)
+	match s 'm'
+		ok then print("ok\n")
+		notSent(r) then r.fin()
+	end 'm'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bag.create() as isolated Bag
+	let u = Sent.notSent(Resp.create(1))
+
+	modify bx 'w'
+		match u 'm'
+			ok then print("ok\n")
+			notSent(q) then useS(Sent.notSent(q))
+		end 'm'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:44:38: cannot store a read-only 'Resp' into 'Sent.notSent.r' while 'w' is open; store a copy
+```
+
+<!-- test: an-outer-linear-union-matched-in-a-modify-block-may-consume-its-payload -->
+<!-- procs: 1 -->
+A finalizer that only destroys its receiver keeps nothing, so the payload of the outer `u` is consumed inside `modify bx` and the block leaves the union moved.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Bag
+	export var n as Code
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	let bx = Bag.create() as isolated Bag
+	let u = Sent.notSent(Resp.create(1))
+
+	modify bx 'w'
+		match u 'm'
+			ok then print("ok\n")
+			notSent(q) then q.fin()
+		end 'm'
+
+		bx.n = 2
+	end 'w'
+
+	print("done\n")
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+done
+```
+```exitcode
+0
+```

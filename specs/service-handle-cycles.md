@@ -24,6 +24,13 @@ E4014. The rule is conservative: it does not trace which closure is stored where
 cannot share a program with a closure that captures a handle reaching that service, even when the two never meet. Pass the
 handle as an argument to the call that needs it.
 
+A generic instance that implements an interface, built at a type parameter of another generic (a `Wrap with T` that hands
+out a `Gen with T` as a `Sink`), is an instance no source text spells, and a caller's `T` may be any handle. A service state
+that holds the interface, in a field, a union payload or a container element, therefore reaches the handle of every service
+whenever such an instance exists, and a cycle through it is the same E4014. The rule does not trace which instantiation a
+state holds, so a service with an interface-typed field cannot share a program with a generic that builds a conformer of that
+interface at a type parameter, even when the two never meet.
+
 A handle that a message carries is not state: it lives only until the message returns. A chain of distinct services, each
 holding the next one's handle, is not a cycle.
 
@@ -543,4 +550,134 @@ end 'main'
 ```
 ```stdout
 answer 42
+```
+
+<!-- test: a-service-keeping-a-conformer-built-at-a-type-parameter-is-refused -->
+`Wrap with T` hands out a `Gen with T` as a `Sink`, so used as `Wrap with Echo.handle` it builds a `Gen with Echo.handle` that no source text spells. `Echo` keeps a `Sink` in its state and `put` stores one of those, so the state reaches its own handle through an instance the program never writes: a conformer built at a type parameter stands for a holder of any service handle.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Sink
+	function take(mutable self, by Tally)
+end 'Sink'
+
+type Gen uses T implements Sink
+	var held as T
+	var seen as Tally
+
+	static function create(held T) returns Self
+		return Self{held: held, seen: 0}
+	end 'create'
+
+	function take(mutable self, by Tally)
+		self.seen = self.seen + by
+	end 'take'
+end 'Gen'
+
+type Wrap uses T
+	var seed as T
+
+	static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function asSink() returns Sink
+		return Gen.create(self.seed)
+	end 'asSink'
+end 'Wrap'
+
+typealias TallyGen = Gen with Tally
+typealias EchoWrap = Wrap with Echo.handle
+
+type Echo
+	var sink as Sink
+
+	static function create() returns Self
+		return Self{sink: TallyGen.create(0)}
+	end 'create'
+
+	export function put(me Echo.handle)
+		let wrapped = EchoWrap.create(me)
+		self.sink = wrapped.asSink()
+	end 'put'
+end 'Echo'
+
+function main() returns ExitCode
+	let echo = spawn Echo.create()
+	try echo.put(echo.clone(), sendTimeout: ForeverMs) otherwise return 1
+	echo.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:36:6: type 'Echo' reaches a service handle that reaches it again (via Echo → sink: Sink → Gen with T → type argument → Echo.handle → Echo); a service's handle is counted by its holder, so the cycle is never freed. Pass the handle with each message, or use distinct types
+```
+
+<!-- test: a-conformer-built-at-a-type-parameter-is-accepted-when-no-service-holds-its-interface -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+The same `Wrap with T` and `Gen with T`, built at `Tally`, with a service that keeps a `Gen with Tally` by its own type: no service state holds a `Sink`, so no handle reaches a state through the conformer and the run is clean.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Sink
+	function take(mutable self, by Tally)
+end 'Sink'
+
+type Gen uses T implements Sink
+	var held as T
+	var seen as Tally
+
+	static function create(held T) returns Self
+		return Self{held: held, seen: 0}
+	end 'create'
+
+	function take(mutable self, by Tally)
+		self.seen = self.seen + by
+	end 'take'
+end 'Gen'
+
+type Wrap uses T
+	var seed as T
+
+	static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function asSink() returns Sink
+		return Gen.create(self.seed)
+	end 'asSink'
+end 'Wrap'
+
+typealias TallyGen = Gen with Tally
+typealias TallyWrap = Wrap with Tally
+
+type Echo
+	var gen as TallyGen
+
+	static function create() returns Self
+		return Self{gen: TallyGen.create(0)}
+	end 'create'
+
+	export function put(by Tally)
+		let wrapped = TallyWrap.create(by)
+		let sink = wrapped.asSink()
+		sink.take(1)
+		self.gen.take(2)
+	end 'put'
+end 'Echo'
+
+function main() returns ExitCode
+	let echo = spawn Echo.create()
+	try echo.put(1, sendTimeout: ForeverMs) otherwise return 1
+	echo.shutdown()
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
 ```

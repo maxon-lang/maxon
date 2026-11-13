@@ -1139,3 +1139,113 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:25:3: use of moved value 'pending': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: error.a-reply-answered-in-a-branch-and-after-it-is-refused-without-the-word-reply -->
+No declaration in the program names `Reply`, yet `reply.later()` makes a unique value, so the answer on the branch that ran moves it and the answer after the branch reads a moved value.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Twice
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ask(flag bool) returns Tally throws ReplyStopped
+		let pending = reply.later()
+
+		if flag 'early'
+			pending.answer(1)
+		end 'early'
+
+		pending.answer(2)
+		return
+	end 'ask'
+end 'Twice'
+
+function main() returns ExitCode
+	let twice = spawn Twice.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:3: use of moved value 'pending': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-reply-bound-to-a-second-name-is-refused-without-the-word-reply -->
+`let other = pending` moves the unique `Reply`, so answering `pending` afterwards reads a moved value although no declaration in the program names `Reply`.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Twice
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		let other = pending
+		pending.answer(1)
+		other.answer(2)
+		return
+	end 'ask'
+end 'Twice'
+
+function main() returns ExitCode
+	let twice = spawn Twice.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:12:3: use of moved value 'pending': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.an-outer-union-holding-a-reply-matched-in-a-modify-block-cannot-store-the-reply-into-the-open-region -->
+`pe` is declared outside `modify bx`, so the `Reply` its `match` binds is read-only there, and building `Pe.waiting(q)` into the open `Hold` would store it.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+union Pe
+	none
+	waiting(r TallyReply)
+end 'Pe'
+
+type Hold
+	export var p as Pe
+
+	static function create() returns Self
+		return Self{p: Pe.none}
+	end 'create'
+end 'Hold'
+
+type Gate
+	var served as Tally
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		let pe = Pe.waiting(pending)
+		let bx = Hold.create() as isolated Hold
+
+		modify bx 'w'
+			match pe 'm'
+				none then print("none\n")
+				waiting(q) then bx.p = Pe.waiting(q)
+			end 'm'
+		end 'w'
+
+		return
+	end 'ask'
+end 'Gate'
+
+function main() returns ExitCode
+	let gate = spawn Gate.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:33:39: cannot store a read-only 'TallyReply' into 'Pe.waiting.r' while 'w' is open; store a copy
+```
