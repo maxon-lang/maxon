@@ -16,25 +16,6 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 - repro: a program that reproduces it, or for ci-red the run URL, lane and failing case
 ```
 
-## tests/specHarness's corpus pairing check fails: three fed-run gates have no fixture directory
-- priority: normal
-- status: open
-- where: tests/specHarness/corpus.maxtest:7
-- seen: the spec-suite speed plan's L2 land, by its case author; the three gates
-  (`a-fed-run-that-ends-at-its-childs-exit-sees-the-exit-while-a-process-it-started-writes-without-pause`,
-  `a-fed-run-whose-child-sleeps-without-reading-a-large-feed-ends-at-the-deadline`,
-  `a-fed-run-whose-child-never-reads-its-feed-is-judged-by-its-own-outcome`) share a sibling's fixture.
-  It fails in CI's corpora job on every lane that reaches the corpus; no run URL was read.
-- repro: `maxon test tests/specHarness "--filter=every fixture has its test file"` exits 1 with 3 checks failed
-
-## The gate a-fed-run-whose-child-never-reads-its-feed-is-judged-by-its-own-outcome fails on x64-linux
-- priority: normal
-- status: open
-- where: tests/specHarness/gates/a-fed-run-whose-child-never-reads-its-feed-is-judged-by-its-own-outcome.maxtest:1
-- seen: the spec-suite speed plan's L2 land; its probe, run through `execute`, is killed by signal 13.
-  Reproduced on a clean clone of 02bced2 with the compiler built before L2, so L2 did not cause it.
-- repro: `maxon test tests/specHarness "--filter=a-fed-run-whose-child-never-reads-its-feed"` exits 1
-
 ## Nothing checks that spec-test prints the same stdout at one worker and at several
 - priority: normal
 - status: open
