@@ -40,76 +40,50 @@ export function newFenceCell() returns FenceCell
 end 'newFenceCell'
 
 type FenceMember
-	let handle as Fenceable.handle
-	let arrivals as FenceCell
-	let issued as FenceCell
-	var ticket as FenceTicket
+	export let handle as Fenceable.handle
+	export let arrivals as FenceCell
 
-	static function of(handle Fenceable.handle, arrivals FenceCell, issued FenceCell) returns Self
-		return Self{handle: handle, arrivals: arrivals, issued: issued, ticket: 0}
+	static function of(handle Fenceable.handle, arrivals FenceCell) returns Self
+		return Self{handle: handle, arrivals: arrivals}
 	end 'of'
-
-	function claimTicket() returns FenceTicket
-		while true 'untilClaimed'
-			let seen = self.issued.current()
-			let next = seen + 1
-
-			if self.issued.publish(next, replacing: seen) 'claimed'
-				return next
-			end 'claimed'
-		end 'untilClaimed'
-	end 'claimTicket'
-
-	function sendFence()
-		self.ticket = self.claimTicket()
-
-		// A shared member's fences must reach its mailbox in ticket order: an arrival of a later ticket
-		// would otherwise stand for an earlier settler's messages still queued.
-		while self.arrivals.current() + 1 < self.ticket 'behindAnotherSettler'
-			Scheduler.yield()
-		end 'behindAnotherSettler'
-
-		try self.handle.fence(self.ticket) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull then panic("ServiceFence.settle: an enrolled service's mailbox is full, so it cannot take the fence that waits for its last message to finish")
-				serviceStopped then panic("ServiceFence.settle: an enrolled service stopped while the fence still held its handle")
-			end 'why'
-		end 'refused'
-	end 'sendFence'
-
-	function awaitFence()
-		while self.arrivals.current() < self.ticket 'awaitingTheFence'
-			Scheduler.yield()
-		end 'awaitingTheFence'
-	end 'awaitFence'
 end 'FenceMember'
 
 typealias FenceMemberArray = Array with FenceMember
 
 export type ServiceFence
 	var members as FenceMemberArray
+	var ticket as FenceTicket
 
 	export static function create() returns ServiceFence
-		return Self{members: FenceMemberArray.create(0)}
+		return Self{members: FenceMemberArray.create(0), ticket: 0}
 	end 'create'
 
 	export function enroll(handle Fenceable.handle, arrivals FenceCell)
-		self.members.push(FenceMember.of(handle, arrivals: arrivals, issued: newFenceCell()))
+		self.members.push(FenceMember.of(handle, arrivals: arrivals))
 	end 'enroll'
-
-	export function enrollShared(handle Fenceable.handle, arrivals FenceCell, issued FenceCell)
-		self.members.push(FenceMember.of(handle, arrivals: arrivals, issued: issued))
-	end 'enrollShared'
 
 	// A member drops each message's payloads after its handler returns, and runs messages in order, so
 	// an arrived `fence` means no free from an earlier answer is still to come.
 	export function settle()
+		if self.members.count() == 0 'nobodyToWaitFor'
+			return
+		end 'nobodyToWaitFor'
+
+		self.ticket = self.ticket + 1
+
 		for member in self.members 'eachMember'
-			member.sendFence()
+			try member.handle.fence(self.ticket) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull then panic("ServiceFence.settle: an enrolled service's mailbox is full, so it cannot take the fence that waits for its last message to finish")
+					serviceStopped then panic("ServiceFence.settle: an enrolled service stopped while the fence still held its handle")
+				end 'why'
+			end 'refused'
 		end 'eachMember'
 
 		for member in self.members 'eachArrival'
-			member.awaitFence()
+			while member.arrivals.current() < self.ticket 'awaitingTheFence'
+				Scheduler.yield()
+			end 'awaitingTheFence'
 		end 'eachArrival'
 	end 'settle'
 

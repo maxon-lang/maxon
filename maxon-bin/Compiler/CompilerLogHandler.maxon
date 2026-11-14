@@ -27,23 +27,42 @@ enum LogSpecRefusal implements Error
 	unknownLevel
 end 'LogSpecRefusal'
 
+typealias AcknowledgedReceiverSlot = Slot with CompileReceiver.handle
+
 // The trace unit is the handler's own state, so `compilerLogger` reads no module storage. `attribute` arrives through the same mailbox as the records, so the unit
 // it sets precedes every later record from that sender; across senders the last `attribute` wins.
-type CompilerLogHandler implements LogHandler, Fenceable
+type CompilerLogHandler implements LogHandler
 	var unit as TraceUnit
-	let arrivals as FenceCell
+	let acknowledged as AcknowledgedReceiverSlot
+	let tailStall as StallMilliseconds
 
-	static function create(arrivals FenceCell) returns CompilerLogHandler
-		return Self{unit: UnattributedTraceUnit, arrivals: arrivals}
+	static function create() returns CompilerLogHandler
+		return Self{unit: UnattributedTraceUnit, acknowledged: AcknowledgedReceiverSlot.create("CompilerLogHandler.acknowledged"), tailStall: tailStallFromEnvironment()}
 	end 'create'
 
 	export function attribute(traceUnit TraceUnit)
 		self.unit = traceUnit
 	end 'attribute'
 
-	export function fence(ticket FenceTicket)
-		self.arrivals.publish(ticket)
-	end 'fence'
+	export function flush() returns bool
+		return true
+	end 'flush'
+
+	// The acknowledgement is sent through the stored handle so this thread frees nothing after the send: a
+	// free landing after the run reads its counters moves between phase rows
+	// (`identical-cold-compiles-report-identical-memory`).
+	export function flushThen(receiver CompileReceiver.handle)
+		self.acknowledged.replace(receiver)
+		let target = self.acknowledged.held()
+
+		try target.logFlushed(target.clone()) otherwise panic("CompilerLogHandler.flushThen: the run waiting for its log to drain refused the acknowledgement — it holds its handle until the acknowledgement arrives")
+
+		pauseServiceTail(self.tailStall)
+	end 'flushThen'
+
+	export function releaseAcknowledged()
+		self.acknowledged.clear()
+	end 'releaseAcknowledged'
 
 	export function handle(record immutable LogRecord) returns bool
 		let group = recordGroupOf(record)
@@ -58,45 +77,55 @@ type CompilerLogHandler implements LogHandler, Fenceable
 	end 'handle'
 end 'CompilerLogHandler'
 
-// `arrivals` and `issued` are shared by the fence of every compile, so a ticket is unique across jobs
-// and concurrent drivers.
 type CompilerLogRoute
 	export let handler as CompilerLogHandler.handle
-	export let arrivals as FenceCell
-	export let issued as FenceCell
 
-	static function spawned() returns CompilerLogRoute
-		let arrivals = newFenceCell()
-
-		return Self{handler: spawn(capacity: InstrumentationMailboxCapacity) CompilerLogHandler.create(arrivals.clone()), arrivals: arrivals, issued: newFenceCell()}
-	end 'spawned'
+	static function create(handler CompilerLogHandler.handle) returns CompilerLogRoute
+		return Self{handler: handler}
+	end 'create'
 end 'CompilerLogRoute'
 
-// The compiler's one handler, reached by `installCompilerLogHandler`, `attributeCompilerLog` and
-// `compilerLogFence` alike; the `LogSink` default holds it only as a `LogHandler.handle`, which has no
+// The compiler's one handler, reached by `installCompilerLogHandler` and by `compileToProduct`'s
+// `attribute` alike; the `LogSink` default holds it only as a `LogHandler.handle`, which has no
 // `attribute`.
-default CompilerLogRoute = CompilerLogRoute.spawned()
+default CompilerLogRoute = CompilerLogRoute.create(spawn(capacity: InstrumentationMailboxCapacity) CompilerLogHandler.create())
 
 export function installCompilerLogHandler()
 	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 end 'installCompilerLogHandler'
 
-module function attributeCompilerLog(unit TraceUnit)
+module function attributeCompilerLogThen(unit TraceUnit, receiver CompileReceiver.handle)
 	try CompilerLogRoute.current().handler.attribute(unit) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then break
-			serviceStopped then panic("attributeCompilerLog: the compiler's log handler stopped while the process still held its handle")
+			serviceStopped then panic("attributeCompilerLogThen: the compiler's log handler stopped while the process still held its handle")
 		end 'why'
 	end 'refused'
-end 'attributeCompilerLog'
 
-module function compilerLogFence() returns ServiceFence
-	let route = CompilerLogRoute.current()
-	let fence = ServiceFence.create()
-	fence.enrollShared(route.handler.clone() as Fenceable.handle, arrivals: route.arrivals.clone(), issued: route.issued.clone())
+	flushCompilerLogThen(receiver)
+end 'attributeCompilerLogThen'
 
-	return fence
-end 'compilerLogFence'
+// A barrier: the handler is a service, so records still in its mailbox are handled after the sender
+// moves on, allocating inside whatever measured bracket is open by then. A compile flushes before
+// its totals close. The acknowledgement is a message to `receiver`, so a run that holds a service
+// waits for it as a stage and not inside one.
+module function flushCompilerLogThen(receiver CompileReceiver.handle)
+	try CompilerLogRoute.current().handler.flushThen(receiver) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("flushCompilerLogThen: the compiler's log mailbox is full, and a run that holds a service cannot wait for room")
+			serviceStopped then panic("flushCompilerLogThen: the compiler's log handler stopped answering")
+		end 'why'
+	end 'refused'
+end 'flushCompilerLogThen'
+
+module function releaseAcknowledgedCompilerLog()
+	try CompilerLogRoute.current().handler.releaseAcknowledged() otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then break
+			serviceStopped then panic("releaseAcknowledgedCompilerLog: the compiler's log handler stopped while the process still held its handle")
+		end 'why'
+	end 'refused'
+end 'releaseAcknowledgedCompilerLog'
 
 function recordGroupOf(record LogRecord) returns CompilerLogGroup
 	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")
