@@ -73,3 +73,14 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   LivenessMutableFunctionValues are both 0x3C6EF372FE94F82B, and the comment above the marks says a new
   one is checked against all of them by hand. They feed different chains and no wrong answer was found.
 - repro: `grep -n 0x3C6EF372FE94F82B maxon-bin/Compiler/SignatureIndex.maxon` lists two declarations
+
+## A tuple-alias local read by a call in the `return` expression gives a wrong value
+- priority: normal
+- status: open
+- where: not located; the tuple local looks released before the `return` expression reads it
+- seen: the spec-suite speed plan's alias landing, soundness hunt; no library alias is involved and
+  renaming the aliases changes nothing. Not checked against an older compiler.
+- repro: `typealias MyWord = int(0 to 100000)`, `typealias MyTriple = (MyWord, MyWord, MyWord)`, a
+  function `sumOf(triple MyTriple) returns MyWord` that destructures and adds, and a `main` that binds
+  `let triple = (1, 2, 3) as MyTriple`, calls `sumOf(triple)` twice into locals, prints them (`6 6`) and
+  ends `return sumOf(triple) as ExitCode`: it exits 54, not 6. With `return 0` the program is correct.
