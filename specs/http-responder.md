@@ -457,6 +457,7 @@ status 200 exit 0
 ```
 
 <!-- test: a-responder-the-handler-never-answers-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 type ForgetfulHandler implements HttpHandler
@@ -489,6 +490,7 @@ error E3012: <fragment>:10:7: unused variable: 'responder'
 ```
 
 <!-- test: a-responder-left-by-an-early-return-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 type HastyHandler implements HttpHandler
@@ -530,6 +532,7 @@ error E3223: <fragment>:13:4: this drops 'responder', a linear value that was ne
 ```
 
 <!-- test: ignoring-a-failed-answer-drops-the-responder -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 type CarelessHandler implements HttpHandler

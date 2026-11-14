@@ -1636,6 +1636,7 @@ error E3224: <fragment>:38:4: a linear value is never passed to an interface met
 ```
 
 <!-- test: a-linear-value-live-across-an-await-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 typealias Code = int(0 to 999)
@@ -1676,6 +1677,7 @@ error E3223: <fragment>:29:10: the linear value 'r' is live across this wait: a 
 ```
 
 <!-- test: a-send-with-a-timeout-is-a-wait-a-live-linear-value-may-not-cross -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 typealias Code = int(0 to 999)
@@ -1722,6 +1724,7 @@ error E3223: <fragment>:36:6: the linear value 'r' is live across this wait: a w
 ```
 
 <!-- test: a-linear-temporary-live-across-an-await-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 typealias Code = int(0 to 999)
@@ -1847,6 +1850,7 @@ error E3223: <fragment>:22:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: a-send-with-a-throwing-operand-while-a-linear-value-is-live-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 typealias Code = int(0 to 999)
@@ -1913,6 +1917,7 @@ error E3223: <fragment>:47:23: this drops 'r', a linear value that was never con
 ```
 
 <!-- test: otherwise-ignore-on-a-failed-send-drops-the-linear-argument -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 typealias Code = int(0 to 999)
@@ -2314,6 +2319,7 @@ error E3223: <fragment>:25:2: this drops 'cell', a linear value that was never c
 ```
 
 <!-- test: a-linear-value-live-across-an-acquire-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 
 ```maxon
 typealias Code = int(0 to 999)
@@ -4091,6 +4097,7 @@ fin 2
 ```
 
 <!-- test: dropped-promises-and-linear-values-are-reported-in-the-order-of-the-drops -->
+<!-- unsupported-targets: wasm32-wasi -->
 A linear value and a promise are each dropped twice, by an overwrite in the middle of the function and at its end. The four refusals come in the order the drops happen, whichever kind each is.
 ```maxon
 typealias Code = int(0 to 999)
