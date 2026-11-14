@@ -16,21 +16,36 @@ let SeizedKillWordBytes = 8
 let SeizedKillByteBits = 8
 let SeizedKilled = 1
 
-export function installPtraceHostRuntime(module StdModule, layout HostContextLayout)
-	buildSeizedOpen(module, layout: layout)
-	buildSeizedRelease(module, layout: layout)
+export function installPtraceHostRuntime(module StdModule, layout HostContextLayout, schedulerPresent bool)
+	buildSeizedOpen(module, layout: layout, schedulerPresent: schedulerPresent)
+	buildSeizedRelease(module, layout: layout, schedulerPresent: schedulerPresent)
 	buildSeizedKill(module, layout: layout)
 end 'installPtraceHostRuntime'
 
+function emitSeizedUnpin(module StdModule, func IrFunction, block IrBlock, pinToken ValueId, whenDone IrBlock, schedulerPresent bool, ids ValueMinter)
+	// A pin token comes only from the green-thread runtime, so a program without it holds none and
+	// `__gt_unpin_owner` is not installed; calling it there is an unknown function at link time.
+	if not schedulerPresent 'noPinCanExist'
+		module.setTerminator(block, op: StdOp.branch(whenDone.id))
+		return
+	end 'noPinCanExist'
+
+	let unpinCall = module.addBlock(func, label: b"szunpincall", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: block, value: pinToken, pred: StdCmpPred.ne, against: 0, whenTrue: unpinCall, whenFalse: whenDone, ids: ids)
+
+	module.appendOp(unpinCall, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(pinToken)))
+	module.setTerminator(unpinCall, op: StdOp.branch(whenDone.id))
+end 'emitSeizedUnpin'
+
 // The caller surrenders its machine pin to the table, so a table that cannot be mapped unpins it here.
-function buildSeizedOpen(module StdModule, layout HostContextLayout)
+function buildSeizedOpen(module StdModule, layout HostContextLayout, schedulerPresent bool)
 	let func = IrFunction.createFromStd(ProfileSeizedOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(2)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let mapped = module.addBlock(func, label: b"szmapped", heat: BlockHeat.normal)
 	let refused = module.addBlock(func, label: b"szrefused", heat: BlockHeat.normal)
-	let refusedUnpin = module.addBlock(func, label: b"szrefusedunpin", heat: BlockHeat.normal)
 	let refusedDone = module.addBlock(func, label: b"szrefuseddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
@@ -47,10 +62,7 @@ function buildSeizedOpen(module StdModule, layout HostContextLayout)
 	emitStoreField(module, block: mapped, record: base, offset: layout.seizedPinOffset as ByteOffset, value: pinToken)
 	module.setTerminator(mapped, op: StdOp.ret(base))
 
-	emitBranchOnCompare(module, block: refused, value: pinToken, pred: StdCmpPred.ne, against: 0, whenTrue: refusedUnpin, whenFalse: refusedDone, ids: ids)
-
-	module.appendOp(refusedUnpin, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(pinToken)))
-	module.setTerminator(refusedUnpin, op: StdOp.branch(refusedDone.id))
+	emitSeizedUnpin(module, func: func, block: refused, pinToken: pinToken, whenDone: refusedDone, schedulerPresent: schedulerPresent, ids: ids)
 
 	emitConstReturn(module, block: refusedDone, value: 0, ids: ids)
 
@@ -61,7 +73,7 @@ end 'buildSeizedOpen'
 // only the OS thread that attached: unpinned first, the green thread could move to a machine whose detach
 // the kernel refuses, leaving the tracees stopped. A detach is refused while a tracee runs, so a refused
 // one is interrupted, awaited and asked again, and a thread that still refuses has its process killed.
-function buildSeizedRelease(module StdModule, layout HostContextLayout)
+function buildSeizedRelease(module StdModule, layout HostContextLayout, schedulerPresent bool)
 	let func = IrFunction.createFromStd(ProfileSeizedReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
@@ -73,7 +85,6 @@ function buildSeizedRelease(module StdModule, layout HostContextLayout)
 	let probe = module.addBlock(func, label: b"szprobe", heat: BlockHeat.normal)
 	let kill = module.addBlock(func, label: b"szkill", heat: BlockHeat.normal)
 	let unpin = module.addBlock(func, label: b"szunpin", heat: BlockHeat.normal)
-	let unpinCall = module.addBlock(func, label: b"szunpincall", heat: BlockHeat.normal)
 	let free = module.addBlock(func, label: b"szfree", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
@@ -123,10 +134,7 @@ function buildSeizedRelease(module StdModule, layout HostContextLayout)
 	module.setTerminator(kill, op: StdOp.branch(next.id))
 
 	let pinToken = emitLoadField(module, block: unpin, record: base, offset: layout.seizedPinOffset as ByteOffset, ids: ids)
-	emitBranchOnCompare(module, block: unpin, value: pinToken, pred: StdCmpPred.ne, against: 0, whenTrue: unpinCall, whenFalse: free, ids: ids)
-
-	module.appendOp(unpinCall, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(pinToken)))
-	module.setTerminator(unpinCall, op: StdOp.branch(free.id))
+	emitSeizedUnpin(module, func: func, block: unpin, pinToken: pinToken, whenDone: free, schedulerPresent: schedulerPresent, ids: ids)
 
 	module.appendOp(free, op: StdOp.osFreePages(base, sizeId: bytes))
 	module.setTerminator(free, op: StdOp.retVoid)

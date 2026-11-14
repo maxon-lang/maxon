@@ -814,7 +814,7 @@ export function installProfileRuntime(module StdModule, usage RuntimeUsage, cont
 	match shape 'shape'
 		win32 then installWin32SamplingEntries(module, layout: context)
 		mach then installMachSamplingEntries(module, layout: context)
-		ptrace then installPtraceSamplingEntries(module, layout: context)
+		ptrace then installPtraceSamplingEntries(module, layout: context, schedulerPresent: usage.usesGt)
 	end 'shape'
 
 	buildProfileClose(module, shape: shape)
@@ -843,8 +843,8 @@ function installWin32SamplingEntries(module StdModule, layout HostContextLayout)
 	buildHostProcessEntry(module, name: ProfileReadRemoteName, words: HostProcessFourWords, service: HostProcessCall.readProcessMemory)
 end 'installWin32SamplingEntries'
 
-function installPtraceSamplingEntries(module StdModule, layout HostContextLayout)
-	installPtraceHostRuntime(module, layout: layout)
+function installPtraceSamplingEntries(module StdModule, layout HostContextLayout, schedulerPresent bool)
+	installPtraceHostRuntime(module, layout: layout, schedulerPresent: schedulerPresent)
 	buildProfileSleep(module)
 end 'installPtraceSamplingEntries'
 
