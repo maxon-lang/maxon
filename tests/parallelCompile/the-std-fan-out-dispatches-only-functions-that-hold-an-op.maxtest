@@ -1,0 +1,80 @@
+let StdFanOutLinePrefix = "[GEN] DEBUG: stdFanOut: "
+let DispatchedCountCloser = " of "
+let DispatchReportSuffix = " function(s) hold an op"
+let PoolSizingSuffix = " function(s)"
+let IdleProgram = "idle program"
+let ReachingProgram = "library-reaching program"
+let ReportsPerBuild = 1
+let OnlyReport = 0
+let PieceBeforeCloser = 0
+let PieceAfterOpener = 1
+
+test 'the Std fan-out dispatches only functions that hold an op'
+	let idleStaged = stagedFixtureTree(FixturesDirName, caseLabel: "the-std-fan-out-dispatches-only-functions-that-hold-an-op-idle", fixture: "fan-out-idle-program")
+	let idleRun = fanOutLoggedBuild(idleStaged, program: IdleProgram)
+
+	let reachingStaged = stagedFixtureTree(FixturesDirName, caseLabel: "the-std-fan-out-dispatches-only-functions-that-hold-an-op-reaching", fixture: "fan-out-reaching-program")
+	let reachingRun = fanOutLoggedBuild(reachingStaged, program: ReachingProgram)
+
+	let (idleDispatched, idleModule) = dispatchReport(idleRun, program: IdleProgram)
+	let (reachingDispatched, reachingModule) = dispatchReport(reachingRun, program: ReachingProgram)
+
+	Expect.lessThan(idleDispatched, than: idleModule, message: "the Std fan-out dispatched {idleDispatched} of the {IdleProgram}'s {idleModule} function(s). That program calls nothing in the library, so the library's functions reach the fan-out holding no op, and dispatching them pays a pool job per function for nothing.")
+	Expect.lessThan(reachingDispatched, than: reachingModule, message: "the Std fan-out dispatched {reachingDispatched} of the {ReachingProgram}'s {reachingModule} function(s). A program that formats, sorts and prints still reaches only part of the library, and every function it does not reach holds no op, so a fan-out that dispatches the whole module is not choosing by op.")
+	Expect.lessThan(idleDispatched, than: reachingDispatched, message: "the Std fan-out dispatched {idleDispatched} function(s) for the {IdleProgram} and {reachingDispatched} for the {ReachingProgram}. Dispatch follows what a program reaches: the second holds ops in library functions the first never calls, so counts that are equal or inverted mean the dispatched set is not the set of functions holding an op.")
+
+	requirePoolSizedFromDispatch(idleRun, dispatched: idleDispatched, program: IdleProgram)
+	requirePoolSizedFromDispatch(reachingRun, dispatched: reachingDispatched, program: ReachingProgram)
+
+	discardStagedDir(idleStaged)
+	discardStagedDir(reachingStaged)
+end 'the Std fan-out dispatches only functions that hold an op'
+
+function fanOutLoggedBuild(staged FilePath, program String) returns CollectedOutput throws TestFailure
+	let arguments = StringArray.create(0)
+	arguments.push(CodegenDebugLogFlag)
+	let run = spawnPinnedBuild(staged, label: program, extraArguments: arguments, processors: ProcessorPin.machine)
+
+	let observedExit = run.exitCode()
+	try Expect.equal(observedExit, expected: 0, message: "the {program} did not compile at the default processor count. It wrote to stderr: {run.stderr}")
+
+	return run
+end 'fanOutLoggedBuild'
+
+function dispatchReport(run CollectedOutput, program String) returns (PrintedNumber, PrintedNumber) throws TestFailure
+	let line = try soleFanOutLine(run, suffix: DispatchReportSuffix, program: program, absence: "With none, the fan-out did not report which functions it dispatched, so nothing here can tell a pool that skips the functions holding no op from one that dispatches the whole module.")
+	let dispatched = countBetween(line, opener: StdFanOutLinePrefix, closer: DispatchedCountCloser, what: "the dispatched count in the {program}'s fan-out report")
+	let moduleFunctions = countBetween(line, opener: DispatchedCountCloser, closer: DispatchReportSuffix, what: "the module's function count in the {program}'s fan-out report")
+
+	return (dispatched, moduleFunctions)
+end 'dispatchReport'
+
+function requirePoolSizedFromDispatch(run CollectedOutput, dispatched PrintedNumber, program String) throws TestFailure
+	let line = try soleFanOutLine(run, suffix: PoolSizingSuffix, program: program, absence: "With none, the pool the fan-out built cannot be read.")
+	let poolJobs = countBetween(line, opener: PoolLineProcessorsWord, closer: PoolSizingSuffix, what: "the job count in the {program}'s fan-out pool line")
+
+	try Expect.equal(poolJobs, expected: dispatched, message: "the Std fan-out sized its pool for {poolJobs} function(s) and dispatched {dispatched} for the {program}. The pool is sized from the dispatched set: sized from the module, it builds workers for functions that never arrive. It wrote: {line}")
+end 'requirePoolSizedFromDispatch'
+
+function soleFanOutLine(run CollectedOutput, suffix String, program String, absence String) returns String throws TestFailure
+	let lines = StringArray.create(0)
+
+	for raw in outputLines(run.stderr) 'eachLine'
+		let line = raw.trimEnd()
+
+		if line.startsWith(StdFanOutLinePrefix) and line.endsWith(suffix) 'aReport'
+			lines.push(line)
+		end 'aReport'
+	end 'eachLine'
+
+	try Expect.equal(lines.count(), expected: ReportsPerBuild, message: "`{CodegenDebugLogFlag}` printed {lines.count()} line(s) starting `{StdFanOutLinePrefix}` and ending `{suffix}` for the {program}, where the Std fan-out prints exactly {ReportsPerBuild} per build. {absence} It wrote to stderr: {run.stderr}")
+
+	return try lines.get(OnlyReport) otherwise panic("parallel-compile.test: the one fan-out line counted above is outside the lines collected")
+end 'soleFanOutLine'
+
+function countBetween(line String, opener String, closer String, what String) returns PrintedNumber
+	let afterOpener = try line.split(opener).get(PieceAfterOpener) otherwise panic("parallel-compile.test: the gate could not run — {what} cannot be read, because the line holds no `{opener}`. It wrote: {line}")
+	let token = try afterOpener.split(closer).get(PieceBeforeCloser) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")
+
+	return wholeDecimalValue(token, what: what)
+end 'countBetween'

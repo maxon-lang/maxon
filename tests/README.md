@@ -987,6 +987,10 @@ and for the backend pool's jobs:
 - `identical-cold-compiles-report-identical-memory` — the same comparison between two builds that each start from their own empty library cache
 - `lock-heartbeat-leaves-memory-identical` — a build of `uneven-program` stopped for 6.5 s once it holds its output lock (not on Windows: `kill -STOP`/`-CONT` from `sh`) refreshes the lock's record when it resumes, and reports the same allocs, frees and bytes as a build paused for 0 s in every compared row, `total` and `unattributed` included; both go through the same `sh` because a compile's counted allocations follow its environment block, and the `upkeep` row of `--metrics` (the lock refreshes the compile excludes from its totals) is asserted zero in the unpaused build and non-zero in the paused one, so a build that finished before the stop cannot read as agreement
 
+and for the Std passes' fan-out:
+
+- `the-std-fan-out-dispatches-only-functions-that-hold-an-op` — `fan-out-idle-program` (calls nothing in the library) and `fan-out-reaching-program` (formats, sorts and prints) each report under `--log=codegen:debug` that the fan-out dispatched fewer functions than the module holds, the first fewer than the second, and a pool line sized for exactly the dispatched count
+
 `fixtures/<program>/` holds the programs, each as `<name>.maxon.fixture`. It applies
 rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),
 and departs from rule 5 on rule 5's own terms: most contracts need more than one compile. Every case

@@ -1067,6 +1067,11 @@ the allocation count of one whole copy of that shared index, the figure the over
 cannot move a shared-record graph between threads, and under [`--allocations-by-tag`](#maxon-build), whose
 tally attributes each stage to the thread that runs it.
 
+**The Std fan-out.** `--log=codegen:debug` prints `stdFanOut: <N> of <M> function(s) hold an op`: the
+per-function Std passes run on a worker pool over the `N` of the module's `M` functions that hold at least
+one op. An unreached library body holds none, so `N` follows what the program reaches. The next line,
+`stdFanOut: <W> worker(s) over <P> processor(s), <N> function(s)`, sizes that pool.
+
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
 top five buckets for every phase sampled, then the whole table for the phase whose *live* level was

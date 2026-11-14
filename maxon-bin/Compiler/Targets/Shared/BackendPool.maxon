@@ -856,9 +856,7 @@ function fillLongestFirstOrder(sizes PoolJobSizeArray, jobCount PoolSize, order 
 	end 'largestFirst'
 end 'fillLongestFirstOrder'
 
-// Every function's live op count, in index order — the size both backend pools dispatch a function by. It
-// takes the two arrays rather than a module because it serves two pools over the same Std module.
-export function functionOpTallies(functions IrFunctionArray, blocks IrBlockArray) returns PoolJobSizeArray
+function functionOpTallies(functions IrFunctionArray, blocks IrBlockArray) returns PoolJobSizeArray
 	let sizes = PoolJobSizeArray.create(functions.count(), zeroed: false)
 
 	for func in functions 'eachFunc'
@@ -867,6 +865,25 @@ export function functionOpTallies(functions IrFunctionArray, blocks IrBlockArray
 
 	return sizes
 end 'functionOpTallies'
+
+export function noteFunctionsHoldingAnOp(functions IrFunctionArray, blocks IrBlockArray, jobs PoolJobArray, sizes PoolJobSizeArray)
+	for (position, func) in functions.withIterator() 'eachFunc'
+		let tally = liveOpTallyOf(blocks, func: func)
+
+		if tally > 0 'holdsAnOp'
+			noteJob(position.index(), size: tally as PoolJobSize, subjects: jobs, sizes: sizes)
+		end 'holdsAnOp'
+	end 'eachFunc'
+end 'noteFunctionsHoldingAnOp'
+
+export function noteJob(subject ElementIndex, size PoolJobSize, subjects PoolJobArray, sizes PoolJobSizeArray)
+	subjects.push(subject)
+	sizes.push(size)
+end 'noteJob'
+
+export function subjectOfJob(subjects PoolJobArray, job ElementIndex) returns ElementIndex
+	return try subjects.get(job) otherwise panic("subjectOfJob: job {job} is not below the {subjects.count()} subject(s) dispatched")
+end 'subjectOfJob'
 
 // How many ops one function holds. Counted rather than collected: `IrModule.liveOpIndices` answers the
 // same number and allocates an array per function to do it, and this runs on every function of every

@@ -39,8 +39,8 @@ typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
 
 export typealias StdPassRetirees = WorkerRetirees with StdPassWorker.handle
 
-// The per-function landing slots the drain fills in ARRIVAL order, and the fold reads in index order
-// through `LandingSlots.slotOf`.
+// The per-job landing slots the drain fills in ARRIVAL order, and the fold reads in job order,
+// which is ascending function-index order, through `LandingSlots.slotOf`.
 typealias DerivedOriginsArray = Array with DerivedOrigins
 
 // The pool runs every member from the first function of the module; `runStdPassesOverTheBand` runs the
@@ -237,9 +237,6 @@ function refineVersionedRangesInFunc(module StdModule, funcIndex ElementIndex, s
 	end 'answer'
 end 'refineVersionedRangesInFunc'
 
-// Run the schedule's per-function passes over every function on a worker pool; `PoolSizing` owns how the
-// pool is sized. `members` is the schedule, every one a pass `classifyPass` answers `perFunction` for
-// (`PassPipeline.requireFanOutMembership`).
 typealias StdPoolStateSlot = Slot with StdPoolState
 
 type StdPoolState
@@ -254,11 +251,16 @@ type StdPoolState
 	end 'of'
 end 'StdPoolState'
 
+// Run the schedule's per-function passes over the functions that hold an op on a worker pool;
+// `PoolSizing` owns how the pool is sized. `members` is the schedule, every one a pass
+// `classifyPass` answers `perFunction` for (`PassPipeline.requireFanOutMembership`).
 export type StdPassRun
 	let project as Project
 	let std as StdModule
 	let members as StdFanOutStepArray
 	let funcCount as ElementIndex
+	let jobs as PoolJobArray
+	let sizes as PoolJobSizeArray
 	let reducesDivision as bool
 	let tallies as StdPassTallyArray
 	let landedOrigins as DerivedOriginsArray
@@ -267,23 +269,27 @@ export type StdPassRun
 
 	export static function create(project Project, std StdModule, members StdFanOutStepArray) returns StdPassRun
 		let funcCount = std.funcCount()
+		let jobs = PoolJobArray.create(0)
+		let sizes = PoolJobSizeArray.create(0)
+		noteFunctionsHoldingAnOp(std.functions, blocks: std.blocks, jobs: jobs, sizes: sizes)
 		let tallies = StdPassTallyArray.create(members.count(), zeroed: false)
 
 		for _ in members 'eachStep'
 			tallies.push(StdPassTally.create())
 		end 'eachStep'
 
-		return Self{project: project, std: std, members: members, funcCount: funcCount, reducesDivision: targetLowersMulHigh(project.target.cpu), tallies: tallies, landedOrigins: DerivedOriginsArray.create(0), slots: LandingSlots.create(funcCount), pool: StdPoolStateSlot.create("StdPassRun.pool")}
+		return Self{project: project, std: std, members: members, funcCount: funcCount, jobs: jobs, sizes: sizes, reducesDivision: targetLowersMulHigh(project.target.cpu), tallies: tallies, landedOrigins: DerivedOriginsArray.create(0), slots: LandingSlots.create(jobs.count()), pool: StdPoolStateSlot.create("StdPassRun.pool")}
 	end 'create'
 
 	export function begin(receiver CompileReceiver.handle) returns bool
-		let sizing = PoolSizing.forJobs(self.funcCount)
+		let sizing = PoolSizing.forJobs(self.jobs.count())
 
 		if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+			compilerLogger(CompilerLogGroup.codegen).debug("stdFanOut: {self.jobs.count()} of {self.funcCount} function(s) hold an op")
 			compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.stdFanOut))
 		end 'debugging'
 
-		if self.funcCount == 0 'nothingToRun'
+		if self.jobs.count() == 0 'nothingToRun'
 			return false
 		end 'nothingToRun'
 
@@ -293,8 +299,8 @@ export type StdPassRun
 			workers.push(spawn StdPassWorker.create(self.project.target.cpu, os: self.project.target.os, steps: freeze self.members.clone()))
 		end 'eachWorker'
 
-		let dispatch = PoolDispatch.create(functionOpTallies(self.std.functions, blocks: self.std.blocks), workerCount: sizing.workerCount as PoolSize, assignment: PoolAssignment.staticShare)
-		let arrivedUnits = StdArrivedUnits.create(self.funcCount, spent: StdModule.create())
+		let dispatch = PoolDispatch.create(self.sizes, workerCount: sizing.workerCount as PoolSize, assignment: PoolAssignment.staticShare)
+		let arrivedUnits = StdArrivedUnits.create(self.jobs.count(), spent: StdModule.create())
 		self.pool.fill(StdPoolState.of(workers, dispatch: dispatch, arrivedUnits: arrivedUnits, scratch: SpliceScratch.create(), stealsBefore: Scheduler.counters().steals))
 
 		for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
@@ -318,7 +324,7 @@ export type StdPassRun
 			self.dispatchOne(freedWorker, receiver: receiver)
 		end 'handTheFreedWorkerTheNextJob'
 
-		spliceSettledStdUnits(self.std, dispatch: state.dispatch, slots: self.slots, arrivedUnits: state.arrivedUnits, scratch: state.scratch)
+		spliceSettledStdUnits(self.std, jobs: self.jobs, dispatch: state.dispatch, slots: self.slots, arrivedUnits: state.arrivedUnits, scratch: state.scratch)
 
 		return state.dispatch.inFlightCount() == 0
 	end 'answered'
@@ -335,19 +341,20 @@ export type StdPassRun
 			self.project.retiredWorkers.stdPass.keep(state.workers)
 		end 'aPoolRan'
 
-		for funcIndex in 0 upto self.funcCount 'foldOriginsInIndexOrder'
-			let origins = try self.landedOrigins.get(self.slots.slotOf(funcIndex)) otherwise panic("StdPassRun.finish: landedOrigins.get OOB for function {funcIndex}")
-			origins.foldInto(self.project.valueOrigins, funcIndex: funcIndex)
+		for job in 0 upto self.jobs.count() 'foldOriginsInIndexOrder'
+			let origins = try self.landedOrigins.get(self.slots.slotOf(job)) otherwise panic("StdPassRun.finish: landedOrigins.get OOB for job {job}")
+			origins.foldInto(self.project.valueOrigins, funcIndex: subjectOfJob(self.jobs, job: job))
 		end 'foldOriginsInIndexOrder'
 
-		announceAndSummarizeSteps(self.members, tallies: self.tallies, funcCount: self.funcCount, reducesDivision: self.reducesDivision)
+		announceAndSummarizeSteps(self.members, tallies: self.tallies, funcCount: self.funcCount, visitedCount: self.jobs.count(), reducesDivision: self.reducesDivision)
 	end 'finish'
 
 	function dispatchOne(workerSlot ElementIndex, receiver CompileReceiver.handle)
 		let state = self.pool.held()
 		let worker = try state.workers.get(workerSlot) otherwise panic("StdPassRun.dispatchOne: workers.get OOB at {workerSlot} below count {state.workers.count()}")
-		let funcIndex = state.dispatch.nextJob(workerSlot)
-		try worker.runThen(StdUnit.extract(self.std, func: self.std.getFunc(funcIndex), funcIndex: funcIndex), job: funcIndex, receiver: receiver.clone()) otherwise panic("{workerRefusedSendMessage("StdPassRun.dispatchOne", subject: "the worker running function {funcIndex}")}")
+		let job = state.dispatch.nextJob(workerSlot)
+		let funcIndex = subjectOfJob(self.jobs, job: job)
+		try worker.runThen(StdUnit.extract(self.std, func: self.std.getFunc(funcIndex), funcIndex: funcIndex), job: job, receiver: receiver.clone()) otherwise panic("{workerRefusedSendMessage("StdPassRun.dispatchOne", subject: "the worker running function {funcIndex}")}")
 	end 'dispatchOne'
 end 'StdPassRun'
 
@@ -367,6 +374,7 @@ end 'StdPassRun'
 // visiting nothing, which is what keeps the pair out of a band schedule instead of a comment doing it.
 export function runStdPassesOverTheBand(project Project, module StdModule, members StdFanOutStepArray, firstFuncIndex ElementIndex)
 	let funcCount = module.funcCount()
+	let visitedCount = funcCount - firstFuncIndex
 
 	for step in members 'eachScheduledStep'
 		requireBandStepIsSound(step)
@@ -382,7 +390,7 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 		let probe = PhaseProbe.beginPhase(project, phase: bandPhaseOfStep(step))
 		let tally = StdPassTally.create()
 		let workspace = workspaceFor(step, tally: tally)
-		announceStep(step, into: irLog, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
+		announceStep(step, into: irLog, firstFuncIndex: firstFuncIndex, funcCount: funcCount, visitedCount: visitedCount, reducesDivision: reducesDivision)
 
 		for funcIndex in firstFuncIndex upto funcCount 'eachFunc'
 			let origins = DerivedOrigins.create()
@@ -391,7 +399,7 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 			origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
 		end 'eachFunc'
 
-		summarizeStep(step, into: irLog, tally: tally, funcCount: funcCount)
+		summarizeStep(step, into: irLog, tally: tally, funcCount: funcCount, visitedCount: visitedCount)
 		recordPhase(project, phase: bandPhaseOfStep(step), probe: probe)
 	end 'eachStep'
 end 'runStdPassesOverTheBand'
@@ -467,16 +475,16 @@ function foldUnitAnswer(project Project, answer StdUnitAnswer, members StdFanOut
 	end 'eachStep'
 end 'foldUnitAnswer'
 
-function spliceSettledStdUnits(module StdModule, dispatch PoolDispatch, slots LandingSlots, arrivedUnits StdArrivedUnits, scratch SpliceScratch)
+function spliceSettledStdUnits(module StdModule, jobs PoolJobArray, dispatch PoolDispatch, slots LandingSlots, arrivedUnits StdArrivedUnits, scratch SpliceScratch)
 	while dispatch.hasNextToSettle() 'eachSettledJob'
 		let job = dispatch.takeNextToSettle()
 		let slot = slots.slotOf(job)
-		spliceStdUnit(module, func: module.getFunc(job), unitModule: arrivedUnits.unitAt(slot), scratch: scratch)
+		spliceStdUnit(module, func: module.getFunc(subjectOfJob(jobs, job: job)), unitModule: arrivedUnits.unitAt(slot), scratch: scratch)
 		arrivedUnits.spend(slot)
 	end 'eachSettledJob'
 end 'spliceSettledStdUnits'
 
-function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, reducesDivision bool)
+function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, visitedCount ElementIndex, reducesDivision bool)
 	if not compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'quiet'
 		return
 	end 'quiet'
@@ -485,12 +493,12 @@ function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTa
 
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("announceAndSummarizeSteps: members.get OOB at {k}")
-		announceStep(step, into: irLog, firstFuncIndex: WholeModuleFirstFunction, funcCount: funcCount, reducesDivision: reducesDivision)
-		summarizeStep(step, into: irLog, tally: try tallies.get(k) otherwise panic("announceAndSummarizeSteps: tallies.get OOB at {k}"), funcCount: funcCount)
+		announceStep(step, into: irLog, firstFuncIndex: WholeModuleFirstFunction, funcCount: funcCount, visitedCount: visitedCount, reducesDivision: reducesDivision)
+		summarizeStep(step, into: irLog, tally: try tallies.get(k) otherwise panic("announceAndSummarizeSteps: tallies.get OOB at {k}"), funcCount: funcCount, visitedCount: visitedCount)
 	end 'eachStep'
 end 'announceAndSummarizeSteps'
 
-function announceStep(step StdFanOutStep, into Logger, firstFuncIndex ElementIndex, funcCount ElementIndex, reducesDivision bool)
+function announceStep(step StdFanOutStep, into Logger, firstFuncIndex ElementIndex, funcCount ElementIndex, visitedCount ElementIndex, reducesDivision bool)
 	if not into.enabled(LogLevel.debug) 'quiet'
 		return
 	end 'quiet'
@@ -498,11 +506,11 @@ function announceStep(step StdFanOutStep, into Logger, firstFuncIndex ElementInd
 	into.debug(passBanner(passKindOfFanOutStep(step)))
 
 	match step 'headline'
-		foldConstants then into.debug(foldConstantsHeadline(funcCount))
+		foldConstants then into.debug(foldConstantsHeadline(visitedCount))
 		strengthReduceDivision then into.debug(strengthReduceDivisionHeadline(reducesDivision, firstFuncIndex: firstFuncIndex, funcCount: funcCount))
 		foldConstOperands then into.debug(foldConstOperandsHeadline(firstFuncIndex, funcCount: funcCount))
-		commonSubexpressionElimination then into.debug(commonSubexpressionEliminationHeadline(funcCount))
-		loopInvariantCodeMotion then into.debug(hoistLoopInvariantsHeadline(funcCount))
+		commonSubexpressionElimination then into.debug(commonSubexpressionEliminationHeadline(visitedCount))
+		loopInvariantCodeMotion then into.debug(hoistLoopInvariantsHeadline(visitedCount))
 		pruneDeadBlockArgs or
 		elimTrivialBlockArgs or
 		threadConstantBranches or
@@ -513,18 +521,18 @@ function announceStep(step StdFanOutStep, into Logger, firstFuncIndex ElementInd
 	end 'headline'
 end 'announceStep'
 
-function summarizeStep(step StdFanOutStep, into Logger, tally StdPassTally, funcCount ElementIndex)
+function summarizeStep(step StdFanOutStep, into Logger, tally StdPassTally, funcCount ElementIndex, visitedCount ElementIndex)
 	if not into.enabled(LogLevel.debug) 'quiet'
 		return
 	end 'quiet'
 
 	match step 'summary'
-		pruneDeadBlockArgs then into.debug(pruneDeadBlockArgsSummary(tally, funcCount: funcCount))
-		elimTrivialBlockArgs then into.debug(elimTrivialBlockArgsSummary(tally, funcCount: funcCount))
-		threadConstantBranches then into.debug(threadConstantBranchesSummary(tally, funcCount: funcCount))
+		pruneDeadBlockArgs then into.debug(pruneDeadBlockArgsSummary(tally, funcCount: visitedCount))
+		elimTrivialBlockArgs then into.debug(elimTrivialBlockArgsSummary(tally, funcCount: visitedCount))
+		threadConstantBranches then into.debug(threadConstantBranchesSummary(tally, funcCount: visitedCount))
 		refineValueRanges or
 		refineVersionedRanges then into.debug(refineValueRangesSummary(tally, funcCount: funcCount))
-		unswitchInvariantGuards then into.debug(unswitchInvariantGuardsSummary(tally, funcCount: funcCount))
+		unswitchInvariantGuards then into.debug(unswitchInvariantGuardsSummary(tally, funcCount: visitedCount))
 		foldEstablishedGuards then into.debug(foldEstablishedGuardsSummary(tally))
 		foldConstants or
 		strengthReduceDivision or

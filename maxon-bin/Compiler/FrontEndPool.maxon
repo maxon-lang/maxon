@@ -617,7 +617,7 @@ module type FrontEndPool
 		let sizes = PoolJobSizeArray.create(0)
 
 		for source in try unlexedSourcesOf(project) 'eachUnlexed'
-			noteJob(source.fileIndex, size: source.content.byteLength() as PoolJobSize, files: files, sizes: sizes)
+			noteJob(source.fileIndex, size: source.content.byteLength() as PoolJobSize, subjects: files, sizes: sizes)
 		end 'eachUnlexed'
 
 		let drain = self.newDrain(FrontEndDrainInput.lexing(project), files: files, sizes: sizes, slots: LandingSlots.create(project.db.sourcePaths.count()))
@@ -905,7 +905,7 @@ module type FrontEndPool
 
 		for job in 0 upto drain.files.count() 'eachJob'
 			try requireStillWanted(project)
-			let fileIndex = fileOfJob(drain.files, job: job)
+			let fileIndex = subjectOfJob(drain.files, job: job)
 
 			let outcome = match drain.input 'input'
 				lexing(sources) gives lexInProcess(project, worker: worker, content: sourceTextAt(sources, fileIndex: fileIndex))
@@ -971,7 +971,7 @@ module type FrontEndPool
 
 	function landAnswer(drain FrontEndDrain, job ElementIndex, answer FrontEndAnswer)
 		self.noteCosts(answer.costs)
-		landOutcome(answer.outcome, fileIndex: fileOfJob(drain.files, job: job), outcomes: drain.outcomes, slots: drain.slots)
+		landOutcome(answer.outcome, fileIndex: subjectOfJob(drain.files, job: job), outcomes: drain.outcomes, slots: drain.slots)
 	end 'landAnswer'
 
 	function handNextJob(project Project, drain FrontEndDrain, freedWorker ElementIndex, receiver CompileReceiver.handle) throws CompileError
@@ -983,7 +983,7 @@ module type FrontEndPool
 
 	function dispatchJob(drain FrontEndDrain, workerSlot ElementIndex, receiver CompileReceiver.handle)
 		let drainJob = drain.dispatches.held().nextJob(workerSlot)
-		let fileIndex = fileOfJob(drain.files, job: drainJob)
+		let fileIndex = subjectOfJob(drain.files, job: drainJob)
 
 		match drain.input 'input'
 			lexing(project) then try self.workerAt(workerSlot).runThen(FrontEndJob.lexing(sourceTextAt(project, fileIndex: fileIndex)), generation: drain.generation, drainJob: drainJob, receiver: receiver.clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.dispatchJob", subject: "the worker handed file {fileIndex}")}")
@@ -1088,15 +1088,6 @@ function landOutcome(outcome FrontEndOutcome, fileIndex ElementIndex, outcomes F
 	outcomes.push(outcome)
 end 'landOutcome'
 
-function fileOfJob(files PoolJobArray, job ElementIndex) returns ElementIndex
-	return try files.get(job) otherwise panic("FrontEndPool: job {job} is not below the {files.count()} file(s) dispatched")
-end 'fileOfJob'
-
-function noteJob(fileIndex ElementIndex, size PoolJobSize, files PoolJobArray, sizes PoolJobSizeArray)
-	files.push(fileIndex)
-	sizes.push(size)
-end 'noteJob'
-
 // ⭐ **HOW MANY OF THE POOL'S WORKERS A PARSE DRAIN USES: as many as carry the whole work in the
 // time of its longest file, `ceil(total / longest)`, up to the pool.** No drain ends before its
 // longest parse does, so a worker past that count shortens nothing — and each worker a drain uses
@@ -1123,7 +1114,7 @@ end 'parseDrainWorkerCount'
 function noteParseJob(query ParseQuery, fileIndex ElementIndex, files PoolJobArray, sizes PoolJobSizeArray)
 	match query 'query'
 		memoized then return
-		needed(_, tokens, _, _) then noteJob(fileIndex, size: tokens.count() as PoolJobSize, files: files, sizes: sizes)
+		needed(_, tokens, _, _) then noteJob(fileIndex, size: tokens.count() as PoolJobSize, subjects: files, sizes: sizes)
 	end 'query'
 end 'noteParseJob'
 

@@ -12,7 +12,8 @@ export typealias ReportedPoolCount = int(i64.min to i64.max)
 // refusal is RENDERED identically at every count, the per-function log lines of the Std pool come
 // out in declaration order, the job's branch cleanup, frame and encoding are timed as POOL rows,
 // and two identical compiles report IDENTICAL MEMORY. Lexing and parsing run on a pool of their own
-// (`FrontEndPool`), which REPORTS the pool it built the same way.
+// (`FrontEndPool`), which REPORTS the pool it built the same way. The Std passes' fan-out
+// (`StdPassPool`) dispatches only the functions that hold an op.
 //
 // ⚠ EACH POOL LINE IS SHOWN ONLY BY ITS OWN CATEGORY'S FLAG: the allocator's by `--log=codegen:debug`
 // (`[GEN]`), the front end's by `--log=compiler:debug` (`[CMP]`). `Logger.parseLogOption` raises ONE
@@ -43,12 +44,13 @@ let RetainedImageFileName = "retained-image"
 export let CodegenDebugLogFlag = "--log=codegen:debug"
 export let CompilerDebugLogFlag = "--log=compiler:debug"
 
-// Each pool line as the sink renders it, then the words both reports share. Each report ends with a count
-// no needle pins: the allocator's functions and the front end's files both include what the stdlib adds.
+// Each pool line as the sink renders it, then the words every pool report shares. Each report ends
+// with a count no needle pins: the allocator's functions and the front end's files both include what
+// the stdlib adds.
 let RegallocPoolLinePrefix = "[GEN] DEBUG: regalloc: "
 let FrontEndPoolLinePrefix = "[CMP] DEBUG: front end: "
 let PoolLineWorkersWord = "worker(s) over"
-let PoolLineProcessorsWord = "processor(s), "
+export let PoolLineProcessorsWord = "processor(s), "
 
 // Where the four counts sit among a front-end pool line's space-separated words:
 // `<workers> worker(s) over <processors> processor(s), <files> file(s), <adopted> adopted`.
