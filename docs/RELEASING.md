@@ -59,8 +59,8 @@ scripts/pin-seed.sh [--date=YYYY-MM-DD] [--prove=<lane>]...
    Mac through `scripts/mac-host.sh`, with the seed tag pushed first so the Mac can clone the commit, and
    the local archive installed there; any lane natively on its own host. An unreachable lane is skipped with
    a notice; the Mac probe is a connect test bounded to a few seconds.
-4. **Publish.** The tag is pushed, `gh release create --verify-tag` publishes the pre-release, and every
-   target is fetched back from it against its `SHA256SUMS`.
+4. **Publish.** The tag is pushed, the pre-release is created on it through GitHub's REST API (`gh api`; no
+   step needs GraphQL), and every target is fetched back from it against its `SHA256SUMS`.
 5. **Pin.** The tag is committed to `scripts/seed-tag` as the user, and `git push origin HEAD:main` sends the
    frozen commit and the pin together. CI runs once, on the pin, with the new seed, so `main` is never red in
    between, and its four lanes are the proof of every lane not proved locally.

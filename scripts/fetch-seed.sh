@@ -96,7 +96,7 @@ download_release() {
 		exit 1
 	fi
 
-	gh release download "$tag" --pattern "*$target*" --pattern "$ChecksumsAsset" --dir "$work"
+	seed_release_download "$target" "$work"
 }
 
 copy_local_release() {

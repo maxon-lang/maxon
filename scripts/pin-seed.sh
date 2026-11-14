@@ -400,7 +400,7 @@ retract_published() {
 			return 0
 		fi
 
-		gh release delete "$tag" --cleanup-tag --yes || return 1
+		seed_release_delete "$tag" || return 1
 	fi
 
 	remote_tag="$(git ls-remote --tags "$Remote" "refs/tags/$tag")" || return 1
@@ -489,11 +489,11 @@ push_tag() {
 }
 
 publish_seed() {
-	seed_release_create_command "$tag"
+	seed_release_require_assets "$tag"
 	push_tag
 	release_started="yes"
 
-	"${seed_release_create[@]}" \
+	seed_release_create "$tag" \
 		|| { echo "pin-seed.sh: creating the release $tag failed" >&2; exit 1; }
 }
 
