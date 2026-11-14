@@ -2805,8 +2805,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtIoRead(module, commandShape: subprocessCommandShape(target))
 	installSubpRuntime(module, target: target, streamState: streamState, stdioStream: stdioStream)
 
-	// ⭐ **THE COWN RUNTIME RIDES `usesGt` EXACTLY AS THE SCHEDULER DOES, AND FOR THE SAME REASON:
-	// there is no program that wants one without the other.** `__cown_spawn` calls `__gt_spawn_green`
+	// The cown runtime rides `usesGt` as the scheduler does: a program without the scheduler can hold no
+	// handle, and the `CownHandleLeaf` entries it can still name get `installCownHandleLeafStandIns`'s
+	// aborting bodies in `afterPipeline` instead. `__cown_spawn` calls `__gt_spawn_green`
 	// and every cown wake goes through `__gt_ready`; a program that never spawns a service loses every
 	// cown function to `DeadFunctionElimination`, whose only edge into them is the `funcAddr`/`call` pair
 	// `LowerMaxonToStd.lowerServiceSpawn` emits.

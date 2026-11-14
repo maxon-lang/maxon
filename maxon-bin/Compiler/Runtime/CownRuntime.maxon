@@ -144,6 +144,44 @@ export function isCownAcquireEntry(callee ByteArray) returns bool
 	return callee.equals(CownAcquireName) or callee.equals(CownAcquireReleaseName)
 end 'isCownAcquireEntry'
 
+module enum CownHandleLeaf
+	handleClone
+	interfaceClone
+	close
+end 'CownHandleLeaf'
+
+module function cownHandleLeafName(leaf CownHandleLeaf) returns immutable ByteArray
+	return match leaf 'leaf'
+		handleClone gives CownHandleCloneBoxName
+		interfaceClone gives CownInterfaceCloneBoxName
+		close gives CownCloseName
+	end 'leaf'
+end 'cownHandleLeafName'
+
+module function cownHandleLeafReturnType(leaf CownHandleLeaf) returns StdReturnType
+	return match leaf 'leaf'
+		handleClone or
+		interfaceClone gives StdReturnType.value(StdType.i64)
+		close gives StdReturnType.void
+	end 'leaf'
+end 'cownHandleLeafReturnType'
+
+export function isCownHandleLeaf(callee ByteArray) returns bool
+	for leaf in CownHandleLeaf.allCases 'eachLeaf'
+		if callee.equals(cownHandleLeafName(leaf)) 'named'
+			return true
+		end 'named'
+	end 'eachLeaf'
+
+	return false
+end 'isCownHandleLeaf'
+
+export function installCownHandleLeafStandIns(module StdModule)
+	for leaf in CownHandleLeaf.allCases 'eachLeaf'
+		buildAbortingRuntimeEntry(module, symbolName: cownHandleLeafName(leaf), returnType: cownHandleLeafReturnType(leaf), reason: RuntimeAbortReason.fatal(RuntimeFatal.serviceHandleWithoutAScheduler))
+	end 'eachLeaf'
+end 'installCownHandleLeafStandIns'
+
 function emitStoreReleaseField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, value ValueId)
 	module.appendOp(block, op: StdOp.storeRelease(record, offset: offset, valueId: value, valueType: StdType.i64))
 end 'emitStoreReleaseField'
@@ -799,7 +837,7 @@ function buildCownRun(module StdModule)
 end 'buildCownRun'
 
 function buildCownClose(module StdModule)
-	let func = IrFunction.createFromStd(CownCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let func = IrFunction.createFromStd(cownHandleLeafName(CownHandleLeaf.close), returnType: cownHandleLeafReturnType(CownHandleLeaf.close), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	let ids = ValueMinter.create(1)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -906,7 +944,7 @@ function buildCownSendAbandon(module StdModule)
 end 'buildCownSendAbandon'
 
 function buildCownHandleCloneBox(module StdModule)
-	let func = IrFunction.createFromStd(CownHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let func = IrFunction.createFromStd(cownHandleLeafName(CownHandleLeaf.handleClone), returnType: cownHandleLeafReturnType(CownHandleLeaf.handleClone), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

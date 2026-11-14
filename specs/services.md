@@ -4275,6 +4275,155 @@ typealias Integer = int(i64.min to i64.max)
 n=2
 ```
 
+<!-- test: a-handle-of-a-service-the-program-never-spawns-is-cloned -->
+<!-- process: own -->
+A handle type names a service whether or not the program spawns it. A program that spawns nothing holds no handle,
+so a `.clone()` it writes runs on none, and the program still compiles and runs.
+```maxon
+typealias TextHandles = Array with TextLogHandler.handle
+
+function main() returns ExitCode
+	let held = TextHandles.create(0)
+	let copies = TextHandles.create(0)
+
+	for handle in held 'eachHandle'
+		copies.push(handle.clone())
+	end 'eachHandle'
+
+	print("{copies.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: an-array-of-handles-of-a-service-the-program-never-spawns-is-cloned -->
+<!-- process: own -->
+Cloning an array of handles clones each handle. In a program that spawns nothing the array is empty and the clone
+is too.
+```maxon
+typealias TextHandles = Array with TextLogHandler.handle
+
+function main() returns ExitCode
+	let held = TextHandles.create(0)
+	let copies = held.clone()
+	print("{copies.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: a-union-that-can-carry-a-handle-is-cloned-in-a-program-that-spawns-nothing -->
+<!-- process: own -->
+A union with a case that carries a handle has values that carry none. An array of them is cloned element by
+element in a program that spawns nothing.
+```maxon
+union MaybeLog
+	nothing
+	some(log TextLogHandler.handle)
+end 'MaybeLog'
+
+typealias Logs = Array with MaybeLog
+
+function main() returns ExitCode
+	let held = Logs.create(0)
+	held.push(MaybeLog.nothing)
+	let copies = held.clone()
+	print("{copies.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: an-array-of-arrays-of-handles-is-cloned-in-a-program-that-spawns-nothing -->
+<!-- process: own -->
+An array of handle arrays holds empty arrays in a program that spawns nothing, and cloning it clones each.
+```maxon
+typealias TextHandles = Array with TextLogHandler.handle
+typealias HandleRows = Array with TextHandles
+
+function main() returns ExitCode
+	let held = HandleRows.create(0)
+	held.push(TextHandles.create(0))
+	let copies = held.clone()
+	print("{copies.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: an-array-of-structs-holding-a-handle-is-cloned-in-a-program-that-spawns-nothing -->
+<!-- process: own -->
+A struct with a handle field has no value in a program that spawns nothing, so an array of them is empty and so is
+its clone.
+```maxon
+type LogHolder
+	var log as TextLogHandler.handle
+
+	static function holding(log TextLogHandler.handle) returns Self
+		return Self{log: log}
+	end 'holding'
+end 'LogHolder'
+
+typealias LogHolders = Array with LogHolder
+
+function main() returns ExitCode
+	let held = LogHolders.create(0)
+	let copies = held.clone()
+	print("{copies.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: a-handle-of-a-service-the-program-never-spawns-is-shut-down -->
+<!-- process: own -->
+`shutdown` is written against the handle type, so a program that spawns nothing may write it; it runs on no handle.
+```maxon
+typealias TextHandles = Array with TextLogHandler.handle
+
+function main() returns ExitCode
+	let held = TextHandles.create(0)
+
+	for handle in held 'eachHandle'
+		handle.shutdown()
+	end 'eachHandle'
+
+	print("{held.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
 <!-- test: a-handle-moved-into-another-service -->
 A handle is a transferable message payload: `Worker` is handed the `Logger`'s handle, sends to it, and then
 DROPS it — the un-consumed payload drop the loop owes for every message it runs. `logger` is a `var`, so the

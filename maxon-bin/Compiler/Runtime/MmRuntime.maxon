@@ -811,11 +811,11 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 	end 'cloneExistential'
 
 	if usage.usesCloneUncloneable 'cloneUncloneable'
-		buildAbortingRuntimeEntry(module, symbolName: MmCloneUncloneableName, returnType: StdReturnType.value(StdType.i64), abort: RuntimeAbort.existentialNotCloneable)
+		buildAbortingRuntimeEntry(module, symbolName: MmCloneUncloneableName, returnType: StdReturnType.value(StdType.i64), reason: RuntimeAbortReason.abort(RuntimeAbort.existentialNotCloneable))
 	end 'cloneUncloneable'
 
 	if usage.usesShareWalk 'unwalkable'
-		buildAbortingRuntimeEntry(module, symbolName: MmWalkUnwalkableName, returnType: StdReturnType.void, abort: RuntimeAbort.existentialNotWalkable)
+		buildAbortingRuntimeEntry(module, symbolName: MmWalkUnwalkableName, returnType: StdReturnType.void, reason: RuntimeAbortReason.abort(RuntimeAbort.existentialNotWalkable))
 	end 'unwalkable'
 
 	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__managed_cow_detach`, under
@@ -2209,13 +2209,13 @@ let ElementWalkParamCount = 2
 // An entry whose whole body is an abort, and the caller states its return type because it must be the type of
 // the WORD it stands in for: it is reached through a `callIndirect` on a witness word, so a signature that
 // merely fits the abort disagrees with the call — a disagreement wasm refuses as an invalid module.
-function buildAbortingRuntimeEntry(module StdModule, symbolName ByteArray, returnType StdReturnType, abort RuntimeAbort)
+module function buildAbortingRuntimeEntry(module StdModule, symbolName ByteArray, returnType StdReturnType, reason RuntimeAbortReason)
 	let func = IrFunction.createFromStd(symbolName, returnType: returnType, paramCount: SingleValueEntryParamCount, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(SingleValueEntryParamCount)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: SingleValueEntryParamCount)
-	emitRuntimeAbort(module, func: func, block: entry, abort: abort, ids: ids)
+	emitAbortDoorCall(module, func: func, block: entry, reason: reason, ids: ids)
 
 	module.functions.push(func)
 end 'buildAbortingRuntimeEntry'

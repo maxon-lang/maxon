@@ -771,7 +771,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		recordGtUsage(usage)
 	end 'serviceRegistry'
 
-	if isInterfaceHandleRuntimeCallee(callee) 'interfaceHandle'
+	// A `CownHandleLeaf` can first be named by `noteRelocatedFunctionUsage` after lowering, when the scheduler
+	// decision is already baked in, so a leaf never turns it on; `afterPipeline` gives it a body either way.
+	if isInterfaceHandleRuntimeCallee(callee) and not isCownHandleLeaf(callee) 'interfaceHandle'
 		recordGtUsage(usage)
 	end 'interfaceHandle'
 
@@ -845,8 +847,8 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 
 	// A `__prof_*` call. It carries only `usesIntToString`, which `__prof_seized_kill` formats its stderr line
 	// with: every other entry in the family is a leaf over host calls, page reservations or raw word
-	// accesses, so a program that samples another process pulls in neither the allocator nor the scheduler on
-	// this bit's account.
+	// accesses, or calls `__gt_unpin_owner` only when `usesGt` is already set, so a program that samples
+	// another process pulls in neither the allocator nor the scheduler on this bit's account.
 	if isProfileRuntimeCallee(callee) 'processSampling'
 		usage.usesProcessSampling = true
 		usage.usesIntToString = true

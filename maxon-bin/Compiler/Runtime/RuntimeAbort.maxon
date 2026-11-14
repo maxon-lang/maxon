@@ -547,7 +547,7 @@ export function emitRuntimeFatal(module StdModule, func IrFunction, block IrBloc
 	emitAbortDoorCall(module, func: func, block: block, reason: RuntimeAbortReason.fatal(fatal), ids: ids)
 end 'emitRuntimeFatal'
 
-function emitAbortDoorCall(module StdModule, func IrFunction, block IrBlock, reason RuntimeAbortReason, ids ValueMinter)
+module function emitAbortDoorCall(module StdModule, func IrFunction, block IrBlock, reason RuntimeAbortReason, ids ValueMinter)
 	if not module.runtimeAbortDoorBuilt 'firstSite'
 		buildRuntimeAbortDoor(module)
 		module.runtimeAbortDoorBuilt = true
@@ -610,6 +610,7 @@ export enum RuntimeFatal
 	descendantListingFailed
 	descendantReportTruncated
 	resolvedPathHasNoExtendedForm
+	serviceHandleWithoutAScheduler
 end 'RuntimeFatal'
 
 export union RuntimeAbortReason
@@ -719,6 +720,7 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 		descendantListingFailed gives "the host could not list every descendant of this process at its exit, or a descendant it ended did not end"
 		descendantReportTruncated gives "the descendants this process left running at its exit do not fit the report; every one of them has been ended"
 		resolvedPathHasNoExtendedForm gives "a Windows path the operating system resolved could not be put in its extended form: it is neither drive-absolute nor a network path, or it left no room for the prefix"
+		serviceHandleWithoutAScheduler gives "a service handle was cloned or shut down in a program that never started the scheduler, where no handle can exist"
 	end 'reason'
 end 'runtimeFatalReason'
 

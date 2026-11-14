@@ -828,6 +828,9 @@ release's version as its heading when the release is cut.
   descriptor its caller passes. When the instance's methods reach the enclosing type again, so that composing the
   table at a concrete instantiation would build an ever-deeper chain of instances, the widening is E2015.
   Fix: give the type argument a concrete type, or pass the value it wraps as a type parameter of its own.
+- On `wasm32-wasi`, `.clone()` and `.shutdown()` on a service's handle (`Echo.handle`) are E3104 at the call,
+  as they are on an interface handle, in a function nothing calls as well as in one `main` reaches.
+  Fix: guard the code that clones or shuts down a service handle with `#if not os(Wasi)`.
 
 ## 0.5.0 — 2026-10-08
 
