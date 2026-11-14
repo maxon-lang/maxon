@@ -165,10 +165,6 @@ export type CompileDriver implements CompileReceiver
 		self.settle(self.running.held().backendAnswered(job, answered: answered, refused: refused, receiver: receiver.clone()), receiver: receiver)
 	end 'backendAnswered'
 
-	export function logFlushed(receiver CompileReceiver.handle)
-		self.settle(self.running.held().logFlushed(receiver.clone()), receiver: receiver)
-	end 'logFlushed'
-
 	function startNext(receiver CompileReceiver.handle)
 		if self.running.isFull() 'busy'
 			return
@@ -194,7 +190,6 @@ export type CompileDriver implements CompileReceiver
 		let run = self.running.held()
 		let owing = try self.owed.remove(0) otherwise panic("CompileDriver.settle: a running job holds the reply it owes")
 		self.running.clear()
-		releaseAcknowledgedCompilerLog()
 		owing.answer(run.answer())
 		self.startNext(receiver)
 	end 'settle'
