@@ -129,10 +129,11 @@ tests/
     a-test-project-compiles-the-sources-its-project-lists.maxtest      `maxon test` of a project whose `.maxproj` lists `.` and `../shared` compiles the sibling, and its test passes
     a-test-and-a-build-of-one-project-compile-the-same-files.maxtest   a `.maxproj` listing only `src`: `maxon test` and `maxon build` both leave out a `stray/` that does not compile
     a-quoted-frame-is-output-and-a-real-leak-is-not.maxtest   a descendant frame quoted mid-line, echoed from another run or carrying no token is test output; a frame forging the run's own token fails on the count the binary ended with; a leak after unterminated stderr is still named; a test binary given no `--descendant-token` stops naming the option
+    a-test-project-whose-support-code-has-lint-findings-passes.maxtest   support code that drops a pure result and holds an unused unexported function and an unused `export` compiles under `maxon test`, and its test passes
   test-fixtures/<case>/
     <name>.maxtest               a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
-  test-fixtures/<staged case>/   the two `.maxproj` cases above: stored names only (rule 1), staged into `<test scratch>/<case>/`
+  test-fixtures/<staged case>/   the staged cases above: stored names only (rule 1), staged into `<test scratch>/<case>/`
     proj/<name>.fixture  <sibling>/<name>.fixture
   specHarness/
     SpecHarness.maxon            the shared half: the staging outside the checkout, the spawn, the report literals
@@ -499,7 +500,7 @@ tests/
     coverage-timeout-refuses-below-the-least-a-target-takes.maxtest   a coverage deadline shorter than a millisecond is refused with the range every target deadline shares
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
   cli/
-    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, reading and forging library cache lines and entries, reading a cell of a build's `--metrics=` table, the error-path drop family, the recorded build and its compiled / up-to-date readers, and the wait past the filesystem clock
+    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, reading and forging library cache lines and entries, reading a cell of a build's `--metrics=` table, the error-path drop family, the recorded build and its compiled / up-to-date readers, the wait past the filesystem clock, the lint run and the diagnostics it is expected to report (`LintRun`, `lintedIn`, `ExpectedDiagnostic`), the cases built on them (`LintRefusalCase`, `LintUsageRefusalCase`, `LintOfATestProjectCase`, `LintOfAManifestProgramCase`, `BuiltAndRunThenLintRefusedCase`), and `HeldFiles`, which proves a run left a tree's files as they were
     no-arguments.maxtest                    `maxon` alone answers, SHORT, sorted, and exits 0
     help-reference.maxtest                  the reference leads with the short list, then what it hides
     help-per-command.maxtest                every documented command answers `help <command>` for itself
@@ -638,6 +639,23 @@ tests/
     check-scriptlib-reports-a-broken-package.maxtest        `check-scriptlib` builds a package body nothing calls, exits 1 and names `bad/Bad.maxon`
     check-scriptlib-passes-clean-packages.maxtest           `check-scriptlib` over two clean packages and no `main` exits 0 with nothing on stderr
     check-stdlib-reports-an-error-in-a-function-nothing-calls.maxtest   `check-stdlib --target=x64-linux` over an install-shaped stdlib holding a planted E3207 in a function nothing calls exits 1, naming the file and the target
+    lint-reports-a-discarded-pure-result.maxtest            `lint` reports E3064 and writes no executable; `-a-dropped-impure-result`, `-an-unused-export` and `-an-unused-unexported-declaration` do the same for E3065, E3092 and E3219
+    lint-of-a-clean-program-says-linted-and-writes-nothing.maxtest   a clean program exits 0 with one `Linted` line, nothing on stderr and no executable
+    lint-of-several-source-paths-lints-them-as-one-program.maxtest   several paths, and a directory with a file (`lint-of-a-directory-and-a-file-…`), are one program, as `build` compiles them
+    lint-with-no-path-lints-the-working-directory.maxtest   with no path: the working directory; `lint-with-no-path-in-a-manifest-project-…`, `-in-a-delegating-project-…`, `-beside-several-targets-…` and `-binds-the-targets-defines-…` cover the `.maxproj` routes as `build` takes them
+    lint-of-a-named-manifest-target-lints-that-targets-program.maxtest   a lone word naming a target lints the program that target builds
+    lint-with-a-define-lints-the-program-the-define-gives.maxtest   `--define=` binds as `build` binds it, and one naming nothing is refused
+    lint-for-another-target-reports-what-that-target-compiles.maxtest   `--target=` reports the findings that target's `#if` branches compile, and no others
+    lint-refuses-an-output-option.maxtest                   `--output=` is a usage error: nothing checked, nothing written
+    lint-of-a-manifest-reports-a-pure-result-its-target-drops.maxtest   a `.maxproj` named alone is linted as its runner compiles it; `lint-of-a-task-file-…` and `lint-of-a-manifest-reports-an-unused-unexported-function` do the same for E3219, the clean, empty and target-less manifests have a case each, and `--target=`, `--define=` or another path beside one is refused
+    lint-with-tests-of-a-clean-test-project-says-linted.maxtest   `--tests` of a clean test project exits 0 with one `Linted` line; the other `lint-with-tests-*` cases cover one test file, a target word, the subject named, the application's `main`, a finding in a test file or in support code, a failing runner's exit code and the refusals beside `--tests`
+    lint-with-tests-stages-under-a-directory-of-its-own.maxtest   `--tests` stages under `.maxon/lint/` and leaves `maxon test`'s `.maxon/test/staged/` as it was
+    lint-reports-breaking-changes-since-the-last-build-on-stderr.maxtest   a target and `--tests` print the breaking changes on stderr, one `Linted` line on stdout, and leave the compiler-version record and the build records as they were
+    lint-with-metrics-writes-the-checks-phase-rows.maxtest   `--metrics=` writes a table whose check phases allocated, whose code-generation phases read zero, and which holds no `code` row
+    build-compiles-and-runs-a-program-whose-only-faults-are-lint-findings.maxtest   `build` compiles a program whose only faults are lint findings, it runs right, and `lint` refuses it; `build-compiles-and-runs-a-program-that-drops-runtime-reads-…` does the same for dropped runtime reads, intrinsics and composite results
+    execute-runs-a-script-that-drops-a-result-and-leaves-a-function-unused.maxtest   `execute` runs a one-file script with a dropped pure result and an unused unexported function
+    scale-test-measures-the-lint-checks-on-every-rung.maxtest   every rung's tables and result document carry the three `lint:` rows, measured from a `lint` of that rung
+    fixtures/lint-*/                        stored names only - see rule 1
     scratch-name-mints-distinct-names.maxtest               names one process mints one after another never repeat
     scratch-name-round-trips-through-its-parser.maxtest     a minted name gives back its stem and, on its own host, its owner
     scratch-name-parser-refuses-what-it-did-not-mint.maxtest   the parser judges only a name of its family and of the fixed width, and calls the rest unmarked
@@ -820,7 +838,7 @@ tests/
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
     fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
   examples/
-    ExamplesHarness.maxon                   the shared half: build one example, bench/concurrency/ or bench/aes/ program or document's program into `<test scratch>/<source spelling>/`, run it, check its answer
+    ExamplesHarness.maxon                   the shared half: lint and build one example, bench/concurrency/ or bench/aes/ program or document's program into `<test scratch>/<source spelling>/`, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
     hello.maxtest                           prints `Hello, world!` and exits 0
     binary-trees.maxtest                    the published n=10 checks, exit 0
@@ -887,6 +905,7 @@ tests/
     reference-documents-every-tool.maxtest       docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
     reference-documents-the-agent-instructions.maxtest       `initialize`'s `instructions` are docs/WRITING_MAXON_CODE.md's preamble and its `## Scripts and scriptlib` section
     check-reports-a-type-error-and-writes-nothing.maxtest      `check` answers a type error's code, is not the warm-rebuild gate, and writes nothing
+    check-reports-a-discarded-pure-result.maxtest      `check` enforces the lint rules: a discarded pure result answers E3064
     dump-ir-answers-the-ir-text.maxtest          `dump_ir` answers the IR of `main` as text, and writes nothing
     two-sessions-debug-one-source.maxtest        two debug sessions of one source each debug a build of their own, and a closed session's build is gone
     stdio-debug-tools.maxtest               the stdio face holds one debug session across calls, refuses a tool before `debug_start`, and builds a source
@@ -929,6 +948,7 @@ tests/
     run-spec-test-never-reads-another-runs-document.maxtest      `run_spec_test` reads only the result document its own run wrote, and leaves none behind
     run-spec-test-removes-the-document-of-a-stopped-run.maxtest      a run stopped at its bound leaves no result document behind
     run-scale-test-answers-its-document-and-leaves-none.maxtest      `run_scale_test` answers the document its own run wrote, and leaves none behind
+    run-scale-test-measures-the-lint-checks.maxtest      each rung's `phases` carry the three `lint:` rows, with what they allocated
     an-empty-string-argument-is-refused-by-name.maxtest      an empty string given to an argument is refused by name, never read as absent
     execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
     build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
@@ -997,7 +1017,9 @@ plain `.maxon` helpers like the `*Harness.maxon` files above — never a stored 
 them. Four facts shape it:
 
 - **Every declaration in it is `public`.** A corpus compiles all of `support/` but calls part of it, and
-  an `export` nothing in that compilation uses is E3092; `public` is the tier exempt from that check.
+  `maxon lint --tests`, which CI runs on every corpus, reports an `export` nothing in that compilation
+  uses (E3092) and an unmarked declaration nothing live names (E3219); `public` is the tier exempt from
+  both.
 - **A corpus directory's name is its namespace**, because the project root is the common ancestor of the
   listed directories (`tests/`). A name that is not an identifier is E3182, which is why every corpus
   is named as an identifier: `buildManifest`, `emittedRuntime` and so on.
@@ -1052,7 +1074,8 @@ The engine file declares no staging, spawning or run check of its own: it calls 
 
 Every `maxon test` spawned at a live fixture purges and re-stages `<fixture>/.maxon/test/staged/`.
 One run takes its files one after another, so two tests naming one fixture take turns; two
-`maxon test` runs at once over the same corpus race on that directory.
+`maxon test` runs at once over the same corpus race on that directory. `maxon lint --tests` stages under
+`<fixture>/.maxon/lint/`, so a lint and a test run of one corpus each keep their own staged files.
 
 ### 6. Expectations are GENERATED, never hand-written
 
@@ -1791,9 +1814,11 @@ of bodies takes the single compile; one being extended asks for its bodies one a
 
 ## `examples/` — every program in `examples/`, and every complete program the docs show, still builds and still computes its known answer
 
-One case per program: build it with the compiler under test and, where its answer is known, run it and
-compare. The shared half — the build, the run and the answer check — lives in
-`ExamplesHarness.maxon`; see the note under `debug/`.
+One case per program: lint it and build it with the compiler under test and, where its answer is known,
+run it and compare. `maxon build` compiles past the lint rules, so the lint is what holds a program a
+reader copies to them: a `maxon lint` that exits non-zero fails the case before the build. The shared
+half — the lint, the build, the run and the answer check — lives in `ExamplesHarness.maxon`; see the note
+under `debug/`.
 
 A complete program a document shows a reader — one with a `main`: the README and homepage heroes, the
 docs' introduction and first-program walk-through — is gated the same way, because nothing else compiles

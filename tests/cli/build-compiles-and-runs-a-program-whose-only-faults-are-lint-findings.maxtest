@@ -1,0 +1,31 @@
+let BuildOfLintFindingsCaseDirName = "build-of-lint-findings"
+let BuildOfLintFindingsFixture = "build-dropped-results-and-unused-declarations"
+let BuildOfLintFindingsPrintedLine = "dropped results ran, journal entries: 1\n"
+let BuildOfLintFindingsExit = 23
+
+let BareStringDropSite = "main.maxon:65:2"
+let BareStringDropMessage = "result of pure function 'greeting' must be used"
+let DiscardedStringSite = "main.maxon:66:2"
+let BareArrayDropSite = "main.maxon:67:2"
+let BareArrayDropMessage = "result of pure function 'filled' must be used"
+let BareRecordDropSite = "main.maxon:68:2"
+let BareRecordDropMessage = "result of pure function 'labelled' must be used"
+let BareTupleDropSite = "main.maxon:69:2"
+let BareTupleDropMessage = "result of pure function 'paired' must be used"
+let BareImpureDropSite = "main.maxon:70:2"
+let BareImpureDropMessage = "result of 'recorded' is not used (use '_ = expr' to discard)"
+let RoutedThrowingDropSite = "main.maxon:73:3"
+let RoutedThrowingDropMessage = "result of pure function 'checked' must be used"
+
+test 'build compiles a program whose only faults are lint findings, the program runs right, and lint refuses it'
+	let findings = ExpectedDiagnosticArray.create(0)
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: BareStringDropSite, message: BareStringDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: DiscardedStringSite, message: BareStringDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: BareArrayDropSite, message: BareArrayDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: BareRecordDropSite, message: BareRecordDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: BareTupleDropSite, message: BareTupleDropMessage))
+	findings.push(ExpectedDiagnostic.at(DroppedImpureResultCode, site: BareImpureDropSite, message: BareImpureDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: RoutedThrowingDropSite, message: RoutedThrowingDropMessage))
+
+	requireHeldOutsideCheckout(BuildOfLintFindingsCaseDirName, check: BuiltAndRunThenLintRefusedCase.of(BuildOfLintFindingsFixture, printed: BuildOfLintFindingsPrintedLine, exitCode: BuildOfLintFindingsExit, findings: findings))
+end 'build compiles a program whose only faults are lint findings, the program runs right, and lint refuses it'

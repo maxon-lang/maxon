@@ -60,7 +60,8 @@ the current figures. Look for:
 When the change also grows the compiler's own source, the self-compile cannot separate a slower compiler from
 a bigger input, so the 5% is judged on the same input for both compilers: the scale ladder's generated
 programs. Inline-copying an accessor to dodge a cost is duplication, not an optimization; make the accessor
-free in the optimizer.
+free in the optimizer. A self-compile runs no lint rule, so a change to the discarded-result rule or the two
+unused-declaration audits is read off the ladder's `lint:` rows and timed with `maxon lint maxon-bin`.
 
 **Scope the hunt to the change.** A new pass, a new IR op, or a new collection the compiler indexes by
 earns the full hunt above. A change that added none of those gives the hunt structurally nothing to

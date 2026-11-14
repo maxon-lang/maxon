@@ -10,9 +10,22 @@ export enum CheckedDiagnostics
 	besideClaims
 end 'CheckedDiagnostics'
 
+export enum LintRules
+	enforced
+	skipped
+
+	function auditPasses() returns PassKindArray
+		return match self 'rules'
+			enforced gives PassKindArray from [PassKind.checkUnusedExports, PassKind.checkUnusedUnexported]
+			skipped gives PassKindArray.create(0)
+		end 'rules'
+	end 'auditPasses'
+end 'LintRules'
+
 export union DriverWork
-	build
+	build(lintRules LintRules)
 	check(rendersTargetIr bool, reading CheckedDiagnostics)
+	lint
 	warm(step WarmStep)
 	lexSweep(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray)
 	claims
@@ -21,6 +34,7 @@ export union DriverWork
 		return match self 'work'
 			build gives "build"
 			check gives "check"
+			lint gives "lint"
 			warm(step) gives "warm {step.word()}"
 			lexSweep gives "lex sweep"
 			claims gives "claims"
@@ -56,6 +70,7 @@ export type CompileRequest
 	export let runtimeDirOverride as StatedText
 	export let scriptlib as ScriptlibLoad
 	export let entryFunction as immutable ByteArray
+	export let retainedEntries as NameRoster
 	export let compilerWrittenSources as CompilerWrittenSourceArray
 	export let sourceSelection as SourceSelection
 	export let stagedSourceOrigins as StagedSourceOriginArray
@@ -64,14 +79,15 @@ export type CompileRequest
 	export let sink as DiagnosticDestination
 	export let lock as LockHoldState
 
-	export static function create(work DriverWork, origin ProjectOrigin, target Target, session DriverSession, inputPaths MaxonSourcePathArray = MaxonSourcePathArray.create(0), outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray = RuntimeFunctionNameArray.create(0), asyncTrace bool = false, debugStream bool = false, poisonFreed bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), defines DefineArray = DefineArray.create(0)) returns CompileRequest
-		return Self{work: work, origin: origin, inputPaths: inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, poisonFreed: poisonFreed, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, sink: session.diagnostics.destination, lock: session.treeLock.holdings().clone()}
+	export static function create(work DriverWork, origin ProjectOrigin, target Target, session DriverSession, inputPaths MaxonSourcePathArray = MaxonSourcePathArray.create(0), outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray = RuntimeFunctionNameArray.create(0), asyncTrace bool = false, debugStream bool = false, poisonFreed bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), defines DefineArray = DefineArray.create(0), retainedEntries NameRoster = NameRoster.create(0)) returns CompileRequest
+		return Self{work: work, origin: origin, inputPaths: inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, poisonFreed: poisonFreed, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, retainedEntries: retainedEntries, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, sink: session.diagnostics.destination, lock: session.treeLock.holdings().clone()}
 	end 'create'
 end 'CompileRequest'
 
 export union DriverOutcome
 	built(product CompileProduct)
 	checked(compiled bool, diagnostics DiagnosticArray, irText String)
+	linted
 	warmed(reading WarmReading)
 	swept(outcomes LexLandedArray)
 	claimed(claims SourceClaims)

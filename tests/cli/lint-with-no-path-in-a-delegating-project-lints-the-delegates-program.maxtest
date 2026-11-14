@@ -1,0 +1,36 @@
+let LintOfADelegatingProjectCaseDirName = "lint-of-a-delegating-project"
+let LintOfADelegatingProjectFixture = "lint-delegating-project"
+let LintOfADelegatingProjectDirName = "app"
+let LintOfADelegatingProjectDelegateDirName = "library"
+let LintOfADelegatingProjectDelegateStem = "program"
+let LintOfADelegatingProjectBuiltExit = 0
+let LintOfADelegatingProjectSite = "main.maxon:10:2"
+let LintOfADelegatingProjectMessage = "result of pure function 'doubled' must be used"
+
+test 'lint with no path in a project whose target delegates lints the program the delegated project builds'
+	requireHeldOutsideCheckout(LintOfADelegatingProjectCaseDirName, check: LintOfADelegatingProject.create())
+end 'lint with no path in a project whose target delegates lints the program the delegated project builds'
+
+type LintOfADelegatingProject implements OutsideCheckoutCase
+	static function create() returns LintOfADelegatingProject
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let staged = stagedCliFixture(dir, fixture: LintOfADelegatingProjectFixture)
+		let app = staged.join(LintOfADelegatingProjectDirName)
+		let delegateOutput = executableIn(staged.join(LintOfADelegatingProjectDelegateDirName), stem: LintOfADelegatingProjectDelegateStem)
+
+		let delegated = ExpectedDiagnosticArray.create(0)
+		delegated.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintOfADelegatingProjectSite, message: LintOfADelegatingProjectMessage))
+
+		let linted = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: StringArray.create(0))
+		try linted.requireRefusedWithOnly(app, diagnostics: delegated)
+		try Expect.isFalse(File.exists(delegateOutput), message: "{linted.typed} wrote {delegateOutput.toString()}, the executable the delegated project builds. {linted.said()}")
+
+		let built = runWithCacheRoot([BuildCommandWord], cacheRoot: cacheRootIn(dir), workingDirectory: app)
+
+		try Expect.equal(built.exitCode(), expected: LintOfADelegatingProjectBuiltExit, message: "`maxon {BuildCommandWord}` of the delegating project did not build the delegated program, whose only fault is a lint finding, so the project delegates nothing the lint could follow. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
+		try Expect.isTrue(File.exists(delegateOutput), message: "`maxon {BuildCommandWord}` of the delegating project wrote no {delegateOutput.toString()}, so the target delegates elsewhere. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
+	end 'requireHeldIn'
+end 'LintOfADelegatingProject'

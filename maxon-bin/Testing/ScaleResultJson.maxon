@@ -152,16 +152,17 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend, bytes: bytes)
 
 		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
-		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` appears in the report
-		// and in this document together, or in neither.
-		let phases = JsonNodeIdArray.create(CompilePhase.allCases.count(), zeroed: false)
+		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` or
+		// `LintMeasuredPhase` appears in the report and in this document together, or in neither.
+		let phases = JsonNodeIdArray.create(CompilePhase.allCases.count() + LintMeasuredPhase.allCases.count(), zeroed: false)
 		let subs = JsonNodeIdArray.create(RegAllocPhase.allCases.count(), zeroed: false)
 
 		for source in scalePhaseSources() 'eachPhase'
 			let node = metricNode(doc, name: phaseSourceName(source), metric: phaseMetricOf(source, result: result))
 
 			match source 'src'
-				compilePhase then phases.push(node)
+				compilePhase or
+				lintPhase then phases.push(node)
 				regAllocPhase then subs.push(node)
 			end 'src'
 		end 'eachPhase'

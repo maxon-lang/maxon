@@ -527,7 +527,7 @@ end 'passBanner'
 //
 // No `project` is threaded here: a coverage point is minted in the PARSER, above every fold, so by the
 // time a pass list exists the instrumentation is already in the IR.
-export function buildMaxonTierPasses() returns PassKindArray
+export function buildMaxonTierPasses(lintRules LintRules) returns PassKindArray
 	let passes = PassKindArray.create(0)
 
 	// ⚠ The first two are ordered, and neither order is recoverable from the passes themselves.
@@ -542,8 +542,7 @@ export function buildMaxonTierPasses() returns PassKindArray
 	passes.push(PassKind.checkSignatureVisibility)
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
-	passes.push(PassKind.checkUnusedExports)
-	passes.push(PassKind.checkUnusedUnexported)
+	passes.append(lintRules.auditPasses())
 	passes.push(PassKind.reportSecondaryFindings)
 	return passes
 end 'buildMaxonTierPasses'

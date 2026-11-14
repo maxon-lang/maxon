@@ -1,0 +1,56 @@
+let BuildOfDroppedCompositesCaseDirName = "build-of-dropped-composites"
+let BuildOfDroppedCompositesFixture = "build-dropped-runtime-and-composite-results"
+let BuildOfDroppedCompositesPrintedLine = "dropped runtime and composite results ran, journal entries: 3\n"
+let BuildOfDroppedCompositesExit = 29
+
+let ArrayElementDropSite = "main.maxon:71:9"
+let ArrayElementDropMessage = "result of pure function 'Array.get' must be used"
+let MapValueDropSite = "main.maxon:72:10"
+let MapValueDropMessage = "result of pure function 'Map.get' must be used"
+let ArrayCountDropSite = "main.maxon:80:8"
+let ArrayCountDropMessage = "result of pure function 'Array.count' must be used"
+let StringCountDropSite = "main.maxon:81:7"
+let StringCountDropMessage = "result of pure function 'String.count' must be used"
+let StringSplitDropSite = "main.maxon:82:7"
+let StringSplitDropMessage = "result of pure function 'String.split' must be used"
+let StringBytesDropSite = "main.maxon:83:7"
+let StringBytesDropMessage = "result of pure function 'String.toByteArray' must be used"
+let SqrtDropSite = "main.maxon:85:2"
+let SqrtDropMessage = "result of pure function 'sqrt' must be used"
+let AbsDropSite = "main.maxon:86:2"
+let AbsDropMessage = "result of pure function 'abs' must be used"
+let TruncDropSite = "main.maxon:87:2"
+let TruncDropMessage = "result of pure function 'trunc' must be used"
+let PureUnionDropSite = "main.maxon:89:2"
+let PureUnionDropMessage = "result of pure function 'pureOutcome' must be used"
+let ImpureUnionDropSite = "main.maxon:90:2"
+let ImpureUnionDropMessage = "result of 'recordedOutcome' is not used (use '_ = expr' to discard)"
+let PureInterfaceDropSite = "main.maxon:91:2"
+let PureInterfaceDropMessage = "result of pure function 'pureDescriber' must be used"
+let ImpureInterfaceDropSite = "main.maxon:92:2"
+let ImpureInterfaceDropMessage = "result of 'recordedDescriber' is not used (use '_ = expr' to discard)"
+let PureClosureDropSite = "main.maxon:93:2"
+let PureClosureDropMessage = "result of pure function 'pureGreeter' must be used"
+let ImpureClosureDropSite = "main.maxon:94:2"
+let ImpureClosureDropMessage = "result of 'recordedGreeter' is not used (use '_ = expr' to discard)"
+
+test 'build compiles a program that drops runtime reads, intrinsics, unions, interface values and closures, the program runs right, and lint refuses it'
+	let findings = ExpectedDiagnosticArray.create(0)
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: ArrayElementDropSite, message: ArrayElementDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: MapValueDropSite, message: MapValueDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: ArrayCountDropSite, message: ArrayCountDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: StringCountDropSite, message: StringCountDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: StringSplitDropSite, message: StringSplitDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: StringBytesDropSite, message: StringBytesDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: SqrtDropSite, message: SqrtDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: AbsDropSite, message: AbsDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: TruncDropSite, message: TruncDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: PureUnionDropSite, message: PureUnionDropMessage))
+	findings.push(ExpectedDiagnostic.at(DroppedImpureResultCode, site: ImpureUnionDropSite, message: ImpureUnionDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: PureInterfaceDropSite, message: PureInterfaceDropMessage))
+	findings.push(ExpectedDiagnostic.at(DroppedImpureResultCode, site: ImpureInterfaceDropSite, message: ImpureInterfaceDropMessage))
+	findings.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: PureClosureDropSite, message: PureClosureDropMessage))
+	findings.push(ExpectedDiagnostic.at(DroppedImpureResultCode, site: ImpureClosureDropSite, message: ImpureClosureDropMessage))
+
+	requireHeldOutsideCheckout(BuildOfDroppedCompositesCaseDirName, check: BuiltAndRunThenLintRefusedCase.of(BuildOfDroppedCompositesFixture, printed: BuildOfDroppedCompositesPrintedLine, exitCode: BuildOfDroppedCompositesExit, findings: findings))
+end 'build compiles a program that drops runtime reads, intrinsics, unions, interface values and closures, the program runs right, and lint refuses it'

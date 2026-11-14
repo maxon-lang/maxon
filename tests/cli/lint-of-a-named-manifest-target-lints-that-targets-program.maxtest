@@ -1,0 +1,37 @@
+let LintOfANamedTargetCaseDirName = "lint-of-a-named-target"
+let LintOfANamedTargetFixture = "lint-two-targets"
+let LintOfANamedTargetDroppingWord = "dropping-target"
+let LintOfANamedTargetCleanWord = "clean-target"
+let LintOfANamedTargetDroppingStem = "dropping-program"
+let LintOfANamedTargetCleanStem = "clean-program"
+let LintOfANamedTargetSite = "main.maxon:10:2"
+let LintOfANamedTargetMessage = "result of pure function 'doubled' must be used"
+
+test 'lint of a word naming a manifest target lints the program that target builds'
+	requireHeldOutsideCheckout(LintOfANamedTargetCaseDirName, check: LintOfANamedTarget.create())
+end 'lint of a word naming a manifest target lints the program that target builds'
+
+type LintOfANamedTarget implements OutsideCheckoutCase
+	static function create() returns LintOfANamedTarget
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfANamedTargetFixture)
+
+		let dropping = ExpectedDiagnosticArray.create(0)
+		dropping.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintOfANamedTargetSite, message: LintOfANamedTargetMessage))
+
+		let droppingRun = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfANamedTargetDroppingWord])
+		try droppingRun.requireRefusedWithOnly(app, diagnostics: dropping)
+
+		let cleanRun = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfANamedTargetCleanWord])
+		try cleanRun.requireOneLintedLine(app)
+
+		for stem in [LintOfANamedTargetDroppingStem, LintOfANamedTargetCleanStem] 'eachOutput'
+			let output = executableIn(app, stem: stem)
+
+			try Expect.isFalse(File.exists(output), message: "a lint of a named target wrote {output.toString()}, the executable a target of the project builds. {droppingRun.said()} {cleanRun.said()}")
+		end 'eachOutput'
+	end 'requireHeldIn'
+end 'LintOfANamedTarget'

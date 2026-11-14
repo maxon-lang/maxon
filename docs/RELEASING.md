@@ -29,7 +29,8 @@ match the release's `SHA256SUMS`.
 `stdlib/` and the compiler's own sources are compiled by the seed on every CI lane and every release runner,
 none of which has another compiler to reach for. A tree that uses something the pinned seed does not accept —
 a `__Managed*` entry (E2015), a `__Builtins` intrinsic (E3004), a language form, a rule that widens a tier
-(E3092) — fails the seed's first build, and nothing later on `main` can fix that: the compiler that accepts
+(E3092, under a seed whose `build` runs the [lint rules](CLI_REFERENCE.md#maxon-lint)) — fails the seed's
+first build, and nothing later on `main` can fix that: the compiler that accepts
 the tree is the one the seed does not contain yet. Whoever lands such a commit has that compiler, the slot
 built from `HEAD`, so the commit and the seed frozen from it are published and pinned together.
 

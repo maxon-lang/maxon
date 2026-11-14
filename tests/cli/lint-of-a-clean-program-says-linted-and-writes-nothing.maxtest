@@ -1,0 +1,17 @@
+let LintOfACleanProgramCaseDirName = "lint-of-a-clean-program"
+let LintOfACleanProgramFixture = "lint-clean"
+
+test 'lint of a clean program exits 0, prints one Linted line, says nothing on stderr and writes no executable'
+	requireHeldOutsideCheckout(LintOfACleanProgramCaseDirName, check: LintOfACleanProgram.create())
+end 'lint of a clean program exits 0, prints one Linted line, says nothing on stderr and writes no executable'
+
+type LintOfACleanProgram implements OutsideCheckoutCase
+	static function create() returns LintOfACleanProgram
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfACleanProgramFixture)
+		try lintedIn(dir, app: app, options: StringArray.create(0)).requireLintedClean(app, naming: app.filename())
+	end 'requireHeldIn'
+end 'LintOfACleanProgram'

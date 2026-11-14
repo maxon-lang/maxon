@@ -1,0 +1,56 @@
+let LintReportsBreakingChangesCaseDirName = "lint-reports-breaking-changes"
+let LintReportsBreakingChangesTargetDirName = "target-route"
+let LintReportsBreakingChangesTestsDirName = "tests-route"
+let LintReportsBreakingChangesTargetFixture = "lint-release-record"
+let LintReportsBreakingChangesTestsFixture = "lint-tests-release-record"
+let LintReportsBreakingChangesTestsOption = "--tests"
+let LintReportsBreakingChangesBuildRecordDirName = "build"
+let LintReportsBreakingChangesCleanExit = 0
+let LintReportsBreakingChangesLintedPrefix = "Linted "
+let LintReportsBreakingChangesLintedLines = 1
+
+test 'lint prints the breaking changes since the last build on stderr, one Linted line on stdout, and keeps the record, on the target and the tests routes'
+	requireHeldOutsideCheckout(LintReportsBreakingChangesCaseDirName, check: LintReportsBreakingChanges.create())
+end 'lint prints the breaking changes since the last build on stderr, one Linted line on stdout, and keeps the record, on the target and the tests routes'
+
+type LintReportsBreakingChanges implements OutsideCheckoutCase
+	static function create() returns LintReportsBreakingChanges
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		try requireBreakingChangesReported(dir.join(LintReportsBreakingChangesTargetDirName), fixture: LintReportsBreakingChangesTargetFixture, recordedBy: BuildCommandWord, lintArguments: StringArray.create(0))
+		try requireBreakingChangesReported(dir.join(LintReportsBreakingChangesTestsDirName), fixture: LintReportsBreakingChangesTestsFixture, recordedBy: TestCommandWord, lintArguments: [LintReportsBreakingChangesTestsOption])
+	end 'requireHeldIn'
+end 'LintReportsBreakingChanges'
+
+function requireBreakingChangesReported(dir FilePath, fixture String, recordedBy String, lintArguments StringArray) throws TestFailure
+	let app = stagedCliFixture(dir, fixture: fixture)
+	let cacheRoot = cacheRootIn(dir)
+	let recorded = runWithCacheRoot([recordedBy], cacheRoot: cacheRoot, workingDirectory: app)
+
+	try Expect.equal(recorded.exitCode(), expected: LintReportsBreakingChangesCleanExit, message: "`maxon {recordedBy}` of the `{fixture}` project did not succeed, so it recorded no release. It wrote to stdout: {recorded.stdout} and to stderr: {recorded.stderr}")
+
+	let record = try soleVersionRecordUnder(cacheRoot)
+	writeStagedFile(record, content: recordLine(OlderRelease))
+
+	let buildRecords = HeldFiles.under(cacheRoot.join(CacheVendorDirName).join(LintReportsBreakingChangesBuildRecordDirName))
+	let linted = LintRun.ran(app, cacheRoot: cacheRoot, arguments: lintArguments)
+	let said = linted.said()
+	let notesHead = "{LastBuiltWording} {OlderRelease}."
+	let lines = outputLines(linted.output.stdout.trim())
+
+	try Expect.equal(linted.output.exitCode(), expected: LintReportsBreakingChangesCleanExit, message: "{linted.typed} of a clean project last built by maxon {OlderRelease} did not exit {LintReportsBreakingChangesCleanExit}. {said}")
+	try Expect.contains(linted.output.stderr, needle: notesHead, message: "{linted.typed} of a project last built by maxon {OlderRelease} did not print `{notesHead}` and the breaking changes since on stderr, as `maxon {recordedBy}` would. {said}")
+	try Expect.isFalse(linted.output.stdout.contains(LastBuiltWording), message: "{linted.typed} printed the breaking changes on stdout, which holds only its `{LintReportsBreakingChangesLintedPrefix}` line. {said}")
+	try Expect.equal(lines.count(), expected: LintReportsBreakingChangesLintedLines, message: "{linted.typed} did not print exactly one line on stdout. {said}")
+
+	let line = try lines.get(0) otherwise panic("lint-reports-breaking-changes: a split always yields one element")
+
+	try Expect.startsWith(line, needle: LintReportsBreakingChangesLintedPrefix, message: "{linted.typed} did not print a `{LintReportsBreakingChangesLintedPrefix}` line. {said}")
+
+	let recordAfter = try soleVersionRecordUnder(cacheRoot)
+
+	try Expect.equal(fileText(recordAfter), expected: recordLine(OlderRelease), message: "{linted.typed} rewrote the compiler-version record {record.toString()}: a lint builds nothing, so the project's last build is still maxon {OlderRelease}'s. {said}")
+	try buildRecords.requireUnchangedBy(linted.typed, said: said)
+end 'requireBreakingChangesReported'

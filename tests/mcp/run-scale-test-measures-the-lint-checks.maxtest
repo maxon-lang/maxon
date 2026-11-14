@@ -1,0 +1,51 @@
+typealias ScaleLintAllocationMap = Map with (String, JsonInt)
+
+let ScaleLintSmallestLadder = 1
+let ScaleLintToolName = "run_scale_test"
+let ScaleLintResultKey = "result"
+let ScaleLintRungsKey = "rungs"
+let ScaleLintPhasesKey = "phases"
+let ScaleLintNameKey = "name"
+let ScaleLintAllocsKey = "allocs"
+let ScaleLintFirstRung = 0
+let ScaleLintSemanticCheckPhase = "lint:semanticCheck"
+let ScaleLintUnusedExportsPhase = "lint:checkUnusedExports"
+let ScaleLintUnusedUnexportedPhase = "lint:checkUnusedUnexported"
+let ScaleLintNothingAllocated = 0
+
+test 'run_scale_test answers a document whose phases carry the lint checks with what they allocated'
+	let answer = callTool(ScaleLintToolName, argumentsJson: argumentsOf(["\"rungs\":{ScaleLintSmallestLadder}"]), devMode: true)
+	let text = toolCallText(answer)
+
+	Expect.isFalse(toolCallIsError(answer), message: "a one-rung ladder is a legal run. It answered: {text}")
+
+	let phases = rungZeroPhaseAllocations(text)
+
+	for phase in [ScaleLintSemanticCheckPhase, ScaleLintUnusedExportsPhase, ScaleLintUnusedUnexportedPhase] 'eachLintPhase'
+		Expect.isTrue(phases.contains(phase), message: "rung 0's `{ScaleLintPhasesKey}` carry no `{phase}`, so the document no longer measures a check only `lint` runs. It answered: {text}")
+
+		let allocated = try phases.get(phase) otherwise panic("run-scale-test-lint: a phase the map was just asked for is held")
+
+		Expect.greaterThan(allocated, than: ScaleLintNothingAllocated, message: "`{phase}` allocated nothing at rung 0. It answered: {text}")
+	end 'eachLintPhase'
+end 'run_scale_test answers a document whose phases carry the lint checks with what they allocated'
+
+function rungZeroPhaseAllocations(text String) returns ScaleLintAllocationMap
+	let payload = try Json.parse(text) otherwise panic("run-scale-test-lint: the tool's payload is not JSON: {text}")
+	let result = try payload.getChild(payload.root, key: ScaleLintResultKey) otherwise panic("run-scale-test-lint: the payload carries no `{ScaleLintResultKey}`: {text}")
+	let rungs = try payload.getChild(result, key: ScaleLintRungsKey) otherwise panic("run-scale-test-lint: the document carries no `{ScaleLintRungsKey}`: {text}")
+	let rung = try payload.arrayAt(rungs, index: ScaleLintFirstRung) otherwise panic("run-scale-test-lint: the document carries no rung 0: {text}")
+	let phases = try payload.getChild(rung, key: ScaleLintPhasesKey) otherwise panic("run-scale-test-lint: rung 0 carries no `{ScaleLintPhasesKey}`: {text}")
+	let count = try payload.arrayLength(phases) otherwise panic("run-scale-test-lint: `{ScaleLintPhasesKey}` is not an array: {text}")
+	let allocations = ScaleLintAllocationMap.create()
+
+	for i in 0 upto count 'eachPhase'
+		let phase = try payload.arrayAt(phases, index: i) otherwise panic("run-scale-test-lint: `{ScaleLintPhasesKey}` has no element {i} of its {count}")
+		let name = try payload.getString(phase, key: ScaleLintNameKey) otherwise panic("run-scale-test-lint: a phase carries no `{ScaleLintNameKey}`: {text}")
+		let allocs = try payload.getInt(phase, key: ScaleLintAllocsKey) otherwise panic("run-scale-test-lint: the `{name}` phase carries no `{ScaleLintAllocsKey}`: {text}")
+
+		allocations.upsert(name, value: allocs)
+	end 'eachPhase'
+
+	return allocations
+end 'rungZeroPhaseAllocations'

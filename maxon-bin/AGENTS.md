@@ -29,6 +29,10 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   maxon-bin` from the root is a PATH build** — the root holds no `.maxproj`, so the word is a path: it
   compiles the same sources and stamps NO version, which is what the seed rule below relies on and what
   you keep away from the slot.
+- **Lint it:** `./maxon-bin/.maxon/maxon lint maxon-bin`. A build compiles past the lint rules (E3064 and
+  E3065, a dropped result; E3092, an unused `export`; E3219, an unused unexported declaration), so the
+  self-compile reports none of them; this does. `--target=<lane>` lints for a lane other than the host's,
+  which matters where `#if` branches differ.
 - **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the pinned seed's binary at
   `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **The seed is the `seed-*`
   pre-release that `scripts/seed-tag` names, a frozen compiler:** it changes only when a commit moves the
@@ -133,8 +137,9 @@ program then panics; a runtime probe fires in every later build. Keep probe buil
 a real program (`examples/fannkuch-redux.maxon`) before trusting a filtered green.
 
 ⛔ **THE SEED ALSO JUDGES THE COMPILER'S OWN SOURCES BY ITS OLDER RULES.** A language form newer than the seed
-is refused there, and a tier the seed cannot credit fails too: an `export` that only a rule in this tree makes
-used is E3092 to the seed, on every lane. Either is a refusal, so the commit lands with its own seed. When an
+is refused there, and a tier the seed cannot credit fails too: under a seed whose `build` runs the lint rules,
+an `export` that only a rule in this tree makes used is E3092 to the seed, on every lane. A seed-built first
+stage applies the seed's rules, never this tree's. Either is a refusal, so the commit lands with its own seed. When an
 editor's lock stops `build-from-seed.sh`, prove the chain by hand into `temp/<task>/`:
 `.bootstrap/maxon.exe build maxon-bin --output=temp/<task>/c1.exe`, then
 `temp/<task>/c1.exe build maxon-bin --output=temp/<task>/c2.exe`.
@@ -396,7 +401,11 @@ facts worth knowing before you get there:
   and a corpus with no file runs everywhere; `tests/README.md` has the grammar. A new corpus is run from the day it
   is added. `/land` runs a corpus only filtered to the cases the change touched; the full corpora are CI's.
   CI also runs `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
-  and `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it.
+  `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it,
+  and `scripts/lint-tree.sh`, which lints every first-party program: the compiler, the script programs, the
+  torture programs with their preludes, every corpus under `tests/` with `--tests`, and every real
+  `.maxproj` and `.maxtasks` file. `maxon test` compiles a corpus as `maxon build` does, past the lint rules;
+  `maxon lint --tests tests/<corpus>` checks it against them.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing

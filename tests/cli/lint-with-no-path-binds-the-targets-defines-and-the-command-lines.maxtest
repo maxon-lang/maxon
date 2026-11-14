@@ -1,0 +1,44 @@
+let LintBindsBothDefinesCaseDirName = "lint-binds-both-defines"
+let LintBindsBothDefinesFixture = "lint-manifest-and-command-line-defines"
+let LintBindsBothDefinesUnknownTargetDirName = "unknown-in-the-target"
+let LintBindsBothDefinesUnknownTargetFixture = "lint-manifest-unknown-define"
+let LintBindsBothDefinesOptionPrefix = "--define="
+let LintBindsBothDefinesFlavor = "Flavor=sweet"
+let LintBindsBothDefinesUnknownFlavor = "NoSuchFlavor=sweet"
+let LintBindsBothDefinesUnknownFlavorName = "'NoSuchFlavor'"
+let LintBindsBothDefinesUnknownChannelName = "'NoSuchChannel'"
+let LintBindsBothDefinesFlavorName = "'Flavor'"
+let LintBindsBothDefinesUnknownLine = "error E3149"
+
+test 'lint with no path binds the target defines and the command line defines together, refusing an unknown name in either'
+	requireHeldOutsideCheckout(LintBindsBothDefinesCaseDirName, check: LintBindsBothDefines.create())
+end 'lint with no path binds the target defines and the command line defines together, refusing an unknown name in either'
+
+type LintBindsBothDefines implements OutsideCheckoutCase
+	static function create() returns LintBindsBothDefines
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintBindsBothDefinesFixture)
+
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: ["{LintBindsBothDefinesOptionPrefix}{LintBindsBothDefinesFlavor}"]).requireOneLintedLine(app)
+
+		let unknownOnTheCommandLine = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: ["{LintBindsBothDefinesOptionPrefix}{LintBindsBothDefinesUnknownFlavor}"])
+		try requireUnknownDefineRefused(unknownOnTheCommandLine, app: app, named: LintBindsBothDefinesUnknownFlavorName)
+
+		let unknownApp = stagedCliFixture(dir.join(LintBindsBothDefinesUnknownTargetDirName), fixture: LintBindsBothDefinesUnknownTargetFixture)
+		let unknownInTheTarget = LintRun.ran(unknownApp, cacheRoot: cacheRootIn(dir), arguments: ["{LintBindsBothDefinesOptionPrefix}{LintBindsBothDefinesFlavor}"])
+		try requireUnknownDefineRefused(unknownInTheTarget, app: unknownApp, named: LintBindsBothDefinesUnknownChannelName)
+		try Expect.isFalse(unknownInTheTarget.output.stderr.contains(LintBindsBothDefinesFlavorName), message: "{unknownInTheTarget.typed} refused `{LintBindsBothDefinesFlavor}`, which names a constant the target's program declares. {unknownInTheTarget.said()}")
+	end 'requireHeldIn'
+end 'LintBindsBothDefines'
+
+function requireUnknownDefineRefused(linted LintRun, app FilePath, named String) throws TestFailure
+	let said = linted.said()
+
+	try Expect.equal(linted.output.exitCode(), expected: RefusedExitCode, message: "{linted.typed} did not exit {RefusedExitCode}, the code `maxon {BuildCommandWord}` refuses a define naming no declaration with. {said}")
+	try Expect.contains(linted.output.stderr, needle: LintBindsBothDefinesUnknownLine, message: "{linted.typed} did not report the define naming no declaration as `maxon {BuildCommandWord}` does. {said}")
+	try Expect.contains(linted.output.stderr, needle: named, message: "{linted.typed}'s refusal does not name {named}, the define that names no declaration. {said}")
+	try requireNothingBuiltFor(app, what: linted.typed, said: said)
+end 'requireUnknownDefineRefused'

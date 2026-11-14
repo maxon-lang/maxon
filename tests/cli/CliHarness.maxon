@@ -5,8 +5,8 @@ typealias ReportedTally = int(i64.min to i64.max)
 // printed that let these cases assert WITHOUT keeping a list of commands of their own.
 //
 // ⭐⭐ **WHAT THIS CORPUS PROVES: THE DRIVER'S OWN FACE — `maxon` with no arguments, `maxon help`, and
-// `maxon upgrade`, which answers from where the running binary sits, and what `maxon build` names, skips and
-// reports.** Those are driver commands, so they
+// `maxon upgrade`, which answers from where the running binary sits, and what `maxon build` and
+// `maxon lint` name, skip and report.** Those are driver commands, so they
 // are gated by spawning the compiler and asserting what it reports (`tests/README.md`), and they cannot be
 // gated in `specs/`: a spec case is a Maxon PROGRAM the harness compiles and runs, which can reach
 // `stdlib/` and nothing else.
@@ -2141,3 +2141,341 @@ let RunCommandWord = "run"
 let TaskExitCode = 7
 let TasksFileExtension = ".maxtasks"
 let CommandLabel = "command: "
+
+let LintCommandWord = "lint"
+let DiscardedPureResultCode = "E3064"
+let DroppedImpureResultCode = "E3065"
+let UnusedExportCode = "E3092"
+let UnusedUnexportedCode = "E3219"
+let UnusedLeftoverMessage = "unused function: 'leftover' is not exported and nothing live in its directory names it; delete it"
+
+let CliFixturesDir = "tests/cli/fixtures"
+let ExpectedDiagnosticLinePrefix = "error "
+let ExpectedDiagnosticFieldSeparator = ": "
+let ExpectedDiagnosticPathPlaceholder = "<path>/"
+
+type ExpectedDiagnostic
+	let code as String
+	let site as String
+	let message as String
+
+	static function at(code String, site String, message String) returns ExpectedDiagnostic
+		return Self{code: code, site: site, message: message}
+	end 'at'
+
+	function isReportedIn(stderr String) returns bool
+		let opening = "{ExpectedDiagnosticLinePrefix}{self.code}{ExpectedDiagnosticFieldSeparator}"
+		let closing = "{self.site}{ExpectedDiagnosticFieldSeparator}{self.message}"
+
+		for line in outputLines(stderr) 'eachLine'
+			if line.startsWith(opening) and line.endsWith(closing) 'reported'
+				return true
+			end 'reported'
+		end 'eachLine'
+
+		return false
+	end 'isReportedIn'
+
+	function spelled() returns String
+		return "{ExpectedDiagnosticLinePrefix}{self.code}{ExpectedDiagnosticFieldSeparator}{ExpectedDiagnosticPathPlaceholder}{self.site}{ExpectedDiagnosticFieldSeparator}{self.message}"
+	end 'spelled'
+end 'ExpectedDiagnostic'
+
+typealias ExpectedDiagnosticArray = Array with ExpectedDiagnostic
+
+function stagedCliFixture(dir FilePath, fixture String) returns FilePath
+	let app = stagingDir(dir.join(AppDirName).toString())
+	stageStoredTree(fixtureDir("{CliFixturesDir}{PortablePathSeparator}{fixture}"), into: app)
+
+	return app
+end 'stagedCliFixture'
+
+function defaultBuildOutputOf(app FilePath) returns FilePath
+	return executableIn(app, stem: app.filename())
+end 'defaultBuildOutputOf'
+
+function runConfinedIn(dir FilePath, arguments StringArray) returns CollectedOutput
+	return runWithCacheRoot(arguments, cacheRoot: cacheRootIn(dir), workingDirectory: dir)
+end 'runConfinedIn'
+
+function requireNothingBuiltFor(app FilePath, what String, said String) throws TestFailure
+	let output = defaultBuildOutputOf(app)
+
+	try Expect.isFalse(File.exists(output), message: "{what} wrote {output.toString()}, the executable `maxon {BuildCommandWord}` writes for that project; it compiles no code. {said}")
+	try Expect.isFalse(File.exists(sidecarOf(output)), message: "{what} wrote {sidecarOf(output).toString()}, the sidecar of the executable `maxon {BuildCommandWord}` writes for that project. {said}")
+end 'requireNothingBuiltFor'
+
+let LintedLinePrefix = "Linted "
+let LintedLineCount = 1
+let LintedCleanExit = 0
+
+type LintRun
+	let typed as String
+	let output as CollectedOutput
+
+	static function ran(workingDirectory FilePath, cacheRoot FilePath, arguments StringArray) returns LintRun
+		let commandLine = StringArray.create(0)
+		commandLine.push(LintCommandWord)
+		commandLine.append(arguments)
+
+		let typed = "`maxon {joined(commandLine, separator: Space)}`"
+
+		return Self{typed: typed, output: runWithCacheRoot(commandLine, cacheRoot: cacheRoot, workingDirectory: workingDirectory)}
+	end 'ran'
+
+	function said() returns String
+		return "It wrote to stdout: {self.output.stdout} and to stderr: {self.output.stderr}"
+	end 'said'
+
+	function requireRefused(app FilePath, diagnostics ExpectedDiagnosticArray) throws TestFailure
+		try Expect.equal(self.output.exitCode(), expected: RefusedExitCode, message: "{self.typed} did not exit {RefusedExitCode}, the code `maxon {BuildCommandWord}` refuses a program with. {said()}")
+
+		for expected in diagnostics 'eachDiagnostic'
+			try Expect.isTrue(expected.isReportedIn(self.output.stderr), message: "{self.typed} did not report `{expected.spelled()}` on stderr, the line `maxon {BuildCommandWord}` prints for it. {said()}")
+		end 'eachDiagnostic'
+
+		try requireNothingBuiltFor(app, what: self.typed, said: said())
+	end 'requireRefused'
+
+	function requireRefusedWithOnly(app FilePath, diagnostics ExpectedDiagnosticArray) throws TestFailure
+		try requireRefused(app, diagnostics: diagnostics)
+
+		let reported = linesOpeningIn(self.output.stderr, prefix: ReportedErrorLinePrefix)
+
+		try Expect.equal(reported.count(), expected: diagnostics.count(), message: "{self.typed} reported {reported.count()} errors where its findings are exactly {diagnostics.count()}: {joined(reported, separator: ReportedErrorLineSeparator)}. {said()}")
+	end 'requireRefusedWithOnly'
+
+	function requireLintedClean(app FilePath, naming String) throws TestFailure
+		let line = try oneLintedLine(app)
+		let expected = "{LintedLinePrefix}{naming}"
+
+		try Expect.equal(line, expected: expected, message: "{self.typed} of a program with no finding did not print `{expected}`, naming what was typed. {said()}")
+	end 'requireLintedClean'
+
+	function requireOneLintedLine(app FilePath) throws TestFailure
+		let line = try oneLintedLine(app)
+
+		try Expect.startsWith(line, needle: LintedLinePrefix, message: "{self.typed} of a program with no finding did not print a line starting `{LintedLinePrefix}`. {said()}")
+	end 'requireOneLintedLine'
+
+	function oneLintedLine(app FilePath) returns String throws TestFailure
+		try Expect.equal(self.output.exitCode(), expected: LintedCleanExit, message: "{self.typed} of a program with no finding did not exit {LintedCleanExit}. {said()}")
+		try Expect.isEmpty(self.output.stderr, message: "{self.typed} of a program with no finding wrote to stderr. {said()}")
+
+		let lines = outputLines(self.output.stdout.trim())
+
+		try Expect.equal(lines.count(), expected: LintedLineCount, message: "{self.typed} of a program with no finding did not print exactly one line on stdout. {said()}")
+
+		let line = try lines.get(0) otherwise panic("LintRun: a split always yields one element")
+
+		try requireNothingBuiltFor(app, what: self.typed, said: said())
+
+		return line
+	end 'oneLintedLine'
+end 'LintRun'
+
+function lintedIn(dir FilePath, app FilePath, options StringArray) returns LintRun
+	let arguments = StringArray.create(0)
+	arguments.push(app.filename())
+	arguments.append(options)
+
+	return LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: arguments)
+end 'lintedIn'
+
+let BuiltCleanExit = 0
+
+type BuiltAndRunThenLintRefusedCase implements OutsideCheckoutCase
+	let fixture as String
+	let printed as String
+	let exitCode as ExitInt
+	let findings as ExpectedDiagnosticArray
+
+	static function of(fixture String, printed String, exitCode ExitInt, findings ExpectedDiagnosticArray) returns BuiltAndRunThenLintRefusedCase
+		return Self{fixture: fixture, printed: printed, exitCode: exitCode, findings: findings}
+	end 'of'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: self.fixture)
+		let typed = "`maxon {BuildCommandWord} {app.filename()}`"
+		let built = runConfinedIn(dir, arguments: [BuildCommandWord, app.filename()])
+		let builtSaid = "It wrote to stdout: {built.stdout} and to stderr: {built.stderr}"
+		let executable = defaultBuildOutputOf(app)
+
+		try Expect.equal(built.exitCode(), expected: BuiltCleanExit, message: "{typed} refused the `{self.fixture}` program, whose only faults are `maxon {LintCommandWord}`'s findings; a build compiles past them as Go's compiler does. {builtSaid}")
+		try Expect.isTrue(File.exists(executable), message: "{typed} exited {built.exitCode()} and wrote no {executable.toString()}. {builtSaid}")
+
+		let ran = spawnCompiler(StringArray.create(0), binary: executable, staged: dir)
+		let ranSaid = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+		try Expect.equal(ran.exitCode(), expected: self.exitCode, message: "the `{self.fixture}` program, whose results are dropped, exited {ran.exitCode()}, not {self.exitCode}. A dropped result released wrongly is a leak (exit 101) or a double free. {ranSaid}")
+		try Expect.equal(withoutCarriageReturns(ran.stdout), expected: self.printed, message: "the `{self.fixture}` program, whose results are dropped, printed the wrong output. {ranSaid}")
+		try Expect.isEmpty(ran.stderr, message: "the `{self.fixture}` program, whose results are dropped, wrote to stderr. {ranSaid}")
+
+		try File.delete(executable) otherwise panic("{self.fixture}: could not remove {executable.toString()} before the lint, which must be shown to write none")
+		try File.delete(sidecarOf(executable)) otherwise panic("{self.fixture}: could not remove the sidecar of {executable.toString()} before the lint, which must be shown to write none")
+
+		try lintedIn(dir, app: app, options: StringArray.create(0)).requireRefused(app, diagnostics: self.findings)
+	end 'requireHeldIn'
+end 'BuiltAndRunThenLintRefusedCase'
+
+type LintRefusalCase implements OutsideCheckoutCase
+	let fixture as String
+	let diagnostics as ExpectedDiagnosticArray
+
+	static function reporting(fixture String, diagnostic ExpectedDiagnostic) returns LintRefusalCase
+		let diagnostics = ExpectedDiagnosticArray.create(0)
+		diagnostics.push(diagnostic)
+
+		return Self{fixture: fixture, diagnostics: diagnostics}
+	end 'reporting'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: self.fixture)
+		try lintedIn(dir, app: app, options: StringArray.create(0)).requireRefusedWithOnly(app, diagnostics: self.diagnostics)
+	end 'requireHeldIn'
+end 'LintRefusalCase'
+
+let ReportedErrorLinePrefix = "error"
+let ReportedErrorLineSeparator = " | "
+
+type LintOfAManifestProgramCase implements OutsideCheckoutCase
+	let fixture as String
+	let manifest as String
+	let proof as StringArray
+	let provedExit as ExitInt
+	let findings as ExpectedDiagnosticArray
+
+	static function of(fixture String, manifest String, proof StringArray, provedExit ExitInt, findings ExpectedDiagnosticArray) returns LintOfAManifestProgramCase
+		return Self{fixture: fixture, manifest: manifest, proof: proof, provedExit: provedExit, findings: findings}
+	end 'of'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: self.fixture)
+		let proved = runWithCacheRoot(self.proof, cacheRoot: cacheRootIn(dir), workingDirectory: app)
+
+		try Expect.equal(proved.exitCode(), expected: self.provedExit, message: "`maxon {joined(self.proof, separator: Space)}` beside the `{self.fixture}` {self.manifest} did not exit {self.provedExit}, so it is no runnable manifest and its lint proves nothing. The runner compiles a manifest past the lint rules. It wrote to stdout: {proved.stdout} and to stderr: {proved.stderr}")
+
+		let linted = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [self.manifest])
+
+		if self.findings.isEmpty() 'clean'
+			try linted.requireOneLintedLine(app)
+		end 'clean' else 'faulty'
+			try linted.requireRefusedWithOnly(app, diagnostics: self.findings)
+		end 'faulty'
+	end 'requireHeldIn'
+end 'LintOfAManifestProgramCase'
+
+let LintUsageRefusedCleanExit = 0
+let LintUsageRefusalNoFindingPrefix = "error E"
+
+type LintUsageRefusalCase implements OutsideCheckoutCase
+	let fixture as String
+	let arguments as StringArray
+	let words as StringArray
+
+	static function of(fixture String, arguments StringArray, words StringArray) returns LintUsageRefusalCase
+		return Self{fixture: fixture, arguments: arguments, words: words}
+	end 'of'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: self.fixture)
+		let linted = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: self.arguments)
+		let said = linted.said()
+		let lines = outputLines(linted.output.stderr)
+
+		try Expect.notEqual(linted.output.exitCode(), expected: LintUsageRefusedCleanExit, message: "{linted.typed} was not refused. {said}")
+
+		for word in self.words 'eachWord'
+			try Expect.contains(linted.output.stderr, needle: word, message: "{linted.typed}'s refusal does not say `{word}`. {said}")
+		end 'eachWord'
+
+		let opening = try self.words.get(0) otherwise panic("LintUsageRefusalCase: a refusal is pinned by at least one stable phrase")
+		var usageFollows = false
+
+		for (iter, line) in lines.withIterator() 'eachLine'
+			if line.contains(opening) 'theRefusal'
+				if let next = try lines.get(iter.index() + 1) 'hasNext'
+					usageFollows = next.startsWith(UsageLinePrefix)
+				end 'hasNext'
+
+				break
+			end 'theRefusal'
+		end 'eachLine'
+
+		try Expect.isTrue(usageFollows, message: "{linted.typed}'s refusal is not followed by the `{UsageLinePrefix}` line a usage error prints. {said}")
+		try Expect.isEmpty(joined(linesOpeningIn(linted.output.stdout, prefix: LintedLinePrefix), separator: Space), message: "{linted.typed} printed a `{LintedLinePrefix}` line, though it was refused before anything was linted. {said}")
+		try Expect.isEmpty(joined(linesOpeningIn(linted.output.stderr, prefix: LintUsageRefusalNoFindingPrefix), separator: Space), message: "{linted.typed} reported a finding, though a usage error stops the command before anything is checked. {said}")
+		try requireNothingBuiltFor(app, what: linted.typed, said: said)
+	end 'requireHeldIn'
+end 'LintUsageRefusalCase'
+
+typealias HeldFileContents = Array with ByteArray
+
+type HeldFiles
+	let dir as FilePath
+	let files as FilePathArray
+	let contents as HeldFileContents
+
+	static function under(dir FilePath) returns HeldFiles
+		let files = filesUnder(dir)
+		let contents = HeldFileContents.create(0)
+
+		for file in files 'eachFile'
+			contents.push(fileBytes(file))
+		end 'eachFile'
+
+		return Self{dir: dir, files: files, contents: contents}
+	end 'under'
+
+	function requireUnchangedBy(what String, said String) throws TestFailure
+		let now = filesUnder(self.dir)
+
+		try Expect.equal(now.count(), expected: self.files.count(), message: "{what} changed how many files {self.dir.toString()} holds. {said}")
+
+		for (iter, file) in self.files.withIterator() 'eachFile'
+			try Expect.isTrue(File.exists(file), message: "{what} removed {file.toString()}. {said}")
+
+			let held = try self.contents.get(iter.index()) otherwise panic("HeldFiles: every listed file had its contents read")
+
+			try Expect.isTrue(fileBytes(file).equals(held), message: "{what} rewrote {file.toString()}. {said}")
+		end 'eachFile'
+	end 'requireUnchangedBy'
+end 'HeldFiles'
+
+let LintTestsOption = "--tests"
+let NoMainLine = "error E3001"
+let TestedCleanExit = 0
+
+type LintOfATestProjectCase implements OutsideCheckoutCase
+	let fixture as String
+	let findings as ExpectedDiagnosticArray
+
+	static function of(fixture String, findings ExpectedDiagnosticArray) returns LintOfATestProjectCase
+		return Self{fixture: fixture, findings: findings}
+	end 'of'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: self.fixture)
+		let withTests = LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: [LintTestsOption, app.filename()])
+
+		if self.findings.isEmpty() 'clean'
+			try withTests.requireLintedClean(app, naming: app.filename())
+		end 'clean' else 'faulty'
+			try withTests.requireRefusedWithOnly(app, diagnostics: self.findings)
+		end 'faulty'
+
+		let withoutTests = lintedIn(dir, app: app, options: StringArray.create(0))
+		let withoutSaid = withoutTests.said()
+
+		try Expect.equal(withoutTests.output.exitCode(), expected: RefusedExitCode, message: "{withoutTests.typed} of the `{self.fixture}` test project, which declares no `main`, did not exit {RefusedExitCode}: without `{LintTestsOption}` it lints the program `maxon {BuildCommandWord}` compiles, which leaves the test files out. {withoutSaid}")
+		try Expect.contains(withoutTests.output.stderr, needle: NoMainLine, message: "{withoutTests.typed} of the `{self.fixture}` test project did not report the missing `main` as `maxon {BuildCommandWord}` does. {withoutSaid}")
+
+		for line in outputLines(withoutTests.output.stderr) 'eachLine'
+			try Expect.isFalse(line.contains(TestSourceSuffix), message: "{withoutTests.typed} reported `{line}`, in a `{TestSourceSuffix}` file: without `{LintTestsOption}` it loads no test file. {withoutSaid}")
+		end 'eachLine'
+
+		let tested = runConfinedIn(dir, arguments: [TestCommandWord, app.filename()])
+
+		try Expect.equal(tested.exitCode(), expected: TestedCleanExit, message: "`maxon {TestCommandWord} {app.filename()}` of the `{self.fixture}` test project did not pass: the lint rules stay out of `maxon {TestCommandWord}`. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}")
+	end 'requireHeldIn'
+end 'LintOfATestProjectCase'

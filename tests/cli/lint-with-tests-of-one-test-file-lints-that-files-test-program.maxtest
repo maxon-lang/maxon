@@ -1,0 +1,32 @@
+let LintWithTestsOfAFileCaseDirName = "lint-with-tests-of-a-file"
+let LintWithTestsOfAFileFixture = "lint-test-file"
+let LintWithTestsOfAFileOption = "--tests"
+let LintWithTestsOfAFileDropping = "dropping.maxtest"
+let LintWithTestsOfAFileClean = "clean.maxtest"
+let LintWithTestsOfAFileSite = "dropping.maxtest:11:2"
+let LintWithTestsOfAFileMessage = "result of pure function 'doubled' must be used"
+let LintWithTestsOfAFileTestedExit = 0
+
+test 'lint --tests of one test file lints that file alone with the test entry, as maxon test runs it'
+	requireHeldOutsideCheckout(LintWithTestsOfAFileCaseDirName, check: LintWithTestsOfAFile.create())
+end 'lint --tests of one test file lints that file alone with the test entry, as maxon test runs it'
+
+type LintWithTestsOfAFile implements OutsideCheckoutCase
+	static function create() returns LintWithTestsOfAFile
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintWithTestsOfAFileFixture)
+
+		let dropping = ExpectedDiagnosticArray.create(0)
+		dropping.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintWithTestsOfAFileSite, message: LintWithTestsOfAFileMessage))
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintWithTestsOfAFileOption, LintWithTestsOfAFileDropping]).requireRefusedWithOnly(app, diagnostics: dropping)
+
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintWithTestsOfAFileOption, LintWithTestsOfAFileClean]).requireOneLintedLine(app)
+
+		let tested = runWithCacheRoot([TestCommandWord, LintWithTestsOfAFileDropping], cacheRoot: cacheRootIn(dir), workingDirectory: app)
+
+		try Expect.equal(tested.exitCode(), expected: LintWithTestsOfAFileTestedExit, message: "`maxon {TestCommandWord} {LintWithTestsOfAFileDropping}` did not pass: the lint rules stay out of `maxon {TestCommandWord}`. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}")
+	end 'requireHeldIn'
+end 'LintWithTestsOfAFile'

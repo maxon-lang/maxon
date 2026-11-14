@@ -28,7 +28,9 @@ The same few shapes turn a linear pass superlinear, and the code guards against 
 
 `maxon scale-test` (`maxon-bin/Testing/ScaleTestRunner.maxon`) compiles a generated program at a ladder of
 sizes, each rung double the one before, and reports, per compile phase and per rung, the allocations, bytes
-and CPU time of the compiling thread. Wall time is never measured.
+and CPU time of the compiling thread. Wall time is never measured. Each rung is compiled by `maxon build`
+and then checked by `maxon lint`, whose semantic check and two unused-declaration audits are the `lint:`
+rows: the work `maxon build` leaves to `maxon lint`.
 
 **Growth is read as the ratio between rungs.** ×2.00 is linear, ×4.00 quadratic, ×1.00 constant; nothing is
 fitted and there is no threshold (`ScaleRatio.maxon`). Allocation counts are exact and reproducible; bytes are

@@ -1,0 +1,35 @@
+let LintOfSeveralPathsCaseDirName = "lint-of-several-paths"
+let LintOfSeveralPathsFixture = "lint-two-files"
+let LintOfSeveralPathsFirstFile = "first.maxon"
+let LintOfSeveralPathsSecondFile = "second.maxon"
+let LintOfSeveralPathsDroppingFile = "second-dropping.maxon"
+let LintOfSeveralPathsDropSite = "second-dropping.maxon:10:2"
+let LintOfSeveralPathsDropMessage = "result of pure function 'doubled' must be used"
+let LintOfSeveralPathsAloneSite = "first.maxon:2:9"
+let LintOfSeveralPathsAloneCode = "E3004"
+let LintOfSeveralPathsAloneMessage = "call to undefined function 'helperAnswer'"
+
+test 'lint of several source paths lints them as one program, as build compiles them'
+	requireHeldOutsideCheckout(LintOfSeveralPathsCaseDirName, check: LintOfSeveralPaths.create())
+end 'lint of several source paths lints them as one program, as build compiles them'
+
+type LintOfSeveralPaths implements OutsideCheckoutCase
+	static function create() returns LintOfSeveralPaths
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfSeveralPathsFixture)
+		let first = app.join(LintOfSeveralPathsFirstFile).toString()
+
+		let alone = ExpectedDiagnosticArray.create(0)
+		alone.push(ExpectedDiagnostic.at(LintOfSeveralPathsAloneCode, site: LintOfSeveralPathsAloneSite, message: LintOfSeveralPathsAloneMessage))
+		try LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: [first]).requireRefused(app, diagnostics: alone)
+
+		let dropping = ExpectedDiagnosticArray.create(0)
+		dropping.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintOfSeveralPathsDropSite, message: LintOfSeveralPathsDropMessage))
+		try LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: [first, app.join(LintOfSeveralPathsDroppingFile).toString()]).requireRefused(app, diagnostics: dropping)
+
+		try LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: [first, app.join(LintOfSeveralPathsSecondFile).toString()]).requireOneLintedLine(app)
+	end 'requireHeldIn'
+end 'LintOfSeveralPaths'

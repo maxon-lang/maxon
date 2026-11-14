@@ -183,9 +183,10 @@ Formats Maxon source, as `maxon fmt` does.
 
 ### `check`
 
-Compiles a program for the host, as `maxon build` would, and writes nothing: no executable and no
-sidecar. The answer's `success` says whether it compiled, and `diagnostics` holds what `maxon build` would
-have printed on stderr, one `error E…` line per problem. The compile runs inside the server process, not
+Checks a program for the host, as [`maxon lint`](/docs/cli/#maxon-lint) would, and writes nothing: no executable
+and no sidecar. The answer's `success` says whether it compiled, and `diagnostics` holds what `maxon lint`
+would have printed on stderr, one `error E…` line per problem: what `maxon build` prints, and the
+[lint rules](/docs/cli/#maxon-lint)' findings beside it. The compile runs inside the server process, not
 in a child `maxon`, so a compiler panic ends the server.
 
 | Argument | Type | Description |
@@ -198,8 +199,8 @@ compiler's path) and `stdlibRoot` (the `stdlib/` directory it compiled against).
 
 ### `dump_ir`
 
-Compiles a program for the host, as `maxon build` would, and answers its Target IR in `ir`: the text
-`maxon build --emit-ir` writes. Nothing is written. `success` and `diagnostics` are as for `check`, and
+Compiles a program for the host, as `maxon build` would with the [lint rules](/docs/cli/#maxon-lint) enforced, and
+answers its Target IR in `ir`: the text `maxon build --emit-ir` writes. Nothing is written. `success` and `diagnostics` are as for `check`, and
 `ir` is empty when the compile fails. Like `check`, it compiles inside the server process, so a compiler
 panic ends the server.
 
@@ -416,7 +417,8 @@ last 4 KiB of output, starting on a character boundary).
 ### `run_scale_test`
 
 Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. It
-has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). The document is written
+has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). Each rung's `phases`
+carry the `lint:` rows of [`maxon scale-test`](/docs/cli/compiler-development/#maxon-scale-test). The document is written
 to `.scale-tmp/scale-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and
 deleted when the call ends.
 

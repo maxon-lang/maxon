@@ -1,0 +1,27 @@
+let LintOfADirectoryAndAFileCaseDirName = "lint-of-a-directory-and-a-file"
+let LintOfADirectoryAndAFileFixture = "lint-directory-and-file"
+let LintOfADirectoryAndAFileDirectory = "lib"
+let LintOfADirectoryAndAFileFile = "main.maxon"
+let LintOfADirectoryAndAFileAloneCode = "E3004"
+let LintOfADirectoryAndAFileAloneSite = "main.maxon:2:9"
+let LintOfADirectoryAndAFileAloneMessage = "call to undefined function 'helperAnswer'"
+
+test 'lint of a directory and a file named together lints them as one program'
+	requireHeldOutsideCheckout(LintOfADirectoryAndAFileCaseDirName, check: LintOfADirectoryAndAFile.create())
+end 'lint of a directory and a file named together lints them as one program'
+
+type LintOfADirectoryAndAFile implements OutsideCheckoutCase
+	static function create() returns LintOfADirectoryAndAFile
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfADirectoryAndAFileFixture)
+
+		let alone = ExpectedDiagnosticArray.create(0)
+		alone.push(ExpectedDiagnostic.at(LintOfADirectoryAndAFileAloneCode, site: LintOfADirectoryAndAFileAloneSite, message: LintOfADirectoryAndAFileAloneMessage))
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfADirectoryAndAFileFile]).requireRefused(app, diagnostics: alone)
+
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfADirectoryAndAFileDirectory, LintOfADirectoryAndAFileFile]).requireOneLintedLine(app)
+	end 'requireHeldIn'
+end 'LintOfADirectoryAndAFile'

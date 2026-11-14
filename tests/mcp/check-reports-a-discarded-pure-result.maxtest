@@ -1,0 +1,17 @@
+let DiscardedPureResultDirName = "mcp-check-reports-a-discarded-pure-result"
+let CheckToolName = "check"
+let DiscardedPureResultSource = "typealias Tally = int(0 to 1000)\n\nlet DoubledInput = 4\n\nfunction doubled(n Tally) returns Tally\n\treturn n * 2\nend 'doubled'\n\nfunction main() returns ExitCode\n\tdoubled(DoubledInput)\n\treturn 0\nend 'main'\n"
+let DiscardedPureResultCode = "E3064"
+let DiscardedPureResultMessage = "result of pure function 'doubled' must be used"
+
+test 'check answers a discarded pure result with its diagnostic'
+	let program = stagedProgram(DiscardedPureResultDirName, fileName: StagedProgramFileName, source: DiscardedPureResultSource)
+	let answer = callTool(CheckToolName, argumentsJson: pathArgument(program))
+	let text = toolCallText(answer)
+
+	Expect.isTrue(toolCallIsError(answer), message: "`{CheckToolName}` over a program that discards a pure function's result was answered as a success. The tool runs every check `spec-test` and the language server run, the discarded-result rule among them: {text}")
+	Expect.contains(text, needle: DiscardedPureResultCode, message: "`{CheckToolName}` over a discarded pure result did not carry {DiscardedPureResultCode}: {text}")
+	Expect.contains(text, needle: DiscardedPureResultMessage, message: "`{CheckToolName}` over a discarded pure result did not carry the rule's message: {text}")
+
+	discardStagedDir(stagedDirNamed(DiscardedPureResultDirName))
+end 'check answers a discarded pure result with its diagnostic'

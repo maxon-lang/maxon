@@ -29,6 +29,7 @@ agents, and reads back what a program did.
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon fmt [file\|directory]` | Re-print Maxon sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
+| `maxon lint [--tests] [<file\|directory\|target>...]` | Check a program with every rule, the [lint rules](#maxon-lint) included, and stop before code generation |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
 | `maxon mcp-server [--dev] [--http[=<port>]]` | Speak the Model Context Protocol over stdio, or over loopback HTTP ([MCP Server](/docs/cli/mcp-server/)) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](/docs/cli/debugging/)) |
@@ -246,8 +247,8 @@ install or [`maxon upgrade`](#maxon-upgrade) leaves it as it is.
   keeps its library or package meaning; a package that also spells that name as a member is
   [E3112](/docs/cli/error-codes/#e3112--stdlibshadowednameisalsoamember). A member a script's `extension` adds to a
   library or package type is the script's: package and library files keep the meaning their own layer
-  gives the name ([Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)). The unused-declaration checks (E3092, E3219)
-  cover the program's own files.
+  gives the name ([Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)). The
+  unused-declaration checks of [`maxon lint`](#maxon-lint) (E3092, E3219) cover the program's own files.
 - **The compiler's reserved surface stays closed to a package**: a `__` name is
   [E2051](/docs/cli/error-codes/#e2051--reservedidentifier) or
   [E3004](/docs/cli/error-codes/#e3004--callunknownfunction), and the raw memory surface is
@@ -261,7 +262,7 @@ calls into it. [`maxon check-scriptlib`](#maxon-check-scriptlib) builds every pa
 ## `maxon check-scriptlib`
 
 Compiles every package of a [scriptlib](#the-scriptlib-directory) directory, with every function body
-built, and reports every diagnostic on stderr.
+built, and reports every diagnostic on stderr, the [lint rules](#maxon-lint)' included.
 
 ```bash
 maxon check-scriptlib              # the scriptlib/ beside this compiler's stdlib/
@@ -380,6 +381,9 @@ there, and a file named through a link and then the directory holding it is load
 **Diagnostics are printed in source order**, whatever phase found them: by file (in the order the compile
 reads its files), then line and column. A duplicate declaration is reported at the later one.
 
+**The lint rules are [`maxon lint`](#maxon-lint)'s.** A build compiles a program that discards a result
+(E3064, E3065) or holds an unused declaration (E3092, E3219); run `maxon lint` on it to see them.
+
 **No path** builds the target of the `.maxproj` file in the current directory. With several targets it
 lists them and exits 1. **A single word naming a target** builds that target, each `_` of the target's
 name written `-`: `maxon build my-app` builds the target function `my_app`. A word naming no target is
@@ -407,7 +411,7 @@ uses it.
 | `--census-by-tag`, `--census-by-tag=<phase>` | Census the *live* heap by allocation tag at every compile phase boundary — which types the bytes still held at that point belong to, rather than how many bytes the phase asked for. Naming a phase censuses that phase alone and prints that phase's table, which is what a large compile can afford. It samples residency whether or not `--log=compiler:debug` is given, and writes a `tag` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `livebytes` are the slots live at that boundary and their bytes; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so the census is by *size class* instead and says so in its headline. See [Logging](#logging). |
 | `--allocations-by-tag`, `--allocations-by-tag=<phase>` | Tally every allocation the compile *asks for* by allocation tag and by phase — churn rather than a level, so a phase that allocates a million short-lived boxes shows them here and in no other table. Naming a phase tallies that phase alone. It writes a `churn` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `bytes` are the allocations the phase made and the bytes they asked for; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so every allocation is counted under `(untagged)` and the report says so. See [Logging](#logging). |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
-| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `upkeep`, `code`, `tag` when `--census-by-tag` is given, and `churn` when `--allocations-by-tag` is. `upkeep` is the time and memory spent refreshing the records of the locks the compile holds, once every 5 s; the memory columns of every `phase` row, of `total` and of `unattributed` exclude it, so two compiles of one program report the same memory however long each ran; the time columns count it in the rows that were open. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
+| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `upkeep`, `code`, `tag` when `--census-by-tag` is given, and `churn` when `--allocations-by-tag` is. A [`maxon lint`](#maxon-lint) table holds the `phase`, `regalloc`, `total`, `unattributed` and `upkeep` rows, and its code-generation phases read zero. `upkeep` is the time and memory spent refreshing the records of the locks the compile holds, once every 5 s; the memory columns of every `phase` row, of `total` and of `unattributed` exclude it, so two compiles of one program report the same memory however long each ran; the time columns count it in the rows that were open. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
 
 `--debugstream`, `--async-trace`, `--poison-freed` and `--coverage` are opt-in **per build**: each adds its
 machinery only to a build that names it.
@@ -580,6 +584,87 @@ the build stops:
 
 A described build can supply defines too; a `--define` on the command line wins over the described
 build's.
+
+## `maxon lint`
+
+Runs the front end and every check on a program, the lint rules included, and stops before code
+generation. It writes no executable, no sidecar and no build record.
+
+```bash
+maxon lint [<file|directory|target>...] [options]
+maxon lint --tests [<target>] [directory | file.maxtest]
+maxon lint <name>.maxproj | <name>.maxtasks
+```
+
+**The lint rules** are the checks `maxon build`, `maxon execute`, `maxon run`, `maxon test` and the
+compile of a project's build runner leave to `lint`, so those commands compile and run a program that
+breaks one:
+
+| Code | Rule |
+|------|------|
+| [E3064](/docs/cli/error-codes/#e3064--semanticdiscardedpureresult) | A pure function's result is discarded ([Function Purity and Discarded Results](/docs/language/functions/#function-purity-and-discarded-results)) |
+| [E3065](/docs/cli/error-codes/#e3065--semanticdiscardedimpureresult) | An impure function's result is dropped by a bare call statement; `_ = f()` is the discard |
+| [E3092](/docs/cli/error-codes/#e3092--semanticunusedexportedsymbol) | An `export` that no file outside its declaring directory's subtree uses |
+| [E3219](/docs/cli/error-codes/#e3219--semanticunusedunexporteddeclaration) | An unmarked top-level declaration that nothing live in its directory's subtree names |
+
+Each is an error, and `lint` exits 1 on any diagnostic. `maxon spec-test`, `maxon check-stdlib`,
+`maxon check-scriptlib`, `maxon verify-recheck`, the MCP [`check`](/docs/cli/mcp-server/#check) and [`dump_ir`](/docs/cli/mcp-server/#dump_ir)
+tools and the [language server](/docs/cli/editor/#maxon-lsp-server) compile with the lint rules too. Every other check
+runs as it does in `maxon build`. A refusal by the back end, register pressure
+([E5001](/docs/cli/error-codes/#e5001--registerpressure)) among them, is `maxon build`'s to report.
+
+**The program is named as `maxon build` names one.** Several paths are one program, in the order given. A
+lone word naming a target of the working directory's `.maxproj` file is that target, each `_` written
+`-`, linted over the sources and defines its description states once the description is validated as
+`maxon build` validates it; delegation is followed. With no path, `lint` lints the `.maxproj` file's only
+target, lists the targets and exits 1 when there are several, and lints the working directory when there
+is no `.maxproj` file. `--define=` and `--target=` act as they do for `maxon build`.
+
+**A `.maxproj` or `.maxtasks` file named alone** is linted as its runner compiles it: the first target or
+task it declares is the entry, and every exported target or task counts as used. A file holding nothing
+but comments and blank lines is clean, and a file that declares something but no target or task is
+refused. The runner is compiled for the host with no define, so `--target=`, `--define=` and any other
+path beside it are refused.
+
+**`--tests`** lints what [`maxon test`](#maxon-test) compiles: the project's sources and its `.maxtest`
+files, chosen as `maxon test` chooses them, with the test entry `maxon test` generates. It takes
+`maxon test`'s arguments, an optional target and then a directory or one `.maxtest` file, and the program's
+own `main` counts as used. The program is staged in `<project>/.maxon/lint/`, or for one test file in
+`<its directory>/.maxon/lint/<file name>/`, beside the `.maxon/test/` tree `maxon test` compiles from.
+Diagnostics name the files you wrote. A project that declares no `test` is refused, and so is `--define=`
+beside `--tests`.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--tests` | Lint the program `maxon test` compiles in place of the one `maxon build` compiles |
+| `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default, as for `maxon build`. See [Defines](#defines). |
+| `--target=<cpu>-<os>` | Lint the program as compiled for this target: `#if` branches, target refusals and the lint rules all read that target |
+| `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. |
+
+**Output.** Diagnostics go to stderr as `maxon build` prints them; E3092 and E3219 are reported once
+nothing else stands. A target, and `--tests` of a project, print the
+[breaking changes since the last build](#breaking-changes-since-the-last-build) on stderr, and the
+project's compiler-version record is read and left as it is. A clean program prints one line on stdout,
+`Linted <subjects>`, where `<subjects>`, separated by `, `, are the paths typed, else the sources the
+target lists, else the working directory; for `--tests`, the directory or file typed, else the target
+typed alone, else the working directory.
+
+| Code | Meaning |
+|------|---------|
+| `0` | The program is clean |
+| `1` | A diagnostic stands, the command line is refused, or the program could not be read |
+| the runner's | A project's build runner failed, for a target or for `--tests` |
+
+```bash
+maxon lint                           # the .maxproj file's only target, or the working directory
+maxon lint src/ tools/gen.maxon      # one program from two paths
+maxon lint my-app --target=x64-linux # the target my_app, as compiled for x64-linux
+maxon lint --tests                   # what `maxon test` compiles here
+maxon lint --tests src/lexer.maxtest # one test file's test program
+maxon lint maxon.maxtasks            # the task file, as its runner compiles it
+```
 
 ## `maxon cache`
 
@@ -811,7 +896,11 @@ not hold a release version ends the run with its error and exit 2.
 **Where it runs.** The test binary runs in the directory `maxon test` was invoked from, so a relative
 path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, or for a
 test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
-its generated sources out of every ordinary build.
+its generated sources out of every ordinary build. [`maxon lint --tests`](#maxon-lint) stages the same
+program in `.maxon/lint/`.
+
+**The lint rules.** The test binary is compiled as `maxon build` compiles a program, so the
+[lint rules](#maxon-lint) are left to `maxon lint --tests`, which checks this same program.
 
 **Scratch directories.** Each test process gets two empty directories of its own, named in its
 environment: `MAXON_TEST_SCRATCH`, in the system temp area (`maxon-test-<pid>`, the pid of the process

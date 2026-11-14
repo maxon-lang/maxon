@@ -31,7 +31,8 @@
 //   regalloc     one RegAllocPhase, nested inside the `regalloc` phase (NOT an extra phase — a
 //                breakdown of one; adding these to the phases would double-count)
 //   unattributed what no phase claimed (the glue between them)
-//   code         the emitted .exe's code size, in the `bytes` column
+//   code         the emitted .exe's code size, in the `bytes` column; absent from a lint's table,
+//                which emits no code
 //
 // The `code` row is not decoration: it is the SUBJECT of the degeneracy self-check. The compiler runs a
 // real `foldConstOperands` pass, so a naively generated benchmark of constant arithmetic folds
@@ -119,19 +120,20 @@ let MetricsNoName = "-"
 // path. The runner, for its part, treats a MISSING metrics file as a failed rung rather than as
 // zeroes — a rung that reported nothing is not a rung that compiled instantly.
 //
-// ⚠ AND IT IS WRITTEN ONLY BY A COMPILE THAT SUCCEEDED. This call is the last step of
-// `compileMeasured`, so every throwing exit — a parse error, a semantic error, an E5001 — leaves no
-// file at all, even though that compile burned real CPU. The spec suite's cumulative-CPU indicator
+// ⚠ AND IT IS WRITTEN ONLY BY A COMPILE THAT SUCCEEDED. It is written after the build's image or
+// the lint's last check (`JobRun.afterTotals`, `JobRun.lintFinished`), so every throwing exit — a
+// parse error, a semantic error, an E5001 — leaves no file at all, even though that compile burned
+// real CPU. The spec suite's cumulative-CPU indicator
 // has no measurement for those compiles either, since a compile that threw returns no
 // `CompileProduct`; it counts them separately and prints the count, rather than reporting a total
 // that quietly omits them (see `SpecTestRunner.CompileCpu`).
-function writeMetrics(project Project, metricsPath String, codeBytes CodeByteCount)
+function writeMetrics(project Project, metricsPath String, code CodeEmission)
 	let path = try FilePath.from(metricsPath) otherwise 'badPath'
 		compilerLogger(CompilerLogGroup.compiler).error("Invalid --metrics path '{metricsPath}'")
 		return
 	end 'badPath'
 
-	try File.writeText(path, content: metricsText(project, codeBytes: codeBytes)) otherwise 'writeErr'
+	try File.writeText(path, content: metricsText(project, code: code)) otherwise 'writeErr'
 		compilerLogger(CompilerLogGroup.compiler).error("Failed to write metrics to {metricsPath}")
 		return
 	end 'writeErr'
@@ -144,7 +146,12 @@ end 'writeMetrics'
 // quantity the degeneracy check reads.
 export typealias CodeByteCount = int(0 to u32.max)
 
-function metricsText(project Project, codeBytes CodeByteCount) returns String
+export union CodeEmission
+	emitted(bytes CodeByteCount)
+	notEmitted
+end 'CodeEmission'
+
+function metricsText(project Project, code CodeEmission) returns String
 	let timings = project.timings
 	let memory = project.memory
 
@@ -174,7 +181,10 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 	// time stays in the rows that were open.
 	out.append(metricsRow(MetricsKindUpkeep, name: MetricsNoName, cost: PhaseCost.create(memory.upkeep.nanos, cpuTicks: memory.upkeep.cpuTicks), delta: memory.upkeep, residency: PhaseResidency.zero()))
 
-	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: codeBytes as HeapByteCount), residency: PhaseResidency.zero()))
+	match code 'code'
+		emitted(bytes) then out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: bytes as HeapByteCount), residency: PhaseResidency.zero()))
+		notEmitted then break
+	end 'code'
 
 	if memory.tagCensus.enabled 'censusRows'
 		out.append(tagBucketMetricsRows(memory.tagCensus.buckets, kind: TagRowLine.census(memory.tagCensus.buckets.mode)))

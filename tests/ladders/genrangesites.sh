@@ -129,7 +129,7 @@ end 'rcOpaque'
 PRELUDE
 
 # `RcBox` exists only for the two FIELD-STORE modes. `params` guards at a callee's entry and never
-# stores, and an export nothing references outside its file is E3092.
+# stores, and an unmarked type nothing names is E3219 to `maxon lint`.
 if [ "$MODE" != "params" ]; then
 	cat >> "$OUT/a_prelude.maxon" <<'BOX'
 

@@ -1,0 +1,83 @@
+typealias Tally = int(0 to 1000)
+typealias TallyArray = Array with Tally
+
+let RanLine = "dropped results ran, journal entries:"
+let FilledCount = 4
+let PairedFirst = 2
+let LabelWeight = 3
+let RefusedRouteExit = 3
+
+enum Refusal implements Error
+	refused
+end 'Refusal'
+
+type Labelled
+	let label as String
+	let weight as Tally
+
+	static function create(label String, weight Tally) returns Labelled
+		return Self{label: label, weight: weight}
+	end 'create'
+end 'Labelled'
+
+function greeting(name String) returns String
+	return "hello {name}"
+end 'greeting'
+
+function filled(count Tally) returns TallyArray
+	let values = TallyArray.create(0)
+
+	for i in 0 upto count 'fill'
+		values.push(i)
+	end 'fill'
+
+	return values
+end 'filled'
+
+function labelled(name String) returns Labelled
+	return Labelled.create("label {name}", weight: LabelWeight)
+end 'labelled'
+
+function paired(name String) returns (Tally, String)
+	return (PairedFirst, "pair {name}")
+end 'paired'
+
+function checked(name String) returns String throws Refusal
+	if name.isEmpty() 'empty'
+		throw Refusal.refused
+	end 'empty'
+
+	return "checked {name}"
+end 'checked'
+
+function recorded(journal StringArray, entry String) returns String
+	journal.push(entry)
+	return "recorded {entry}"
+end 'recorded'
+
+function leftover() returns String
+	return "never called"
+end 'leftover'
+
+function main() returns ExitCode
+	let journal = StringArray.create(0)
+
+	greeting("bare")
+	_ = greeting("discarded")
+	filled(FilledCount)
+	labelled("bare")
+	paired("bare")
+	recorded(journal, entry: "bare")
+
+	try 'routed'
+		checked("bare")
+	end 'routed'
+	otherwise (e) 'refusedRoute'
+		match e 'which'
+			refused then return RefusedRouteExit
+		end 'which'
+	end 'refusedRoute'
+
+	print("{RanLine} {journal.count()}\n")
+	return answer()
+end 'main'

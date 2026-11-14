@@ -13,6 +13,8 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/scratch-dir.sh
+. scripts/lib/script-programs.sh
+. scripts/lib/subject-loop.sh
 
 compiler="$(maxon_compiler_path .)"
 [ -x "$compiler" ] || { echo "build-script-programs.sh: no compiler at $compiler — run \`./maxon-bin/.maxon/maxon run build\` at the repo root" >&2; exit 1; }
@@ -23,10 +25,7 @@ mkdir -p "$out"
 
 trap 'scratch_dir_on_exit $? "$out" "build-script-programs.sh" 0' EXIT
 
-tracked_scripts="$(git ls-files -- scripts)"
-program_dirs="$(printf '%s\n' "$tracked_scripts" | sed -n 's|^scripts/\([^/]*\)/.*\.maxon$|\1|p' | sort -u)"
-self_building_dirs="$(printf '%s\n' "$tracked_scripts" | sed -n 's|^scripts/\([^/]*\)/compile-all\.sh$|\1|p' | sort -u)"
-programs="$(comm -23 <(printf '%s\n' "$program_dirs") <(printf '%s\n' "$self_building_dirs"))"
+programs="$(script_program_dirs)"
 
 if [ -z "$programs" ]; then
 	echo "build-script-programs.sh: no tracked directory under scripts/ holds a .maxon file" >&2
@@ -35,24 +34,12 @@ fi
 
 echo "program directories: $(printf '%s' "$programs" | tr '\n' ' ')"
 
-failed=""
+SubjectScript="build-script-programs.sh"
+SubjectDone="built"
+SubjectRefusal="did not build"
 
 for program in $programs; do
-	log="$out/$program.log"
-	build_status=0
-	"$compiler" build "scripts/$program" --output="$out/$program" > "$log" 2>&1 || build_status=$?
-
-	if [ "$build_status" -ne 0 ]; then
-		printf 'build-script-programs.sh: scripts/%s did not build (exit %s) — its output follows\n' "$program" "$build_status" >&2
-		cat "$log" >&2
-		failed="$failed $program"
-		continue
-	fi
-
-	echo "built scripts/$program"
+	subject_run "scripts/$program" "$out/$program.log" "$compiler" build "scripts/$program" --output="$out/$program"
 done
 
-if [ -n "$failed" ]; then
-	echo "build-script-programs.sh: did not build:$failed" >&2
-	exit 1
-fi
+subject_report

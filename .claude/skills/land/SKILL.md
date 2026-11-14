@@ -1,6 +1,6 @@
 ---
 name: land
-description: Implement one self-contained compiler change end to end and push it as one commit on main — a spec set watched red first, the code, optimization, independent review, documentation, rebase, the landing gates once (CI runs the rest). Use for a bug fix, a missing diagnostic, a defect found by hand, or a feature of any size. Invoke as `/land <what to do>`.
+description: Implement one self-contained compiler change end to end and push it as one commit on main — a spec set watched red first, the code, optimization, independent review, documentation, rebase, the landing gates once (build, filtered specs, codecs check, plus lint, self-compile and the seed chain when the diff calls for them; CI runs the rest). Use for a bug fix, a missing diagnostic, a defect found by hand, or a feature of any size. Invoke as `/land <what to do>`.
 ---
 
 # Land one change
@@ -26,7 +26,7 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 > - §8 runs once because the change is one chunk; four slices mean four rebases, gate runs, self-compiles
 >   and reviews.
 > - between slices `main` carries half a mechanism (an `export` without its consumer is an E3092 that
->   breaks the self-compile; a diagnostic no case reaches is dead code; a lowering with no emitter is a
+>   fails CI's lint step; a diagnostic no case reaches is dead code; a lowering with no emitter is a
 >   wrong answer waiting for a caller).
 > - §1's red set is the acceptance for the whole change; slices each invent a smaller one.
 >
@@ -49,7 +49,7 @@ gates and the commit.** Agents do the reading and the typing.
 | **5** | Independent review | the **`code-review`** skill, in a dispatched agent — never one that wrote the code | fix before the commit |
 | **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a non-empty code-identity proof |
 | **7** | **Rebase** on `origin/main` | **you** | resolve by hand |
-| **8** | THE LANDING GATES, once: build · filtered specs · codecs check · **self-compile** and seed chain where the diff calls for them | **you** | **stop** |
+| **8** | THE LANDING GATES, once: build · filtered specs · codecs check · **lint**, **self-compile** and seed chain where the diff calls for them | **you** | **stop** |
 | **9** | Commit and push — do not wait for CI | **you** | a rejected push re-runs §8 |
 
 **Every spec run, in §8 as before it, is `--filter`ed** — the whole set in ONE run, one `--filter=` per
@@ -97,7 +97,7 @@ five times per change and exactly one of those runs gates anything.
 |---|---|---|---|
 | **build** | **only when the binary is stale** | **you, §8** — §6's documenter is the last editor and does not build; its comment edits make the binary stale | ⛔ **nobody builds a current binary** — see the box below |
 | **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
-| **the §8 gates** — final filtered specs · codecs check · self-compile · seed chain · docs check | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before them, on the identical tree, and runs no tests at all. The full suite, the wasm lane and the tree corpora are CI's |
+| **the §8 gates** — final filtered specs · codecs check · lint · self-compile · seed chain · docs check | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before them, on the identical tree, and runs no tests at all. The full suite, the wasm lane and the tree corpora are CI's |
 | **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
 | **`git commit` / `git push` / `git rebase`** | **once** | **you, §7 and §9** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
 
@@ -566,7 +566,8 @@ fix commit; the cost of a local battery is paid on every change.
 | **Build** exit 0 | **Only if stale** — after §6's comment edits it is stale whenever §6 touched a compiled-in source. A current binary is not rebuilt. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the spec rows — it builds twice |
 | **Filtered `run_spec_test`** — §1's minimal set plus every spec file the change touched, in ONE run | **`failed: 0`**, and no exit **101**. The gate is zero failures in every case the filter selects, never a total |
 | **Filtered tree corpora and IR specs** — `./maxon-bin/.maxon/maxon test <tests/dir> --filter=…` and `spec-test ir-specs --filter=<spec>/` for each corpus case or `ir-specs/` spec the change touched | each `0 fail` / `failed: 0`. A pin the change moved is re-minted with `--update-required --filter=<spec>/` and staged with the change (`git add -A ir-specs/ specs/`); a change to one target's emitted code also filters `ir-specs` on that target's lane (`--target=<lane>`), which compiles each pin without running it, on any host. See the box below |
-| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds or removes an `export`, adds a file declaring types, deletes the last cross-file caller of an `export` (de-duplicating is the usual way to orphan one), or adds or tightens a diagnostic.** The slot compiler that `run build` wrote was compiled by its predecessor, so this row is the first time the change's own rules meet the compiler's own source. Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
+| **LINT** — `./maxon-bin/.maxon/maxon lint maxon-bin` · `./maxon-bin/.maxon/maxon lint --tests tests/<corpus>` · `bash scripts/lint-tree.sh <group>` | **`lint maxon-bin` when the diff touches `maxon-bin/`; `lint --tests` for each corpus under `tests/` the diff touches; `lint-tree.sh` for each other group (`script-programs`, `multicore-stress`, `manifests`) whose sources the diff touches.** Exit 0: one `Linted …` line per `lint`, and `lint-tree.sh`'s report naming no subject that did not lint clean. Run after the build, with the compiler it wrote, so the change's own rules meet the tree. The build, the self-compile and `maxon test` compile past the lint rules — E3064 and E3065 (a dropped result), E3092 (an `export` no other directory uses: adding or removing an `export` or deleting its last cross-directory caller, which de-duplicating usually is, orphans one) and E3219 (an unused unexported declaration) — so without this row CI's "Every first-party program lints clean" step is the first to see them. Add `--target=<lane>` to `lint maxon-bin` when the change touches a lane's `#if` branch |
+| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds a file declaring types, or adds or tightens a diagnostic that is not a lint rule.** The slot compiler that `run build` wrote was compiled by its predecessor, so this row is the first time the change's own rules meet the compiler's own source. Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
 | **The seed chain** — on a throwaway clone at a short path with the diff applied and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`; exit 0, or a refusal | **Where the tree's sources start using a declaration, intrinsic, language form, rule or runtime behaviour the change itself made legal or required, or the change alters a rule the seed applies to the compiler's own source.** CI builds from the pinned seed. Any failure is a refusal, except E6002, which is a locked slot. ⛔ **A refused commit lands through `scripts/pin-seed.sh`, never `git push`** (§9): it freezes `HEAD`, proves the seed, publishes it and pushes the commit with its pin. Naming the `--prove=<lane>` lanes is yours, by `docs/RELEASING.md` "Which lanes to prove"; that document owns the procedure |
 | **The codecs** — `python3 scripts/library-cache/generate-codecs.py --check` | exit 0: the library-cache codecs inside the compiler's sources match what the generator emits. On exit 1, run it without `--check` and stage what it rewrites |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` — which also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
@@ -582,14 +583,14 @@ CI's job. Briefs cap the work the same way: reuse an existing control binary, ba
 combined filtered run at the end.
 
 **CI runs everything else, and it is not run here:** the full `run_spec_test`, the wasm32-wasi lane, the
-full tree corpora, the multicore stress compile-all, `check-stdlib`, the full IR suite on every lane and
+full tree corpora, the multicore stress compile-all, `check-stdlib`, every `lint-tree.sh` group, the full IR suite on every lane and
 the WSL lane runs.
 
-> ### ⭐ THE SELF-COMPILE IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
-> `checkUnusedExports` (**E3092**) and `checkUnusedUnexported` (**E3219**) run only when the compiler compiles a *program*, and the
+> ### ⭐ `lint maxon-bin` IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
+> `checkUnusedExports` (**E3092**) and `checkUnusedUnexported` (**E3219**) judge a whole *program*, and the
 > only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A fully green
-> suite says nothing about it.** It is the only E3092 gate, and CI's failure there
-> is a red `main`.
+> suite says nothing about it**, and `maxon build` runs neither audit, so the self-compile cannot see one:
+> `maxon lint maxon-bin` is the local E3092 gate, and CI's lint step failing is a red `main`.
 > Run it where §8's row says. An E3092 here is a declaration more visible than its uses: narrow it, or land it *with* its
 > first consumer.
 

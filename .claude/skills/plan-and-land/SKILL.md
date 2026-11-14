@@ -287,7 +287,7 @@ approach; do not rewrite it by reflex.
 > ⛔ **NOT staging reasons, each already offered as one:** it turned out large · several passes · new IR
 > ops · easier review · the first half is "independently useful" · a faster battery per stage ·
 > **"land the refactor first, the feature after"**, exactly the failure `/land` measured: *"An `export`
-> without its consumer is an E3092 that breaks the self-compile."*
+> without its consumer is an E3092 that fails CI's lint step."*
 
 ⭐ **The default is ONE stage, and more than one is the user's call, not yours.**
 

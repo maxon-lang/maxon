@@ -1,0 +1,18 @@
+let LintOfAnEmptyManifestCaseDirName = "lint-of-an-empty-manifest"
+let LintOfAnEmptyManifestFixture = "lint-manifest-empty"
+let LintOfAnEmptyManifestFile = "app.maxproj"
+
+test 'lint of an empty manifest file, a bare project marker, exits 0 and prints one Linted line'
+	requireHeldOutsideCheckout(LintOfAnEmptyManifestCaseDirName, check: LintOfAnEmptyManifest.create())
+end 'lint of an empty manifest file, a bare project marker, exits 0 and prints one Linted line'
+
+type LintOfAnEmptyManifest implements OutsideCheckoutCase
+	static function create() returns LintOfAnEmptyManifest
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfAnEmptyManifestFixture)
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfAnEmptyManifestFile]).requireOneLintedLine(app)
+	end 'requireHeldIn'
+end 'LintOfAnEmptyManifest'

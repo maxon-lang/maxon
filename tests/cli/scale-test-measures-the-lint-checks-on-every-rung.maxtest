@@ -1,0 +1,95 @@
+typealias PhaseAllocationMap = Map with (String, PrintedNumber)
+
+let ScaleLintOneRungFlag = "--rungs=1"
+let ScaleLintAllocationsHeading = "per-phase ALLOCATIONS"
+let ScaleLintNextTablePrefix = "per-phase "
+let ScaleLintRowNameField = 0
+let ScaleLintFirstRungField = 1
+let ScaleLintSemanticCheckRow = "lint:semanticCheck"
+let ScaleLintUnusedExportsRow = "lint:checkUnusedExports"
+let ScaleLintUnusedUnexportedRow = "lint:checkUnusedUnexported"
+let ScaleBuildSemanticCheckRow = "phase:semanticCheck"
+let ScaleLintFixedSemanticAllocations = 16
+let ScaleBuildUnusedExportsRow = "phase:checkUnusedExports"
+let ScaleBuildUnusedUnexportedRow = "phase:checkUnusedUnexported"
+let ScaleNothingAllocated = 0
+let ScaleTestCleanExit = 0
+
+test 'scale-test measures the lint checks on every rung, beside the build that no longer runs them'
+	let run = spawnCompiler([ScaleTestCommandWord, ScaleLintOneRungFlag])
+	let said = "stdout:\n{run.stdout}\nstderr:\n{run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: ScaleTestCleanExit, message: "`maxon {ScaleTestCommandWord} {ScaleLintOneRungFlag}` did not deliver rung 0. {said}")
+
+	let rows = rungZeroAllocationsOf(run.stdout)
+
+	for lintRow in [ScaleLintSemanticCheckRow, ScaleLintUnusedExportsRow, ScaleLintUnusedUnexportedRow] 'eachLintRow'
+		Expect.isTrue(rows.contains(lintRow), message: "the per-phase allocations table holds no `{lintRow}` row, so the ladder no longer measures a check only `maxon {LintCommandWord}` runs. {said}")
+
+		let allocated = try rows.get(lintRow) otherwise panic("scale-test-lint: a row the table was just asked for is held")
+
+		Expect.greaterThan(allocated, than: ScaleNothingAllocated, message: "`{lintRow}` allocated nothing at rung 0, so the lint run it reports measured no check. {said}")
+	end 'eachLintRow'
+
+	let lintSemantic = try rows.get(ScaleLintSemanticCheckRow) otherwise panic("scale-test-lint: the row was just checked")
+	let buildSemantic = try rows.get(ScaleBuildSemanticCheckRow) otherwise panic("scale-test-lint: the table holds the build's semanticCheck row beside the lint's")
+
+	Expect.greaterThan(lintSemantic, than: buildSemantic + ScaleLintFixedSemanticAllocations, message: "`{ScaleLintSemanticCheckRow}` allocated {lintSemantic} at rung 0 against the build's {buildSemantic}, which is no more than the {ScaleLintFixedSemanticAllocations} a lint adds when no discarded result needs a declared callee's purity. The generated corpus holds `_ =` sites over declared callees, so the lint must build the effect summary and the row must carry it. {said}")
+
+	for buildRow in [ScaleBuildUnusedExportsRow, ScaleBuildUnusedUnexportedRow] 'eachBuildRow'
+		Expect.isTrue(rows.contains(buildRow), message: "the per-phase allocations table holds no `{buildRow}` row, the build's own reading of that phase. {said}")
+
+		let allocated = try rows.get(buildRow) otherwise panic("scale-test-lint: a row the table was just asked for is held")
+
+		Expect.equal(allocated, expected: ScaleNothingAllocated, message: "`{buildRow}` allocated at rung 0, but `maxon {BuildCommandWord}` does not run that check; the `{BuildCommandWord}` rows must stay the build's. {said}")
+	end 'eachBuildRow'
+end 'scale-test measures the lint checks on every rung, beside the build that no longer runs them'
+
+function rungZeroAllocationsOf(stdout String) returns PhaseAllocationMap
+	let rows = PhaseAllocationMap.create()
+	var inTable = false
+
+	for line in outputLines(stdout) 'eachLine'
+		let trimmed = line.trim()
+
+		if trimmed.startsWith(ScaleLintAllocationsHeading) 'theHeading'
+			inTable = true
+			continue
+		end 'theHeading'
+
+		if not inTable 'notYet'
+			continue
+		end 'notYet'
+
+		if trimmed.startsWith(ScaleLintNextTablePrefix) 'theNextTable'
+			break
+		end 'theNextTable'
+
+		let tokens = whitespaceTokens(trimmed)
+
+		if tokens.count() <= ScaleLintFirstRungField 'notARow'
+			continue
+		end 'notARow'
+
+		let name = try tokens.get(ScaleLintRowNameField) otherwise panic("scale-test-lint: a row with a count has a name")
+		let figure = try tokens.get(ScaleLintFirstRungField) otherwise panic("scale-test-lint: the count was just checked")
+
+		if not isWrittenInDigits(figure) 'aHeader'
+			continue
+		end 'aHeader'
+
+		rows.upsert(name, value: wholeDecimalValue(figure, what: "the rung 0 allocations of `{name}`"))
+	end 'eachLine'
+
+	return rows
+end 'rungZeroAllocationsOf'
+
+function isWrittenInDigits(token String) returns bool
+	for c in token 'eachCharacter'
+		if not Ascii.isDigit(c) 'notADigit'
+			return false
+		end 'notADigit'
+	end 'eachCharacter'
+
+	return true
+end 'isWrittenInDigits'

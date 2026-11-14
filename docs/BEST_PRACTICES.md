@@ -413,7 +413,7 @@ The parameter types can be left out because `sort` and `filter` declare their ca
 
 ### Handle Pure vs Impure Return Values Correctly
 
-The compiler tracks purity. Pure function results must always be used. Impure function results must be explicitly discarded with `_ =` if unused.
+The compiler tracks purity. Pure function results must always be used. Impure function results must be explicitly discarded with `_ =` if unused. Both are lint rules (E3064, E3065): run [`maxon lint`](CLI_REFERENCE.md#maxon-lint) to check them, since `maxon build` compiles past them.
 
 ```maxon
 // Pure: result must be used

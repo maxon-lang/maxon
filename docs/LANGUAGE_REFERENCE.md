@@ -2162,7 +2162,7 @@ var q = 0 as Amount
 
 - A name without `var`/`let` must already be a `var`; a `let` target is **E2013**.
 - The number of names must match the element count (**E3005**).
-- Discarding every element of a pure function's result is **E3064**.
+- Discarding every element of a pure function's result is **E3064**, a [lint rule](#function-purity-and-discarded-results).
 
 ### Destructuring in For Loops
 
@@ -3532,7 +3532,10 @@ it. Two names for one record that only exist at run time are beyond what the com
 ### Function Purity and Discarded Results
 
 A function's result must be used. The compiler infers whether a function is **pure** (no output, no writes
-to globals or parameters, only pure callees) or **impure**, and the rules for ignoring a result differ:
+to globals or parameters, only pure callees) or **impure**, and the rules for ignoring a result differ.
+They are [lint rules](CLI_REFERENCE.md#maxon-lint): `maxon lint`, `maxon spec-test`, the MCP `check` tool
+and the language server report E3064 and E3065, and `maxon build`, `maxon execute`, `maxon run` and
+`maxon test` compile and run a program that drops a result.
 
 | Callee | Bare call statement | `_ = call()` |
 |--------|---------------------|--------------|
@@ -4048,7 +4051,7 @@ var y = 0 as Amount
 
 - Every name without `var`/`let` must already be a `var`; a `let` target is **E2013**.
 - The number of names must match the tuple's element count (**E3005**).
-- Discarding every element of a pure function's result is **E3064**.
+- Discarding every element of a pure function's result is **E3064**, a [lint rule](#function-purity-and-discarded-results).
 
 ### If Statement
 
@@ -4942,6 +4945,10 @@ visibility:
 | `export` | every file | yes (**E3092**) |
 | `public` | every file | no |
 
+E3219 and E3092 are [lint rules](CLI_REFERENCE.md#maxon-lint), reported by `maxon lint`, `maxon spec-test`
+and the MCP `check` tool; `maxon build` compiles a program that holds an unused declaration. E3062 is
+reported by every compile.
+
 ```text
 project/
 ├── main.maxon                 # cannot call helper()
@@ -5004,7 +5011,7 @@ directory names it; delete it`). A declaration is live when code that is not its
 declaration names it (an `export` or `public` declaration, `main`, a test, a method), or a live unmarked
 declaration does, so declarations that only name each other, or a function that only calls itself, are all
 reported. A name spelled in a branch of `#if` the target excludes counts as a use. An unmarked typealias
-nothing in its subtree names is **E3062**. E3219 is reported once the program has no other error.
+nothing in its subtree names is **E3062**. `maxon lint` reports E3219 once the program has no other error.
 
 ### `export`
 
@@ -5024,11 +5031,11 @@ Calling `privateHelper` from a file outside the declaring directory's subtree is
 'privateHelper' is not exported`).
 
 `export` also states an expectation: **this program uses the declaration from outside its directory.** When
-nothing outside the declaring directory's subtree refers to it, the compiler reports **E3092** (`exported
-function 'geometry.perimeter' is never referenced outside its declaring directory`): an unmarked declaration
-already serves every reader it has. The rule includes the root directory, so in a program whose files all sit
-in one directory every `export` is reported. These checks run on every program that otherwise compiles, a
-one-file program included. The entry point, every target a `.maxproj` file declares and every task a
+nothing outside the declaring directory's subtree refers to it, [`maxon lint`](CLI_REFERENCE.md#maxon-lint)
+reports **E3092** (`exported function 'geometry.perimeter' is never referenced outside its declaring
+directory`): an unmarked declaration already serves every reader it has. The rule includes the root
+directory, so in a program whose files all sit in one directory every `export` is reported. `maxon lint`
+runs these checks on every program that otherwise compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every task a
 `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported surface names —
 a signature, a binding, a field, a payload, a typealias's target or a clause — is exempt while that declaration
 is itself referenced from outside its directory, or while the type owning the surface is itself exempt at that
@@ -7847,9 +7854,10 @@ abandoned body is unknown: what it waits for, writes and returns fits every chec
 its results. A type name that denotes nothing is reported where it is written, and a value of that type
 is unresolved, so each use of it is covered by that report. An error inside one method's body covers that
 method, and the rest of its type is checked. Unneeded casts (**E3010**), unused bindings (**E3012**,
-**E3077**), unused exports (**E3092**), unused unexported declarations (**E3219**), dropped
-promises (**E3212**, **E3213**), target refusals and the checks made while generating code are reported
-once the program has no other error, so fixing every reported error can surface more.
+**E3077**), unused exports (**E3092**) and unused unexported declarations (**E3219**) where
+[`maxon lint`](CLI_REFERENCE.md#maxon-lint) checks them, dropped promises (**E3212**, **E3213**), target
+refusals and the checks made while generating code are reported once the program has no other error, so
+fixing every reported error can surface more.
 
 Each example below is refused with the diagnostic shown.
 
@@ -7899,7 +7907,8 @@ return x                      // E3077: variable 'x' is never reassigned; use 'l
 let unused = 3                // E3012: unused variable: 'unused'
 ```
 
-**Discarding a result**
+**Discarding a result**, refused by [`maxon lint`](CLI_REFERENCE.md#maxon-lint) (E3064, E3065) and by
+every compile (E3067)
 
 ```maxon
 double(5)                     // E3064: result of pure function 'double' must be used

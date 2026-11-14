@@ -40,6 +40,10 @@ visibility:
 | `export` | every file | yes (**E3092**) |
 | `public` | every file | no |
 
+E3219 and E3092 are [lint rules](/docs/cli/#maxon-lint), reported by `maxon lint`, `maxon spec-test`
+and the MCP `check` tool; `maxon build` compiles a program that holds an unused declaration. E3062 is
+reported by every compile.
+
 ```text
 project/
 ├── main.maxon                 # cannot call helper()
@@ -102,7 +106,7 @@ directory names it; delete it`). A declaration is live when code that is not its
 declaration names it (an `export` or `public` declaration, `main`, a test, a method), or a live unmarked
 declaration does, so declarations that only name each other, or a function that only calls itself, are all
 reported. A name spelled in a branch of `#if` the target excludes counts as a use. An unmarked typealias
-nothing in its subtree names is **E3062**. E3219 is reported once the program has no other error.
+nothing in its subtree names is **E3062**. `maxon lint` reports E3219 once the program has no other error.
 
 ## `export`
 
@@ -122,11 +126,11 @@ Calling `privateHelper` from a file outside the declaring directory's subtree is
 'privateHelper' is not exported`).
 
 `export` also states an expectation: **this program uses the declaration from outside its directory.** When
-nothing outside the declaring directory's subtree refers to it, the compiler reports **E3092** (`exported
-function 'geometry.perimeter' is never referenced outside its declaring directory`): an unmarked declaration
-already serves every reader it has. The rule includes the root directory, so in a program whose files all sit
-in one directory every `export` is reported. These checks run on every program that otherwise compiles, a
-one-file program included. The entry point, every target a `.maxproj` file declares and every task a
+nothing outside the declaring directory's subtree refers to it, [`maxon lint`](/docs/cli/#maxon-lint)
+reports **E3092** (`exported function 'geometry.perimeter' is never referenced outside its declaring
+directory`): an unmarked declaration already serves every reader it has. The rule includes the root
+directory, so in a program whose files all sit in one directory every `export` is reported. `maxon lint`
+runs these checks on every program that otherwise compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every task a
 `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported surface names —
 a signature, a binding, a field, a payload, a typealias's target or a clause — is exempt while that declaration
 is itself referenced from outside its directory, or while the type owning the surface is itself exempt at that

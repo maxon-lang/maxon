@@ -1,0 +1,37 @@
+let LintWithTestsStagesApartCaseDirName = "lint-with-tests-stages-apart"
+let LintWithTestsStagesApartFixture = "lint-tests-clean"
+let LintWithTestsStagesApartOption = "--tests"
+let LintWithTestsStagesApartTestDirName = "test"
+let LintWithTestsStagesApartStagedDirName = "staged"
+let LintWithTestsStagesApartTestedExit = 0
+
+test 'lint --tests stages the test program under a directory of its own, never the one maxon test compiles from'
+	requireHeldOutsideCheckout(LintWithTestsStagesApartCaseDirName, check: LintWithTestsStagesApart.create())
+end 'lint --tests stages the test program under a directory of its own, never the one maxon test compiles from'
+
+type LintWithTestsStagesApart implements OutsideCheckoutCase
+	static function create() returns LintWithTestsStagesApart
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintWithTestsStagesApartFixture)
+		let staged = app.join(ProjectProductsDirName).join(LintWithTestsStagesApartTestDirName).join(LintWithTestsStagesApartStagedDirName)
+
+		let first = LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: [LintWithTestsStagesApartOption, app.filename()])
+		try first.requireOneLintedLine(app)
+		try Expect.isFalse(Directory.exists(staged), message: "{first.typed} of a project `maxon {TestCommandWord}` never ran in created {staged.toString()}, the directory `maxon {TestCommandWord}` compiles from. {first.said()}")
+
+		let tested = runConfinedIn(dir, arguments: [TestCommandWord, app.filename()])
+		let testedSaid = "It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}"
+
+		try Expect.equal(tested.exitCode(), expected: LintWithTestsStagesApartTestedExit, message: "`maxon {TestCommandWord} {app.filename()}` did not pass, so it is no control. {testedSaid}")
+		try Expect.isTrue(Directory.exists(staged), message: "`maxon {TestCommandWord} {app.filename()}` left no {staged.toString()}, so nothing shows a lint leaves it alone. {testedSaid}")
+
+		let held = HeldFiles.under(staged)
+		let second = LintRun.ran(dir, cacheRoot: cacheRootIn(dir), arguments: [LintWithTestsStagesApartOption, app.filename()])
+
+		try second.requireOneLintedLine(app)
+		try held.requireUnchangedBy(second.typed, said: second.said())
+	end 'requireHeldIn'
+end 'LintWithTestsStagesApart'

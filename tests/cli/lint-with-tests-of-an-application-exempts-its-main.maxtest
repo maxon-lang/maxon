@@ -1,0 +1,40 @@
+let LintWithTestsApplicationCaseDirName = "lint-with-tests-application"
+let LintWithTestsApplicationCleanDirName = "clean"
+let LintWithTestsApplicationCleanFixture = "lint-tests-application-clean"
+let LintWithTestsApplicationUnusedDirName = "unused"
+let LintWithTestsApplicationUnusedFixture = "lint-tests-application-unused"
+let LintWithTestsApplicationUnusedSite = "support.maxon:7:10"
+
+test 'lint --tests of an application project with tests exempts its main as the entry, as maxon test passes it'
+	requireHeldOutsideCheckout(LintWithTestsApplicationCaseDirName, check: LintWithTestsOfAnApplication.create())
+end 'lint --tests of an application project with tests exempts its main as the entry, as maxon test passes it'
+
+type LintWithTestsOfAnApplication implements OutsideCheckoutCase
+	static function create() returns LintWithTestsOfAnApplication
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cacheRoot = cacheRootIn(dir)
+		let cleanParent = dir.join(LintWithTestsApplicationCleanDirName)
+		let clean = stagedCliFixture(cleanParent, fixture: LintWithTestsApplicationCleanFixture)
+
+		try LintRun.ran(cleanParent, cacheRoot: cacheRoot, arguments: [clean.filename()]).requireLintedClean(clean, naming: clean.filename())
+		try LintRun.ran(cleanParent, cacheRoot: cacheRoot, arguments: [LintTestsOption, clean.filename()]).requireLintedClean(clean, naming: clean.filename())
+		try requireTestedClean(cleanParent, app: clean, cacheRoot: cacheRoot)
+
+		let unusedParent = dir.join(LintWithTestsApplicationUnusedDirName)
+		let unused = stagedCliFixture(unusedParent, fixture: LintWithTestsApplicationUnusedFixture)
+		let findings = ExpectedDiagnosticArray.create(0)
+		findings.push(ExpectedDiagnostic.at(UnusedUnexportedCode, site: LintWithTestsApplicationUnusedSite, message: UnusedLeftoverMessage))
+
+		try LintRun.ran(unusedParent, cacheRoot: cacheRoot, arguments: [LintTestsOption, unused.filename()]).requireRefusedWithOnly(unused, diagnostics: findings)
+		try requireTestedClean(unusedParent, app: unused, cacheRoot: cacheRoot)
+	end 'requireHeldIn'
+
+	function requireTestedClean(parent FilePath, app FilePath, cacheRoot FilePath) throws TestFailure
+		let tested = runWithCacheRoot([TestCommandWord, app.filename()], cacheRoot: cacheRoot, workingDirectory: parent)
+
+		try Expect.equal(tested.exitCode(), expected: TestedCleanExit, message: "`maxon {TestCommandWord} {app.filename()}` of an application project with tests did not pass, so it is no control: the lint rules stay out of `maxon {TestCommandWord}`. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}")
+	end 'requireTestedClean'
+end 'LintWithTestsOfAnApplication'

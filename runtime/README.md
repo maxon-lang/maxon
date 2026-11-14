@@ -63,9 +63,10 @@ reached only through its entry points.
   [`__Raw` rows](#__raw-rows-and-host-facilities).
 - **A tier file may declare `__` names.** The E2051 reservation is lifted for `runtime/`
   (`Queries.declaresCompilerInternalNames`).
-- **Do not discard a declared callee's result.** `_ = f(…)` on a function the program declares makes the
-  compile build the whole-program effect-free summary (`SemanticCheck.effectFreeSummaryIfConsulted`) to
-  judge the discard, and tier bodies are built in every program. Consume the value instead. A discarded
+- **Do not discard a declared callee's result.** `_ = f(…)` on a function the program declares makes a
+  compile that runs the lint rules (`maxon lint`, `spec-test`, the MCP `check` tool, the language server)
+  build the whole-program effect-free summary (`SemanticCheck.effectFreeSummaryIfConsulted`) to judge the
+  discard, and tier bodies are built in every program. Consume the value instead. A discarded
   `__Raw` result does not ask that question.
 - **No `panic`.** A panic builds a message and walks a stack, both of which allocate, and the allocator
   cannot do that while reporting its own failure. A tier body that cannot continue calls

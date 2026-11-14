@@ -1,0 +1,31 @@
+let LintWithADefineCaseDirName = "lint-with-a-define"
+let LintWithADefineFixture = "lint-define"
+let LintWithADefineOptionPrefix = "--define="
+let LintWithADefineBinding = "Channel=nightly"
+let LintWithADefineUnknownName = "NoSuchChannel"
+let LintWithADefineUnknownBinding = "NoSuchChannel=nightly"
+let LintWithADefineUnknownLine = "error E3149"
+
+test 'lint with --define= binds the define as build does, and refuses one naming nothing'
+	requireHeldOutsideCheckout(LintWithADefineCaseDirName, check: LintWithADefine.create())
+end 'lint with --define= binds the define as build does, and refuses one naming nothing'
+
+type LintWithADefine implements OutsideCheckoutCase
+	static function create() returns LintWithADefine
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintWithADefineFixture)
+
+		try lintedIn(dir, app: app, options: ["{LintWithADefineOptionPrefix}{LintWithADefineBinding}"]).requireLintedClean(app, naming: app.filename())
+
+		let unknown = lintedIn(dir, app: app, options: ["{LintWithADefineOptionPrefix}{LintWithADefineUnknownBinding}"])
+		let said = unknown.said()
+
+		try Expect.equal(unknown.output.exitCode(), expected: RefusedExitCode, message: "{unknown.typed} did not exit {RefusedExitCode}, the code `maxon {BuildCommandWord}` refuses a define naming no declaration with. {said}")
+		try Expect.contains(unknown.output.stderr, needle: LintWithADefineUnknownLine, message: "{unknown.typed} did not report the define naming no declaration as `{BuildCommandWord}` does. {said}")
+		try Expect.contains(unknown.output.stderr, needle: LintWithADefineUnknownName, message: "{unknown.typed}'s refusal does not name the define. {said}")
+		try requireNothingBuiltFor(app, what: unknown.typed, said: said)
+	end 'requireHeldIn'
+end 'LintWithADefine'

@@ -1,0 +1,22 @@
+let LintWithNoPathCaseDirName = "lint-with-no-path"
+let LintWithNoPathFixture = "lint-discarded-pure-result"
+let LintWithNoPathSite = "main.maxon:10:2"
+let LintWithNoPathMessage = "result of pure function 'doubled' must be used"
+
+test 'lint with no path lints the project in the working directory'
+	requireHeldOutsideCheckout(LintWithNoPathCaseDirName, check: LintWithNoPath.create())
+end 'lint with no path lints the project in the working directory'
+
+type LintWithNoPath implements OutsideCheckoutCase
+	static function create() returns LintWithNoPath
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintWithNoPathFixture)
+
+		let expected = ExpectedDiagnosticArray.create(0)
+		expected.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintWithNoPathSite, message: LintWithNoPathMessage))
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: StringArray.create(0)).requireRefused(app, diagnostics: expected)
+	end 'requireHeldIn'
+end 'LintWithNoPath'

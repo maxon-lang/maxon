@@ -1,0 +1,41 @@
+let LintWithMetricsCaseDirName = "lint-with-metrics"
+let LintWithMetricsFixture = "lint-metrics-checked"
+let LintWithMetricsFileName = "lint-metrics.tsv"
+let LintWithMetricsNothingAllocated = 0
+let SemanticCheckPhaseName = "semanticCheck"
+let CheckUnusedExportsPhaseName = "checkUnusedExports"
+let CheckUnusedUnexportedPhaseName = "checkUnusedUnexported"
+let LintWithMetricsBackendPhases = ["isel", "regalloc", "encode", "link", "writeExe"]
+
+test 'lint with --metrics= writes a table whose check phases allocated and whose backend phases did not run'
+	requireHeldOutsideCheckout(LintWithMetricsCaseDirName, check: LintWithMetrics.create())
+end 'lint with --metrics= writes a table whose check phases allocated and whose backend phases did not run'
+
+type LintWithMetrics implements OutsideCheckoutCase
+	static function create() returns LintWithMetrics
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintWithMetricsFixture)
+		let metrics = dir.join(LintWithMetricsFileName)
+		let linted = lintedIn(dir, app: app, options: ["{MetricsOptionPrefix}{metrics.toString()}"])
+
+		try linted.requireLintedClean(app, naming: app.filename())
+		try Expect.isTrue(File.exists(metrics), message: "{linted.typed} wrote no {metrics.toString()}. {linted.said()}")
+
+		let table = fileText(metrics)
+
+		for phase in [SemanticCheckPhaseName, CheckUnusedExportsPhaseName, CheckUnusedUnexportedPhaseName] 'eachCheck'
+			let allocs = metricsCell(table, kind: PhaseRowKind, name: phase, field: MetricsAllocsField)
+
+			try Expect.greaterThan(allocs, than: LintWithMetricsNothingAllocated, message: "{linted.typed}'s `{PhaseRowKind}` row `{phase}` counts no allocation, so the check it names never ran. The table was: {table}")
+		end 'eachCheck'
+
+		for phase in LintWithMetricsBackendPhases 'eachBackendPhase'
+			let allocs = metricsCell(table, kind: PhaseRowKind, name: phase, field: MetricsAllocsField)
+
+			try Expect.equal(allocs, expected: LintWithMetricsNothingAllocated, message: "{linted.typed}'s `{PhaseRowKind}` row `{phase}` counts allocations: `{LintCommandWord}` stops before code generation. The table was: {table}")
+		end 'eachBackendPhase'
+	end 'requireHeldIn'
+end 'LintWithMetrics'

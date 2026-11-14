@@ -310,9 +310,12 @@ it as gone.
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
 `source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
-above have severity Information. "No `main` function" (E3001) and the unused-declaration diagnostics
-(E3092, E3219, E3062) appear in `maxon build`'s output alone. When they are the only errors, a document
-is published with its unneeded casts (E3010) and target refusals (E3074, E3104).
+above have severity Information. A document is checked with the [lint rules](/docs/cli/#maxon-lint), and is
+published with a discarded result (E3064, E3065). "No `main` function" (E3001) and the
+unused-declaration diagnostics (E3092, E3219, E3062) are claims about the whole program, published by
+the command line alone: E3001 and E3062 in the output of `maxon build` and `maxon lint`, E3092 and E3219
+in `maxon lint`'s. When they are the only errors, a document is published with its unneeded casts
+(E3010) and target refusals (E3074, E3104).
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
 project check's.** This applies where the document's root is a directory holding a `.maxproj`. The
@@ -320,8 +323,7 @@ buffer check's set is published at once. The project check then compiles the doc
 from disk, with the buffer's current text — saved or not — in place of the file, through type checking
 and range checking, and publishes the diagnostics that compile
 reports on this document: a range error in a call to a function a sibling file declares, a partial
-implementation of a sibling's interface, an unused variable, and every other error `maxon build` reports
-before code generation. A diagnostic with no position of its own is published when the buffer check
+implementation of a sibling's interface, an unused variable, and every other error `maxon lint` reports. A diagnostic with no position of its own is published when the buffer check
 raised it too. `.maxtest`, `.maxproj` and `.maxtasks` documents, and files of `stdlib/` and `runtime/`,
 get the buffer check's set alone.
 

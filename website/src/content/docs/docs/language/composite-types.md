@@ -974,7 +974,7 @@ var q = 0 as Amount
 
 - A name without `var`/`let` must already be a `var`; a `let` target is **E2013**.
 - The number of names must match the element count (**E3005**).
-- Discarding every element of a pure function's result is **E3064**.
+- Discarding every element of a pure function's result is **E3064**, a [lint rule](/docs/language/functions/#function-purity-and-discarded-results).
 
 ### Destructuring in For Loops
 

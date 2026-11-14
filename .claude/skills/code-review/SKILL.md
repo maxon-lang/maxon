@@ -312,7 +312,7 @@ name what the change owes in your report for §6 rather than writing it. Standal
 
 - **The landing gates:** every row of `/land` §8's table — build if stale (`maxon run build`, which
   builds twice by itself for an emitted-runtime change), filtered specs covering what changed, the codecs
-  check, and the self-compile, seed chain and documentation gates where §8 calls for them. CI runs the
+  check, and the lint, self-compile, seed chain and documentation gates where §8 calls for them. CI runs the
   rest. They are kept in one place.
 - **Scaling:** `mcp__maxon__run_scale_test` if the change touched a pass, the IR, or a data
   structure the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one,

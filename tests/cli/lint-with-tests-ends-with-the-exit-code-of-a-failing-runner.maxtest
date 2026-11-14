@@ -1,0 +1,25 @@
+let LintWithTestsFailingRunnerCaseDirName = "lint-with-tests-failing-runner"
+let LintWithTestsFailingRunnerFixture = "lint-tests-runner-fails"
+let LintWithTestsFailingRunnerOption = "--tests"
+let LintWithTestsFailingRunnerExit = 42
+
+test 'lint --tests of a project whose build runner fails ends with the runner exit code, as the target route does'
+	requireHeldOutsideCheckout(LintWithTestsFailingRunnerCaseDirName, check: LintWithTestsFailingRunner.create())
+end 'lint --tests of a project whose build runner fails ends with the runner exit code, as the target route does'
+
+type LintWithTestsFailingRunner implements OutsideCheckoutCase
+	static function create() returns LintWithTestsFailingRunner
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintWithTestsFailingRunnerFixture)
+
+		let target = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: StringArray.create(0))
+		try Expect.equal(target.output.exitCode(), expected: LintWithTestsFailingRunnerExit, message: "{target.typed} of a project whose runner exits {LintWithTestsFailingRunnerExit} did not end with that code, so it is no control. {target.said()}")
+
+		let tests = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintWithTestsFailingRunnerOption])
+		try Expect.equal(tests.output.exitCode(), expected: LintWithTestsFailingRunnerExit, message: "{tests.typed} of a project whose runner exits {LintWithTestsFailingRunnerExit} did not end with that code, as {target.typed} does. {tests.said()}")
+		try requireNothingBuiltFor(app, what: tests.typed, said: tests.said())
+	end 'requireHeldIn'
+end 'LintWithTestsFailingRunner'

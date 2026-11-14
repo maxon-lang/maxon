@@ -293,6 +293,10 @@ When no `// --- file:` markers are present, behavior is unchanged (single-file t
    - Test name is prefixed with spec filename (e.g., `abs.float`)
    - ALL `maxon` blocks in Tests MUST have output blocks
 
+5. **Every case is compiled with the [lint rules](CLI_REFERENCE.md#maxon-lint) enforced**, as
+   `maxon lint` compiles a program, so a case's scaffolding uses every result it computes and every
+   declaration it makes: a discarded result is E3064 or E3065, and an unused declaration E3092 or E3219.
+
 ## Documentation Examples
 
 Every code example in the **Documentation** section is illustrative: the parser's runnable region starts at
@@ -588,8 +592,8 @@ These cases always compile and run on their own: a compile-error case; a case pi
 marker; a `stdin`, `procs`, `preempt`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
 `AsyncTrace` or `DebugInfo` marker; a stdlib-overlay or runtime-file section; a multi-file case;
 `__file__` or `__line__` in the source; a `TargetIr`, `RequiredRuntime`, `RequiredData` or
-`RequiredRdata` block; a top-level `export` declaration, which a multi-file program refuses
-when no file outside its directory uses it (E3092); and a `main` that is not exactly
+`RequiredRdata` block; a top-level `export` declaration, which the lint rules refuse in a multi-file
+program when no file outside its directory uses it (E3092); and a `main` that is not exactly
 `function main() returns ExitCode` or `function main()` with one `end 'main'`. So does a case whose source
 names one of these words anywhere, a `typealias` included: `CommandLine` or `executablePath`, which read
 the batch program's own argv and path; a `HeapStats` call or one of the `Scheduler` and `Clock` calls that read process-wide runtime state (`Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.quiesce()`, `Scheduler.currentMachine()`, `Clock.threadCpuTicks()`), which earlier cases move;

@@ -1,0 +1,30 @@
+let LintBesideSeveralTargetsCaseDirName = "lint-beside-several-targets"
+let LintBesideSeveralTargetsFixture = "lint-two-targets"
+let LintBesideSeveralTargetsWords = ["clean-target", "dropping-target"]
+
+test 'lint with no path beside a manifest declaring several targets refuses as build does, listing them'
+	requireHeldOutsideCheckout(LintBesideSeveralTargetsCaseDirName, check: LintBesideSeveralTargets.create())
+end 'lint with no path beside a manifest declaring several targets refuses as build does, listing them'
+
+type LintBesideSeveralTargets implements OutsideCheckoutCase
+	static function create() returns LintBesideSeveralTargets
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintBesideSeveralTargetsFixture)
+		let built = runWithCacheRoot([BuildCommandWord], cacheRoot: cacheRootIn(dir), workingDirectory: app)
+		let linted = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: StringArray.create(0))
+		let said = "{linted.said()} `maxon {BuildCommandWord}` wrote to stdout: {built.stdout} and to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode(), expected: RefusedExitCode, message: "`maxon {BuildCommandWord}` beside two targets did not refuse to choose, so it is no control. {said}")
+		try Expect.equal(linted.output.exitCode(), expected: RefusedExitCode, message: "{linted.typed} beside two targets did not exit {RefusedExitCode} as `maxon {BuildCommandWord}` does. {said}")
+		try Expect.equal(linted.output.stderr, expected: built.stderr, message: "{linted.typed} beside two targets did not refuse with the words `maxon {BuildCommandWord}` refuses with. {said}")
+
+		for word in LintBesideSeveralTargetsWords 'eachTarget'
+			try Expect.contains(linted.output.stdout, needle: word, message: "{linted.typed} did not list `{word}`, the word `maxon {LintCommandWord}` takes for that target. {said}")
+		end 'eachTarget'
+
+		try requireNothingBuiltFor(app, what: linted.typed, said: said)
+	end 'requireHeldIn'
+end 'LintBesideSeveralTargets'

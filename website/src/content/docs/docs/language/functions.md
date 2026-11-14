@@ -370,7 +370,10 @@ it. Two names for one record that only exist at run time are beyond what the com
 ## Function Purity and Discarded Results
 
 A function's result must be used. The compiler infers whether a function is **pure** (no output, no writes
-to globals or parameters, only pure callees) or **impure**, and the rules for ignoring a result differ:
+to globals or parameters, only pure callees) or **impure**, and the rules for ignoring a result differ.
+They are [lint rules](/docs/cli/#maxon-lint): `maxon lint`, `maxon spec-test`, the MCP `check` tool
+and the language server report E3064 and E3065, and `maxon build`, `maxon execute`, `maxon run` and
+`maxon test` compile and run a program that drops a result.
 
 | Callee | Bare call statement | `_ = call()` |
 |--------|---------------------|--------------|

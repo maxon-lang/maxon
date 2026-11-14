@@ -22,9 +22,14 @@ let SpecTestCommandName = "spec-test"
 let StageLibraryTierCommandName = "stage-library-tier"
 let CheckScriptlibCommandName = "check-scriptlib"
 let CheckStdlibCommandName = "check-stdlib"
+let LintCommandName = "lint"
+let LintTestsFlag = "--tests"
+let LintedReportPrefix = "Linted "
+let LintedSubjectSeparator = ", "
 
-// Re-emitted by `SpecTestRunner.buildGuestCompiler` and `ScaleTestRunner.compileRung`, and read
-// back by the same parser.
+// Re-emitted wherever the compiler spawns itself to build (`SpecTestRunner.buildGuestCompiler`,
+// `ScaleTestRunner.compileRung`, which re-emits `LintCommandName` too, `McpTools`, `DebugBuild`), and
+// read back by the same parser.
 let BuildSubcommandName = "build"
 
 // Constants because `MaxonArgs.parse` matches each word and `maxon help` prints it: a word written
@@ -335,6 +340,7 @@ function main() returns ExitCode
 		fmt gives runFmt(args)
 		init gives runInit(args)
 		help gives runHelp(args)
+		lint gives runLint(args)
 		lspServer gives runLspServer(args)
 		mcpServer gives runMcpServerCommand(args)
 		monitor gives runMonitor(args)
@@ -377,6 +383,7 @@ function commandReadsEveryWord(command MaxonCommand) returns bool
 		fmt or
 		help or
 		init or
+		lint or
 		lspServer or
 		mcpServer or
 		scaleTest or
@@ -412,14 +419,26 @@ let SecondStageVariable = "MAXON_SECOND_STAGE"
 let SecondStageValue = "1"
 let NotRepeatedPrefix = "Not repeating this build with the program it wrote:"
 
+union SoleTargetReading
+	noProjectFile
+	read(resolution DescriptionResolution)
+end 'SoleTargetReading'
+
+function soleTargetReadingOf(voice ManifestVoice) returns SoleTargetReading
+	match projectRosterIn(Directory.currentPath(), voice: voice) 'roster'
+		noProjectFile then return SoleTargetReading.noProjectFile
+		failed(inputs) then return SoleTargetReading.read(DescriptionResolution.refused(rosterRefusalCode(inputs)))
+		declared(projectFile, targets) then return SoleTargetReading.read(describedSoleTarget(projectFile, declared: targets, voice: voice))
+	end 'roster'
+end 'soleTargetReadingOf'
+
 function runProjectBuild(args MaxonArgs) returns ExitCode
 	let voice = buildVoice(args)
 
-	match projectRosterIn(Directory.currentPath(), voice: voice) 'roster'
+	match soleTargetReadingOf(voice) 'reading'
 		noProjectFile then return withoutAProjectFile()
-		failed(inputs) then return rosterRefusalCode(inputs)
-		declared(projectFile, targets) then return buildSoleTarget(projectFile, declared: targets, args: args, voice: voice)
-	end 'roster'
+		read(resolution) then return buildResolved(resolution, args: args, voice: voice)
+	end 'reading'
 end 'runProjectBuild'
 
 function withoutAProjectFile() returns ExitCode
@@ -429,23 +448,41 @@ function withoutAProjectFile() returns ExitCode
 	return OwnFailureExit
 end 'withoutAProjectFile'
 
-function buildSoleTarget(projectFile FilePath, declared TaskNameArray, args MaxonArgs, voice ManifestVoice) returns ExitCode
+function describedSoleTarget(projectFile FilePath, declared TaskNameArray, voice ManifestVoice) returns DescriptionResolution
 	match chosenTarget(projectFile, declared: declared, word: StatedText.unstated, voice: voice) 'chosen'
-		named(name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0)
-		notDeclared then panic("buildSoleTarget: the project was asked for no target, and only a stated word can name one it does not declare")
-		refused(code) then return code
+		named(name) then return describedThroughProject(projectFile, target: name, base: ManifestBase.workingDirectory, depth: 0, voice: voice)
+		notDeclared then panic("describedSoleTarget: the project was asked for no target, and only a stated word can name one it does not declare")
+		refused(code) then return DescriptionResolution.refused(code)
 	end 'chosen'
-end 'buildSoleTarget'
+end 'describedSoleTarget'
 
-function runWordBuild(args MaxonArgs, word String) returns ExitCode
-	let voice = buildVoice(args)
+union ProgramNaming
+	byProject
+	byTarget(projectFile FilePath, name String)
+	byPaths
+	refused(code ExitCode)
+end 'ProgramNaming'
 
-	match readingOfWord(Directory.currentPath(), word: word, voice: voice) 'reading'
-		aTarget(projectFile, name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0)
-		aPath then return runBuildPaths(args)
-		refused(code) then return code
-	end 'reading'
-end 'runWordBuild'
+function programNamedBy(args MaxonArgs, voice ManifestVoice) returns ProgramNaming
+	if args.paths.count() == 0 'noPath'
+		return ProgramNaming.byProject
+	end 'noPath'
+
+	// A target name outranks a path of the same spelling: a target also names an output, so resolving
+	// `maxon build maxon-bin` as a path would compile to a different file and leave the real one
+	// stale.
+	if args.paths.count() == 1 'maybeTargetName'
+		let only = try args.paths.get(0) otherwise panic("programNamedBy: paths.get OOB — count is 1")
+
+		match readingOfWord(Directory.currentPath(), word: only, voice: voice) 'reading'
+			aTarget(projectFile, name) then return ProgramNaming.byTarget(projectFile, name: name)
+			aPath then return ProgramNaming.byPaths
+			refused(code) then return ProgramNaming.refused(code)
+		end 'reading'
+	end 'maybeTargetName'
+
+	return ProgramNaming.byPaths
+end 'programNamedBy'
 
 function buildThroughProject(projectFile FilePath, target String, args MaxonArgs, base ManifestBase, depth DelegationDepth) returns ExitCode
 	let voice = buildVoice(args)
@@ -491,40 +528,17 @@ function buildDescribed(described DescribedBuild, args MaxonArgs, voice Manifest
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
-	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
-	// positive twin, and a manifest saying `false` means the project never wants one.
-	let manifestWantsDebugInfo = try manifestBool(described.doc, build: described.node, key: ManifestDebugInfoKey, unstated: DebugInfoWhenUnstated) otherwise (e) 'badDebugInfo'
-		return reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: described.manifest, voice: voice)
-	end 'badDebugInfo'
+	match acceptedSettings(described, args: args, target: target, voice: voice, notices: ReportStream.standardOutput) 'settings'
+		accepted(settings) then return builtWithSettings(described, settings: settings, target: target, outputOverride: outputOverride, args: args)
+		refused(code) then return code
+	end 'settings'
+end 'buildDescribed'
 
-	let productVersion = try manifestVersion(described.doc, build: described.node, target: target) otherwise (e) 'badVersion'
-		return reportMalformedManifestField(ManifestVersionKey, error: e, manifest: described.manifest, voice: voice)
-	end 'badVersion'
-
-	// The manifest's defines come first, so a command-line `--define` overrides one it computed: a
-	// later stamp replaces an earlier one, so order expresses the precedence.
-	let defines = try manifestDefines(described.doc, build: described.node) otherwise (e) 'badDefines'
-		return reportMalformedManifestField(ManifestDefinesKey, error: e, manifest: described.manifest, voice: voice)
-	end 'badDefines'
-
-	for supplied in args.defines 'eachCommandLineDefine'
-		defines.push(supplied)
-	end 'eachCommandLineDefine'
-
-	let projectDir = try directoryHoldingFile(described.manifest) otherwise 'noDirectory'
-		printError("error: could not derive the directory holding {reportPathDisplay(described.manifest)}\n")
-
-		return OwnFailureExit
-	end 'noDirectory'
-
-	if reportBreakingChanges(projectDir, onto: ReportStream.standardOutput) == VersionRecordVerdict.refused 'refusedRecord'
-		return OwnFailureExit
-	end 'refusedRecord'
-
-	let outcome = buildAndReport(described.sources, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
+function builtWithSettings(described DescribedBuild, settings DescribedSettings, target Target, outputOverride StatedText, args MaxonArgs) returns ExitCode
+	let outcome = buildAndReport(described.sources, target: target, args: args, outputOverride: outputOverride, debugInfo: settings.debugInfo and args.debugInfo, productVersion: settings.productVersion, defines: settings.defines)
 
 	match outcome 'outcome'
-		built then recordCompilerRelease(projectDir)
+		built then recordCompilerRelease(settings.projectDir)
 		failed then break
 	end 'outcome'
 
@@ -534,7 +548,57 @@ function buildDescribed(described DescribedBuild, args MaxonArgs, voice Manifest
 		built(written) gives repeatedWithOutput(written, target: target) if described.rebuildWithOutput else SucceededExit
 		failed(code) gives code
 	end 'repeated'
-end 'buildDescribed'
+end 'builtWithSettings'
+
+type DescribedSettings
+	export let projectDir as FilePath
+	export let debugInfo as bool
+	export let productVersion as VersionComponentArray
+	export let defines as DefineArray
+
+	static function create(projectDir FilePath, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns DescribedSettings
+		return Self{projectDir: projectDir, debugInfo: debugInfo, productVersion: productVersion, defines: defines}
+	end 'create'
+end 'DescribedSettings'
+
+union SettingsAcceptance
+	accepted(settings DescribedSettings)
+	refused(code ExitCode)
+end 'SettingsAcceptance'
+
+function acceptedSettings(described DescribedBuild, args MaxonArgs, target Target, voice ManifestVoice, notices ReportStream) returns SettingsAcceptance
+	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
+	// positive twin, and a manifest saying `false` means the project never wants one.
+	let manifestWantsDebugInfo = try manifestBool(described.doc, build: described.node, key: ManifestDebugInfoKey, unstated: DebugInfoWhenUnstated) otherwise (e) 'badDebugInfo'
+		return SettingsAcceptance.refused(reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: described.manifest, voice: voice))
+	end 'badDebugInfo'
+
+	let productVersion = try manifestVersion(described.doc, build: described.node, target: target) otherwise (e) 'badVersion'
+		return SettingsAcceptance.refused(reportMalformedManifestField(ManifestVersionKey, error: e, manifest: described.manifest, voice: voice))
+	end 'badVersion'
+
+	// The manifest's defines come first, so a command-line `--define` overrides one it computed: a
+	// later stamp replaces an earlier one, so order expresses the precedence.
+	let defines = try manifestDefines(described.doc, build: described.node) otherwise (e) 'badDefines'
+		return SettingsAcceptance.refused(reportMalformedManifestField(ManifestDefinesKey, error: e, manifest: described.manifest, voice: voice))
+	end 'badDefines'
+
+	for supplied in args.defines 'eachCommandLineDefine'
+		defines.push(supplied)
+	end 'eachCommandLineDefine'
+
+	let projectDir = try directoryHoldingFile(described.manifest) otherwise 'noDirectory'
+		printError("error: could not derive the directory holding {reportPathDisplay(described.manifest)}\n")
+
+		return SettingsAcceptance.refused(OwnFailureExit)
+	end 'noDirectory'
+
+	if reportBreakingChanges(projectDir, onto: notices) == VersionRecordVerdict.refused 'refusedRecord'
+		return SettingsAcceptance.refused(OwnFailureExit)
+	end 'refusedRecord'
+
+	return SettingsAcceptance.accepted(DescribedSettings.create(projectDir, debugInfo: manifestWantsDebugInfo, productVersion: productVersion, defines: defines))
+end 'acceptedSettings'
 
 // Called after `buildAndReport` has released the tree lock and the output's build lock, which the second
 // stage takes again.
@@ -594,36 +658,18 @@ end 'reportEntryRosterError'
 function runBuild(args MaxonArgs) returns ExitCode
 	printVersionHeader()
 
-	if args.paths.count() == 0 'noPath'
-		return runProjectBuild(args)
-	end 'noPath'
-
-	// A target name outranks a path of the same spelling: a target also names an output, so resolving
-	// `maxon build maxon-bin` as a path would compile to a different file and leave the real one
-	// stale.
-	if args.paths.count() == 1 'maybeTargetName'
-		let only = try args.paths.get(0) otherwise panic("runBuild: paths.get OOB — count is 1")
-
-		return runWordBuild(args, word: only)
-	end 'maybeTargetName'
-
-	return runBuildPaths(args)
+	match programNamedBy(args, voice: buildVoice(args)) 'naming'
+		byProject then return runProjectBuild(args)
+		byTarget(projectFile, name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0)
+		byPaths then return runBuildPaths(args)
+		refused(code) then return code
+	end 'naming'
 end 'runBuild'
 
 // Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles`
 // registers them in that order and roots the project at their common ancestor.
 function runBuildPaths(args MaxonArgs) returns ExitCode
-	let inputPaths = MaxonSourcePathArray.create(args.paths.count(), zeroed: false)
-
-	for spelling in args.paths 'eachPositional'
-		let path = try FilePath.from(spelling) otherwise 'badPath'
-			printError("error: invalid path: {spelling}\n")
-			return OwnFailureExit
-		end 'badPath'
-
-		inputPaths.push(path)
-	end 'eachPositional'
-
+	let inputPaths = try sourcePathsNamedBy(args) otherwise return OwnFailureExit
 	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	let outputOverride = args.outputOverride
@@ -634,6 +680,25 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 		failed(code) gives code
 	end 'outcome'
 end 'runBuildPaths'
+
+enum SourcePathError implements Error
+	invalidSpelling
+end 'SourcePathError'
+
+function sourcePathsNamedBy(args MaxonArgs) returns MaxonSourcePathArray throws SourcePathError
+	let inputPaths = MaxonSourcePathArray.create(args.paths.count(), zeroed: false)
+
+	for spelling in args.paths 'eachPositional'
+		let path = try FilePath.from(spelling) otherwise 'badPath'
+			printError("error: invalid path: {spelling}\n")
+			throw SourcePathError.invalidSpelling
+		end 'badPath'
+
+		inputPaths.push(path)
+	end 'eachPositional'
+
+	return inputPaths
+end 'sourcePathsNamedBy'
 
 // The lock is asked of the command line's `--output=`: `outputOverride` may be a manifest's own
 // `output`, which says nothing about who else writes the tree.
@@ -823,7 +888,7 @@ end 'acquireBuildTreeLock'
 function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session DriverSession) returns BuildOutcome
 	compilerLogger(CompilerLogGroup.compiler).info("compiling {subject}: {reason}")
 
-	let request = freeze CompileRequest.create(DriverWork.build, origin: ProjectOrigin.sources, target: job.target, session: session, inputPaths: job.inputPaths, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines).clone()
+	let request = freeze CompileRequest.create(DriverWork.build(LintRules.skipped), origin: ProjectOrigin.sources, target: job.target, session: session, inputPaths: job.inputPaths, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines).clone()
 	let product = try compile(freshCompileDriver(), request: request, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
@@ -964,6 +1029,182 @@ function runCheckStdlib(args MaxonArgs) returns ExitCode
 
 	return SucceededExit if clean else OwnFailureExit
 end 'runCheckStdlib'
+
+function runLint(args MaxonArgs) returns ExitCode
+	let voice = ManifestVoice.forCommandLine(LintCommandName, announce: false, logOverridden: args.logOverridden)
+	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
+
+	_ = quietTheBuildChatter(args.logOverridden)
+
+	match lintNamedBy(args, voice: voice) 'naming'
+		sources(naming) then return lintOfSources(naming, args: args, target: target, voice: voice)
+		tests then return lintedTests(args, target: target, voice: voice)
+		manifest(file) then return lintedManifest(file, args: args)
+		refused(code) then return code
+	end 'naming'
+end 'runLint'
+
+union LintNaming
+	sources(naming ProgramNaming)
+	tests
+	manifest(file FilePath)
+	refused(code ExitCode)
+end 'LintNaming'
+
+function lintNamedBy(args MaxonArgs, voice ManifestVoice) returns LintNaming
+	let manifests = manifestFilesNamedBy(args)
+
+	if args.lintsTests and not args.defines.isEmpty() 'testsWithADefine'
+		return LintNaming.refused(refusedLint("{LintTestsFlag} lints what `{TestCommandName}` compiles, and `{TestCommandName}` takes no {DefineFlagPrefix}"))
+	end 'testsWithADefine'
+
+	if manifests.isEmpty() and args.lintsTests 'testProject'
+		return LintNaming.tests
+	end 'testProject'
+
+	if manifests.isEmpty() 'program'
+		return LintNaming.sources(programNamedBy(args, voice: voice))
+	end 'program'
+
+	let manifest = try manifests.get(0) otherwise panic("lintNamedBy: manifests holds a file, so index 0 exists")
+
+	if args.lintsTests 'testsAndAManifest'
+		return LintNaming.refused(refusedLint("{LintTestsFlag} lints what `{TestCommandName}` compiles, and {reportPathDisplay(manifest)} is a manifest, whose program is not a test project"))
+	end 'testsAndAManifest'
+
+	if args.paths.count() > 1 'manifestBesideOthers'
+		return LintNaming.refused(refusedLint("{reportPathDisplay(manifest)} is a manifest, which is linted alone: its program is not one program with the other paths"))
+	end 'manifestBesideOthers'
+
+	if args.targetSpec.isStated() 'manifestForATarget'
+		return LintNaming.refused(refusedLint("{reportPathDisplay(manifest)} is a manifest, whose program is compiled for the host that runs it, so {TargetFlagPrefix} does not apply"))
+	end 'manifestForATarget'
+
+	if not args.defines.isEmpty() 'manifestWithADefine'
+		return LintNaming.refused(refusedLint("{reportPathDisplay(manifest)} is a manifest, whose runner is compiled with no define, so {DefineFlagPrefix} does not apply"))
+	end 'manifestWithADefine'
+
+	return LintNaming.manifest(manifest)
+end 'lintNamedBy'
+
+function manifestFilesNamedBy(args MaxonArgs) returns FilePathArray
+	let manifests = FilePathArray.create(0)
+
+	for spelling in args.paths 'eachPositional'
+		let path = try FilePath.from(spelling) otherwise continue
+
+		if isDriverFileName(path.filename()) and File.exists(path) and not Directory.isDirectory(path) 'aManifestFile'
+			manifests.push(path)
+		end 'aManifestFile'
+	end 'eachPositional'
+
+	return manifests
+end 'manifestFilesNamedBy'
+
+function lintOfSources(naming ProgramNaming, args MaxonArgs, target Target, voice ManifestVoice) returns ExitCode
+	match naming 'naming'
+		byProject then return lintOfProject(args, target: target, voice: voice)
+		byTarget(projectFile, name) then return lintResolved(describedThroughProject(projectFile, target: name, base: ManifestBase.workingDirectory, depth: 0, voice: voice), args: args, target: target, voice: voice)
+		byPaths then return lintOfPaths(args, target: target)
+		refused(code) then return code
+	end 'naming'
+end 'lintOfSources'
+
+function lintedManifest(manifest FilePath, args MaxonArgs) returns ExitCode
+	let first = try firstEntryDeclaredIn(manifest) otherwise (e) 'unreadable'
+		reportEntryRosterError(e)
+		return OwnFailureExit
+	end 'unreadable'
+
+	let subjects = lintedSubjects(MaxonSourcePathArray from [manifest])
+
+	match first 'first'
+		entered(entry) then return lintedRunnerOf(manifest, entry: entry, args: args, subjects: subjects)
+		holdsNothing then return lintedClean(subjects)
+		holdsNoEntry then return refusedLint("{reportPathDisplay(manifest)} declares no target or task, so its runner has no program to lint")
+	end 'first'
+end 'lintedManifest'
+
+function lintedRunnerOf(manifest FilePath, entry String, args MaxonArgs, subjects String) returns ExitCode
+	let session = DriverSession.printing()
+	let request = runnerCompileRequest(DriverWork.lint, program: manifest, target: detectHostTarget(), entryFunction: freeze entry.toByteArray(), session: session, outputOverride: StatedText.unstated, metrics: args.metrics)
+
+	return lintedRequest(request, session: session, subjects: subjects)
+end 'lintedRunnerOf'
+
+function refusedLint(problem String) returns ExitCode
+	printError("error: {problem}\n")
+	printError("Usage: {lintUsageLine()}\n")
+
+	return OwnFailureExit
+end 'refusedLint'
+
+function lintUsageLine() returns String
+	return "maxon {LintCommandName} {lintArguments()}"
+end 'lintUsageLine'
+
+function lintArguments() returns String
+	return "[{LintTestsFlag}] [<file|directory|target>...] [{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>]... [{MetricsFlagPrefix}<path>] [{TargetFlagPrefix}<cpu>-<os>]"
+end 'lintArguments'
+
+function lintOfProject(args MaxonArgs, target Target, voice ManifestVoice) returns ExitCode
+	match soleTargetReadingOf(voice) 'reading'
+		noProjectFile then return lintedProgram(MaxonSourcePathArray from [Directory.currentPath()], target: target, args: args, defines: args.defines)
+		read(resolution) then return lintResolved(resolution, args: args, target: target, voice: voice)
+	end 'reading'
+end 'lintOfProject'
+
+function lintOfPaths(args MaxonArgs, target Target) returns ExitCode
+	let inputPaths = try sourcePathsNamedBy(args) otherwise return OwnFailureExit
+
+	return lintedProgram(inputPaths, target: target, args: args, defines: args.defines)
+end 'lintOfPaths'
+
+function lintResolved(resolution DescriptionResolution, args MaxonArgs, target Target, voice ManifestVoice) returns ExitCode
+	return match resolution 'resolution'
+		resolved(described) gives lintDescribed(described, args: args, target: target, voice: voice)
+		refused(code) gives code
+	end 'resolution'
+end 'lintResolved'
+
+function lintDescribed(described DescribedBuild, args MaxonArgs, target Target, voice ManifestVoice) returns ExitCode
+	match acceptedSettings(described, args: args, target: target, voice: voice, notices: ReportStream.standardError) 'settings'
+		accepted(settings) then return lintedProgram(described.sources, target: target, args: args, defines: settings.defines)
+		refused(code) then return code
+	end 'settings'
+end 'lintDescribed'
+
+function lintedProgram(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, defines DefineArray) returns ExitCode
+	let session = DriverSession.printing()
+	let request = freeze CompileRequest.create(DriverWork.lint, origin: ProjectOrigin.sources, target: target, session: session, inputPaths: inputPaths, metrics: args.metrics, defines: defines).clone()
+
+	return lintedRequest(request, session: session, subjects: lintedSubjects(inputPaths))
+end 'lintedProgram'
+
+function lintedRequest(request immutable CompileRequest, session DriverSession, subjects String) returns ExitCode
+	try lintOnDriver(freshCompileDriver(), request: request, session: session) otherwise (e) 'refused'
+		reportCompileError(e)
+		return OwnFailureExit
+	end 'refused'
+
+	return lintedClean(subjects)
+end 'lintedRequest'
+
+function lintedClean(subjects String) returns ExitCode
+	print("{LintedReportPrefix}{subjects}\n")
+
+	return SucceededExit
+end 'lintedClean'
+
+function lintedSubjects(inputPaths MaxonSourcePathArray) returns String
+	let spellings = StringArray.create(inputPaths.count(), zeroed: false)
+
+	for path in inputPaths 'eachPath'
+		spellings.push("{path}")
+	end 'eachPath'
+
+	return joinedWith(spellings, separator: LintedSubjectSeparator)
+end 'lintedSubjects'
 
 function reportStdlibRefusal(diagnostics DiagnosticArray, triple String)
 	for diagnostic in diagnostics 'eachDiagnostic'
@@ -1745,6 +1986,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		fmt or
 		help or
 		init or
+		lint or
 		lspServer or
 		mcpServer or
 		monitor or
@@ -1965,6 +2207,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `{MaxonSourceExtension}`, `{TestSourceExtension}`, `{ProjectFileExtension}` and `{TaskFileExtension}` files, skipping anything under a `.maxonignore`, and any subdirectory that is its own checkout. A file whose layout it cannot tell (one that does not lex, a keyword where a name must stand, blocks that do not close) is refused, left as it is, and the run exits 1. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
 		init gives CommandReference.create(InitCommandName, arguments: "[<directory>]", summary: "Scaffold a new project: `<directory>{ProjectFileExtension}` and `{MainSourceFileName}`.", detail: "With no directory it initializes the working directory, and with one it creates that directory. The project is named after the directory: its `{ProjectFileExtension}` file takes that name, and its one target builds `{ProjectProductsDirName}/<name>`.{ParagraphSeparator}It never overwrites: if the directory already holds a `{ProjectFileExtension}` file or a `{MainSourceFileName}`, NOTHING is written and the existing path is named.", audience: CommandAudience.usingTheCompiler)
+		lint gives CommandReference.create(LintCommandName, arguments: lintArguments(), summary: "Run the front end and the checks on a program, the lint rules included, and stop before code generation.", detail: "The lint rules are the checks `{BuildSubcommandName}`, `{ExecuteCommandName}`, `{RunCommandName}` and `{TestCommandName}` leave out, as does the compile of a project's build runner: a pure function's result that is discarded, an impure function's result that is dropped, an `export` that no file outside its declaring directory subtree uses, and an unmarked top-level declaration that nothing live in its directory subtree names. `{LintCommandName}` runs them with every check before code generation, so a refusal of the backend, register pressure among them, is `{BuildSubcommandName}`'s.{ParagraphSeparator}The program is named as `{BuildSubcommandName}` names one: several paths are ONE program, in the order given, a lone word naming a target of the `{ProjectFileExtension}` file in the working directory is that target, a `{ProjectFileExtension}` or `{TaskFileExtension}` file named alone is a manifest, and every other word is a path. `{DefineFlagPrefix}` replaces a top-level `String` constant's written-out default and `{TargetFlagPrefix}` lints the program as that target, as `{BuildSubcommandName}` does for the program it builds.{ParagraphSeparator}A manifest is linted as its runner compiles it: the first target or task it declares is the entry, and every exported target or task counts as used. A file that declares something but no target or task is refused, and a file holding nothing but comments and blank lines is clean. That program is compiled for the host that runs it with no define, so `{TargetFlagPrefix}` and `{DefineFlagPrefix}` are refused beside it, and so is any other path.{ParagraphSeparator}`{LintTestsFlag}` lints what `{TestCommandName}` compiles: the project's sources and its `{TestSourceExtension}` files, chosen as `{TestCommandName}` chooses them and staged in a directory of its own under the `{ProjectProductsDirName}` directory of the project, or of the directory holding the one `{TestSourceExtension}` file, beside the one `{TestCommandName}` compiles from, with the entry `{TestCommandName}` generates. The program's own `main` counts as used. Diagnostics name the files you wrote, a project that declares no `test` is refused, and `{DefineFlagPrefix}` is refused beside it, as `{TestCommandName}` takes none.{ParagraphSeparator}With no path it lints the `{ProjectFileExtension}` file's only target, and with several targets it lists them and lints none; with no `{ProjectFileExtension}` file it lints the working directory. A target is linted over the sources and defines its description states, after the description is validated as `{BuildSubcommandName}` validates it. The notes on breaking changes since a project's last build, which a target and `{LintTestsFlag}` of a project report, go to stderr rather than stdout, and the project's build record is only read. Diagnostics are printed as `{BuildSubcommandName}` prints them, and the audits run only once nothing else stands. It stops before code generation. `{MetricsFlagPrefix}` writes the rows of the compile's total, of every phase, of the register allocator's sub-phases, of what no phase claimed and of the lock-record upkeep, and the rows of the phases code generation owns read zero.{ParagraphSeparator}Exit 0 the program is clean, and stdout says `{LintedReportPrefix}<subjects>`, where `<subjects>` is, for a program, each path typed, else each source the target lists, else the working directory, and for `{LintTestsFlag}`, the directory or file typed, else the target typed alone, else the working directory; several subjects are separated by `{LintedSubjectSeparator}`; 1 a diagnostic stands, the command line is refused or the program could not be read; a build runner that fails ends the command with its own exit code, whether the lint is of a target or of `{LintTestsFlag}`.", audience: CommandAudience.usingTheCompiler)
 		dapServer gives CommandReference.create(DapServerCommandName, arguments: "", summary: "Speak the Debug Adapter Protocol over stdio.", detail: "Content-Length framed DAP messages, so an editor such as VS Code can debug a Maxon program: `launch` names a built executable, a `.maxon` file or a project directory, and a source is built with debug info first. Breakpoints, stepping, pause, threads, stacks, variables and evaluation are the interactive debugger's, and the program's own output arrives as `output` events. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
 		mcpServer gives CommandReference.create(McpServerCommandName, arguments: mcpServerArguments(), summary: "Speak the Model Context Protocol, over stdio or loopback HTTP.", detail: "JSON-RPC bodies over newline-delimited stdio by default, providing MCP tools for compiling, testing, inspecting, formatting and DEBUGGING Maxon code. With {DevFlag}, also exposes compiler development tools.{ParagraphSeparator}With {McpHttpFlag} it serves the SAME tool roster over HTTP on 127.0.0.1 instead, at the one route `/mcp`, and prints the endpoint it chose as one JSON line on stdout before falling silent. There is no host option: the transport binds loopback only, refuses a request whose `Origin` or `Host` is not loopback, and holds one session per `Mcp-Session-Id`, which `initialize` mints and `DELETE /mcp` ends.", audience: CommandAudience.usingTheCompiler)
@@ -2022,6 +2265,7 @@ enum HelpOption
 	testFilter
 	testList
 	testBuild
+	lintTests
 	testJson
 	testIsolate
 	testBail
@@ -2089,7 +2333,7 @@ function optionReference(option HelpOption) returns OptionReference
 		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
 		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(EmitIrFlag)])
 		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrRuntimeFlagPrefix)])
-		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it where this host has a runner: wasm32-wasi under the vendored wasmtime, a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine {OrbMachineName} (natively for the Mac's own CPU, x64-linux under Rosetta on Apple silicon); a target this host cannot execute, x64-windows off Windows included, is compiled and reported as not run. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run. For {CheckStdlibCommandName} it checks that one target instead of every one.", commands: [MaxonCommand.build, MaxonCommand.checkStdlib, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
+		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it where this host has a runner: wasm32-wasi under the vendored wasmtime, a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine {OrbMachineName} (natively for the Mac's own CPU, x64-linux under Rosetta on Apple silicon); a target this host cannot execute, x64-windows off Windows included, is compiled and reported as not run. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run. For {CheckStdlibCommandName} it checks that one target instead of every one. For {LintCommandName} it lints the program as that target, and a manifest, which is compiled for the host that runs it, refuses it.", commands: [MaxonCommand.build, MaxonCommand.checkStdlib, MaxonCommand.lint, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
 		debugBatch gives OptionReference.create(BatchOption, description: "Drive the session from {CommandsOptionPrefix} instead of a prompt, and write one JSON object per line on stdout. The program's own stdout and stderr both go to this driver's STDERR, so stdout stays pure JSON. The driver exits 0 when the session completed - the program's own code is DATA in the `exit` event - and 1 on a timeout, a refused session or a crash.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(BatchOption)])
 		debugCommands gives OptionReference.create("{CommandsOptionPrefix}<cmd;cmd;...|@file>", description: "The commands {BatchOption} runs, separated by `;`, or `@<path>` to read them from a file one per line.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CommandsOptionPrefix)])
 		debugComplete gives OptionReference.create("{CompleteOptionPrefix}<partial line>", description: "Print the completions for a partially typed debugger line, one per line, and run nothing. The first word completes to the command vocabulary, aliases included; a break target completes to the functions the program holds.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CompleteOptionPrefix)])
@@ -2105,8 +2349,8 @@ function optionReference(option HelpOption) returns OptionReference
 		poisonFreed gives OptionReference.create(PoisonFreedFlag, description: "Fill each freed managed box with 0x3F, from its payload to the end of its slot, so a read after free returns 63, or a pointer of 0x3F3F3F3F3F3F3F3F that faults when dereferenced. A box above 32 KiB goes back to the operating system whole and is not filled.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(PoisonFreedFlag)])
 		censusByTag gives OptionReference.create("{CensusByTagFlag}, {CensusByTagFlagPrefix}<phase>", description: "Census the LIVE heap by allocation tag at every compile phase boundary, and report it beside the residency table (it implies `--log=compiler:debug`'s sampling) and as `tag` rows in {MetricsFlagPrefix}'s TSV. Naming a phase censuses that phase alone and prints that phase's table, which is what a large compile can afford. A compiler built without {DebugStreamFlag} carries no tags, so the census is by SIZE CLASS instead and says so.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(CensusByTagFlag), OptionArrival.prefixed(CensusByTagFlagPrefix)])
 		allocationsByTag gives OptionReference.create("{AllocationsByTagFlag}, {AllocationsByTagFlagPrefix}<phase>", description: "Tally every allocation this compile ASKS FOR by allocation tag and by phase, and report it under the memory table (with `--log=compiler:debug`) and as `churn` rows in {MetricsFlagPrefix}'s TSV. It is CHURN, not a level: a phase that allocates a million short-lived boxes shows them here and nowhere else. Naming a phase tallies that phase alone. A compiler built without {DebugStreamFlag} carries no tags, so every allocation is counted under `(untagged)` and the report says so.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(AllocationsByTagFlag), OptionArrival.prefixed(AllocationsByTagFlagPrefix)])
-		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.verifyRecheck], arrivals: [OptionArrival.prefixed(DefineFlagPrefix)])
-		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(MetricsFlagPrefix)])
+		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one. {LintCommandName} refuses it beside a manifest, whose runner is compiled with no define, and beside `{LintTestsFlag}`, because `{TestCommandName}` takes none.", commands: [MaxonCommand.build, MaxonCommand.lint, MaxonCommand.run, MaxonCommand.verifyRecheck], arrivals: [OptionArrival.prefixed(DefineFlagPrefix)])
+		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build, MaxonCommand.lint, MaxonCommand.run], arrivals: [OptionArrival.prefixed(MetricsFlagPrefix)])
 		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern> (case-sensitive). A bare spec name selects that whole spec. Repeatable: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
 		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Re-mint the inline blocks a run checks, in the spec files themselves: the `mm-trace` / `log-trace` capture blocks, and the `TargetIr:<lane>` pin of this run's lane for every selected case of a spec that holds any pin. A pin is compiled, not run, so a lane this host cannot execute still re-mints. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run re-mints every selected case's blocks in the suite.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(UpdateRequiredFlag)])
 		batch gives OptionReference.create("{BatchFlagPrefix}{BatchOnValue}|{BatchOffValue}", description: "{BatchOnValue} (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly; {BatchOffValue} compiles and runs every case on its own. The summary line says how many run cases ran batched, in how many programs, and how many ran alone.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(BatchFlagPrefix)])
@@ -2121,6 +2365,7 @@ function optionReference(option HelpOption) returns OptionReference
 		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive). Repeatable, and each value may hold comma-separated patterns: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
 		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run, and compile nothing unless {TestBuildFlag} is given.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestListFlag)])
 		testBuild gives OptionReference.create(TestBuildFlag, description: "With {TestListFlag}, also build the test binary, with its debug-info sidecar, and run nothing.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestBuildFlag)])
+		lintTests gives OptionReference.create(LintTestsFlag, description: "Lint what `{TestCommandName}` compiles in place of what `{BuildSubcommandName}` compiles: the project's sources with its `{TestSourceExtension}` files and the generated test entry, chosen as `{TestCommandName}` chooses them and staged in a directory of its own, so a `{TestCommandName}` of the same project compiles from its own staged tree. It takes `{TestCommandName}`'s arguments: an optional target, then a directory or one `{TestSourceExtension}` file.", commands: [MaxonCommand.lint], arrivals: [OptionArrival.exactly(LintTestsFlag)])
 		testJson gives OptionReference.create(TestJsonFlag, description: "Emit the report as JSON instead of text.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestJsonFlag)])
 		testIsolate gives OptionReference.create(TestIsolateFlag, description: "Run every test in its own process, rather than one process per test FILE.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestIsolateFlag)])
 		testBail gives OptionReference.create("{TestBailFlag}, {TestBailFlagPrefix}N", description: "Stop claiming new work after N failures (default {DefaultBailAfter}); the shard already running finishes, so the total may exceed N.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestBailFlag), OptionArrival.prefixed(TestBailFlagPrefix)])
@@ -2382,6 +2627,7 @@ export enum MaxonCommand
 
 	help
 	init
+	lint
 	lspServer
 	mcpServer
 
@@ -2415,9 +2661,10 @@ export typealias FilterPatternArray = Array with String
 export type MaxonArgs
 	export var command as MaxonCommand
 
-	// The order is load-bearing: `build` compiles every positional, and `Compiler.loadSourceFiles`
-	// registers sources in this order, which is how a caller states which of two sibling files
-	// declares first. Every other command refuses beyond its count (`refusedPositionalBeyond`).
+	// The order is load-bearing: `build` and `lint` compile every positional, and
+	// `Compiler.loadSourceFiles` registers sources in this order, which is how a caller states which
+	// of two sibling files declares first. Every other command refuses beyond its count
+	// (`refusedPositionalBeyond`).
 	export var paths as SourcePathSpellingArray
 	export var outputOverride as StatedText
 	export var emitIr as bool
@@ -2500,6 +2747,8 @@ export type MaxonArgs
 
 	export var buildTestBinary as bool
 
+	export var lintsTests as bool
+
 	export var jsonReport as bool
 
 	// True by default; the field names what it controls rather than the flag.
@@ -2541,7 +2790,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, lintsTests: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2843,7 +3092,9 @@ export type MaxonArgs
 				parsed.listOnly = true
 			end 'listFlag' else if arg == TestBuildFlag 'buildFlag'
 				parsed.buildTestBinary = true
-			end 'buildFlag' else if arg == TestJsonFlag 'jsonFlag'
+			end 'buildFlag' else if arg == LintTestsFlag 'lintTestsFlag'
+				parsed.lintsTests = true
+			end 'lintTestsFlag' else if arg == TestJsonFlag 'jsonFlag'
 				parsed.jsonReport = true
 			end 'jsonFlag' else if arg == TestNoTimingFlag 'noTimingFlag'
 				parsed.showTiming = false

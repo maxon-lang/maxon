@@ -79,7 +79,7 @@ var y = 0 as Amount
 
 - Every name without `var`/`let` must already be a `var`; a `let` target is **E2013**.
 - The number of names must match the tuple's element count (**E3005**).
-- Discarding every element of a pure function's result is **E3064**.
+- Discarding every element of a pure function's result is **E3064**, a [lint rule](/docs/language/functions/#function-purity-and-discarded-results).
 
 ## If Statement
 

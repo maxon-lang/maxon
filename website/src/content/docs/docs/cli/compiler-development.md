@@ -23,7 +23,8 @@ maxon spec-test [directory] [options]
 ```
 
 `[directory]` is the spec directory (default `specs`). A second positional is refused. Every selected
-case is compiled inside this process, so the compiler under test is the executable you ran.
+case is compiled inside this process, so the compiler under test is the executable you ran, and with the
+[lint rules](/docs/cli/#maxon-lint) enforced, as a batch of cases is.
 
 | Option | Description |
 |--------|-------------|
@@ -107,6 +108,12 @@ itself broke.
 Before the first measured rung it compiles the smallest rung once, unmeasured, to warm the library cache,
 so every measured rung reads the cache the same way. A phase's memory counts the compile's own work: what
 the tree lock's upkeep allocates while the phase runs is subtracted from it.
+
+Each rung is compiled by `maxon build`, run, and then checked by [`maxon lint`](/docs/cli/#maxon-lint), whose
+measurements add three rows to each per-phase table and to the result document's `phases`:
+`lint:semanticCheck` (the semantic check, with the discarded-result rule), `lint:checkUnusedExports` and
+`lint:checkUnusedUnexported`. `--repeat` applies to them as to the build's rows. A rung's totals, and the
+rows logged by `--note`, are the build's.
 
 ```bash
 maxon scale-test [options]
@@ -195,7 +202,7 @@ compiler loads, the unicode tables it embeds, and a copy of its executable. Anyt
 Compiles every function of the `stdlib/` beside this compiler as though a program called each one, once
 for every target, and reports every diagnostic on stderr. A program compiles only the library functions
 it reaches, so this is the one compile that checks a stdlib function no program calls: every body is
-built, every check runs on it, and the back end compiles it.
+built, every check runs on it, the [lint rules](/docs/cli/#maxon-lint) included, and the back end compiles it.
 
 ```bash
 maxon check-stdlib                         # every supported target
@@ -220,6 +227,7 @@ CI runs it on every lane.
 
 ```bash
 ./maxon-bin/.maxon/maxon run build                    # rebuild the compiler with itself
+./maxon-bin/.maxon/maxon lint maxon-bin               # the lint rules over the compiler's own source
 ./maxon-bin/.maxon/maxon spec-test --filter=arrays/ --filter=tuples/   # the specs you touched, one run
 ./maxon-bin/.maxon/maxon spec-test > temp/spec.log 2>&1   # the whole suite, read from the file
 ./maxon-bin/.maxon/maxon scale-test                   # after a change to a compiler pass

@@ -63,7 +63,7 @@ A candidate that names no shape is not a candidate.
 - ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
   implementer's, a reviewer's — is ONE `spec-test` over the spec files the change touches, one
   `--filter=<spec>/` per file, on x64, and again with `--target=wasm32-wasi` only when the change
-  touches wasm lowering. The full suite is CI's, after the push (`/land` §8); the self-compile is the
+  touches wasm lowering. The full suite is CI's, after the push (`/land` §8); `maxon lint maxon-bin` is the
   E3092 gate and is not a spec run.
 - ⛔ **A filtered-green compiler is not a working compiler.** Once the filter is green, before the A/B,
   the implementer runs `maxon test tests/examples --filter=fannkuch`, which builds the example this

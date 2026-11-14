@@ -9,6 +9,11 @@ When a build or test run reports breaking changes since the project was last bui
 `breaking_changes` tool and apply each change's fix. See
 [Breaking changes since the last build](CLI_REFERENCE.md#breaking-changes-since-the-last-build).
 
+`maxon build` leaves the [lint rules](CLI_REFERENCE.md#maxon-lint) to `maxon lint`: a discarded result
+(**E3064**, **E3065**), an unused `export` (**E3092**) and an unused unexported declaration (**E3219**).
+Before handing code back, run `maxon lint` on the program, and `maxon lint --tests` on a project's tests,
+or call the MCP `check` tool, which enforces them too.
+
 ---
 
 ## Syntax that DOES NOT EXIST in Maxon
@@ -386,7 +391,7 @@ function f(x Coord) returns Coord
   `[...]` literal inferring the type is not a use.
 - An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
   directory subtree names is **E3219**: delete it. Declarations that only name each other, or a function that only calls
-  itself, are dead together.
+  itself, are dead together. E3219 is a lint rule: `maxon lint` reports it, and `maxon build` compiles past it.
 - A `var` that is never reassigned is **E3077** — use `let`, whatever the `var` was bound from and even when it
   is written through (`push`, a field write, a callee that writes the parameter). What keeps a `var` is
   reassigning the name: an assignment, passing it to a `mutable` parameter, or a `mutable self` method of a value
@@ -1188,7 +1193,8 @@ An unmarked declaration is visible to its directory. Three tiers exist:
 - **default** — visible to every file in the declaring directory and any subdirectory of it: top-level
   declarations, methods, static members, nested typealiases and fields alike.
 - **`export`** — visible everywhere in the compilation. An `export` nothing outside its declaring directory
-  names is **E3092**, the root directory included: there the default already reaches every reader.
+  names is **E3092**, the root directory included: there the default already reaches every reader. E3092 is
+  a lint rule: `maxon lint` reports it, and `maxon build` compiles past it.
 - **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export check.
 
 No surface a declaration exposes may name a type less visible than the declaration: a function's signature
@@ -1351,6 +1357,9 @@ A function's result must be used. The compiler infers whether a function is pure
 | pure function (no output, no writes to globals or parameters) | **E3064** | **E3064** |
 | impure function | **E3065** | allowed |
 | chainable method (returns its own receiver type) | allowed | allowed |
+
+E3064 and E3065 are lint rules: `maxon lint` and the MCP `check` tool report them, and `maxon build`
+compiles past them, so run one of the two before handing code back.
 
 ### Files and paths
 

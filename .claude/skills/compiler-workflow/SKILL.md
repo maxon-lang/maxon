@@ -34,6 +34,10 @@ the compiler indexes by, and READ it.
   character in words there. After editing a table, count the cells of every row you touched.
 - Through MCP the ladder comes back as `result`, the `--result-json` document (per rung and phase:
   `allocs`, `frees`, `bytes`, `cpuTicks`), with the printed tables in `rawTail`.
+- **Each rung is built, then linted.** A phase row is the build's, except the `lint:` rows —
+  `lint:semanticCheck`, `lint:checkUnusedExports`, `lint:checkUnusedUnexported` — read from a `maxon lint` of
+  the same rung, since `maxon build` runs neither audit nor the discarded-result rule. `regalloc:` rows are
+  the register allocator's sub-phases. Rung totals and the logged row are the build's alone.
 
 ⇒ **The full reading guide — the memory and CPU columns, the two blind spots, A/B methodology — is
 the `optimize` skill.** Load it before acting on a ladder.

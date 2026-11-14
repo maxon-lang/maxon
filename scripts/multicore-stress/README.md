@@ -22,7 +22,7 @@ inside a checkout: it locates `stdlib/` relative to itself.
 | `pin-matrix.sh` | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at one processor wherever the system monitor never stepped in (`monitor=0`; above one processor those readings are reported, not judged) — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | does a contended refcount word survive, and can the pin be removed to break it? |
 | `awaitany-index-race.sh` | does a machine with nothing runnable OBSERVE a promise another M answered, or wait out its timer instead — read as the SELECT LATENCY, in the exit code |
-| `compile-all.sh` | does every program here still compile, and are the must-not-compile entries (`REFUSED_PROGRAMS` in `lib.sh`) still refused with their declared codes? Runs in CI on every lane |
+| `compile-all.sh` | does every program here still compile, and are the must-not-compile entries (`REFUSED_PROGRAMS` in `lib.sh`) still refused with their declared codes? Runs in CI on every lane. It builds each program past the lint rules, which `scripts/lint-tree.sh multicore-stress` checks |
 
 ```
 bash scripts/multicore-stress/validate.sh              # REPS=N, default 15
@@ -37,8 +37,10 @@ header for why).
 ## The shared halves
 
 - **`lib.sh`** — what every driver needs, written once: where this host's compiler is (through
-  `scripts/lib/host-binaries.sh`, so **no script here spells `.exe`**), the field readers, and
-  `SPAWNING_PROGRAMS`.
+  `scripts/lib/host-binaries.sh`, so **no script here spells `.exe`**), the field readers,
+  `SPAWNING_PROGRAMS`, and `program_preludes`, the prelude sources a program is compiled with, which
+  `compile-all.sh` builds and `scripts/lint-tree.sh` lints each program with. Its list test, `list_has`,
+  is `scripts/lib/word-lists.sh`'s.
   ⭐ **THAT ROSTER IS ONE FACT WITH TWO READERS** — the prelude a program is compiled with, and the
   family `pin-matrix.sh` asserts for it. Kept in one place so a program appended to the wrong list
   cannot inherit the other's expectation.

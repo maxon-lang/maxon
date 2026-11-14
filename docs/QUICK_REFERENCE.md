@@ -288,7 +288,7 @@ greet("Smith", title: "Dr.")
 
 **Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a `let` to a `mutable` parameter is E2013 (bind it to a `var`), and so is passing a literal, an expression, a module-level `let` or a captured name. The variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
 
-**Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
+**Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded. Both are lint rules: `maxon lint` reports them, and `maxon build` compiles past them.
 
 **One declaration per name:** A function name is declared once per directory, a method name once per type, and a requirement name once per interface; a second declaration is E3006. Give each function its own name, or use a default parameter for an optional argument.
 

@@ -1,0 +1,29 @@
+let LintRefusesAnOutputOptionCaseDirName = "lint-refuses-an-output-option"
+let LintRefusesAnOutputOptionFixture = "lint-discarded-pure-result"
+let LintRefusesAnOutputOptionStem = "linted"
+let LintRefusesAnOutputOptionCleanExit = 0
+
+test 'lint refuses --output= as a usage error, checks nothing and writes nothing'
+	requireHeldOutsideCheckout(LintRefusesAnOutputOptionCaseDirName, check: LintRefusesAnOutputOption.create())
+end 'lint refuses --output= as a usage error, checks nothing and writes nothing'
+
+type LintRefusesAnOutputOption implements OutsideCheckoutCase
+	static function create() returns LintRefusesAnOutputOption
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintRefusesAnOutputOptionFixture)
+		let output = executableIn(dir, stem: LintRefusesAnOutputOptionStem)
+		let linted = lintedIn(dir, app: app, options: ["{OutputOptionPrefix}{output.toString()}"])
+		let typed = linted.typed
+		let said = linted.said()
+
+		try Expect.notEqual(linted.output.exitCode(), expected: LintRefusesAnOutputOptionCleanExit, message: "{typed} was not refused. `{LintCommandWord}` writes no executable, so an output path is a question nobody can answer. {said}")
+		try Expect.contains(linted.output.stderr, needle: OutputOptionPrefix, message: "{typed}'s refusal does not name the option that was typed. {said}")
+		try Expect.contains(linted.output.stderr, needle: LintCommandWord, message: "{typed}'s refusal does not name the command that refused it. {said}")
+		try Expect.isFalse(linted.output.stderr.contains(DiscardedPureResultCode), message: "{typed} checked the program before refusing its command line: it reported {DiscardedPureResultCode}. A usage error stops the command before anything runs. {said}")
+		try Expect.isFalse(File.exists(output), message: "{typed} wrote {output.toString()}. {said}")
+		try requireNothingBuiltFor(app, what: typed, said: said)
+	end 'requireHeldIn'
+end 'LintRefusesAnOutputOption'

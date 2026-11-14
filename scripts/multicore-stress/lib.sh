@@ -8,18 +8,11 @@ MULTICORE_REPO="$(cd "$MULTICORE_HERE/../.." && pwd)"
 MAXON_TARGETS_TABLE="${MAXON_TARGETS_TABLE:-$MULTICORE_REPO/maxon-bin/targets.tsv}"
 # shellcheck source=scripts/lib/host-binaries.sh
 . "$MULTICORE_REPO/scripts/lib/host-binaries.sh"
+. "$MULTICORE_REPO/scripts/lib/word-lists.sh"
 
 # Overridable so the same driver can measure a compiler staged elsewhere, which is how a PARENT-commit
 # reading is taken. The binary must sit inside a checkout: it locates `stdlib/` relative to itself.
 MAXON="${MAXON:-$(maxon_compiler_path "$MULTICORE_REPO")}"
-
-# Whether the space-separated list $1 holds the word $2.
-list_has() {
-	case " $1 " in
-		*" $2 "*) return 0 ;;
-		*) return 1 ;;
-	esac
-}
 
 # ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — a `spawn` publishes to a P ring, an `async` to its
 # caller's own coroutine queue. TWO things key off this one list: the worker-arrival prelude a program
@@ -108,24 +101,31 @@ finish_checks() {
 	fi
 }
 
+# The prelude sources <program> is compiled with, one path per line.
+#
 # ⚠ A PRELUDE GOES ONLY TO PROGRAMS THAT CALL IT. `RuntimeUsage.scanRuntimeUsage` filters only
 # unreachable STDLIB functions, so an uncalled prelude would still install the scheduler queries into
 # every binary here — changing programs whose readings are dated.
-#
+program_preludes() {
+	local prog="$1"
+
+	# The two preludes are INDEPENDENT, because the two lists are: a program may call both, one, or neither,
+	# and each is compiled in exactly where it is called.
+	if spawns_green_threads "$prog"; then
+		printf '%s\n' "$MULTICORE_HERE/$WORKER_ARRIVAL_PRELUDE.maxon"
+	fi
+	if list_has "$MONITOR_WITNESS_PROGRAMS" "$prog"; then
+		printf '%s\n' "$MULTICORE_HERE/$MONITOR_WITNESS_PRELUDE.maxon"
+	fi
+}
+
 #   build_program <program> <output> [extra compiler flags...]
 build_program() {
 	local prog="$1" out="$2"
 	shift 2
 
-	# The two preludes are INDEPENDENT, because the two lists are: a program may call both, one, or neither,
-	# and each is compiled in exactly where it is called.
-	local preludes=""
-	if spawns_green_threads "$prog"; then
-		preludes="$preludes $MULTICORE_HERE/$WORKER_ARRIVAL_PRELUDE.maxon"
-	fi
-	if list_has "$MONITOR_WITNESS_PROGRAMS" "$prog"; then
-		preludes="$preludes $MULTICORE_HERE/$MONITOR_WITNESS_PRELUDE.maxon"
-	fi
+	local preludes
+	preludes="$(program_preludes "$prog")"
 
 	# shellcheck disable=SC2086
 	"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" $preludes --output="$out"

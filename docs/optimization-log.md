@@ -279,6 +279,7 @@ ragged.
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 10,370,804 | 14,435,830 | 22,534,881 | 38,754,645 | 71,340,378 | 137,119,736 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 10,469,413 | 14,555,746 | 22,697,436 | 39,002,472 | 71,758,773 | 137,878,391 |
 | 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 14,626,494 | 19,107,038 | 28,055,214 | 45,979,705 | 81,961,833 | 154,547,142 |
+| 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 11,164,174 | 15,538,163 | 24,255,682 | 41,712,756 | 76,772,855 | 147,502,626 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -367,6 +368,7 @@ ragged.
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 1,101,829,024 | 1,602,748,160 | 2,606,533,680 | 4,638,740,016 | 8,762,446,016 | 17,036,074,864 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 1,107,872,432 | 1,609,875,216 | 2,615,829,648 | 4,652,378,928 | 8,784,771,584 | 17,075,723,456 |
 | 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 1,402,204,336 | 1,935,298,288 | 3,002,651,296 | 5,165,089,920 | 9,547,507,088 | 18,341,147,696 |
+| 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 1,192,525,568 | 1,717,957,104 | 2,769,790,064 | 4,899,461,024 | 9,217,588,320 | 17,881,208,992 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -498,6 +500,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 1,713,300,507 | 2,440,862,462 | 3,637,198,662 | 5,889,140,558 | 12,088,468,798 | 21,344,903,217 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 1,593,731,909 | 2,198,554,228 | 3,530,302,749 | 5,706,880,362 | 10,567,712,559 | 20,256,949,477 |
 | 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 5,678,014,421 | 7,352,085,686 | 10,656,406,205 | 17,527,837,540 | 31,153,548,494 | 59,034,916,098 |
+| 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 4,479,465,135 | 6,035,210,470 | 9,104,994,533 | 15,008,722,008 | 27,204,630,868 | 52,003,627,401 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -2636,3 +2639,48 @@ instruction of it: the hold is on the refill, the relist and the scavenger.
 
 The state region shrinks by one 8 KiB chunk, the lock table holding two locks instead of one per class. The
 pinned seed refuses the tree at `requireTierGeometryAgrees`, as it does for any change to the region's size.
+
+### Result — 2026-11-14, `build` leaves the lint rules to `maxon lint`
+
+`maxon build`, `execute`, `run` and `test` no longer run the discarded-result rule (E3064, E3065, with the
+whole-program effect summary built only for it) or the two unused-declaration audits (E3092, E3219).
+`maxon lint` runs them with every other check and stops before code generation, as Go keeps `go vet` out of
+`go build`. `spec-test`, the MCP `check` tool, the language server, `check-stdlib` and `check-scriptlib` still
+enforce them.
+
+The self-compile on an i7-8700, four interleaved rounds, both arms compiling the base commit's `maxon-bin`
+from inside a copy of the base tree. The base arm is the compiler of the commit before this one, built by this
+change's compiler, so the two differ only in what `build` checks:
+
+| | base | this change | |
+|---|---|---|---|
+| wall | 95.5 s, 94.5 s, 97.9 s, 92.5 s | 88.7 s, 90.9 s, 86.0 s, 84.2 s | −8.0% |
+| CPU ticks | 254.9 G, 252.5 G, 258.1 G, 248.4 G | 232.4 G, 235.5 G, 228.6 G, 222.8 G | −9.3% |
+| allocations | 526 M, 524 M, 524 M, 524 M | 495 M in every round | −5.6% |
+| `semanticCheck` (compiling thread) | 24.1 s, 24.3 s, 24.5 s, 23.9 s | 20.9 s, 19.2 s, 19.1 s, 18.8 s | |
+| `checkUnusedExports` | 1.5 s in every round | 0 | |
+| `checkUnusedUnexported` | 1.2 s, 1.2 s, 1.2 s, 1.1 s | 0 | |
+
+A `maxon lint` of the same `maxon-bin` is 60.5 s (60.6 s, 60.4 s) and 291 M allocations: the front end and the
+checks, its `semanticCheck` at 23.7 s and the audits at 1.5 s and 1.1 s. That is what a lane's lint step
+pays for the compiler's own source; `scripts/lint-tree.sh` over every first-party program, test corpus and
+manifest is about 3 min 45 s on this machine.
+
+`scale-test` runs a `maxon lint` of each rung beside its build and reports the three phases the build no longer
+measures as `lint:` rows. Allocations per rung, and the growth of the top rung over the one below:
+
+| row | rung 0 | rung 1 | rung 2 | rung 3 | rung 4 | rung 5 | |
+|---|---|---|---|---|---|---|---|
+| `lint:semanticCheck` | 681,474 | 895,266 | 1,321,741 | 2,173,274 | 3,874,836 | 7,276,258 | ×1.87 |
+| `lint:checkUnusedExports` | 116,418 | 126,838 | 147,279 | 188,120 | 269,806 | 433,495 | ×1.60 |
+| `lint:checkUnusedUnexported` | 34,597 | 51,164 | 84,120 | 150,145 | 281,857 | 544,963 | ×1.93 |
+
+`lint:semanticCheck` is 16 allocations above the build's `semanticCheck` at every rung: the generated corpus has
+no discard site that consults the effect summary, so the ladder does not measure the discarded-result rule,
+which is about 5 s of the self-compile above. The ladder took 119 s where it took 85 s when the rows were added, one front-end
+compile more per rung.
+
+The ladder row logged with this change is not attributable to it alone. Against the previous row it is lower by
+3.5 M allocations at rung 0 and 7.0 M at rung 5, and the two audits this change takes out of the build are
+0.15 M and 0.98 M of that; the rest arrived with the commits the branch was rebased onto between the two rows
+(directory-scoped visibility with its cached library audit, and a signature index that records less).

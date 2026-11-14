@@ -53,6 +53,7 @@ on:
       - '!scripts/**'
       - 'scripts/run-test-corpora.sh'
       - 'scripts/build-script-programs.sh'
+      - 'scripts/lint-tree.sh'
       - 'scripts/fetch-seed.sh'
       - 'scripts/seed-tag'
       - 'scripts/build-from-seed.sh'
@@ -403,6 +404,11 @@ jobs:
       - name: Every script program builds
         if: steps.seed.outputs.seeded == 'yes'
         run: bash scripts/build-script-programs.sh
+
+      - name: Every first-party program lints clean
+        if: steps.seed.outputs.seeded == 'yes'
+        timeout-minutes: 20
+        run: bash scripts/lint-tree.sh
 
       - name: Every stdlib function compiles for every target
         if: steps.seed.outputs.seeded == 'yes'

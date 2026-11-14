@@ -11,7 +11,7 @@
 // compiling in process — so the exact `error EXXXX: ...` lines the spec compares
 // against reach the reader whichever of the two it is.
 //
-// ⭐ **TWO ENTRIES, ONE DRIVER.** `compileToProduct` is the whole build and hands its
+// ⭐ **TWO BUILD ENTRIES, ONE DRIVER.** `compileToProduct` is the whole build and hands its
 // products back as VALUES; `compile` is the command line's adapter over it and adds
 // only the `.ir` sidecar write. There is deliberately no second sequence that loads a project,
 // compiles it and writes the executable anywhere.
@@ -93,11 +93,33 @@ export function compileToProduct(driver CompileDriver.handle, request immutable 
 		built(product) then return product
 		failed(error) then throw error
 		checked or
+		linted or
 		warmed or
 		swept or
 		claimed then panic("compileToProduct: the driver answered a build with another kind of job")
 	end 'outcome'
 end 'compileToProduct'
+
+export function lintOnDriver(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) throws CompileError
+	match request.work 'work'
+		lint then break
+		build or
+		check or
+		warm or
+		lexSweep or
+		claims then panic("lintOnDriver: the request asks for the job '{request.work.word()}', which is not a lint")
+	end 'work'
+
+	match driverOutcomeOf(driver, request: request, session: session) 'outcome'
+		linted then return
+		failed(error) then throw error
+		built or
+		checked or
+		warmed or
+		swept or
+		claimed then panic("lintOnDriver: the driver answered a lint with another kind of job")
+	end 'outcome'
+end 'lintOnDriver'
 
 export function claimsOnDriver(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns SourceClaims throws CompileError
 	match driverOutcomeOf(driver, request: request, session: session) 'outcome'
@@ -105,6 +127,7 @@ export function claimsOnDriver(driver CompileDriver.handle, request immutable Co
 		failed(error) then throw error
 		built or
 		checked or
+		linted or
 		warmed or
 		swept then panic("claimsOnDriver: the driver answered a claims pass with another kind of job")
 	end 'outcome'
@@ -122,6 +145,7 @@ function checkOnDriver(driver CompileDriver.handle, origin ProjectOrigin, inputP
 		checked(compiled, diagnostics, irText) gives CheckAnswer.checked(compiled, diagnostics: diagnostics.clone(), irText: irText)
 		failed(error) gives CheckAnswer.failed(error)
 		built or
+		linted or
 		warmed or
 		swept or
 		claimed panic("checkOnDriver: the driver answered a check with another kind of job")
@@ -181,7 +205,8 @@ type JobRun
 
 	function begin(receiver CompileReceiver.handle) returns CompileStep
 		match self.spec.work 'work'
-			build then return self.beginBuild(receiver)
+			build(lintRules) then return self.beginSourceCompile(lintRules, goal: CompileGoal.codeResult, receiver: receiver)
+			lint then return self.beginSourceCompile(LintRules.enforced, goal: CompileGoal.checked, receiver: receiver)
 			check then return self.beginCheck(receiver)
 			warm(step) then return self.beginWarm(step, receiver: receiver)
 			lexSweep(root, stdlibDir, runtimeDir, files) then return self.beginSweep(root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, files: files, receiver: receiver)
@@ -231,7 +256,7 @@ type JobRun
 		return traceUnitOf(try commonAncestorOf(self.spec.inputPaths))
 	end 'requestRootUnit'
 
-	function beginBuild(receiver CompileReceiver.handle) returns CompileStep
+	function beginSourceCompile(lintRules LintRules, goal CompileGoal, receiver CompileReceiver.handle) returns CompileStep
 		self.unit = try self.requestRootUnit() otherwise (failure) 'noRoot'
 			return self.failed(failure)
 		end 'noRoot'
@@ -239,37 +264,40 @@ type JobRun
 		attributeCompilerLog(self.unit)
 		self.logFence.settle()
 
-		return self.afterAttribution(receiver)
-	end 'beginBuild'
+		return self.afterAttribution(lintRules, goal: goal, receiver: receiver)
+	end 'beginSourceCompile'
 
-	function afterAttribution(receiver CompileReceiver.handle) returns CompileStep
+	function afterAttribution(lintRules LintRules, goal CompileGoal, receiver CompileReceiver.handle) returns CompileStep
 		let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: self.unit, spans: self.spans, treeLock: self.session.treeLock)
 		self.wholeProbes.fill(whole)
 
-		let project = try self.loadedBuildProject() otherwise (failure) 'unloaded'
+		let project = try self.loadedBuildProject(lintRules) otherwise (failure) 'unloaded'
 			return self.failed(failure)
 		end 'unloaded'
 
 		self.projects.fill(project)
 
-		let prepared = try self.preparedOutput(project) otherwise (failure) 'unprepared'
-			return self.failed(failure)
-		end 'unprepared'
+		if not goal.isChecked() 'writesAnImage'
+			let prepared = try self.preparedOutput(project) otherwise (failure) 'unprepared'
+				return self.failed(failure)
+			end 'unprepared'
 
-		self.tails.fill(prepared)
+			self.tails.fill(prepared)
+		end 'writesAnImage'
 
-		return self.startMachine(CompileGoal.codeResult, receiver: receiver)
+		return self.startMachine(goal, receiver: receiver)
 	end 'afterAttribution'
 
 	function loadedRequestProject(library LibraryLoad) returns Project throws CompileError
 		let request = self.spec
 
-		return try loadProject(request.inputPaths.clone(), target: request.target, stdlibDirOverride: request.stdlibDirOverride, runtimeDirOverride: request.runtimeDirOverride, scriptlib: request.scriptlib, entryFunction: request.entryFunction, compilerWrittenSources: request.compilerWrittenSources.clone(), sourceSelection: request.sourceSelection, stagedSourceOrigins: request.stagedSourceOrigins.clone(), debugStream: request.debugStream, session: self.session, library: library, defines: request.defines.clone(), productVersion: request.productVersion.clone(), tallied: request.allocationsByTag, tallyPhases: request.allocationsPhase, openPhaseSpans: self.spans)
+		return try loadProject(request.inputPaths.clone(), target: request.target, stdlibDirOverride: request.stdlibDirOverride, runtimeDirOverride: request.runtimeDirOverride, scriptlib: request.scriptlib, entryFunction: request.entryFunction, retainedEntries: request.retainedEntries.clone(), compilerWrittenSources: request.compilerWrittenSources.clone(), sourceSelection: request.sourceSelection, stagedSourceOrigins: request.stagedSourceOrigins.clone(), debugStream: request.debugStream, session: self.session, library: library, defines: request.defines.clone(), productVersion: request.productVersion.clone(), tallied: request.allocationsByTag, tallyPhases: request.allocationsPhase, openPhaseSpans: self.spans)
 	end 'loadedRequestProject'
 
-	function loadedBuildProject() returns Project throws CompileError
+	function loadedBuildProject(lintRules LintRules) returns Project throws CompileError
 		let request = self.spec
 		let project = try self.loadedRequestProject(LibraryLoad.included)
+		project.lintRules = lintRules
 		project.asyncTrace = request.asyncTrace
 		project.poisonFreed = request.poisonFreed
 		project.debugInfo = request.debugInfo
@@ -357,6 +385,7 @@ type JobRun
 			warm(step) then return self.compiledSlotAndGoalOf(step)
 			build or
 			check or
+			lint or
 			lexSweep or
 			claims then panic("JobRun.warmSlotAndGoal: only a warm compile names a slot")
 		end 'work'
@@ -460,6 +489,7 @@ type JobRun
 		match request.work 'work'
 			check(rendersTargetIr, _) then project.rendersTargetIr = rendersTargetIr
 			build or
+			lint or
 			warm or
 			lexSweep or
 			claims then break
@@ -503,6 +533,7 @@ type JobRun
 		match self.spec.work 'work'
 			build then return self.writeImage()
 			check then return self.checkFinished()
+			lint then return self.lintFinished()
 			warm then return self.warmFinished()
 			lexSweep or
 			claims then panic("JobRun.machineFinished: a lex sweep and a claims pass run no compile machine")
@@ -513,6 +544,7 @@ type JobRun
 		match self.spec.work 'work'
 			build then return self.buildFailed(failure)
 			check then return self.checkRefused()
+			lint then return self.failed(failure)
 			warm then return self.warmFailed(failure)
 			lexSweep or
 			claims then panic("JobRun.compileFailed: a lex sweep and a claims pass run no compile machine")
@@ -573,6 +605,7 @@ type JobRun
 		match self.spec.work 'work'
 			check(rendersTargetIr, _) then return self.checkedOutcome(true, irText: self.renderedIr(rendersTargetIr))
 			build or
+			lint or
 			warm or
 			lexSweep or
 			claims then panic("JobRun.checkFinished: only a check ends here")
@@ -600,6 +633,7 @@ type JobRun
 		match self.spec.work 'work'
 			check(_, reading) then return self.readStanding(project, compiled: compiled, reading: reading)
 			build or
+			lint or
 			warm or
 			lexSweep or
 			claims then panic("JobRun.standingDiagnostics: only a check answers diagnostics")
@@ -687,9 +721,8 @@ type JobRun
 		return self.afterTotals()
 	end 'publishImage'
 
-	function afterTotals() returns CompileStep
+	function settledTotals()
 		let project = self.projects.held()
-		let tail = self.tails.held()
 		let whole = self.wholeProbes.held()
 		let total = whole.elapsed()
 		project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
@@ -703,11 +736,34 @@ type JobRun
 			log.debug(compileTimingsReport(project.timings))
 			log.debug(compileMemoryReport(project.memory, timings: project.timings))
 		end 'debugging'
+	end 'settledTotals'
 
+	function writeRequestedMetrics(code CodeEmission)
 		match self.spec.metrics 'metrics'
 			unstated then break
-			stated(path) then writeMetrics(project, metricsPath: path, codeBytes: tail.codeBytes)
+			stated(path) then writeMetrics(self.projects.held(), metricsPath: path, code: code)
 		end 'metrics'
+	end 'writeRequestedMetrics'
+
+	function lintFinished() returns CompileStep
+		self.settledTotals()
+
+		if projectHasErrors(self.projects.held()) 'refused'
+			return self.failed(CompileError.compileError)
+		end 'refused'
+
+		self.writeRequestedMetrics(CodeEmission.notEmitted)
+		self.outcomes.fill(DriverOutcome.linted)
+
+		return CompileStep.finished
+	end 'lintFinished'
+
+	function afterTotals() returns CompileStep
+		let tail = self.tails.held()
+		self.settledTotals()
+		self.writeRequestedMetrics(CodeEmission.emitted(tail.codeBytes))
+
+		let total = self.projects.held().memory.total
 
 		compilerLogger(CompilerLogGroup.compiler).info("Wrote {tail.codeBytes} bytes of code to {tail.outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
 
@@ -1395,7 +1451,7 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
+function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, retainedEntries NameRoster = NameRoster.create(0), compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
 	let project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
 
@@ -1422,6 +1478,7 @@ function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOv
 	// being READ, and a mapping filled in afterwards would let those — the parse errors, which are
 	// most of them — go on naming the staged copy.
 	project.stagedSourceOrigins = StagedOriginIndex.of(stagedSourceOrigins)
+	project.retainedEntries = retainedEntries
 	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
 
 	// AFTER the user's own sources, so an empty user project fails with `noSourceFiles` above rather than
@@ -1828,7 +1885,7 @@ function prepareLowering(project Project, module MaxonModule) returns LoweredPro
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'duplicateFunctionName'
 
-	try pipeline.runFrontEnd(buildMaxonTierPasses(), gate: maxonTierGateFor(project)) otherwise (failure) 'maxonTierFailed'
+	try pipeline.runFrontEnd(buildMaxonTierPasses(project.lintRules), gate: maxonTierGateFor(project)) otherwise (failure) 'maxonTierFailed'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'maxonTierFailed'
 
@@ -3293,7 +3350,7 @@ export function isTaskFileName(name String) returns bool
 	return name.endsWith(TaskFileExtension)
 end 'isTaskFileName'
 
-function isDriverFileName(name String) returns bool
+export function isDriverFileName(name String) returns bool
 	return isProjectFileName(name) or isTaskFileName(name)
 end 'isDriverFileName'
 
@@ -3393,8 +3450,8 @@ export typealias CompilerWrittenSourceArray = Array with CompilerWrittenSource
 // .stageTestBuild` is the only one) hands the compile a row per copied file, and the single diagnostic
 // sink rewrites the path through it — see `Project.reportDiagnostic` and `Diagnostic.reportedUnder`.
 //
-// Without it a compile error names a file under `<project>/.maxon/test/staged/` — a path that exists
-// only between two runs, under a directory this compiler marks as not part of the project.
+// Without it a compile error names a file under `<project>/.maxon/<test|lint>/staged/` — a path that
+// exists only between two runs, under a directory this compiler marks as not part of the project.
 //
 // The whole file maps, including the lines the stager appended: the lexer's end-of-input sentinel sits
 // one line past a file's last line, so any line threshold would misfire on an unterminated construct in

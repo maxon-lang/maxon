@@ -130,10 +130,7 @@ end 'cachedBuild'
 function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker String, session DriverSession) throws CachedBuildError
 	let program = slot.program
 
-	let inputPaths = MaxonSourcePathArray.create(1, zeroed: false)
-	inputPaths.push(program)
-
-	let request = freeze CompileRequest.create(DriverWork.build, origin: ProjectOrigin.sources, target: target, session: session, inputPaths: inputPaths, outputOverride: StatedText.stated(slot.pending.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: false, debugInfo: true, entryFunction: entryFunction).clone()
+	let request = runnerCompileRequest(DriverWork.build(LintRules.skipped), program: program, target: target, entryFunction: entryFunction, session: session, outputOverride: StatedText.stated(slot.pending.toString()), metrics: StatedText.unstated)
 	let product = try compileToProduct(freshCompileDriver(), request: request, session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
 		throw CachedBuildError.notBuilt
@@ -151,3 +148,10 @@ function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker 
 		throw CachedBuildError.notBuilt
 	end 'notPublished'
 end 'fillSlot'
+
+export function runnerCompileRequest(work DriverWork, program FilePath, target Target, entryFunction ByteArray, session DriverSession, outputOverride StatedText, metrics StatedText) returns immutable CompileRequest
+	let inputPaths = MaxonSourcePathArray.create(1, zeroed: false)
+	inputPaths.push(program)
+
+	return freeze CompileRequest.create(work, origin: ProjectOrigin.sources, target: target, session: session, inputPaths: inputPaths, outputOverride: outputOverride, metrics: metrics, debugInfo: true, entryFunction: entryFunction).clone()
+end 'runnerCompileRequest'

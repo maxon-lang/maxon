@@ -50,9 +50,9 @@ After each edit:
 | You edited | Check |
 |---|---|
 | a standalone program or example | `mcp__maxon__check`, then `mcp__maxon__execute` if it should run — `path:` the file for a one-file program, **the directory** for one spread over several files |
-| a `.maxtest` or its project | `mcp__maxon__test` (`path:` the project directory, `filter:` the test) |
+| a `.maxtest` or its project | `mcp__maxon__test` (`path:` the project directory, `filter:` the test), then `./maxon-bin/.maxon/maxon lint --tests <project directory>` |
 | a spec case | `mcp__maxon__run_spec_test` (`filter:` a case-sensitive substring of `<spec>/<test>`, or an array of them selecting their union in one run; the failures come back in `failures`, and `cases: true` adds every case's verdict) |
-| `maxon-bin/` | build the slot — `./maxon-bin/.maxon/maxon run build` — then the spec filter that owns the behaviour |
+| `maxon-bin/` | build the slot — `./maxon-bin/.maxon/maxon run build` — then `./maxon-bin/.maxon/maxon lint maxon-bin` and the spec filter that owns the behaviour |
 | `stdlib/` or `runtime/` | the spec filter that owns the behaviour — the suite compiles both from source. Build the slot too when a driver command (`fmt`, `test`, the LSP) must see the change |
 
 ⚠ **Traps in the instruments:**
@@ -60,6 +60,9 @@ After each edit:
 - `check` and `dump_ir` compile inside the MCP server, so they answer with the **server's** compiler, and a
   running server keeps serving the compiler it started as after a rebuild. Read the `executable` field, and
   restart the server when a rebuild must be what answers.
+- `build`, `execute`, `test` and `maxon run build` compile past the lint rules — E3064 and E3065 (a dropped
+  result), E3092 (an unused `export`), E3219 (an unused unexported declaration). `check`, `dump_ir`,
+  `run_spec_test` and `maxon lint` report them, so a green build or test run is no evidence of a clean lint.
 - A directory path compiles every `.maxon` under it as one program, so two probe programs in one
   directory are one program — give each its own. A file path compiles that file ALONE: a `main.maxon`
   that uses another file's types fails there, and can report a misleading error (an undefined type behind

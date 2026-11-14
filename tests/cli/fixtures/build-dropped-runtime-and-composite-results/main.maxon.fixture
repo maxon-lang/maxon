@@ -1,0 +1,98 @@
+typealias LabelMap = Map with (String, String)
+
+let RanLine = "dropped runtime and composite results ran, journal entries:"
+let FirstIndex = 0
+let RootInput = 2.0
+let LabelKey = "alpha"
+let AlphaLabel = "alpha label"
+let WordSeparator = " "
+let ProgramExit = 29
+
+union Outcome
+	found(text String)
+	missing
+end 'Outcome'
+
+interface Describer
+	function describe() returns String
+end 'Describer'
+
+type Plain implements Describer
+	let text as String
+
+	static function create(text String) returns Plain
+		return Self{text: text}
+	end 'create'
+
+	export function describe() returns String
+		return "plain {self.text}"
+	end 'describe'
+end 'Plain'
+
+typealias Greeter = function(String) returns String
+
+function pureOutcome(name String) returns Outcome
+	return Outcome.found("found {name}")
+end 'pureOutcome'
+
+function recordedOutcome(journal StringArray, name String) returns Outcome
+	journal.push(name)
+	return Outcome.found("recorded {name}")
+end 'recordedOutcome'
+
+function pureDescriber(name String) returns Describer
+	return Plain.create("pure {name}")
+end 'pureDescriber'
+
+function recordedDescriber(journal StringArray, name String) returns Describer
+	journal.push(name)
+	return Plain.create("recorded {name}")
+end 'recordedDescriber'
+
+function pureGreeter(name String) returns Greeter
+	let stem = "hello {name}"
+	return function(other String) gives "{stem} and {other}"
+end 'pureGreeter'
+
+function recordedGreeter(journal StringArray, name String) returns Greeter
+	journal.push(name)
+	let stem = "recorded {name}"
+	return function(other String) gives "{stem} and {other}"
+end 'recordedGreeter'
+
+function main() returns ExitCode
+	let journal = StringArray.create(0)
+	let names = ["first name", "second name"].clone()
+	let labels = LabelMap.create()
+	labels.upsert(LabelKey, value: AlphaLabel)
+	let text = "dropped text"
+
+	try 'reads'
+		names.get(FirstIndex)
+		labels.get(LabelKey)
+	end 'reads'
+	otherwise (failure) 'readFailed'
+		match failure 'which'
+			default panic("a read of a filled container failed")
+		end 'which'
+	end 'readFailed'
+
+	names.count()
+	text.count()
+	text.split(WordSeparator)
+	text.toByteArray()
+
+	sqrt(RootInput)
+	abs(RootInput)
+	trunc(RootInput)
+
+	pureOutcome("bare")
+	recordedOutcome(journal, name: "outcome")
+	pureDescriber("bare")
+	recordedDescriber(journal, name: "describer")
+	pureGreeter("bare")
+	recordedGreeter(journal, name: "greeter")
+
+	print("{RanLine} {journal.count()}\n")
+	return ProgramExit
+end 'main'

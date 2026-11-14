@@ -100,17 +100,18 @@
 // `scripts/fixpoint.sh` prove byte-identical codegen — neither looks at allocation COUNTS, which is
 // precisely the gap this check covers.
 
-// A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
+// A rung's metrics TSVs and its executable, in the corpus ROOT — NEVER inside the rung's own source
 // directory.
 //
-// That is a correctness requirement, not a filing preference. `build <dir>` LISTS the directory it
-// is given, and every entry costs the compiler a `FilePath` and a `String`: a rung whose own output
-// sits beside its sources measures a different program than the same rung on a fresh checkout — by
-// exactly 26 allocations and 945 bytes per rung, which makes "reproducible" memory numbers
-// reproducible only on a machine that has already run the suite. See ScaleCorpus's header, and
+// That is a correctness requirement, not a filing preference. `build <dir>` and `lint <dir>` LIST the
+// directory they are given, and every entry costs the compiler a `FilePath` and a `String`: a rung
+// whose own output sits beside its sources measures a different program than the same rung on a
+// fresh checkout, which makes "reproducible" memory numbers reproducible only on a machine that has
+// already run the suite. See ScaleCorpus's header, and
 // `pruneRungDir`, which enforces the other half of the invariant.
 let RungMetricsSuffix = ".metrics.tsv"
 let RungOutputSuffix = ".out"
+let LintMetricsInfix = ".lint"
 let DebugSidecarSuffix = ".mxdbg"
 
 // The compiler must be given a RELATIVE rung path, and this is load-bearing rather than tidy.
@@ -179,9 +180,9 @@ end 'PhaseMetric'
 
 typealias PhaseMetricArray = Array with PhaseMetric
 
-// Everything one rung reported. `phases` and `regAlloc` are dense, indexed by their enum's ordinal,
-// so a phase that failed to appear in the TSV is a parse ERROR rather than a silent zero — see
-// `parseRungMetrics`.
+// Everything one rung reported. `phases`, `regAlloc` and `lint` are dense, indexed by their enum's
+// ordinal, so a phase that failed to appear in the TSV is a parse ERROR rather than a silent zero —
+// see `parseRungMetrics`.
 type RungResult
 	export let rung as RungIndex
 	export let sourceBytes as BytePos
@@ -189,10 +190,15 @@ type RungResult
 	export let total as PhaseMetric
 	export let phases as PhaseMetricArray
 	export let regAlloc as PhaseMetricArray
+	export let lint as PhaseMetricArray
 
-	static function create(rung RungIndex, sourceBytes BytePos, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
-		return Self{rung: rung, sourceBytes: sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc}
+	static function create(rung RungIndex, sourceBytes BytePos, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray, lint PhaseMetricArray) returns RungResult
+		return Self{rung: rung, sourceBytes: sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc, lint: lint}
 	end 'create'
+
+	function lintAt(phase LintMeasuredPhase) returns PhaseMetric
+		return try self.lint.get(phase.ordinal) otherwise panic("RungResult.lintAt: lint.get OOB for '{phase.name}'")
+	end 'lintAt'
 
 	function phaseAt(phase CompilePhase) returns PhaseMetric
 		return try self.phases.get(phase.ordinal) otherwise panic("RungResult.phaseAt: phases.get OOB for '{phase.name}'")
@@ -209,8 +215,8 @@ typealias RungResultArray = Array with RungResult
 // The phases this instrument reports, enumerated ONCE
 // ===========================================================================================
 
-// WHAT one row of the per-phase table is measured from: a compile phase, or one of the register
-// allocator's sub-phases.
+// WHAT one row of the per-phase table is measured from: a compile phase, one of the register
+// allocator's sub-phases, or a phase of the rung's `lint` compile.
 //
 // The sub-phases are a BREAKDOWN of `phase:regalloc` and not extra phases beside it — adding them to
 // the same list would double-count every allocation the allocator makes — so they are enumerated
@@ -223,15 +229,31 @@ typealias RungResultArray = Array with RungResult
 union PhaseSource
 	compilePhase(phase CompilePhase)
 	regAllocPhase(sub RegAllocPhase)
+	lintPhase(phase LintMeasuredPhase)
 end 'PhaseSource'
 
 typealias PhaseSourceArray = Array with PhaseSource
 
+enum LintMeasuredPhase
+	semanticCheck
+	checkUnusedExports
+	checkUnusedUnexported
+end 'LintMeasuredPhase'
+
+function compilePhaseOfLint(measured LintMeasuredPhase) returns CompilePhase
+	return match measured 'm'
+		semanticCheck gives CompilePhase.semanticCheck
+		checkUnusedExports gives CompilePhase.checkUnusedExports
+		checkUnusedUnexported gives CompilePhase.checkUnusedUnexported
+	end 'm'
+end 'compilePhaseOfLint'
+
 let PhaseNamePrefix = "phase:"
 let RegAllocNamePrefix = "regalloc:"
+let LintNamePrefix = "lint:"
 
 function scalePhaseSources() returns PhaseSourceArray
-	let sources = PhaseSourceArray.create(CompilePhase.allCases.count() + RegAllocPhase.allCases.count(), zeroed: false)
+	let sources = PhaseSourceArray.create(CompilePhase.allCases.count() + RegAllocPhase.allCases.count() + LintMeasuredPhase.allCases.count(), zeroed: false)
 
 	for phase in CompilePhase.allCases 'eachPhase'
 		sources.push(PhaseSource.compilePhase(phase))
@@ -241,6 +263,10 @@ function scalePhaseSources() returns PhaseSourceArray
 		sources.push(PhaseSource.regAllocPhase(sub))
 	end 'eachSub'
 
+	for measured in LintMeasuredPhase.allCases 'eachLint'
+		sources.push(PhaseSource.lintPhase(measured))
+	end 'eachLint'
+
 	return sources
 end 'scalePhaseSources'
 
@@ -248,6 +274,7 @@ function phaseSourceName(source PhaseSource) returns String
 	return match source 'src'
 		compilePhase(phase) gives "{PhaseNamePrefix}{phase.name}"
 		regAllocPhase(sub) gives "{RegAllocNamePrefix}{sub.name}"
+		lintPhase(measured) gives "{LintNamePrefix}{compilePhaseOfLint(measured).name}"
 	end 'src'
 end 'phaseSourceName'
 
@@ -255,6 +282,7 @@ function phaseMetricOf(source PhaseSource, result RungResult) returns PhaseMetri
 	return match source 'src'
 		compilePhase(phase) gives result.phaseAt(phase)
 		regAllocPhase(sub) gives result.regAllocAt(sub)
+		lintPhase(measured) gives result.lintAt(measured)
 	end 'src'
 end 'phaseMetricOf'
 
@@ -587,33 +615,52 @@ end 'corpusRootPath'
 // ===========================================================================================
 
 function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) returns RungResult throws ScaleError
-	let metricsPath = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungMetricsSuffix}")
 	let outputBase = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungOutputSuffix}")
 
 	try removeRungProducts(outputBase, rung: rung)
 
-	let argv = StringArray.create(4, zeroed: false)
-	argv.push(BuildSubcommandName)
-	argv.push(rung.dir.toString())
-	argv.push("{OutputFlagPrefix}{outputBase.toString()}")
-	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
+	let buildOptions = StringArray.create(1, zeroed: false)
+	buildOptions.push("{OutputFlagPrefix}{outputBase.toString()}")
 
-	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: WorkingDirectory.inherit) otherwise (e) 'spawnFailed'
-		throw ScaleError.reason("compiler spawn failed: {e.displayReason()}")
-	end 'spawnFailed'
-
-	if not exitSucceeded(compile.exitCode as ExitCode) 'compileFailed'
-		throw ScaleError.reason("compiler exited {compile.exitCode}: {compile.stderr.trim()}")
-	end 'compileFailed'
+	let built = try measuredCompile(compilerExe, root: root, rung: rung, subcommand: BuildSubcommandName, metricsName: "{RungDirPrefix}{rung.index}{RungMetricsSuffix}", options: buildOptions)
+	let codeBytes = try built.emittedBytes(rung)
 
 	try runRung(outputBase, rung: rung)
 
+	let linted = try measuredCompile(compilerExe, root: root, rung: rung, subcommand: LintCommandName, metricsName: "{RungDirPrefix}{rung.index}{LintMetricsInfix}{RungMetricsSuffix}", options: StringArray.create(0))
+
+	return built.resultOf(rung, codeBytes: codeBytes, lint: try linted.lintMeasurements(rung))
+end 'compileRung'
+
+function measuredCompile(compilerExe FilePath, root FilePath, rung ScaleRung, subcommand String, metricsName String, options StringArray) returns MetricsTable throws ScaleError
+	let metricsPath = try corpusRootFile(root, name: metricsName)
+
+	try removeLeftBehind(metricsPath, rung: rung)
+
+	let argv = StringArray.create(options.count() + 3, zeroed: false)
+	argv.push(subcommand)
+	argv.push(rung.dir.toString())
+
+	for option in options 'eachOption'
+		argv.push(option)
+	end 'eachOption'
+
+	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
+
+	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: WorkingDirectory.inherit) otherwise (e) 'spawnFailed'
+		throw ScaleError.reason("`maxon {subcommand}` spawn failed: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if not exitSucceeded(compile.exitCode as ExitCode) 'compileFailed'
+		throw ScaleError.reason("`maxon {subcommand}` exited {compile.exitCode}: {compile.stderr.trim()}")
+	end 'compileFailed'
+
 	// A MISSING metrics file is a failed rung, never a rung of zeroes. Zeroes would fit a curve —
 	// a beautifully flat one — and report that the compiler had become infinitely fast.
-	let text = try File.readText(metricsPath) otherwise throw ScaleError.reason("rung {rung.index} produced no metrics file at {metricsPath.toString()}")
+	let text = try File.readText(metricsPath) otherwise throw ScaleError.reason("rung {rung.index}'s `{subcommand}` produced no metrics file at {metricsPath.toString()}")
 
 	return try parseRungMetrics(text, rung: rung)
-end 'compileRung'
+end 'measuredCompile'
 
 // The rung is run, and its exit code is the one thing this instrument asserts about what it
 // compiles: a ladder that writes an executable and never opens it measures what compiling a program
@@ -694,12 +741,13 @@ function leastCpuRung(first RungResult, again RungResult, run ScaleRepeatCount) 
 
 	let total = try leastCpuPhase(first.total, again: again.total, what: MetricsKindTotal, rung: first.rung, run: run)
 
-	// Walked off `scalePhaseSources` rather than off the two enums again, for the reason that list
+	// Walked off `scalePhaseSources` rather than off the three enums again, for the reason that list
 	// exists: the fold then covers exactly what the tables print, and a phase cannot be added to one
-	// walk and left out of the other. It yields both enums in ordinal order, so pushing in its order
-	// rebuilds the dense ordinal indexing `RungResult.phaseAt`/`regAllocAt` read back.
+	// walk and left out of the other. It yields each enum in ordinal order, so pushing in its order
+	// rebuilds the dense ordinal indexing `RungResult.phaseAt`/`regAllocAt`/`lintAt` read back.
 	let phases = PhaseMetricArray.create(CompilePhase.allCases.count(), zeroed: false)
 	let regAlloc = PhaseMetricArray.create(RegAllocPhase.allCases.count(), zeroed: false)
+	let lint = PhaseMetricArray.create(LintMeasuredPhase.allCases.count(), zeroed: false)
 
 	for source in scalePhaseSources() 'eachSource'
 		let least = try leastCpuPhase(phaseMetricOf(source, result: first), again: phaseMetricOf(source, result: again), what: phaseSourceName(source), rung: first.rung, run: run)
@@ -707,10 +755,11 @@ function leastCpuRung(first RungResult, again RungResult, run ScaleRepeatCount) 
 		match source 'dest'
 			compilePhase then phases.push(least)
 			regAllocPhase then regAlloc.push(least)
+			lintPhase then lint.push(least)
 		end 'dest'
 	end 'eachSource'
 
-	return RungResult.create(first.rung, sourceBytes: first.sourceBytes, codeBytes: first.codeBytes, total: total, phases: phases, regAlloc: regAlloc)
+	return RungResult.create(first.rung, sourceBytes: first.sourceBytes, codeBytes: first.codeBytes, total: total, phases: phases, regAlloc: regAlloc, lint: lint)
 end 'leastCpuRung'
 
 // One phase, folded across two compiles: the memory triple must MATCH, and the CPU reading is the
@@ -743,7 +792,46 @@ end 'leastCpuPhase'
 
 typealias PhaseSeenFlags = FixedArray with bool
 
-function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws ScaleError
+type MetricsTable
+	let code as CodeEmission
+	let total as PhaseMetric
+	let phases as PhaseMetricArray
+	let regAlloc as PhaseMetricArray
+
+	static function create(code CodeEmission, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns MetricsTable
+		return Self{code: code, total: total, phases: phases, regAlloc: regAlloc}
+	end 'create'
+
+	function emittedBytes(rung ScaleRung) returns CodeByteCount throws ScaleError
+		match self.code 'code'
+			emitted(bytes) then return bytes
+			notEmitted then throw ScaleError.reason("rung {rung.index}'s `{BuildSubcommandName}` carried no `{MetricsKindCode}` row — the corpus self-check cannot run without it")
+		end 'code'
+	end 'emittedBytes'
+
+	function resultOf(rung ScaleRung, codeBytes CodeByteCount, lint PhaseMetricArray) returns RungResult
+		return RungResult.create(rung.index, sourceBytes: rung.sourceBytes, codeBytes: codeBytes, total: self.total, phases: self.phases, regAlloc: self.regAlloc, lint: lint)
+	end 'resultOf'
+
+	function lintMeasurements(rung ScaleRung) returns PhaseMetricArray throws ScaleError
+		match self.code 'code'
+			notEmitted then break
+			emitted then throw ScaleError.reason("rung {rung.index}'s `{LintCommandName}` wrote a `{MetricsKindCode}` row, so it did not stop before code generation")
+		end 'code'
+
+		let measured = PhaseMetricArray.create(LintMeasuredPhase.allCases.count(), zeroed: false)
+
+		for phase in LintMeasuredPhase.allCases 'eachMeasured'
+			let compilePhase = compilePhaseOfLint(phase)
+
+			measured.push(try self.phases.get(compilePhase.ordinal) otherwise panic("MetricsTable.lintMeasurements: phases.get OOB for '{compilePhase.name}'"))
+		end 'eachMeasured'
+
+		return measured
+	end 'lintMeasurements'
+end 'MetricsTable'
+
+function parseRungMetrics(text String, rung ScaleRung) returns MetricsTable throws ScaleError
 	let phases = PhaseMetricArray.create(CompilePhase.allCases.count(), zeroed: false)
 	let regAlloc = PhaseMetricArray.create(RegAllocPhase.allCases.count(), zeroed: false)
 
@@ -761,8 +849,7 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 
 	var total = PhaseMetric.zero()
 	var totalSeen = false
-	var codeBytes = 0 as CodeByteCount
-	var codeSeen = false
+	var code = CodeEmission.notEmitted
 
 	for line in text.split(MetricsRowSep) 'eachLine'
 		let trimmed = line.trim()
@@ -792,8 +879,7 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 			let sub = try RegAllocPhase.fromName(name) otherwise throw ScaleError.reason("metrics names an unknown regalloc sub-phase '{name}'")
 			try regAlloc.set(sub.ordinal, value: metric) otherwise panic("parseRungMetrics: regAlloc.set OOB for '{name}'")
 		end 'isRegAlloc' else if kind == MetricsKindCode 'isCode'
-			codeBytes = metric.bytes as CodeByteCount
-			codeSeen = true
+			code = CodeEmission.emitted(metric.bytes as CodeByteCount)
 		end 'isCode' else if kind == MetricsKindUnattributed or kind == MetricsKindUpkeep 'isUnattributed'
 			// Read and discarded: the compiler emits `unattributed` so the two reconciliation panics
 			// run on every metrics build (that is what makes them a tripwire), and `upkeep` lies outside
@@ -811,10 +897,6 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 		throw ScaleError.reason("metrics for rung {rung.index} carried no `total` row")
 	end 'noTotal'
 
-	if not codeSeen 'noCode'
-		throw ScaleError.reason("metrics for rung {rung.index} carried no `code` row — the corpus self-check cannot run without it")
-	end 'noCode'
-
 	for phase in CompilePhase.allCases 'checkSeen'
 		let seen = try phaseSeen.get(phase.ordinal) otherwise panic("parseRungMetrics: phaseSeen.get OOB for '{phase.name}'")
 
@@ -823,7 +905,7 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 		end 'missing'
 	end 'checkSeen'
 
-	return RungResult.create(rung.index, sourceBytes: rung.sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc)
+	return MetricsTable.create(code, total: total, phases: phases, regAlloc: regAlloc)
 end 'parseRungMetrics'
 
 function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleError
@@ -966,6 +1048,7 @@ function printPhaseTable(results RungResultArray, measure ScaleMeasure, repeat S
 	print("\n")
 	print("  per-phase {measureHeading(measure)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
 	print("  {repeatNote(measure, repeat: repeat)}\n")
+	print("  The {LintNamePrefix} rows are read from a `maxon {LintCommandName}` compile of the same rung: its semantic check, which also runs the discarded-result rule there, and its two audits of unused declarations.\n")
 	print("\n")
 
 	let header = StringBuilder.create()

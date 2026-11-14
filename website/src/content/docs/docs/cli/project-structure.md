@@ -274,6 +274,8 @@ ancestor above it. Only a marker *below* the path you named can exclude anything
 
 - `maxon test` stages its build in `<project>/.maxon/test/`, and a test file's run alone in
   `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` in `.maxon/test/`.
+- `maxon lint --tests` stages the same program in `<project>/.maxon/lint/`, and a test file's alone in
+  `<its directory>/.maxon/lint/<file name>/`, under a `.maxonignore` in `.maxon/lint/`.
 - A project target's build that states no output is written there, as `.maxon/<name>` for the project
   file `<name>.maxproj`, and the compiler creates the output directory if it is missing.
 

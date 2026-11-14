@@ -30,6 +30,8 @@
 
 let ExamplesDirName = "examples"
 let StagingSpellingSeparator = "-"
+let LintCommandName = "lint"
+let LintedExitCode = 0
 
 let ConcurrencyBenchmarkDirName = "bench/concurrency"
 let ConcurrencyBenchmarkProcessorCounts = ["1", "4"]
@@ -139,9 +141,14 @@ function runDocumentProgram(document String, marker String, name String) returns
 	return run
 end 'runDocumentProgram'
 
-// Build `source` into `staging` as `stem`; `spelling` is how every report names the program.
+// Lint `source`, then build it into `staging` as `stem`; `spelling` is how every report names the
+// program.
 function requireBuild(source FilePath, staging FilePath, stem String, spelling String) throws TestFailure
 	let output = executableIn(staging, stem: stem)
+
+	let lint = spawnCompiler([LintCommandName, source.toString()], staged: staging, what: "the '{spelling}' lint")
+
+	try Expect.equal(lint.exitCode(), expected: LintedExitCode, message: "`{LintCommandName} {spelling}` exited {lint.exitCode()}. Every program the examples directory or a document shows must pass the lint rules, which `{BuildCommandName}` does not check. It wrote to stderr: {lint.stderr}")
 
 	let build = spawnBuild(source, staged: staging, output: output, label: spelling, extraArguments: StringArray.create(0))
 

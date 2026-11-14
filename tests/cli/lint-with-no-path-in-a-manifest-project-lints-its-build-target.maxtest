@@ -1,0 +1,50 @@
+let LintOfAManifestProjectCaseDirName = "lint-of-a-manifest-project"
+let LintOfAManifestProjectFixture = "lint-manifest-project"
+let LintOfAManifestProjectWholeDirectory = "."
+let LintOfAManifestProjectManifestOutput = "program"
+let LintOfAManifestProjectStraySite = "stray.maxon:10:2"
+let LintOfAManifestProjectStrayMessage = "result of pure function 'doubled' must be used"
+let LintOfAManifestProjectUnknownDefineDirName = "unknown-define"
+let LintOfAManifestProjectUnknownDefineFixture = "lint-manifest-unknown-define"
+let LintOfAManifestProjectUnknownDefineLine = "error E3149"
+let LintOfAManifestProjectUnknownDefineName = "'NoSuchChannel'"
+
+test 'lint with no path in a manifest project lints the sources its build target selects'
+	requireHeldOutsideCheckout(LintOfAManifestProjectCaseDirName, check: LintOfAManifestProject.create())
+end 'lint with no path in a manifest project lints the sources its build target selects'
+
+type LintOfAManifestProject implements OutsideCheckoutCase
+	static function create() returns LintOfAManifestProject
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfAManifestProjectFixture)
+
+		let whole = ExpectedDiagnosticArray.create(0)
+		whole.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintOfAManifestProjectStraySite, message: LintOfAManifestProjectStrayMessage))
+		try LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfAManifestProjectWholeDirectory]).requireRefused(app, diagnostics: whole)
+
+		let target = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: StringArray.create(0))
+		try target.requireOneLintedLine(app)
+
+		let manifestOutput = executableIn(app, stem: LintOfAManifestProjectManifestOutput)
+
+		try Expect.isFalse(File.exists(manifestOutput), message: "{target.typed} wrote {manifestOutput.toString()}, the executable the project's build target writes. {target.said()}")
+
+		let unknownApp = stagedCliFixture(dir.join(LintOfAManifestProjectUnknownDefineDirName), fixture: LintOfAManifestProjectUnknownDefineFixture)
+		let built = runWithCacheRoot([BuildCommandWord], cacheRoot: cacheRootIn(dir), workingDirectory: unknownApp)
+		let unknown = LintRun.ran(unknownApp, cacheRoot: cacheRootIn(dir), arguments: StringArray.create(0))
+		let said = "{unknown.said()} `maxon {BuildCommandWord}` wrote to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode(), expected: RefusedExitCode, message: "`maxon {BuildCommandWord}` of a target whose define names no declaration was not refused, so it is no control. {said}")
+		try Expect.contains(built.stderr, needle: LintOfAManifestProjectUnknownDefineLine, message: "`maxon {BuildCommandWord}` of a target whose define names no declaration did not report it, so it is no control. {said}")
+		try Expect.equal(unknown.output.exitCode(), expected: RefusedExitCode, message: "{unknown.typed} beside a target whose define names no declaration did not exit {RefusedExitCode}: the target's defines reach the lint as they reach the build. {said}")
+
+		for needle in [LintOfAManifestProjectUnknownDefineLine, LintOfAManifestProjectUnknownDefineName] 'eachNeedle'
+			try Expect.contains(unknown.output.stderr, needle: needle, message: "{unknown.typed} beside a target whose define names no declaration did not report `{needle}` as `maxon {BuildCommandWord}` does. {said}")
+		end 'eachNeedle'
+
+		try requireNothingBuiltFor(unknownApp, what: unknown.typed, said: said)
+	end 'requireHeldIn'
+end 'LintOfAManifestProject'

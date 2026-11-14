@@ -25,7 +25,7 @@ them):
 
 | Tier | Holds | Passes |
 | --- | --- | --- |
-| Maxon (`IR/Maxon/`) | Source-level IR with width-free types, as the parser emits it | name reporting, signature visibility, type resolution, semantic checks, unused exports |
+| Maxon (`IR/Maxon/`) | Source-level IR with width-free types, as the parser emits it | name reporting, signature visibility, type resolution, semantic checks, and the unused-declaration audits of a compile that runs the [lint rules](../CLI_REFERENCE.md#maxon-lint) |
 | Std (`IR/Std/`) | Widths and the ABI resolved; values are unlimited virtual registers | range checks, inlining, then per function: constant folding, strength reduction, branch threading, value ranges, CSE, loop-invariant code motion, guard unswitching, and dead and trivial phi removal; then stack-record promotion and tuple returns |
 | Target (`IR/Target/`) | x64 or arm64 machine instructions | instruction selection, [register allocation](register-allocation.md), prologue and epilogue, encoding |
 

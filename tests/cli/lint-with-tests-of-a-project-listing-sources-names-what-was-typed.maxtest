@@ -1,0 +1,21 @@
+let LintWithTestsListedSourcesCaseDirName = "lint-with-tests-listed-sources"
+let LintWithTestsListedSourcesFixture = "lint-tests-listed-sources"
+let LintWithTestsListedSourcesOption = "--tests"
+let LintWithTestsListedSourcesProjectDirName = "proj"
+
+test 'lint --tests of a project whose manifest lists sources names the project as it was typed'
+	requireHeldOutsideCheckout(LintWithTestsListedSourcesCaseDirName, check: LintWithTestsListedSources.create())
+end 'lint --tests of a project whose manifest lists sources names the project as it was typed'
+
+type LintWithTestsListedSources implements OutsideCheckoutCase
+	static function create() returns LintWithTestsListedSources
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let staged = stagedCliFixture(dir, fixture: LintWithTestsListedSourcesFixture)
+		let project = staged.join(LintWithTestsListedSourcesProjectDirName)
+
+		try LintRun.ran(staged, cacheRoot: cacheRootIn(dir), arguments: [LintWithTestsListedSourcesOption, LintWithTestsListedSourcesProjectDirName]).requireLintedClean(project, naming: project.filename())
+	end 'requireHeldIn'
+end 'LintWithTestsListedSources'

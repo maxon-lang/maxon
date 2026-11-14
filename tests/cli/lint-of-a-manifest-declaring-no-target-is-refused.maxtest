@@ -1,0 +1,29 @@
+let LintOfATargetlessManifestCaseDirName = "lint-of-a-targetless-manifest"
+let LintOfATargetlessManifestFixture = "lint-manifest-without-target"
+let LintOfATargetlessManifestFile = "app.maxproj"
+let LintOfATargetlessManifestWords = "declares no target or task"
+let LintOfATargetlessManifestFindingPrefix = "error E"
+let LintOfATargetlessManifestLintedPrefix = "Linted "
+
+test 'lint of a manifest file that declares something but no target or task is refused, naming the file'
+	requireHeldOutsideCheckout(LintOfATargetlessManifestCaseDirName, check: LintOfATargetlessManifest.create())
+end 'lint of a manifest file that declares something but no target or task is refused, naming the file'
+
+type LintOfATargetlessManifest implements OutsideCheckoutCase
+	static function create() returns LintOfATargetlessManifest
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOfATargetlessManifestFixture)
+		let linted = LintRun.ran(app, cacheRoot: cacheRootIn(dir), arguments: [LintOfATargetlessManifestFile])
+		let said = linted.said()
+
+		try Expect.equal(linted.output.exitCode(), expected: RefusedExitCode, message: "{linted.typed} of a manifest with no target or task did not exit {RefusedExitCode}. {said}")
+
+		try Expect.isEmpty(joined(linesOpeningIn(linted.output.stderr, prefix: LintOfATargetlessManifestFindingPrefix), separator: Space), message: "{linted.typed} reported a finding where it refuses a manifest naming no target or task, whose program it does not lint. {said}")
+		try Expect.contains(linted.output.stderr, needle: "{LintOfATargetlessManifestFile} {LintOfATargetlessManifestWords}", message: "{linted.typed}'s refusal does not say that {LintOfATargetlessManifestFile} {LintOfATargetlessManifestWords}. {said}")
+		try Expect.isEmpty(joined(linesOpeningIn(linted.output.stdout, prefix: LintOfATargetlessManifestLintedPrefix), separator: Space), message: "{linted.typed} printed a Linted line for a manifest it refused. {said}")
+		try requireNothingBuiltFor(app, what: linted.typed, said: said)
+	end 'requireHeldIn'
+end 'LintOfATargetlessManifest'

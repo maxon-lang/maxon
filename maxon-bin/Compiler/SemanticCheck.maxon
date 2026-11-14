@@ -99,7 +99,11 @@ function semanticCheck(project Project, module MaxonModule, signatures ProgramSi
 
 	// E3064: the sites the parser recorded that used none of a call's result (`PendingDiscardedResult`),
 	// judged against the whole-program effect summary built here. Beside the drain above.
-	checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
+	match project.lintRules 'lintRules'
+		enforced then checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
+		skipped then break
+	end 'lintRules'
+
 	try requireStillWanted(project)
 
 	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same

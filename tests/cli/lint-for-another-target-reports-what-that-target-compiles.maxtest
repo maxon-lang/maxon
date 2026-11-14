@@ -1,0 +1,34 @@
+let LintForAnotherTargetCaseDirName = "lint-for-another-target"
+let LintForAnotherTargetFixture = "lint-target-guarded-drop"
+let LintForAnotherTargetSite = "main.maxon:11:3"
+let LintForAnotherTargetMessage = "result of pure function 'doubled' must be used"
+
+test 'lint for a target that is not the host reports the findings that target compiles and no others'
+	requireHeldOutsideCheckout(LintForAnotherTargetCaseDirName, check: LintForAnotherTarget.create())
+end 'lint for a target that is not the host reports the findings that target compiles and no others'
+
+type LintForAnotherTarget implements OutsideCheckoutCase
+	static function create() returns LintForAnotherTarget
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintForAnotherTargetFixture)
+
+		let guardedIn = ExpectedDiagnosticArray.create(0)
+		guardedIn.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintForAnotherTargetSite, message: LintForAnotherTargetMessage))
+		try lintedIn(dir, app: app, options: [WasmTargetOption]).requireRefused(app, diagnostics: guardedIn)
+
+		try lintedIn(dir, app: app, options: ["{TargetOptionPrefix}{nativeTargetOtherThanTheHost()}"]).requireLintedClean(app, naming: app.filename())
+	end 'requireHeldIn'
+end 'LintForAnotherTarget'
+
+function nativeTargetOtherThanTheHost() returns String
+	for target in nativeTargets() 'eachNative'
+		if target != hostTargetTriple() 'notTheHost'
+			return target
+		end 'notTheHost'
+	end 'eachNative'
+
+	panic("lint-for-another-target: the gate could not run - {TargetsTablePath} lists no native target other than the host {hostTargetTriple()}")
+end 'nativeTargetOtherThanTheHost'

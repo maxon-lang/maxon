@@ -1,0 +1,24 @@
+let ExecuteOfLintFindingsCaseDirName = "execute-of-lint-findings"
+let ExecuteOfLintFindingsFixture = "execute-dropped-result-script"
+let ExecuteOfLintFindingsScriptFileName = "script.maxon"
+let ExecuteOfLintFindingsExit = 17
+
+test 'execute runs a one-file script that drops a pure result and leaves an unexported function unused'
+	requireHeldOutsideCheckout(ExecuteOfLintFindingsCaseDirName, check: ExecuteOfLintFindings.create())
+end 'execute runs a one-file script that drops a pure result and leaves an unexported function unused'
+
+type ExecuteOfLintFindings implements OutsideCheckoutCase
+	static function create() returns ExecuteOfLintFindings
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: ExecuteOfLintFindingsFixture)
+		let script = app.join(ExecuteOfLintFindingsScriptFileName)
+		let ran = runConfinedIn(dir, arguments: [ExecuteCommandWord, script.toString()])
+		let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+		try Expect.equal(ran.exitCode(), expected: ExecuteOfLintFindingsExit, message: "`maxon {ExecuteCommandWord} {ExecuteOfLintFindingsScriptFileName}` did not run the script to its exit code {ExecuteOfLintFindingsExit}. Its only faults are a dropped pure result and an unused unexported function, which are `maxon {LintCommandWord}`'s findings and do not stop a script. {said}")
+		try Expect.isEmpty(ran.stderr, message: "`maxon {ExecuteCommandWord} {ExecuteOfLintFindingsScriptFileName}` wrote to stderr. {said}")
+	end 'requireHeldIn'
+end 'ExecuteOfLintFindings'

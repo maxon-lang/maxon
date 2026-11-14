@@ -13,23 +13,57 @@ export union EntryRosterError implements Error
 	unlexable(diagnostic Diagnostic)
 end 'EntryRosterError'
 
-export function entryNamesDeclaredIn(driverFile FilePath) returns TaskNameArray throws EntryRosterError
+export union ManifestEntry
+	entered(name String)
+	holdsNoEntry
+	holdsNothing
+end 'ManifestEntry'
+
+export function firstEntryDeclaredIn(driverFile FilePath) returns ManifestEntry throws EntryRosterError
+	let tokens = try driverFileTokens(driverFile)
+
+	let first = try offeredEntriesAmong(tokens).get(0) otherwise 'noEntry'
+		return ManifestEntry.holdsNothing if holdsNoDeclaration(tokens) else ManifestEntry.holdsNoEntry
+	end 'noEntry'
+
+	return ManifestEntry.entered(first)
+end 'firstEntryDeclaredIn'
+
+function holdsNoDeclaration(tokens TokenArray) returns bool
+	for token in tokens 'eachToken'
+		if not tokenKindEndsALine(token.kind) 'aDeclaredToken'
+			return false
+		end 'aDeclaredToken'
+	end 'eachToken'
+
+	return true
+end 'holdsNoDeclaration'
+
+function driverFileTokens(driverFile FilePath) returns TokenArray throws EntryRosterError
 	let source = try File.readText(driverFile) otherwise throw EntryRosterError.unreadable(driverFile)
 
-	let declared = try taskNamesIn(source) otherwise (e) 'unlexable'
+	let tokens = try tokenize(source, keywords: KeywordTable.create()) otherwise (e) 'unlexable'
 		throw EntryRosterError.unlexable(lexerErrorDiagnostic(e, path: driverFile))
 	end 'unlexable'
 
+	return tokens
+end 'driverFileTokens'
+
+export function entryNamesDeclaredIn(driverFile FilePath) returns TaskNameArray throws EntryRosterError
+	return offeredEntriesAmong(try driverFileTokens(driverFile))
+end 'entryNamesDeclaredIn'
+
+function offeredEntriesAmong(tokens TokenArray) returns TaskNameArray
 	let offered = TaskNameArray.create(0)
 
-	for named in declared 'eachDeclaration'
+	for named in taskNamesInTokens(tokens) 'eachDeclaration'
 		if not named.startsWith(ReservedEntryPrefix) 'anOfferedEntry'
 			offered.push(named)
 		end 'anOfferedEntry'
 	end 'eachDeclaration'
 
 	return offered
-end 'entryNamesDeclaredIn'
+end 'offeredEntriesAmong'
 
 export function entryNameOf(word String) returns String
 	return word.replace(EntryWordSeparator, with: EntryNameSeparator)
@@ -65,10 +99,6 @@ export function printEntryWords(declared TaskNameArray)
 		print("{word}\n")
 	end 'eachWord'
 end 'printEntryWords'
-
-function taskNamesIn(source String) returns TaskNameArray throws LexerError
-	return taskNamesInTokens(try tokenize(source, keywords: KeywordTable.create()))
-end 'taskNamesIn'
 
 function taskNamesInTokens(tokens TokenArray) returns TaskNameArray
 	let names = TaskNameArray.create(0)

@@ -1,0 +1,24 @@
+let LintWithTestsTargetWordCaseDirName = "lint-with-tests-target-word"
+let LintWithTestsTargetWordFixture = "lint-tests-target-word"
+let LintWithTestsTargetWord = "beta"
+
+test 'lint --tests of a lone target word names the target it was typed as, and a target word with a directory names the directory'
+	requireHeldOutsideCheckout(LintWithTestsTargetWordCaseDirName, check: LintWithTestsOfATargetWord.create())
+end 'lint --tests of a lone target word names the target it was typed as, and a target word with a directory names the directory'
+
+type LintWithTestsOfATargetWord implements OutsideCheckoutCase
+	static function create() returns LintWithTestsOfATargetWord
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cacheRoot = cacheRootIn(dir)
+		let app = stagedCliFixture(dir, fixture: LintWithTestsTargetWordFixture)
+		let tested = runWithCacheRoot([TestCommandWord, LintWithTestsTargetWord], cacheRoot: cacheRoot, workingDirectory: app)
+
+		try Expect.equal(tested.exitCode(), expected: TestedCleanExit, message: "`maxon {TestCommandWord} {LintWithTestsTargetWord}` in a project with several targets did not pass, so it is no control. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}")
+
+		try LintRun.ran(app, cacheRoot: cacheRoot, arguments: [LintTestsOption, LintWithTestsTargetWord]).requireLintedClean(app, naming: LintWithTestsTargetWord)
+		try LintRun.ran(dir, cacheRoot: cacheRoot, arguments: [LintTestsOption, LintWithTestsTargetWord, app.filename()]).requireLintedClean(app, naming: app.filename())
+	end 'requireHeldIn'
+end 'LintWithTestsOfATargetWord'

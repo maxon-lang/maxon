@@ -126,8 +126,13 @@ only when a commit moves the pin, so run the script again after pulling a commit
 scripts/fetch-seed.sh                          # seed .bootstrap/ from the pinned seed
 ./.bootstrap/maxon build maxon-bin --output=maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon run build            # afterwards, it rebuilds itself
+./maxon-bin/.maxon/maxon lint maxon-bin       # the lint rules, which the build compiles past
 ./maxon-bin/.maxon/maxon spec-test
 ```
+
+`scripts/lint-tree.sh` lints every first-party program, test corpus and manifest, as CI does on every
+lane; give it one group (`maxon-bin`, `script-programs`, `multicore-stress`, `test-corpora`, `manifests`)
+to lint that group alone.
 
 ⛔ **Run a compiler that lives INSIDE this checkout — never one installed on your PATH.** The
 compiler finds `stdlib/` and `runtime/` by walking up from its own executable, so an installed `maxon`
