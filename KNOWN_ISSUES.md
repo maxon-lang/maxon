@@ -64,3 +64,12 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   asks stdlibDeclaredTypeNames, so a scriptlib type landing in that set would have its field names treated
   as the corpus's own. Not run.
 - repro: a scriptlib package declaring a type with a function-valued field, compiled by a single-file program
+
+## Two signature hash marks hold the same value
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/SignatureIndex.maxon:46239
+- seen: the spec-suite speed plan's L3c documenter pass, by reading; DeclShapeGenericInstances and
+  LivenessMutableFunctionValues are both 0x3C6EF372FE94F82B, and the comment above the marks says a new
+  one is checked against all of them by hand. They feed different chains and no wrong answer was found.
+- repro: `grep -n 0x3C6EF372FE94F82B maxon-bin/Compiler/SignatureIndex.maxon` lists two declarations
