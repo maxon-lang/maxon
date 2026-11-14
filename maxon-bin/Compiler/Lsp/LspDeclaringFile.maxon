@@ -10,13 +10,13 @@
 // for "none", for the reason `TypeNameRegistry.declarationOf` throws: a not-found token would carry a
 // real `0:0` position that a synthesized declaration also has. Every lookup below fails the same way, so
 // there is one arm and not four spellings of absence.
-module enum LspDeclarationLookupError implements Error
+enum LspDeclarationLookupError implements Error
 	nothingThere
 end 'LspDeclarationLookupError'
 
-module let TokensBetweenAReceiverAndItsMember = 2 as ElementIndex
+let TokensBetweenAReceiverAndItsMember = 2 as ElementIndex
 
-module union LspVisibleField
+union LspVisibleField
 	declared(layout StructLayout, index FieldIndex)
 	hidden
 	none
@@ -25,7 +25,7 @@ end 'LspVisibleField'
 // Three answers and not two. "Nothing declares it" and "declared, but hidden from you" lead to different
 // fallbacks — only the first may reach a lookup by filename — so a reader that collapses them renders a
 // member the compiler refuses to let this file name.
-module union LspMemberDeclaration
+union LspMemberDeclaration
 	declaredIn(path FilePath, owner String)
 	hiddenHere
 	nothingDeclaresIt
@@ -33,26 +33,26 @@ end 'LspMemberDeclaration'
 
 // `owner` is the type the index files the member under (a service, for a handle's message), which is
 // the name of the body that declares it.
-module union LspDeclaringSite
+union LspDeclaringSite
 	ofAMember(path FilePath, owner String)
 	ofAName(path FilePath)
 end 'LspDeclaringSite'
 
-module function lspDeclaringSitePath(site LspDeclaringSite) returns FilePath
+function lspDeclaringSitePath(site LspDeclaringSite) returns FilePath
 	return match site 'site'
 		ofAMember(path, _) gives path
 		ofAName(path) gives path
 	end 'site'
 end 'lspDeclaringSitePath'
 
-module union LspHandleSurface
+union LspHandleSurface
 	messages(serviceName immutable ByteArray, request immutable EnumLayout)
 	notAHandle
 end 'LspHandleSurface'
 
 // What a `<T>.handle` offers, as one guarded door: `isServiceHandle` is the compiler's own membership
 // test and `serviceOfHandle` panics for anything else, so the two are never asked apart.
-module function lspHandleSurfaceOf(signatures ProgramSignatures, typeName ByteArray) returns LspHandleSurface
+function lspHandleSurfaceOf(signatures ProgramSignatures, typeName ByteArray) returns LspHandleSurface
 	if not signatures.isServiceHandle(typeName) 'notAHandle'
 		return LspHandleSurface.notAHandle
 	end 'notAHandle'
@@ -63,7 +63,7 @@ module function lspHandleSurfaceOf(signatures ProgramSignatures, typeName ByteAr
 	return LspHandleSurface.messages(serviceName, request: request)
 end 'lspHandleSurfaceOf'
 
-module function lspCursorNamesAMember(tokens TokenArray, cursor ElementIndex) returns bool
+function lspCursorNamesAMember(tokens TokenArray, cursor ElementIndex) returns bool
 	if cursor == 0 'nothingBefore'
 		return false
 	end 'nothingBefore'
@@ -72,7 +72,7 @@ module function lspCursorNamesAMember(tokens TokenArray, cursor ElementIndex) re
 	return before.kind == TokenKind.dot
 end 'lspCursorNamesAMember'
 
-module function lspDeclaringSiteOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns LspDeclaringSite throws LspDeclarationLookupError
+function lspDeclaringSiteOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns LspDeclaringSite throws LspDeclarationLookupError
 	match corpus 'held'
 		loaded(_, signatures, readerPath) then return try declaringSiteOfACursorName(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, readerPath: readerPath)
 		unavailable then throw LspDeclarationLookupError.nothingThere
@@ -93,7 +93,7 @@ function declaringSiteOfACursorName(signatures ProgramSignatures, corpus LspCorp
 	return LspDeclaringSite.ofAName(try declaringFileOfABareName(signatures, name: name, readerPath: readerPath))
 end 'declaringSiteOfACursorName'
 
-module function lspMemberOwnerOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns String throws LspDeclarationLookupError
+function lspMemberOwnerOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns String throws LspDeclarationLookupError
 	if cursor < TokensBetweenAReceiverAndItsMember 'nothingBeforeTheDot'
 		throw LspDeclarationLookupError.nothingThere
 	end 'nothingBeforeTheDot'
@@ -106,21 +106,21 @@ end 'lspMemberOwnerOfTheCursor'
 function declaringSiteOfTheCursorsMember(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex, member ByteArray, readerPath FilePath) returns LspDeclaringSite throws LspDeclarationLookupError
 	let typeName = try lspMemberOwnerOfTheCursor(corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor)
 
-	return try lspDeclaringSiteOfAMember(signatures, owner: typeName.toByteArray(), member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: cursor))
+	return try lspDeclaringSiteOfAMember(signatures, owner: typeName.toByteArray(), member: member, readerPath: readerPath)
 end 'declaringSiteOfTheCursorsMember'
 
-function lspDeclaringSiteOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspDeclaringSite throws LspDeclarationLookupError
-	match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'declared'
+function lspDeclaringSiteOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspDeclaringSite throws LspDeclarationLookupError
+	match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath) 'declared'
 		declaredIn(path, declaringOwner) then return LspDeclaringSite.ofAMember(path, owner: declaringOwner)
 		hiddenHere or
 		nothingDeclaresIt then throw LspDeclarationLookupError.nothingThere
 	end 'declared'
 end 'lspDeclaringSiteOfAMember'
 
-module function lspMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
+function lspMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
 	match lspHandleSurfaceOf(signatures, typeName: owner) 'aHandle'
 		messages(serviceName, request) then return messageDeclarationOf(signatures, serviceName: serviceName, request: request, member: member, readerPath: readerPath)
-		notAHandle then return declaredMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing)
+		notAHandle then return declaredMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
 	end 'aHandle'
 end 'lspMemberDeclarationOf'
 
@@ -133,8 +133,8 @@ function messageDeclarationOf(signatures ProgramSignatures, serviceName ByteArra
 	return calleeDeclarationOf(signatures, qualified: qualifiedMethodName(serviceName, methodName: member), owner: serviceName, readerPath: readerPath)
 end 'messageDeclarationOf'
 
-function declaredMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
-	if not lspTypeMembersReachable(signatures, owner: owner, readerPath: readerPath, enclosing: enclosing) 'typeHiddenHere'
+function declaredMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	if not lspTypeMembersReachable(signatures, owner: owner, readerPath: readerPath) 'typeHiddenHere'
 		return LspMemberDeclaration.hiddenHere
 	end 'typeHiddenHere'
 
@@ -143,12 +143,12 @@ function declaredMemberDeclarationOf(signatures ProgramSignatures, owner ByteArr
 	match asMethod 'aMethod'
 		declaredIn or
 		hiddenHere then return asMethod
-		nothingDeclaresIt then return fieldOrCaseDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing)
+		nothingDeclaresIt then return fieldOrCaseDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
 	end 'aMethod'
 end 'declaredMemberDeclarationOf'
 
-function fieldOrCaseDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
-	let asField = fieldDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing)
+function fieldOrCaseDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	let asField = fieldDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
 
 	match asField 'aField'
 		declaredIn or
@@ -168,8 +168,8 @@ function calleeDeclarationOf(signatures ProgramSignatures, qualified ByteArray, 
 	end 'tier'
 end 'calleeDeclarationOf'
 
-function fieldDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
-	match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'aField'
+function fieldDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
 		declared(layout, _) then return LspMemberDeclaration.declaredIn(layout.declFilePath, owner: String.from(owner))
 		hidden then return LspMemberDeclaration.hiddenHere
 		none then return LspMemberDeclaration.nothingDeclaresIt
@@ -289,17 +289,17 @@ function declaringFileOfABinding(signatures ProgramSignatures, name ByteArray, r
 	end 'aBinding'
 end 'declaringFileOfABinding'
 
-module function lspVisibleFieldOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspVisibleField
+function lspVisibleFieldOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspVisibleField
 	match signatures.structFor(owner, readerFilePath: readerPath) 'aStruct'
-		declared(layout) then return visibleFieldIn(signatures, layout: layout, member: member, readerPath: readerPath, enclosing: enclosing)
+		declared(layout) then return visibleFieldIn(signatures, layout: layout, member: member, readerPath: readerPath)
 		undeclared then return LspVisibleField.none
 	end 'aStruct'
 end 'lspVisibleFieldOf'
 
-function visibleFieldIn(signatures ProgramSignatures, layout StructLayout, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspVisibleField
+function visibleFieldIn(signatures ProgramSignatures, layout StructLayout, member ByteArray, readerPath FilePath) returns LspVisibleField
 	let index = try layout.indexOfField(member) otherwise return LspVisibleField.none
 
-	if not LspLayoutReach.of(signatures, layout: layout, readerPath: readerPath, enclosing: enclosing).reaches(signatures, layout: layout, index: index) 'hiddenHere'
+	if not LspLayoutReach.of(signatures, layout: layout, readerPath: readerPath).reaches(signatures, layout: layout, index: index) 'hiddenHere'
 		return LspVisibleField.hidden
 	end 'hiddenHere'
 
@@ -308,20 +308,17 @@ end 'visibleFieldIn'
 
 // The answers `fieldReach` takes that do not vary by field, settled once per layout so a walk over its
 // fields does not repeat them.
-module type LspLayoutReach
-	module let readerPath as FilePath
-	module let site as MemberReaderSite
-	module let rawSurfaceRefused as bool
-	module let typeReachable as bool
+type LspLayoutReach
+	let readerPath as FilePath
+	let rawSurfaceRefused as bool
+	let typeReachable as bool
 
-	module static function of(signatures ProgramSignatures, layout StructLayout, readerPath FilePath, enclosing LspEnclosingType) returns LspLayoutReach
-		let site = lspReaderSite(enclosing, typeName: layout.name, sharesTheTypesFile: layout.declFilePath.equals(readerPath))
-
-		return Self{readerPath: readerPath, site: site, rawSurfaceRefused: signatures.rawSurfaceIsRefusedIn(readerPath), typeReachable: typeMembersReachable(signatures, visibility: layout.visibility, declFilePath: layout.declFilePath, readerFilePath: readerPath, site: site)}
+	static function of(signatures ProgramSignatures, layout StructLayout, readerPath FilePath) returns LspLayoutReach
+		return Self{readerPath: readerPath, rawSurfaceRefused: signatures.rawSurfaceIsRefusedIn(readerPath), typeReachable: signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: readerPath)}
 	end 'of'
 
-	module function reaches(signatures ProgramSignatures, layout StructLayout, index FieldIndex) returns bool
-		return match fieldReach(signatures, layout: layout, index: index, readerFilePath: self.readerPath, site: self.site, rawSurfaceRefused: self.rawSurfaceRefused, typeReachable: self.typeReachable) 'reach'
+	function reaches(signatures ProgramSignatures, layout StructLayout, index FieldIndex) returns bool
+		return match fieldReach(signatures, layout: layout, index: index, readerFilePath: self.readerPath, rawSurfaceRefused: self.rawSurfaceRefused, typeReachable: self.typeReachable) 'reach'
 			reachable gives true
 			rawSurface or
 			typeHidden or
@@ -330,40 +327,17 @@ module type LspLayoutReach
 	end 'reaches'
 end 'LspLayoutReach'
 
-module function lspReaderSite(enclosing LspEnclosingType, typeName ByteArray, sharesTheTypesFile bool) returns MemberReaderSite
-	match enclosing 'enclosing'
-		inside(enclosingName) then return lspSiteInside(enclosingName, typeName: typeName, sharesTheTypesFile: sharesTheTypesFile)
-		atFileScope then return MemberReaderSite.outsideTheType
-	end 'enclosing'
-end 'lspReaderSite'
-
-function lspSiteInside(enclosingName ByteArray, typeName ByteArray, sharesTheTypesFile bool) returns MemberReaderSite
-	if not enclosingName.equals(typeName) 'anotherType'
-		return MemberReaderSite.outsideTheType
-	end 'anotherType'
-
-	if sharesTheTypesFile 'theTypesOwnBody'
-		return MemberReaderSite.typesOwnBody
-	end 'theTypesOwnBody'
-
-	return MemberReaderSite.extensionBodyInAnotherFile
-end 'lspSiteInside'
-
-module function lspTypeMembersReachable(signatures ProgramSignatures, owner ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns bool
+function lspTypeMembersReachable(signatures ProgramSignatures, owner ByteArray, readerPath FilePath) returns bool
 	match signatures.structFor(owner, readerFilePath: readerPath) 'aStruct'
-		declared(layout) then return lspDeclaredTypeMembersReachable(signatures, owner: owner, visibility: layout.visibility, declFilePath: layout.declFilePath, readerPath: readerPath, enclosing: enclosing)
+		declared(layout) then return signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: readerPath)
 		undeclared then break
 	end 'aStruct'
 
 	match signatures.enumFor(owner, readerFilePath: readerPath) 'anEnumOrUnion'
-		declared(layout) then return lspDeclaredTypeMembersReachable(signatures, owner: owner, visibility: layout.visibility, declFilePath: layout.declFilePath, readerPath: readerPath, enclosing: enclosing)
+		declared(layout) then return signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: readerPath)
 		undeclared then return true
 	end 'anEnumOrUnion'
 end 'lspTypeMembersReachable'
-
-function lspDeclaredTypeMembersReachable(signatures ProgramSignatures, owner ByteArray, visibility Visibility, declFilePath FilePath, readerPath FilePath, enclosing LspEnclosingType) returns bool
-	return typeMembersReachable(signatures, visibility: visibility, declFilePath: declFilePath, readerFilePath: readerPath, site: lspReaderSite(enclosing, typeName: owner, sharesTheTypesFile: declFilePath.equals(readerPath)))
-end 'lspDeclaredTypeMembersReachable'
 
 function visibleDeclarationFile(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	if not signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerPath) 'hiddenHere'

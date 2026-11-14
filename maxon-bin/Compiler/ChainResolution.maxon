@@ -4,24 +4,24 @@
 // with them about the same program.
 
 // The two tokens one qualifier segment costs — the `.` and the identifier after it.
-module let TokensPerQualifierSegment = 2
+let TokensPerQualifierSegment = 2
 
 // What a chain is read as: `typeReference` the whole chain as one type; `typeOrMemberType` the whole chain,
 // or an owner type and then a member type of it (`lib.Type.Inner`); `memberReference` every segment but
 // the last, which is the member; `typePrefix` the longest prefix that names a type.
-module enum ChainUse
+enum ChainUse
 	typeReference
 	typeOrMemberType
 	memberReference
 	typePrefix
 end 'ChainUse'
 
-module union ChainStanding
+union ChainStanding
 	nameable
 	hidden(kind HiddenSymbolKind, tier Visibility)
 end 'ChainStanding'
 
-module type ChainType
+type ChainType
 	export let kind as TypeDeclKind
 	export let declFilePath as FilePath
 	export let name as immutable ByteArray
@@ -40,11 +40,11 @@ module type ChainType
 	end 'isNameable'
 end 'ChainType'
 
-export function nominalNameOr(kind TypeDeclKind, name immutable ByteArray, spelling immutable ByteArray) returns immutable ByteArray
+function nominalNameOr(kind TypeDeclKind, name immutable ByteArray, spelling immutable ByteArray) returns immutable ByteArray
 	return spelling if isTypeAliasDecl(kind) else name
 end 'nominalNameOr'
 
-module union ChainResolution
+union ChainResolution
 	unqualified
 	value
 	declaredType(declaration ChainType, consumed ElementIndex)
@@ -55,11 +55,11 @@ end 'ChainResolution'
 
 // Shared because a union value is a heap object even when payload-free, and `resolveChain` answers at
 // every dotted statement and expression.
-module let UnqualifiedChain = ChainResolution.unqualified
+let UnqualifiedChain = ChainResolution.unqualified
 
 let ValueHeadedChain = ChainResolution.value
 
-module enum ChainHeadClaim
+enum ChainHeadClaim
 	value
 	nominalType
 	otherType
@@ -68,7 +68,7 @@ module enum ChainHeadClaim
 	unclaimed
 end 'ChainHeadClaim'
 
-module union TypeLookup
+union TypeLookup
 	missing
 	found(declaration ChainType)
 	ambiguous(candidates StringArray)
@@ -82,7 +82,7 @@ function chainContinuesAt(tokens TokenArray, dotAt ElementIndex) returns bool
 	return tokenCanBeAName(try tokens.get(dotAt + 1) otherwise return false)
 end 'chainContinuesAt'
 
-module function followsADot(tokens TokenArray, index ElementIndex) returns bool
+function followsADot(tokens TokenArray, index ElementIndex) returns bool
 	if index == 0 'theFirstToken'
 		return false
 	end 'theFirstToken'
@@ -90,7 +90,7 @@ module function followsADot(tokens TokenArray, index ElementIndex) returns bool
 	return (try tokens.get(index - 1) otherwise panic("followsADot: tokens.get OOB at {index - 1}, below the {tokens.count()} tokens it indexes")).kind == TokenKind.dot
 end 'followsADot'
 
-module function chainSegmentsAt(tokens TokenArray, at ElementIndex) returns ElementIndex
+function chainSegmentsAt(tokens TokenArray, at ElementIndex) returns ElementIndex
 	var segments = 0 as ElementIndex
 
 	while chainContinuesAt(tokens, dotAt: at + 1 + segments * TokensPerQualifierSegment) 'eachSegment'
@@ -100,12 +100,12 @@ module function chainSegmentsAt(tokens TokenArray, at ElementIndex) returns Elem
 	return segments
 end 'chainSegmentsAt'
 
-module function chainMemberAt(tokens TokenArray, at ElementIndex, segment ElementIndex) returns immutable ByteArray
+function chainMemberAt(tokens TokenArray, at ElementIndex, segment ElementIndex) returns immutable ByteArray
 	let member = try tokens.get(at + segment * TokensPerQualifierSegment) otherwise panic("chainMemberAt: tokens.get OOB for segment {segment}, which `chainContinuesAt` just found")
 	return member.value
 end 'chainMemberAt'
 
-module function chainSpellingAt(tokens TokenArray, at ElementIndex, segments ElementIndex) returns immutable ByteArray
+function chainSpellingAt(tokens TokenArray, at ElementIndex, segments ElementIndex) returns immutable ByteArray
 	let head = (try tokens.get(at) otherwise panic("chainSpellingAt: tokens.get OOB at {at}, the chain's head")).value
 
 	if segments == 0 'justTheHead'
@@ -121,15 +121,15 @@ module function chainSpellingAt(tokens TokenArray, at ElementIndex, segments Ele
 	return spelled
 end 'chainSpellingAt'
 
-module function chainNamesNothingText(qualifier ByteArray) returns String
+function chainNamesNothingText(qualifier ByteArray) returns String
 	return "nothing declares a binding, directory or type `{String.from(qualifier)}`"
 end 'chainNamesNothingText'
 
-module function chainHeadIsAValueText(head ByteArray, qualifier ByteArray) returns String
+function chainHeadIsAValueText(head ByteArray, qualifier ByteArray) returns String
 	return "`{String.from(head)}` is a value in scope, so `{String.from(qualifier)}` names no type"
 end 'chainHeadIsAValueText'
 
-module function resolveChain(tokens TokenArray, at ElementIndex, signatures ProgramSignatures, readerFilePath FilePath, headIsAValue bool, use ChainUse) returns ChainResolution
+function resolveChain(tokens TokenArray, at ElementIndex, signatures ProgramSignatures, readerFilePath FilePath, headIsAValue bool, use ChainUse) returns ChainResolution
 	let head = try tokens.get(at) otherwise return UnqualifiedChain
 	let segments = chainSegmentsAt(tokens, at: at)
 
@@ -199,7 +199,7 @@ module function resolveChain(tokens TokenArray, at ElementIndex, signatures Prog
 	return ChainResolution.nothing(qualifier)
 end 'resolveChain'
 
-module function classifiedChainHead(signatures ProgramSignatures, head ByteArray, readerFilePath FilePath, headIsAValue bool) returns ChainHeadClaim
+function classifiedChainHead(signatures ProgramSignatures, head ByteArray, readerFilePath FilePath, headIsAValue bool) returns ChainHeadClaim
 	if headIsAValue 'aLocalHeadsIt'
 		return ChainHeadClaim.value
 	end 'aLocalHeadsIt'
@@ -213,7 +213,7 @@ module function classifiedChainHead(signatures ProgramSignatures, head ByteArray
 	end 'typeHead'
 end 'classifiedChainHead'
 
-module function chainHeadIsNominal(claim ChainHeadClaim) returns bool
+function chainHeadIsNominal(claim ChainHeadClaim) returns bool
 	return match claim 'claim'
 		nominalType or
 		nominalTypeBesideBinding gives true
@@ -248,7 +248,7 @@ function ownerOnlyWhenPartial(looked TypeLookup, partial bool) returns TypeLooku
 	end 'looked'
 end 'ownerOnlyWhenPartial'
 
-module function lookupQualifiedType(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns TypeLookup
+function lookupQualifiedType(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns TypeLookup
 	if not containsQualifier(written) 'aBareName'
 		return TypeLookup.missing
 	end 'aBareName'
@@ -261,7 +261,7 @@ module function lookupQualifiedType(signatures ProgramSignatures, written ByteAr
 	end 'claims'
 end 'lookupQualifiedType'
 
-module function spelledTypeName(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns immutable ByteArray
+function spelledTypeName(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns immutable ByteArray
 	return match lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath) 'lookup'
 		found(declaration) gives declaration.name
 		ambiguous or
@@ -269,12 +269,12 @@ module function spelledTypeName(signatures ProgramSignatures, written ByteArray,
 	end 'lookup'
 end 'spelledTypeName'
 
-module union QualifiedBaseDenotation
+union QualifiedBaseDenotation
 	denoted(name immutable ByteArray)
 	ambiguous
 end 'QualifiedBaseDenotation'
 
-module function denotationOfQualifiedBase(signatures ProgramSignatures, written immutable ByteArray, readerFilePath FilePath) returns QualifiedBaseDenotation
+function denotationOfQualifiedBase(signatures ProgramSignatures, written immutable ByteArray, readerFilePath FilePath) returns QualifiedBaseDenotation
 	if not signatures.namesANamespace(leadingSegmentOf(written)) 'noDirectoryStartsHere'
 		return QualifiedBaseDenotation.denoted(written)
 	end 'noDirectoryStartsHere'
@@ -286,7 +286,7 @@ module function denotationOfQualifiedBase(signatures ProgramSignatures, written 
 	end 'lookup'
 end 'denotationOfQualifiedBase'
 
-module union QualifiedTypeSpan
+union QualifiedTypeSpan
 	outside
 	within(declaration ChainType, endIndex ElementIndex)
 
@@ -298,7 +298,7 @@ module union QualifiedTypeSpan
 	end 'isWithin'
 end 'QualifiedTypeSpan'
 
-module function chainHeadIndexOf(tokens TokenArray, index ElementIndex) returns ElementIndex
+function chainHeadIndexOf(tokens TokenArray, index ElementIndex) returns ElementIndex
 	var head = index
 
 	while head >= TokensPerQualifierSegment and (try tokens.get(head - 1) otherwise return head).kind == TokenKind.dot and (try tokens.get(head - TokensPerQualifierSegment) otherwise return head).kind == TokenKind.identifier 'backToTheHead'
@@ -308,7 +308,7 @@ module function chainHeadIndexOf(tokens TokenArray, index ElementIndex) returns 
 	return head
 end 'chainHeadIndexOf'
 
-module function qualifiedTypeSpanning(tokens TokenArray, head ElementIndex, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath, headIsAValue bool) returns QualifiedTypeSpan
+function qualifiedTypeSpanning(tokens TokenArray, head ElementIndex, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath, headIsAValue bool) returns QualifiedTypeSpan
 	if head == index or headIsAValue 'noQualifierBeforeOrAValueHead'
 		return QualifiedTypeSpan.outside
 	end 'noQualifierBeforeOrAValueHead'
@@ -316,7 +316,7 @@ module function qualifiedTypeSpanning(tokens TokenArray, head ElementIndex, inde
 	return spanOfResolution(resolveChain(tokens, at: head, signatures: signatures, readerFilePath: readerFilePath, headIsAValue: headIsAValue, use: ChainUse.typePrefix), head: head, index: index)
 end 'qualifiedTypeSpanning'
 
-module function segmentOfAQualifiedType(tokens TokenArray, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath) returns bool
+function segmentOfAQualifiedType(tokens TokenArray, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath) returns bool
 	return qualifiedTypeSpanning(tokens, head: chainHeadIndexOf(tokens, index: index), index: index, signatures: signatures, readerFilePath: readerFilePath, headIsAValue: false).isWithin()
 end 'segmentOfAQualifiedType'
 
@@ -339,7 +339,7 @@ function spanCovering(declaration ChainType, endIndex ElementIndex, index Elemen
 	return QualifiedTypeSpan.within(declaration, endIndex: endIndex)
 end 'spanCovering'
 
-module function qualifiedNominalNamed(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns ChainType throws AbsentError
+function qualifiedNominalNamed(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns ChainType throws AbsentError
 	match lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath) 'lookup'
 		found(declaration) then return try nominalDeclarationOf(declaration)
 		ambiguous or

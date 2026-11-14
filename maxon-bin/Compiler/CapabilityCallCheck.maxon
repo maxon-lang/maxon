@@ -1,4 +1,4 @@
-module function checkCapabilityCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, kinds ArgumentRecordKinds, facts CapabilityFacts, calls CallSummaryIndex, paramSources ParamSourceIndex) throws CompileError
+function checkCapabilityCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, kinds ArgumentRecordKinds, facts CapabilityFacts, calls CallSummaryIndex, paramSources ParamSourceIndex) throws CompileError
 	let witnessSlots = WitnessSlotsByDeclIndex.create()
 	checkParamsNeedNotBoth(project, funcNames: funcNames, facts: facts)
 	checkHoldersDoNotWait(project, module: module, signatures: signatures, funcNames: funcNames, facts: facts)
@@ -35,7 +35,7 @@ module function checkCapabilityCalls(project Project, module MaxonModule, signat
 	checkConformersMeetTheirRequirements(project, module: module, signatures: signatures, funcNames: funcNames, facts: facts)
 end 'checkCapabilityCalls'
 
-module let ProvisionalForAUse = ValueCapability.paused
+let ProvisionalForAUse = ValueCapability.paused
 let ProvisionalForAWrite = ValueCapability.immutable
 let ReceiverArgumentIndex = 0 as ElementIndex
 
@@ -247,7 +247,7 @@ function needChainText(project Project, funcNames FunctionNameIndex, facts Capab
 	return text
 end 'needChainText'
 
-module function needOriginText(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, position ParamCount, mutable bool) returns String
+function needOriginText(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, position ParamCount, mutable bool) returns String
 	let chain = needChainText(project, funcNames: funcNames, facts: facts, index: index, position: position, mutable: mutable)
 
 	if not chain.isEmpty() 'aCall'
@@ -677,9 +677,9 @@ function checkWrittenCapturesAreWritable(project Project, facts CapabilityFacts,
 	end 'eachCapture'
 end 'checkWrittenCapturesAreWritable'
 
-module typealias TiedCarrierMap = Map with (ValueId, ElementIndex)
+typealias TiedCarrierMap = Map with (ValueId, ElementIndex)
 
-module function tiedCarrierOwnersOf(module MaxonModule, func IrFunction) returns TiedCarrierMap
+function tiedCarrierOwnersOf(module MaxonModule, func IrFunction) returns TiedCarrierMap
 	let owners = TiedCarrierMap.create()
 
 	for tiedOp in func.capabilityNotes.tiedAsyncOps 'eachTiedAsync'
@@ -879,7 +879,7 @@ function promiseCarriersOf(module MaxonModule, func IrFunction, promise ValueId)
 	return carriers
 end 'promiseCarriersOf'
 
-module function requireCallOrTryCall(op MaxonOp) throws AbsentError
+function requireCallOrTryCall(op MaxonOp) throws AbsentError
 	match op 'op'
 		call or
 		tryCall then return
@@ -1097,7 +1097,7 @@ function checkDeferredResultWrites(project Project, funcNames FunctionNameIndex,
 	end 'eachDeferredWrite'
 end 'checkDeferredResultWrites'
 
-module function requireServiceReplyCell(op MaxonOp) throws AbsentError
+function requireServiceReplyCell(op MaxonOp) throws AbsentError
 	match op 'op'
 		serviceReplyCell then return
 		default throws AbsentError.absent
@@ -1119,7 +1119,7 @@ function returnsADeadZero(module MaxonModule, func IrFunction, retVal ValueId) r
 	return true
 end 'returnsADeadZero'
 
-module function requireLiteralOp(op MaxonOp) throws AbsentError
+function requireLiteralOp(op MaxonOp) throws AbsentError
 	match op 'op'
 		literal then return
 		default throws AbsentError.absent
@@ -1450,7 +1450,7 @@ function blockingChainThrough(project Project, module MaxonModule, funcNames Fun
 	return "it {reason}" if path.0.count() == 1 else "{text}{reason}"
 end 'blockingChainThrough'
 
-module function blockingChain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns String
+function blockingChain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns String
 	return blockingChainThrough(project, module: module, funcNames: funcNames, path: blockingPathOrPanic(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: waits), waits: waits)
 end 'blockingChain'
 
@@ -1777,7 +1777,7 @@ function parameterRefusal(project Project, facts CapabilityFacts, gotIndex Eleme
 	return try conversionRefusalSentence(verdict, subject: subject, what: "its parameter '{parameter}'", boundary: boundary, mutableWord: "it `mutable`", frozenWord: "it `immutable`")
 end 'parameterRefusal'
 
-module function checkDoorMeetsBoundary(project Project, facts CapabilityFacts, declaredName ByteArray, gotName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
+function checkDoorMeetsBoundary(project Project, facts CapabilityFacts, declaredName ByteArray, gotName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
 	let declared = try functionTypeRegistryOf(project).aliasShapes.get(declaredName) otherwise return false
 	let gotIndex = try facts.indexOf(gotName) otherwise return false
 	let gotFunc = try facts.funcNames.functions.get(gotIndex) otherwise panic("checkDoorMeetsBoundary: functions.get OOB at {gotIndex}")
@@ -1909,26 +1909,26 @@ function requirementParameterRefusal(facts CapabilityFacts, implIndex ElementInd
 	return try conversionRefusalSentence(verdict, subject: subject, what: words.0, boundary: boundary, mutableWord: words.1, frozenWord: words.2)
 end 'requirementParameterRefusal'
 
-module type ArgumentRecordKinds
+type ArgumentRecordKinds
 	let project as Project
 	let signatures as ProgramSignatures
 	let writability as RecordKindWritability
 
-	module static function over(project Project, signatures ProgramSignatures) returns ArgumentRecordKinds
+	static function over(project Project, signatures ProgramSignatures) returns ArgumentRecordKinds
 		return Self{project: project, signatures: signatures, writability: RecordKindWritability.of(signatures)}
 	end 'over'
 
-	module function isAnImmutableAggregate(func IrFunction, value ValueId) returns bool
+	function isAnImmutableAggregate(func IrFunction, value ValueId) returns bool
 		return self.writability.namesAnImmutableAggregate(valueTagOf(func, value: value), nameId: self.nameIdOf(func, value: value), from: self.project.typeNames)
 	end 'isAnImmutableAggregate'
 
-	module function parameterIsAnImmutableAggregate(func IrFunction, position ParamCount) returns bool
+	function parameterIsAnImmutableAggregate(func IrFunction, position ParamCount) returns bool
 		let paramType = try func.maxonParamTypes.get(position) otherwise panic("ArgumentRecordKinds.parameterIsAnImmutableAggregate: maxonParamTypes.get OOB at {position} — a compared position names a parameter the function declares")
 
 		return self.writability.namesAnImmutableAggregate(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType), from: self.project.typeNames)
 	end 'parameterIsAnImmutableAggregate'
 
-	module function holdsRecordsWithin(func IrFunction, value ValueId) returns bool
+	function holdsRecordsWithin(func IrFunction, value ValueId) returns bool
 		return not self.recordKindsWithin(func, value: value).holdsNoWritableRecord(self.writability)
 	end 'holdsRecordsWithin'
 

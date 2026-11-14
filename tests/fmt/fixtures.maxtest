@@ -104,8 +104,8 @@ let SuccessExitCode = 0
 // Which of a case's two runs a message is about. A tree comparison happens twice and the two failures
 // mean different things: the first says `fmt` wrote the wrong bytes, the second says a re-run touched
 // a tree it had already finished with.
-export let FirstRunLabel = "the first run"
-export let SecondRunLabel = "the second run"
+let FirstRunLabel = "the first run"
+let SecondRunLabel = "the second run"
 
 // What each of a case's three required pins holds, said in the words a reader would need in order to
 // mint a missing one.
@@ -120,7 +120,7 @@ typealias RunExitCode = int(i64.min to i64.max)
 // A file count as the summary line states it. FULL WIDTH deliberately: it is parsed out of text, so
 // the value is whatever the report said, and narrowing it here would turn a wrong report into a range
 // trap instead of the assertion failure a reader can act on.
-export typealias FileTally = int(i64.min to i64.max)
+typealias FileTally = int(i64.min to i64.max)
 
 // The relative paths one tree holds, asked as a membership question rather than read as a list.
 typealias RelativePathSet = Set with String
@@ -639,7 +639,7 @@ function treeReport(missing StringArray, different StringArray, unexpected Strin
 end 'treeReport'
 
 // One heading and its paths, or nothing at all when there are none.
-export function listedUnder(paths StringArray, heading String) returns String
+function listedUnder(paths StringArray, heading String) returns String
 	if paths.isEmpty() 'nothingToSay'
 		return ""
 	end 'nothingToSay'
@@ -1147,7 +1147,7 @@ function stagedCensusNameFor(origin String) returns String
 	return origin.replace(PortablePathSeparator, with: StagedNameSeparator)
 end 'stagedCensusNameFor'
 
-export function spawnFmtOverStagedTree(stagingDirName String, what String) returns CollectedOutput
+function spawnFmtOverStagedTree(stagingDirName String, what String) returns CollectedOutput
 	let arguments = StringArray.create(0)
 	arguments.push(TestedCommandName)
 	arguments.push(StagedTreeArgument)
@@ -1156,13 +1156,13 @@ export function spawnFmtOverStagedTree(stagingDirName String, what String) retur
 end 'spawnFmtOverStagedTree'
 
 // Asked before anything the run left is compared, for the reason its message gives.
-export function requireFmtRunSucceeded(run CollectedOutput, runLabel String, over String) throws TestFailure
+function requireFmtRunSucceeded(run CollectedOutput, runLabel String, over String) throws TestFailure
 	let observed = run.exitCode()
 	let expected = SuccessExitCode
 	try Expect.equal(observed, expected: expected, message: "`{TestedCommandName}` did not succeed on {runLabel} over {over}. A run that refused wrote nothing, so every property asked of what it left would hold and the failure would read as a pass. It wrote to stderr: {run.stderr}")
 end 'requireFmtRunSucceeded'
 
-export function requireSecondRunFoundNothingToDo(run CollectedOutput, stagedCount FileTally, over String) throws TestFailure
+function requireSecondRunFoundNothingToDo(run CollectedOutput, stagedCount FileTally, over String) throws TestFailure
 	let observedStdout = withoutCarriageReturns(run.stdout)
 	let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: stagedCount)}{LineFeed}"
 	try Expect.equal(observedStdout, expected: expectedStdout, message: "a second `{TestedCommandName}` over the tree the first one left in {over} did not report that it had nothing to do. Formatting a formatted file must be a fixed point; anything else means the tool moves a source a little further every time it is run over it.")

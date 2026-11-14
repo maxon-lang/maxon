@@ -12,30 +12,30 @@ let tlsMaxHandshakeBytes = 65536
 let tlsMaxCertificateMessageBytes = 262144
 let tlsMaxUselessRecords = 16
 
-module enum TlsAlertLevel
+enum TlsAlertLevel
 	warning = 1
 	fatal = 2
 end 'TlsAlertLevel'
 
-module enum TlsInboundVersion
+enum TlsInboundVersion
 	undecided
 	tls13
 	tls12
 end 'TlsInboundVersion'
 
-module interface TlsRecordCipher
+interface TlsRecordCipher
 	function seal(mutable self, contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
 	function open(mutable self, record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 end 'TlsRecordCipher'
 
-module type TlsPlaintextCipher implements TlsRecordCipher
+type TlsPlaintextCipher implements TlsRecordCipher
 	var nextVersion as TlsRecordVersion
 
-	module static function create(firstVersion TlsRecordVersion) returns TlsPlaintextCipher
+	static function create(firstVersion TlsRecordVersion) returns TlsPlaintextCipher
 		return Self{nextVersion: firstVersion}
 	end 'create'
 
-	module function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+	function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
 		if plaintext.count() > tlsMaxPlaintextBytes 'overflow'
 			throw TlsRecordError.recordOverflow
 		end 'overflow'
@@ -47,15 +47,15 @@ module type TlsPlaintextCipher implements TlsRecordCipher
 		return record
 	end 'seal'
 
-	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+	function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 		return try tlsOpenPlaintext(record)
 	end 'open'
 end 'TlsPlaintextCipher'
 
-module type TlsTls13Cipher implements TlsRecordCipher
+type TlsTls13Cipher implements TlsRecordCipher
 	var protection as Tls13RecordProtection
 
-	module static function create(suite Tls13CipherSuite, keys Tls13TrafficKeys) returns TlsTls13Cipher throws TlsHandshakeError
+	static function create(suite Tls13CipherSuite, keys Tls13TrafficKeys) returns TlsTls13Cipher throws TlsHandshakeError
 		let protection = try Tls13RecordProtection.create(suite, key: keys.key, iv: keys.iv) otherwise (failure) 'refused'
 			throw tlsRecordFailure(failure)
 		end 'refused'
@@ -63,19 +63,19 @@ module type TlsTls13Cipher implements TlsRecordCipher
 		return Self{protection: protection}
 	end 'create'
 
-	module function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+	function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
 		return try protection.seal(contentType, plaintext: plaintext)
 	end 'seal'
 
-	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+	function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 		return try tlsOpenProtected(protection, record: record)
 	end 'open'
 end 'TlsTls13Cipher'
 
-module type TlsTls12Cipher implements TlsRecordCipher
+type TlsTls12Cipher implements TlsRecordCipher
 	var protection as Tls12RecordProtection
 
-	module static function create(suite Tls12CipherSuite, key ByteArray, iv ByteArray) returns TlsTls12Cipher throws TlsHandshakeError
+	static function create(suite Tls12CipherSuite, key ByteArray, iv ByteArray) returns TlsTls12Cipher throws TlsHandshakeError
 		let protection = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise (failure) 'refused'
 			throw tlsRecordFailure(failure)
 		end 'refused'
@@ -83,11 +83,11 @@ module type TlsTls12Cipher implements TlsRecordCipher
 		return Self{protection: protection}
 	end 'create'
 
-	module function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
+	function seal(contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
 		return try protection.seal(contentType, plaintext: plaintext)
 	end 'seal'
 
-	module function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
+	function open(record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 		return try tlsOpenProtected(protection, record: record)
 	end 'open'
 end 'TlsTls12Cipher'
@@ -122,28 +122,28 @@ function tlsOpenPlaintext(record ByteArray) returns TlsOpenedRecord throws TlsRe
 	return TlsOpenedRecord.create(contentType, plaintext: tlsRecordPart(record, start: tlsRecordHeaderBytes, endIndex: record.count()))
 end 'tlsOpenPlaintext'
 
-module type TlsRecordWriter
+type TlsRecordWriter
 	var cipher as TlsRecordCipher
 	var records as ByteArrays
 	var changeCipherSpecWritten as bool
 
-	module static function create(firstVersion TlsRecordVersion) returns TlsRecordWriter
+	static function create(firstVersion TlsRecordVersion) returns TlsRecordWriter
 		return Self{cipher: TlsPlaintextCipher.create(firstVersion), records: ByteArrays.create(0), changeCipherSpecWritten: false}
 	end 'create'
 
-	module function install(next TlsRecordCipher)
+	function install(next TlsRecordCipher)
 		cipher = next
 	end 'install'
 
-	module function writeHandshake(messages ByteArray) throws TlsHandshakeError
+	function writeHandshake(messages ByteArray) throws TlsHandshakeError
 		try writeFragments(TlsContentType.handshake, data: messages)
 	end 'writeHandshake'
 
-	module function writeApplicationData(data ByteArray) throws TlsHandshakeError
+	function writeApplicationData(data ByteArray) throws TlsHandshakeError
 		try writeFragments(TlsContentType.applicationData, data: data)
 	end 'writeApplicationData'
 
-	module function writeAlert(level TlsAlertLevel, alert TlsAlert) throws TlsHandshakeError
+	function writeAlert(level TlsAlertLevel, alert TlsAlert) throws TlsHandshakeError
 		let body = ByteArray.create(0)
 		body.push(level.rawValue as Byte)
 		body.push(alert.rawValue as Byte)
@@ -151,7 +151,7 @@ module type TlsRecordWriter
 		try writeFragments(TlsContentType.alert, data: body)
 	end 'writeAlert'
 
-	module function writeChangeCipherSpecOnce()
+	function writeChangeCipherSpecOnce()
 		if changeCipherSpecWritten 'written'
 			return
 		end 'written'
@@ -162,7 +162,7 @@ module type TlsRecordWriter
 		changeCipherSpecWritten = true
 	end 'writeChangeCipherSpecOnce'
 
-	module function takeRecords() returns ByteArrays
+	function takeRecords() returns ByteArrays
 		let taken = records.clone()
 		records.clear()
 
@@ -193,37 +193,37 @@ module type TlsRecordWriter
 	end 'writeFragments'
 end 'TlsRecordWriter'
 
-module type TlsRecordReader
+type TlsRecordReader
 	var cipher as TlsRecordCipher
 
-	module static function create() returns TlsRecordReader
+	static function create() returns TlsRecordReader
 		return Self{cipher: TlsPlaintextCipher.create(tlsRecordVersion)}
 	end 'create'
 
-	module function install(next TlsRecordCipher)
+	function install(next TlsRecordCipher)
 		cipher = next
 	end 'install'
 
-	module function read(record ByteArray) returns TlsOpenedRecord throws TlsHandshakeError
+	function read(record ByteArray) returns TlsOpenedRecord throws TlsHandshakeError
 		return try cipher.open(record) otherwise (failure) 'refused'
 			throw tlsRecordFailure(failure)
 		end 'refused'
 	end 'read'
 end 'TlsRecordReader'
 
-module union TlsInboundEvent
+union TlsInboundEvent
 	handshakeData
 	applicationData(data ByteArray)
 	closeNotify
 	ignored
 end 'TlsInboundEvent'
 
-module union TlsHandshakeSlot
+union TlsHandshakeSlot
 	complete(message ByteArray)
 	incomplete
 end 'TlsHandshakeSlot'
 
-module union TlsStagedCipher
+union TlsStagedCipher
 	none
 	staged(cipher TlsTls12Cipher)
 end 'TlsStagedCipher'
@@ -239,20 +239,20 @@ public type TlsRecordInput
 	var consumed as Count
 	var uselessRecords as Count
 	var stagedCipher as TlsStagedCipher
-	module var version as TlsInboundVersion
-	module var established as bool
-	module var changeCipherSpecAllowed as bool
+	var version as TlsInboundVersion
+	var established as bool
+	var changeCipherSpecAllowed as bool
 	public var receivedAlert as TlsReceivedAlert
 
-	module static function create() returns TlsRecordInput
+	static function create() returns TlsRecordInput
 		return Self{reader: TlsRecordReader.create(), buffer: ByteArray.create(0), consumed: 0, uselessRecords: 0, stagedCipher: TlsStagedCipher.none, version: TlsInboundVersion.undecided, established: false, changeCipherSpecAllowed: false, receivedAlert: TlsReceivedAlert.none}
 	end 'create'
 
-	module function install(next TlsRecordCipher)
+	function install(next TlsRecordCipher)
 		reader.install(next)
 	end 'install'
 
-	module function expectChangeCipherSpec(next TlsTls12Cipher) throws TlsHandshakeError
+	function expectChangeCipherSpec(next TlsTls12Cipher) throws TlsHandshakeError
 		try requireKeyBoundary()
 
 		stagedCipher = TlsStagedCipher.staged(next)
@@ -266,7 +266,7 @@ public type TlsRecordInput
 		end 'staged'
 	end 'awaitsStagedCipher'
 
-	module function accept(record ByteArray) returns TlsInboundEvent throws TlsHandshakeError
+	function accept(record ByteArray) returns TlsInboundEvent throws TlsHandshakeError
 		let opened = try reader.read(record)
 
 		return match opened.contentType 'contentType'
@@ -295,7 +295,7 @@ public type TlsRecordInput
 		return tlsMaxHandshakeBytes
 	end 'maxMessageBytes'
 
-	module function nextMessage() returns TlsHandshakeSlot throws TlsHandshakeError
+	function nextMessage() returns TlsHandshakeSlot throws TlsHandshakeError
 		if pendingBytes() < tlsHandshakeHeaderBytes 'noHeader'
 			return TlsHandshakeSlot.incomplete
 		end 'noHeader'
@@ -330,7 +330,7 @@ public type TlsRecordInput
 		return TlsHandshakeSlot.complete(message)
 	end 'nextMessage'
 
-	module function noteUseless() throws TlsHandshakeError
+	function noteUseless() throws TlsHandshakeError
 		uselessRecords = uselessRecords + 1
 
 		if uselessRecords > tlsMaxUselessRecords 'tooMany'
@@ -344,7 +344,7 @@ public type TlsRecordInput
 		return TlsInboundEvent.ignored
 	end 'ignoredRecord'
 
-	module function requireKeyBoundary() throws TlsHandshakeError
+	function requireKeyBoundary() throws TlsHandshakeError
 		if pendingBytes() != 0 'spanning'
 			throw TlsHandshakeError.unexpectedMessage
 		end 'spanning'

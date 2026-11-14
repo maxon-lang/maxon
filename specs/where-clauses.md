@@ -1268,7 +1268,7 @@ a file can rescue it. It resolves because the interface index is built from EVER
 before ANY file is parsed.
 ```maxon
 // --- file: a.maxon
-export typealias Code = int(0 to u32.max)
+typealias Code = int(0 to u32.max)
 typealias Coord = int(0 to 1000)
 
 type Point implements Digest
@@ -1304,7 +1304,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: z.maxon
-export interface Digest
+interface Digest
 	function digest() returns Code
 end 'Digest'
 ```

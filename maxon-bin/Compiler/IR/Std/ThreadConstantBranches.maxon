@@ -58,7 +58,7 @@ typealias ThreadedSiteCount = int(0 to u64.max)
 
 // Why the rule left a SHAPED block alone. Counted per reason into the pass summary, so a reader can
 // tell what widening the rule would buy before writing the widening.
-module enum ThreadRefusal
+enum ThreadRefusal
 	unreachable
 	conditionReadElsewhere
 	testedArgReadElsewhere
@@ -73,7 +73,7 @@ end 'ThreadRefusal'
 // What every function's scan refills, created ONCE for the module: the candidate list (`Array.clear`
 // keeps its capacity), the two classification records the scan reads ops into, and the refusal tally.
 // Per function these would be three allocations paid by the many functions that hold no candidate.
-module type ThreadScratch
+type ThreadScratch
 	export var candidates as ThreadCandidateArray
 	export var arith as StdArithOperands
 	export var branch as StdBranchOperands
@@ -82,21 +82,21 @@ module type ThreadScratch
 	// (`StdPassPool`).
 	export var tally as StdPassTally
 
-	module static function create(tally StdPassTally) returns ThreadScratch
+	static function create(tally StdPassTally) returns ThreadScratch
 		return Self{candidates: ThreadCandidateArray.create(0), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), tally: tally}
 	end 'create'
 end 'ThreadScratch'
 
 // The pass's summary line, from the tally its runs summed into (`StdPassPool`): over the
 // functions that hold an op in the fan-out, and over the band's functions in the appended band.
-module function threadConstantBranchesSummary(tally StdPassTally, funcCount ElementIndex) returns String
+function threadConstantBranchesSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "threadConstantBranches: threaded {tally.threadedSites} site(s) across {funcCount} function(s); shaped blocks left alone: {tally.threadRefusals.summary(ThreadRefusal.allCaseNames)}"
 end 'threadConstantBranchesSummary'
 
 // One join block that has the SHAPE, and — once `admit` has run — whether the rule admits it and
 // which target it keeps. Positions are `func.blockRefs` positions, the key space `StdDominatorTree`
 // answers in.
-module type ThreadCandidate
+type ThreadCandidate
 	export var position as ElementIndex
 	export let blockId as BlockId
 	export let compareOpIdx as ElementIndex
@@ -125,11 +125,11 @@ module type ThreadCandidate
 	end 'create'
 end 'ThreadCandidate'
 
-module typealias ThreadCandidateArray = Array with ThreadCandidate
+typealias ThreadCandidateArray = Array with ThreadCandidate
 
 // Thread one function. Returns how many join blocks it rewrote.
 // Thread every admissible join block of one function, in place, counting the sites into the tally.
-module function threadConstantBranchesInFunc(module StdModule, func IrFunction, origins DerivedOrigins, scratch ThreadScratch)
+function threadConstantBranchesInFunc(module StdModule, func IrFunction, origins DerivedOrigins, scratch ThreadScratch)
 	collectThreadCandidates(module, func: func, scratch: scratch)
 
 	if scratch.candidates.count() == 0 'noCandidate'
@@ -516,7 +516,7 @@ end 'threadOne'
 
 // The args C's edge to `targetId` carries. A target that takes block args MUST have an edge (the
 // phi model records one edge per successor that carries phis); one that takes none has none.
-module function edgeArgsTo(join IrBlock, targetId BlockId, takesArgs bool) returns ValueIdArray
+function edgeArgsTo(join IrBlock, targetId BlockId, takesArgs bool) returns ValueIdArray
 	for edge in join.branchEdges 'eachEdge'
 		if edge.targetBlockId == targetId 'found'
 			return edge.argIds

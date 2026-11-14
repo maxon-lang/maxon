@@ -11,7 +11,7 @@ let NameTableMinimumSlots = 16 as TableCapacity
 let NameTableSlotsPerName = 2
 let NameTableLoadNumerator = 3
 let NameTableLoadDenominator = 4
-export let NameTableIdLimit = u32.max
+let NameTableIdLimit = u32.max
 let NameTableArenaByteLimit = u32.max
 let NameTableMinimumReservedNames = 1
 let NameTableMinimumReservedBytes = 1
@@ -39,7 +39,7 @@ type NameSpan
 	end 'create'
 end 'NameSpan'
 
-export type NameTable
+type NameTable
 	var bytes as ByteArray
 	var spans as NameSpanArray
 	var hashes as NameDigestArray
@@ -52,7 +52,7 @@ export type NameTable
 	var regrown as NameTableRegrowthCount
 	var rehashed as NameTableRegrowthCount
 
-	export static function create(nameHint NameId, byteHint NameByteCount) returns NameTable
+	static function create(nameHint NameId, byteHint NameByteCount) returns NameTable
 		let names = NameTableMinimumReservedNames if nameHint < NameTableMinimumReservedNames else nameHint
 		let arena = NameTableMinimumReservedBytes if byteHint < NameTableMinimumReservedBytes else byteHint
 		let table = Self{bytes: ByteArray.create(0), spans: NameSpanArray.create(0), hashes: NameDigestArray.create(0), slotIds: NameIdArray.create(0), slotStates: SlotStateArray.create(0), views: NameViewColumn.create(0), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
@@ -109,7 +109,7 @@ export type NameTable
 
 	// The fold, without materialising a view of the source's name: the probe and the append both read the
 	// source's arena directly.
-	export function internFrom(source NameTable, id NameId) returns NameId
+	function internFrom(source NameTable, id NameId) returns NameId
 		let span = source.spanAt(id)
 		return self.internWindow(source.bytes, start: span.offset, size: span.size, digest: source.hashAt(id))
 	end 'internFrom'

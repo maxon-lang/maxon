@@ -13,15 +13,15 @@ export function tierStagingErrorText(error TierStagingError) returns String
 	end 'e'
 end 'tierStagingErrorText'
 
-module type StagedTierDirs
-	module let stdlib as FilePath
-	module let runtime as FilePath
+type StagedTierDirs
+	let stdlib as FilePath
+	let runtime as FilePath
 
-	module static function create(stdlib FilePath, runtime FilePath) returns StagedTierDirs
+	static function create(stdlib FilePath, runtime FilePath) returns StagedTierDirs
 		return Self{stdlib: stdlib, runtime: runtime}
 	end 'create'
 
-	module static function beneath(tierRoot FilePath) returns StagedTierDirs throws TierStagingError
+	static function beneath(tierRoot FilePath) returns StagedTierDirs throws TierStagingError
 		let stagedStdlib = tierRoot.join("{StdlibDirName}")
 		let stagedRuntime = try runtimeDirBeside(stagedStdlib) otherwise throw TierStagingError.refused("could not derive the staged runtime tier beside {stagedStdlib.toString()}")
 
@@ -29,7 +29,7 @@ module type StagedTierDirs
 	end 'beneath'
 end 'StagedTierDirs'
 
-module function copiedTiers(tierRoot FilePath, sourceStdlib FilePath, sourceRuntime FilePath, written FilePathArray) returns StagedTierDirs throws TierStagingError
+function copiedTiers(tierRoot FilePath, sourceStdlib FilePath, sourceRuntime FilePath, written FilePathArray) returns StagedTierDirs throws TierStagingError
 	if not Directory.create(tierRoot) 'noRoot'
 		throw TierStagingError.refused("could not create source-tier directory {tierRoot.toString()}")
 	end 'noRoot'

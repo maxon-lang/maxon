@@ -53,14 +53,14 @@ let FrontEndPoolBaselineSlotName = "FrontEndPool.baseline"
 let FrontEndPoolHandoffsSlotName = "FrontEndPool.handoffs"
 let FrontEndPoolRetireProbeSlotName = "FrontEndPool.retireProbe"
 
-module type GenerationBases
+type GenerationBases
 	var next as DrainGeneration
 
-	module static function create() returns GenerationBases
+	static function create() returns GenerationBases
 		return Self{next: 0}
 	end 'create'
 
-	module function take() returns DrainGeneration
+	function take() returns DrainGeneration
 		let base = self.next
 		self.next = self.next + GenerationsPerRun
 
@@ -68,9 +68,9 @@ module type GenerationBases
 	end 'take'
 end 'GenerationBases'
 
-module typealias FrontEndDrainArray = Array with FrontEndDrain
-module typealias PoolDispatchSlot = Slot with PoolDispatch
-module typealias PhaseProbeSlot = Slot with PhaseProbe
+typealias FrontEndDrainArray = Array with FrontEndDrain
+typealias PoolDispatchSlot = Slot with PoolDispatch
+typealias PhaseProbeSlot = Slot with PhaseProbe
 
 typealias FrontEndWorkerHandleArray = Array with FrontEndWorker.handle
 
@@ -79,10 +79,10 @@ export typealias FrontEndRetirees = WorkerRetirees with FrontEndWorker.handle
 typealias FrontEndWorkerStateSlot = Slot with FrontEndWorkerState
 
 export typealias FrontEndWorkSlot = Slot with FrontEndWork
-module typealias FrontEndOutcomeArray = Array with FrontEndOutcome
-module typealias ParseQueryArray = Array with ParseQuery
+typealias FrontEndOutcomeArray = Array with FrontEndOutcome
+typealias ParseQueryArray = Array with ParseQuery
 
-module typealias IndexSlot = Slot with ProgramSignatures
+typealias IndexSlot = Slot with ProgramSignatures
 typealias WorkerHandoffSlot = Slot with WorkerHandoff
 typealias FrontEndBaselineSlot = Slot with FrontEndBaseline
 typealias LiveReachSlot = Slot with immutable LiveReach
@@ -152,7 +152,7 @@ export union LexOutcome
 	directiveFailed(tokens TokenArray, error DirectiveError)
 	lexFailed(error LexerError)
 
-	module function rawStream() returns TokenArray throws LexerError
+	function rawStream() returns TokenArray throws LexerError
 		match self 'outcome'
 			lexed(tokens, _) then return tokens
 			directiveFailed(tokens, _) then return tokens
@@ -162,7 +162,7 @@ export union LexOutcome
 
 	// `landed` is the raw stream the token query kept, which for a file the lexer refused is the empty stream —
 	// and an empty stream filters to itself.
-	module function resolvedStream(landed TokenArray) returns TokenArray throws DirectiveError
+	function resolvedStream(landed TokenArray) returns TokenArray throws DirectiveError
 		match self 'outcome'
 			lexed(_, active) then return active
 			directiveFailed(_, error) then throw error
@@ -400,7 +400,7 @@ end 'FrontEndTools'
 // aborts that walk (`FrontEndPool.RuntimeSharesAnyGraph`).
 type FrontEndWorkerState
 	var tools as FrontEndTools
-	module let ownIndex as IndexSlot
+	let ownIndex as IndexSlot
 	export var costs as PoolPhaseCosts
 
 	// Reopened per bracket (`PhaseProbe.reopenCounters`): a probe minted per file would be an allocation inside
@@ -429,7 +429,7 @@ type FrontEndWorkerState
 end 'FrontEndWorkerState'
 
 // What a drain hands out: the bytes of every file it lexes, or the parse of every file whose memo missed.
-module union FrontEndDrainInput
+union FrontEndDrainInput
 	lexing(project Project)
 	parsing(queries ParseQueryArray)
 
@@ -457,29 +457,29 @@ type WorkerHandoff
 	end 'of'
 end 'WorkerHandoff'
 
-module type FrontEndDrain
-	module let input as FrontEndDrainInput
-	module let files as PoolJobArray
-	module let sizes as PoolJobSizeArray
-	module let outcomes as FrontEndOutcomeArray
-	module let slots as LandingSlots
-	module let generation as DrainGeneration
-	module let dispatches as PoolDispatchSlot
-	module let probes as PhaseProbeSlot
-	module var worked as bool
+type FrontEndDrain
+	let input as FrontEndDrainInput
+	let files as PoolJobArray
+	let sizes as PoolJobSizeArray
+	let outcomes as FrontEndOutcomeArray
+	let slots as LandingSlots
+	let generation as DrainGeneration
+	let dispatches as PoolDispatchSlot
+	let probes as PhaseProbeSlot
+	var worked as bool
 
-	module static function create(input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, slots LandingSlots, generation DrainGeneration) returns FrontEndDrain
+	static function create(input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, slots LandingSlots, generation DrainGeneration) returns FrontEndDrain
 		return Self{input: input, files: files, sizes: sizes, outcomes: FrontEndOutcomeArray.create(0), slots: slots, generation: generation, dispatches: PoolDispatchSlot.create(FrontEndDrainDispatchesSlotName), probes: PhaseProbeSlot.create(FrontEndDrainProbesSlotName), worked: false}
 	end 'create'
 
-	module function resumedProbe() returns PhaseProbe
+	function resumedProbe() returns PhaseProbe
 		let probe = self.probes.held()
 		probe.resume()
 
 		return probe
 	end 'resumedProbe'
 
-	module function isFinished() returns bool
+	function isFinished() returns bool
 		if self.dispatches.isEmpty() 'ranInProcess'
 			return true
 		end 'ranInProcess'
@@ -490,7 +490,7 @@ end 'FrontEndDrain'
 
 // The driver, for one front end. The pool is sized by the most files one drain dispatched; `PoolSizing` owns
 // the rule.
-module type FrontEndPool
+type FrontEndPool
 	// ⚖ **WHETHER THIS BINARY'S OWN RUNTIME CAN MOVE A GRAPH THAT REACHES ONE RECORD TWICE**, which a lexed stream and
 	// a parse artifact both are. The compiler that builds this source binds it `true`
 	// (`ProgramSignatures.bindBuilderCapability`), because the runtime it emits can; a binary a seed built carries the
@@ -501,7 +501,7 @@ module type FrontEndPool
 	static let RuntimeSharesAnyGraph = false
 
 	// Qualified, so that no declaration outside this compiler answers it.
-	module static let RuntimeSharesAnyGraphDefine = "Compiler.FrontEndPool.RuntimeSharesAnyGraph"
+	static let RuntimeSharesAnyGraphDefine = "Compiler.FrontEndPool.RuntimeSharesAnyGraph"
 
 	var workers as FrontEndWorkerHandleArray
 	let inProcess as FrontEndWorkerStateSlot
@@ -537,11 +537,11 @@ module type FrontEndPool
 	var retiring as ElementIndex
 	let retireProbe as PhaseProbeSlot
 
-	module static function create(generationBase DrainGeneration) returns FrontEndPool
+	static function create(generationBase DrainGeneration) returns FrontEndPool
 		return Self{workers: FrontEndWorkerHandleArray.create(0), inProcess: FrontEndWorkerStateSlot.create(FrontEndPoolInProcessSlotName), mostFilesDispatched: 0, baseline: IndexSlot.create(FrontEndPoolBaselineSlotName), handoffs: WorkerHandoffSlot.create(FrontEndPoolHandoffsSlotName), adopted: BoolArray.create(0), adoptions: 0, overlayAllocations: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(0), spent: PoolPhaseCosts.create(FrontEndStage.allCases.count()), lexed: false, parsed: false, drains: FrontEndDrainArray.create(0), generationBase: generationBase, drainsBegun: 0, retiring: 0, retireProbe: PhaseProbeSlot.create(FrontEndPoolRetireProbeSlotName)}
 	end 'create'
 
-	module function beginRetire(project Project, receiver CompileReceiver.handle) returns bool
+	function beginRetire(project Project, receiver CompileReceiver.handle) returns bool
 		if self.workers.count() == 0 'noWorkerHoldsABaseline'
 			return false
 		end 'noWorkerHoldsABaseline'
@@ -565,7 +565,7 @@ module type FrontEndPool
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
 	end 'endRetirement'
 
-	module function retirementIsFinished() returns bool
+	function retirementIsFinished() returns bool
 		return self.retiring == 0
 	end 'retirementIsFinished'
 
@@ -612,7 +612,7 @@ module type FrontEndPool
 
 	// ⭐ **EVERY FILE WHOSE RESOLVED STREAM NO MEMO HOLDS, LEXED AND FILTERED ON THE WORKERS**, then landed through
 	// `queryActiveTokens` in source-path order — so the token queries the signature sweep asks next are all hits.
-	module function beginLex(project Project, receiver CompileReceiver.handle) returns bool throws CompileError
+	function beginLex(project Project, receiver CompileReceiver.handle) returns bool throws CompileError
 		let files = PoolJobArray.create(0)
 		let sizes = PoolJobSizeArray.create(0)
 
@@ -636,7 +636,7 @@ module type FrontEndPool
 		return inFlight
 	end 'beginLex'
 
-	module function finishLex(project Project) returns LexLandedArray throws CompileError
+	function finishLex(project Project) returns LexLandedArray throws CompileError
 		let landed = LexLandedArray.create(0)
 		let drain = try self.drains.pop() otherwise panic("FrontEndPool.finishLex: a lex was begun before it is finished")
 
@@ -666,7 +666,7 @@ module type FrontEndPool
 
 	// ⭐ **EVERY FILE'S PARSE, IN SOURCE-PATH ORDER** — the memoized ones from the memo, the rest parsed on the
 	// workers against `signatures`, which is at its settled baseline.
-	module function beginParse(project Project, signatures ProgramSignatures, receiver CompileReceiver.handle) returns bool throws CompileError
+	function beginParse(project Project, signatures ProgramSignatures, receiver CompileReceiver.handle) returns bool throws CompileError
 		let queries = ParseQueryArray.create(project.db.sourcePaths.count(), zeroed: false)
 		let files = PoolJobArray.create(0)
 		let sizes = PoolJobSizeArray.create(0)
@@ -696,7 +696,7 @@ module type FrontEndPool
 		return inFlight
 	end 'beginParse'
 
-	module function finishParse(project Project) returns FileParseArtifactArray
+	function finishParse(project Project) returns FileParseArtifactArray
 		let drain = try self.drains.pop() otherwise panic("FrontEndPool.finishParse: a parse was begun before it is finished")
 
 		let queries = match drain.input 'input'
@@ -742,7 +742,7 @@ module type FrontEndPool
 
 	// Fold every worker's costs into the stages' rows, report the pool once, and retire the workers to
 	// `project.retiredWorkers` (see `RetiredWorkers`).
-	module function close(project Project)
+	function close(project Project)
 		if self.workers.count() == 0 and self.inProcess.isEmpty() 'nothingRan'
 			return
 		end 'nothingRan'
@@ -935,7 +935,7 @@ module type FrontEndPool
 
 	// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 	// `PoolDispatch`'s, shared with the backend's two pools.
-	module function landAnswered(project Project, generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns bool throws CompileError
+	function landAnswered(project Project, generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns bool throws CompileError
 		if generation == RetiringGeneration 'aRetirementAck'
 			let ack = merge answered
 			_ = ack.answers.take()
@@ -963,7 +963,7 @@ module type FrontEndPool
 		return true
 	end 'landAnswered'
 
-	module function drainIsFinished() returns bool
+	function drainIsFinished() returns bool
 		let drain = try self.drains.get(0) otherwise return true
 
 		return drain.isFinished()
@@ -1039,19 +1039,19 @@ function parseInProcess(project Project, worker FrontEndWorkerState, query Parse
 	return outcome
 end 'parseInProcess'
 
-module type UnlexedSource
-	module let fileIndex as ElementIndex
-	module let path as FilePath
-	module let content as String
+type UnlexedSource
+	let fileIndex as ElementIndex
+	let path as FilePath
+	let content as String
 
-	module static function create(fileIndex ElementIndex, path FilePath, content String) returns UnlexedSource
+	static function create(fileIndex ElementIndex, path FilePath, content String) returns UnlexedSource
 		return Self{fileIndex: fileIndex, path: path, content: content}
 	end 'create'
 end 'UnlexedSource'
 
-module typealias UnlexedSourceArray = Array with UnlexedSource
+typealias UnlexedSourceArray = Array with UnlexedSource
 
-module function unlexedSourcesOf(project Project) returns UnlexedSourceArray throws CompileError
+function unlexedSourcesOf(project Project) returns UnlexedSourceArray throws CompileError
 	let buildKey = buildKeyOf(project)
 	let unlexed = UnlexedSourceArray.create(0)
 

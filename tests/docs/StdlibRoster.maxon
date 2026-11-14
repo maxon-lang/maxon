@@ -52,34 +52,34 @@ end 'PublicDeclaration'
 
 typealias PublicDeclarationArray = Array with PublicDeclaration
 
-module type ReferenceBlock
-	module let words as StringSet
-	module let ancestors as StringSet
-	module let heading as StringSet
+type ReferenceBlock
+	let words as StringSet
+	let ancestors as StringSet
+	let heading as StringSet
 
-	module static function create(words StringSet, ancestors StringSet, heading StringSet) returns ReferenceBlock
+	static function create(words StringSet, ancestors StringSet, heading StringSet) returns ReferenceBlock
 		return Self{words: words, ancestors: ancestors, heading: heading}
 	end 'create'
 end 'ReferenceBlock'
 
-module typealias ReferenceBlockArray = Array with ReferenceBlock
+typealias ReferenceBlockArray = Array with ReferenceBlock
 
-module type ReferenceIndex
-	module let documented as StringSet
-	module let blocks as ReferenceBlockArray
-	module let qualified as StringSet
+type ReferenceIndex
+	let documented as StringSet
+	let blocks as ReferenceBlockArray
+	let qualified as StringSet
 
-	module static function create(documented StringSet, blocks ReferenceBlockArray, qualified StringSet) returns ReferenceIndex
+	static function create(documented StringSet, blocks ReferenceBlockArray, qualified StringSet) returns ReferenceIndex
 		return Self{documented: documented, blocks: blocks, qualified: qualified}
 	end 'create'
 end 'ReferenceIndex'
 
-module type SourceAudit
-	module let declared as Count
-	module let missing as StringArray
-	module let report as String
+type SourceAudit
+	let declared as Count
+	let missing as StringArray
+	let report as String
 
-	module static function create(declared Count, missing StringArray, report String) returns SourceAudit
+	static function create(declared Count, missing StringArray, report String) returns SourceAudit
 		return Self{declared: declared, missing: missing, report: report}
 	end 'create'
 end 'SourceAudit'
@@ -157,7 +157,7 @@ function headingLevelOf(line String) returns HeadingLevel throws HeadingError
 	return marker.count() as HeadingLevel
 end 'headingLevelOf'
 
-module function referenceIndexOf(document String) returns ReferenceIndex
+function referenceIndexOf(document String) returns ReferenceIndex
 	let builder = ReferenceIndexBuilder.create()
 	var inFence = false
 
@@ -357,14 +357,14 @@ function headingNamesAnyOf(block ReferenceBlock, others StringArray) returns boo
 	return false
 end 'headingNamesAnyOf'
 
-module type DeclarationRoster
+type DeclarationRoster
 	var declarations as PublicDeclarationArray
 
-	module static function create() returns DeclarationRoster
+	static function create() returns DeclarationRoster
 		return Self{declarations: PublicDeclarationArray.create(0)}
 	end 'create'
 
-	module function add(source String, fileName String)
+	function add(source String, fileName String)
 		for declaration in publicDeclarationsIn(source, fileName: fileName) 'eachDeclaration'
 			self.declarations.push(declaration)
 		end 'eachDeclaration'
@@ -389,7 +389,7 @@ module type DeclarationRoster
 		return owners
 	end 'ownersByMember'
 
-	module function audit(reference ReferenceIndex) returns SourceAudit
+	function audit(reference ReferenceIndex) returns SourceAudit
 		let owners = self.ownersByMember()
 
 		var declared = 0 as Count

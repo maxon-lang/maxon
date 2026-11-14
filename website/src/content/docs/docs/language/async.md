@@ -435,8 +435,8 @@ end 'main'
   **E3136**: a handle reaches exactly the type's `export` instance methods.
 - **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
   widening it past the type, so the types its signature names need only the service type's visibility
-  ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration)): a file-private service's messages may name
-  file-private types.
+  ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration)): an unexported service's messages may name
+  unexported types.
 - **Shutdown.** `h.shutdown()` closes the mailbox: the messages already queued still run, and then the
   service stops. Every later send fails with `serviceStopped`. It always succeeds, on a full mailbox too.
   Dropping the last handle does the same. A
@@ -446,7 +446,7 @@ end 'main'
   **E3134**, in a `default` as anywhere else. The type may be [qualified](/docs/language/namespaces/#qualified-names), at any length:
   `spawn sub.Calc.create()` starts a type declared in `sub/`, `spawn outer.inner.Calc.create()` one two
   directories down, and `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that
-  declares its own. A factory the spawning file cannot see is **E3008** (**E3088** for a `module` one).
+  declares its own. A factory the spawning file cannot see is **E3008**.
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`. A `spawn` on the bare generic name reads its type
   arguments off the factory's arguments; a factory that fixes no type is **E2015**. A factory argument held
@@ -673,7 +673,7 @@ end 'main'
   ([E3177](/docs/cli/error-codes/#e3177--interfacehandleimplementersdisagree)); send through each service's own handle
   otherwise.
 - A requirement sent through `I.handle` is a message of every service implementing `I`, so each declares it
-  as an `export` instance method. Sending one that an implementer declares another way (a private method,
+  as an `export` instance method. Sending one that an implementer declares another way (an unmarked method,
   say), or that no implementer declares, is [E3136](/docs/cli/error-codes/#e3136--semanticservicenotamessage).
 - A handler that awaits a reply through an `I.handle` waits, so it is
   [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait) like any other waiting message.

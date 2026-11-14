@@ -50,8 +50,8 @@ let rsaTableEntries = 16
 let rsaNewtonSteps = 5
 let rsaMontgomeryHeadroomLimbs = 2
 let rsaNewtonTwo = 2
-module let rsaMinimumModulusBits = 2048
-module let rsaMaximumModulusBits = 4096
+let rsaMinimumModulusBits = 2048
+let rsaMaximumModulusBits = 4096
 let rsaPssTrailer = 0xBC
 let rsaPssSeparator = 0x01
 let rsaPssZeroPrefixBytes = 8
@@ -62,7 +62,7 @@ let rsaPkcs1FramingBytes = 3
 let rsaMgfCounterBytes = 4
 let rsaBlindingExtraBytes = 8
 
-module let rsaEncryptionOid = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
+let rsaEncryptionOid = ByteArray from [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
 let rsaVersionZero = ByteArray from [0x00]
 let rsaSha256DigestInfo = ByteArray from [0x30, 0x31, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20]
 let rsaSha384DigestInfo = ByteArray from [0x30, 0x41, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30]
@@ -281,7 +281,7 @@ function rsaMultiply(left RsaLimbs, right RsaLimbs) returns RsaLimbs
 	return product
 end 'rsaMultiply'
 
-module function rsaBitLength(bytes ByteArray) returns Count
+function rsaBitLength(bytes ByteArray) returns Count
 	let first = try bytes.get(0) otherwise panic("an INTEGER has at least one octet")
 	var bits = (bytes.count() - 1) * rsaBitsPerByte
 	var top = first
@@ -695,7 +695,7 @@ end 'rsaPssMatches'
 type RsaPublicKey
 	var modulus as RsaLimbs
 	var exponent as RsaLimbs
-	module let modulusBits as Count
+	let modulusBits as Count
 	var montgomery as RsaMontgomery
 
 	static function create(modulus ByteArray, exponent ByteArray) returns RsaPublicKey
@@ -768,7 +768,7 @@ type RsaPublicKey
 	end 'blinding'
 end 'RsaPublicKey'
 
-module type RsaPrivateKey
+type RsaPrivateKey
 	var publicKey as RsaPublicKey
 	var primeOne as RsaLimbs
 	var primeTwo as RsaLimbs
@@ -778,7 +778,7 @@ module type RsaPrivateKey
 	var primeOneMontgomery as RsaMontgomery
 	var primeTwoMontgomery as RsaMontgomery
 
-	module static function parse(der ByteArray) returns RsaPrivateKey throws RsaError
+	static function parse(der ByteArray) returns RsaPrivateKey throws RsaError
 		let (version, algorithm, key) = try rsaPrivateKeyParts(der) otherwise throw RsaError.invalidPrivateKey
 
 		if not constantTimeEqual(version, b: rsaVersionZero) or not constantTimeEqual(algorithm, b: rsaEncryptionOid) 'notRsa'
@@ -800,17 +800,17 @@ module type RsaPrivateKey
 		return RsaPrivateKey{publicKey: RsaPublicKey.create(modulus, exponent: exponent), primeOne: primeOne.clone(), primeTwo: primeTwo.clone(), exponentOne: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent1), count: primeOneWidth), exponentTwo: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.exponent2), count: primeTwo.count()), coefficient: rsaResized(rsaFieldLimbs(integers, field: RsaPrivateKeyField.coefficient), count: primeOneWidth), primeOneMontgomery: RsaMontgomery.create(primeOne), primeTwoMontgomery: RsaMontgomery.create(primeTwo)}
 	end 'parse'
 
-	module function pairs(certificateKey ByteArray) returns bool
+	function pairs(certificateKey ByteArray) returns bool
 		let certificate = try RsaPublicKey.parse(certificateKey) otherwise return false
 
 		return publicKey.isSame(certificate)
 	end 'pairs'
 
-	module function signPkcs1v15(hash HashAlgorithm, message ByteArray) returns ByteArray throws RsaError
+	function signPkcs1v15(hash HashAlgorithm, message ByteArray) returns ByteArray throws RsaError
 		return try sign(rsaPkcs1Block(hash, message: message, length: modulusBytes()))
 	end 'signPkcs1v15'
 
-	module function signPss(hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray throws RsaError
+	function signPss(hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray throws RsaError
 		if salt.count() != hash.digestBytes() 'wrongSalt'
 			throw RsaError.invalidSaltLength
 		end 'wrongSalt'

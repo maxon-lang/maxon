@@ -240,7 +240,7 @@ error E2004: <fragment>:3:11: Cannot operate on String and int
 To test cross-file behavior (e.g., export visibility, multi-file builds), use `// --- file: name.maxon` markers inside a single `maxon` code block:
 
 ```maxon
-// --- file: helper.maxon
+// --- file: lib/helper.maxon
 export function helper() returns ExitCode
 		return 42
 end 'helper'
@@ -257,7 +257,7 @@ end 'main'
 When `// --- file:` markers are present, each section is written to a separate temporary file during compilation. The files are compiled together as a multi-file project. Error messages in `maxoncstderr` blocks name the location as `<fragment>:line:column`, whichever file it is in:
 
 ```maxon
-// --- file: helper.maxon
+// --- file: lib/helper.maxon
 function privateHelper() returns ExitCode
 		return 99
 end 'privateHelper'
@@ -268,7 +268,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:2:10: function 'privateHelper' is not exported
+error E3008: <fragment>:9:10: function 'privateHelper' is not exported
 ```
 
 When no `// --- file:` markers are present, behavior is unchanged (single-file test).
@@ -332,7 +332,7 @@ line:
 | `<!-- preempt: off -->` | Run the program with `MAXON_PREEMPT=off` in its environment, so the monitor takes no processor from the thread holding it; `off` is the only value |
 | `<!-- stdin: hold -->` / `<!-- stdin: after "<line>" -->` | Give the program a stdin that blocks. `hold` is a pipe nobody ever writes to, so a read blocks for the program's whole life; `after "<line>"` writes one line (`hello`) and closes the pipe once the program's stdout shows `<line>`, so the read blocks and then completes. The line is one non-empty double-quoted run, matched against whole stdout lines exactly. The feed waits on the program's output alone, so the order "the program printed `<line>`, then the read returned" holds by construction; a program that never prints `<line>` keeps a stdin that blocks as `hold`'s does. Without the marker stdin is the null device and every read answers at once with EOF |
 | `<!-- runs: alone -->` | Run the case's program with no other case's program running beside it: the harness runs a spec's `alone` cases as a job of their own, after every other job has finished, and starts nothing else while it runs. It is for a program whose peak memory is set by a runtime limit, such as a green thread's stack grown to its 1 GiB maximum; `alone` is the only value |
-| `<!-- tier: stdlib -->`, `<!-- tier: stdlib/<directory> -->` | Compile the case as library-tier source: its files are staged inside a private copy of `stdlib/`, so the case may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`, `__ManagedMemory`, `cstring`; E3185 elsewhere) and sees the `module` declarations of `stdlib/` that a program outside it cannot (E3088). A `module` declaration is visible in its declaring directory's subtree, so `stdlib` stages the case at the `stdlib/` root, where it sees the root files' `module` declarations, and `stdlib/<directory>` (for example `stdlib/helpers/tls`) stages it in that directory, where it sees that directory's as well as the root files'; a directory that does not exist is refused. It is for a case whose subject is that surface; a case that only uses one reaches it through the safe standard-library API. The case runs in a program of its own. |
+| `<!-- tier: stdlib -->`, `<!-- tier: stdlib/<directory> -->` | Compile the case as library-tier source: its files are staged inside a private copy of `stdlib/`, so the case may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`, `__ManagedMemory`, `cstring`; E3185 elsewhere) and sees the unmarked declarations of `stdlib/` that a program outside it cannot (E3008). An unmarked declaration is visible in its declaring directory's subtree, so `stdlib` stages the case at the `stdlib/` root, where it sees the root files' unmarked declarations, and `stdlib/<directory>` (for example `stdlib/helpers/tls`) stages it in that directory, where it sees that directory's as well as the root files'; a directory that does not exist is refused. It is for a case whose subject is that surface; a case that only uses one reaches it through the safe standard-library API. The case runs in a program of its own. |
 | `<!-- process: own -->` | Keep the case out of every batch program: it compiles and runs in a program of its own. It is for a case that observes state the whole process shares, which no check of its source can see (a named resource an earlier case still holds, a per-process counter). `runs: alone` also changes when the case is scheduled; `own` changes only which process it runs in, and is the only value |
 
 A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode `, one each of the portable
@@ -547,9 +547,9 @@ declaring a nominal type and another case that names that word (a `typealias` of
 of that name), and a case declaring a `typealias` and another that names the word without declaring it. So do
 a case declaring a type that implements `Iterable`, `Iterator` or any other library interface with extension methods and a
 case that names one of those methods: the extension's body is expanded over every conformer in the program, and it
-cannot name a cursor type that is file-private (E3008). The declared and mentioned names come from the compiler's own front end, one pass per case
+cannot name a cursor type another directory leaves unexported (E3008). The declared and mentioned names come from the compiler's own front end, one pass per case
 in the worker's own compiler ([Workers start warm](#workers-start-warm)). Each batched case
-sits in its own directory, so its file-private names stay its own, with its `main` renamed to an exported
+sits in its own directory, so its unmarked names stay its own, with its `main` renamed to an exported
 `__spec_case_<n>`, and a generated entry runs the cases selected by `--select=`
 between begin and end markers carrying each case's exit code. After each case's `main` returns and before
 its end marker, the entry calls `Scheduler.quiesce()`, which waits for every service and coroutine the
@@ -588,8 +588,8 @@ These cases always compile and run on their own: a compile-error case; a case pi
 marker; a `stdin`, `procs`, `preempt`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
 `AsyncTrace` or `DebugInfo` marker; a stdlib-overlay or runtime-file section; a multi-file case;
 `__file__` or `__line__` in the source; a `TargetIr`, `RequiredRuntime`, `RequiredData` or
-`RequiredRdata` block; a top-level `export` or `module` declaration, which a multi-file program refuses
-when no other file uses it (E3092, E3094); and a `main` that is not exactly
+`RequiredRdata` block; a top-level `export` declaration, which a multi-file program refuses
+when no file outside its directory uses it (E3092); and a `main` that is not exactly
 `function main() returns ExitCode` or `function main()` with one `end 'main'`. So does a case whose source
 names one of these words anywhere, a `typealias` included: `CommandLine` or `executablePath`, which read
 the batch program's own argv and path; a `HeapStats` call or one of the `Scheduler` and `Clock` calls that read process-wide runtime state (`Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.quiesce()`, `Scheduler.currentMachine()`, `Clock.threadCpuTicks()`), which earlier cases move;

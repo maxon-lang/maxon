@@ -1,5 +1,5 @@
 // Every sentence in this file is pinned byte-for-byte by tests/lsp/hover-capability-*.maxtest.
-module function appendParameterAndCapability(prose StringArray, read EditorRead, parameter ParameterFact)
+function appendParameterAndCapability(prose StringArray, read EditorRead, parameter ParameterFact)
 	if read.capability == ValueCapability.paused 'readOnlyHere'
 		appendCapabilityLine(prose, read: read)
 	end 'readOnlyHere'
@@ -7,7 +7,7 @@ module function appendParameterAndCapability(prose StringArray, read EditorRead,
 	prose.push(parameterProse(parameter))
 end 'appendParameterAndCapability'
 
-module function appendCapabilityLine(prose StringArray, read EditorRead)
+function appendCapabilityLine(prose StringArray, read EditorRead)
 	if read.capability == ValueCapability.unknown 'noCapabilityKnown'
 		return
 	end 'noCapabilityKnown'
@@ -52,7 +52,7 @@ function capabilityIsWritable(capability ValueCapability) returns bool
 	return capability == ValueCapability.mutable or capability == ValueCapability.temporary
 end 'capabilityIsWritable'
 
-module function appendMoveLine(prose StringArray, read EditorRead)
+function appendMoveLine(prose StringArray, read EditorRead)
 	match read.move 'move'
 		unmoved then return
 		movedAt(line) then prose.push("{movementWord(read)} at line {line}")
@@ -64,7 +64,7 @@ function movementWord(read EditorRead) returns String
 	return "consumed" if read.linear else "moved"
 end 'movementWord'
 
-module function appendObligationLine(prose StringArray, read EditorRead, facts EditorFacts)
+function appendObligationLine(prose StringArray, read EditorRead, facts EditorFacts)
 	if read.move.hasMoved() 'nothingLeftOwed'
 		return
 	end 'nothingLeftOwed'
@@ -133,7 +133,7 @@ function callSiteStateWord(capability ValueCapability) returns String
 	end 'capability'
 end 'callSiteStateWord'
 
-module function appendFunctionProse(prose StringArray, fact FunctionFact)
+function appendFunctionProse(prose StringArray, fact FunctionFact)
 	if fact.consumesReceiver 'aFinalizerShape'
 		prose.push("takes `consuming self`: a call moves the receiver")
 	end 'aFinalizerShape'

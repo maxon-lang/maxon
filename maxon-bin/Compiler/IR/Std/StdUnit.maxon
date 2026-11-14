@@ -47,7 +47,7 @@ export type StdUnitBody
 	export var unitModule as StdModule
 	export var origins as DerivedOrigins
 
-	module static function blank() returns StdUnitBody
+	static function blank() returns StdUnitBody
 		return Self{unitModule: StdModule.create(), origins: DerivedOrigins.create()}
 	end 'blank'
 end 'StdUnitBody'
@@ -59,7 +59,7 @@ export type StdUnitAnswer
 	export var costs as PoolPhaseCosts
 	export var tallies as StdPassTallyArray
 
-	module static function of(body StdUnitBody, costs PoolPhaseCosts, tallies StdPassTallyArray) returns StdUnitAnswer
+	static function of(body StdUnitBody, costs PoolPhaseCosts, tallies StdPassTallyArray) returns StdUnitAnswer
 		return Self{body: body, costs: costs, tallies: tallies}
 	end 'of'
 end 'StdUnitAnswer'
@@ -75,7 +75,7 @@ export type StdUnit
 		return Self{funcIndex: funcIndex, holder: StdUnitBodySlot.create("StdUnit.holder"), answers: StdUnitAnswerSlot.create("StdUnit.answers")}
 	end 'empty'
 
-	module static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns isolated StdUnit
+	static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns isolated StdUnit
 		let unit = Self.empty(funcIndex) as isolated StdUnit
 
 		modify unit 'fill'
@@ -173,7 +173,7 @@ end 'copiedOp'
 // The unit's block records themselves move in: their opRefs are renumbered in place and the records are
 // set into the module's array, so the phi model the passes rebuilt on them comes across without a copy.
 // The function's `blockRefs` is refilled in place, and `scratch` is the drain's (`IrModule.prepareSplice`).
-module function spliceStdUnit(module StdModule, func IrFunction, unitModule StdModule, scratch SpliceScratch)
+function spliceStdUnit(module StdModule, func IrFunction, unitModule StdModule, scratch SpliceScratch)
 	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
 
 	// Asked here because this is where the unit stops being appended to: every pass that mints an op

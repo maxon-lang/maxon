@@ -1,14 +1,14 @@
-module type Tls12ReadHello
-	module var hello as TlsServerHello
-	module var suite as Tls12CipherSuite
-	module var scan as TlsExtensionScan
+type Tls12ReadHello
+	var hello as TlsServerHello
+	var suite as Tls12CipherSuite
+	var scan as TlsExtensionScan
 
-	module static function create(hello TlsServerHello, suite Tls12CipherSuite, scan TlsExtensionScan) returns Tls12ReadHello
+	static function create(hello TlsServerHello, suite Tls12CipherSuite, scan TlsExtensionScan) returns Tls12ReadHello
 		return Self{hello: hello, suite: suite, scan: scan}
 	end 'create'
 end 'Tls12ReadHello'
 
-module union Tls12ClientRequest
+union Tls12ClientRequest
 	notRequested
 	requested(types ByteArray, schemes TlsSignatureSchemeCodeArray)
 end 'Tls12ClientRequest'
@@ -19,17 +19,17 @@ union Tls12ClientCredentials
 	signing(chain ByteArrays, key TlsPrivateKey, scheme TlsSignatureScheme)
 end 'Tls12ClientCredentials'
 
-module type Tls12ClientExchange
-	module var group as TlsGroupCode
-	module var preMasterSecret as ByteArray
-	module var publicKey as ByteArray
+type Tls12ClientExchange
+	var group as TlsGroupCode
+	var preMasterSecret as ByteArray
+	var publicKey as ByteArray
 
-	module static function create(group TlsGroupCode, preMasterSecret ByteArray, publicKey ByteArray) returns Tls12ClientExchange
+	static function create(group TlsGroupCode, preMasterSecret ByteArray, publicKey ByteArray) returns Tls12ClientExchange
 		return Self{group: group, preMasterSecret: preMasterSecret, publicKey: publicKey}
 	end 'create'
 end 'Tls12ClientExchange'
 
-module union Tls12ClientPhase
+union Tls12ClientPhase
 	idle
 	awaitingCertificate(parameters Tls12Parameters)
 	awaitingServerKeyExchange(parameters Tls12Parameters, key X509PublicKey)
@@ -39,7 +39,7 @@ module union Tls12ClientPhase
 	connected
 end 'Tls12ClientPhase'
 
-module type Tls12ClientFlow implements TlsMessageHandler
+type Tls12ClientFlow implements TlsMessageHandler
 	var config as TlsClientConfig
 	var entropy as TlsClientEntropy
 	var peer as TlsPeerAuthenticator
@@ -48,11 +48,11 @@ module type Tls12ClientFlow implements TlsMessageHandler
 	var clientRandom as ByteArray
 	var phase as Tls12ClientPhase
 
-	module static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, session TlsSession, offer TlsClientOffer, clientRandom ByteArray) returns Tls12ClientFlow
+	static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, session TlsSession, offer TlsClientOffer, clientRandom ByteArray) returns Tls12ClientFlow
 		return Self{config: config, entropy: entropy, peer: peer, session: session, offer: offer, clientRandom: clientRandom, phase: Tls12ClientPhase.idle}
 	end 'create'
 
-	module function begin(read Tls12ReadHello, raw ByteArray) throws TlsHandshakeError
+	function begin(read Tls12ReadHello, raw ByteArray) throws TlsHandshakeError
 		let hello = read.hello
 		let random = hello.random()
 
@@ -94,7 +94,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 		phase = Tls12ClientPhase.awaitingCertificate(parameters)
 	end 'begin'
 
-	module function dispatch(message ByteArray) throws TlsHandshakeError
+	function dispatch(message ByteArray) throws TlsHandshakeError
 		match phase 'phase'
 			idle then throw TlsHandshakeError.internalError
 			awaitingCertificate(parameters) then try onCertificate(message, parameters: parameters)

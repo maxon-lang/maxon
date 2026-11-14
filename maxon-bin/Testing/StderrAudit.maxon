@@ -1,31 +1,31 @@
 let DescendantEntrySeparator = ", "
 let DescendantEntryEnd = "\n"
 let LeakVerdictAdvice = "wait for every process it starts before it ends"
-module let CaseSubject = "case"
-module let TestReportSubject = "test"
+let CaseSubject = "case"
+let TestReportSubject = "test"
 let TabSource = "\\t"
 let DescendantTokenOptionName = "descendant-token"
 let NoDescendants = 0
 
-export typealias DescendantCount = int(0 to u64.max)
+typealias DescendantCount = int(0 to u64.max)
 
-module union FieldSplit
+union FieldSplit
 	read(text String, rest String)
 	unterminated
 end 'FieldSplit'
 
-module function splitAtFirst(text String, separator String) returns FieldSplit
+function splitAtFirst(text String, separator String) returns FieldSplit
 	let at = try text.findFirst(separator) otherwise return FieldSplit.unterminated
 	let after = try text.indexAfter(at) otherwise return FieldSplit.unterminated
 
 	return FieldSplit.read(text.slice(text.startIndex(), endIndex: at), rest: text.slice(after, endIndex: text.endIndex()))
 end 'splitAtFirst'
 
-module type StderrAudit
+type StderrAudit
 	export let text as String
 	export let leaked as StringArray
 
-	module static function separating(stderr String) returns StderrAudit
+	static function separating(stderr String) returns StderrAudit
 		let prefix = descendantsFramePrefix()
 		let kept = StringBuilder.create()
 		let leaked = StringArray.create(0)
@@ -45,7 +45,7 @@ module type StderrAudit
 		return Self{text: kept.build(), leaked: leaked}
 	end 'separating'
 
-	module function verdictOver(outcome TestOutcome) returns TestOutcome
+	function verdictOver(outcome TestOutcome) returns TestOutcome
 		if self.leaked.isEmpty() 'nothingLeft'
 			return outcome
 		end 'nothingLeft'
@@ -106,29 +106,29 @@ function tokenIsOurs(token String) returns bool
 	return token.startsWith(trackingTokenOwner())
 end 'tokenIsOurs'
 
-module function descendantTrackingValue(serial ElementIndex) returns String
+function descendantTrackingValue(serial ElementIndex) returns String
 	return armedDescendantsValue(trackingToken(serial))
 end 'descendantTrackingValue'
 
-module function descendantTokenArgument(serial ElementIndex) returns String
+function descendantTokenArgument(serial ElementIndex) returns String
 	return "--{DescendantTokenOptionName}={trackingToken(serial)}"
 end 'descendantTokenArgument'
 
-module function leftRunningReport(subject String, entries StringArray) returns String
+function leftRunningReport(subject String, entries StringArray) returns String
 	let count = entries.count()
 	let noun = "process" if count == 1 else "processes"
 
 	return "the {subject} left {count} {noun} running: {joinedWith(entries, separator: DescendantEntrySeparator)}; {LeakVerdictAdvice}"
 end 'leftRunningReport'
 
-module union DescendantCountCheck
+union DescendantCountCheck
 	agrees
 	disagrees(report String)
 end 'DescendantCountCheck'
 
 // A test can print a frame carrying the harness's token, so the binary's own count is what the frames
 // found in its stderr must agree with.
-module function checkDescendantCount(program String, subject String, counted DescendantCount, named DescendantCount) returns DescendantCountCheck
+function checkDescendantCount(program String, subject String, counted DescendantCount, named DescendantCount) returns DescendantCountCheck
 	if counted == named 'agree'
 		return DescendantCountCheck.agrees
 	end 'agree'
@@ -136,7 +136,7 @@ module function checkDescendantCount(program String, subject String, counted Des
 	return DescendantCountCheck.disagrees("{program} counted {counted} process(es) left running by this {subject}, and its error output names {named}")
 end 'checkDescendantCount'
 
-module function descendantTokenMemberSource() returns String
+function descendantTokenMemberSource() returns String
 	var source = "\texport static function descendantToken() returns String\n"
 
 	source.append("\t\treturn try CommandLine.getOptionValue(\"{DescendantTokenOptionName}\") otherwise panic(\"the harness passed no --{DescendantTokenOptionName}, so a process left running could not be reported in a form the harness trusts\")\n")
@@ -145,7 +145,7 @@ module function descendantTokenMemberSource() returns String
 	return source
 end 'descendantTokenMemberSource'
 
-module function descendantReportSource(tracksDescendants bool, helperType String) returns String
+function descendantReportSource(tracksDescendants bool, helperType String) returns String
 	if not tracksDescendants 'nothingToEnd'
 		return "\t\tlet descendants = {NoDescendants}\n"
 	end 'nothingToEnd'

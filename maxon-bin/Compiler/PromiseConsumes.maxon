@@ -1,6 +1,6 @@
 typealias PromiseKindColumn = Array with PromiseConsume
 
-export type PromiseConsumeRecord
+type PromiseConsumeRecord
 	export let promise as ValueId
 	export let kind as PromiseConsume
 
@@ -9,7 +9,7 @@ export type PromiseConsumeRecord
 	end 'create'
 end 'PromiseConsumeRecord'
 
-export typealias PromiseConsumeRecordArray = Array with PromiseConsumeRecord
+typealias PromiseConsumeRecordArray = Array with PromiseConsumeRecord
 
 type PromiseChunk
 	let kinds as PromiseKindColumn
@@ -74,11 +74,11 @@ end 'PromiseChunk'
 typealias PromiseChunkColumn = ChunkedColumn with PromiseChunk
 typealias PromiseChunkBuilder = ChunkedColumnBuilder with PromiseChunk
 
-export type PromiseConsumes
+type PromiseConsumes
 	let chunks as PromiseChunkColumn
 	let consumed as ElementIndex
 
-	export static function none() returns PromiseConsumes
+	static function none() returns PromiseConsumes
 		return Self{chunks: PromiseChunkColumn.none(), consumed: 0}
 	end 'none'
 
@@ -90,7 +90,7 @@ export type PromiseConsumes
 		return self.consumed == 0
 	end 'isEmpty'
 
-	export function kindOf(promise ValueId) returns PromiseConsume
+	function kindOf(promise ValueId) returns PromiseConsume
 		let position = promise as ElementIndex
 		let index = chunkIndexOf(position)
 
@@ -101,7 +101,7 @@ export type PromiseConsumes
 		return self.chunks.chunkAt(index).kindAt(slotInChunk(position))
 	end 'kindOf'
 
-	export function recorded(promise ValueId, kind PromiseConsume) returns PromiseConsumes
+	function recorded(promise ValueId, kind PromiseConsume) returns PromiseConsumes
 		if self.kindOf(promise) != PromiseConsume.notConsumed 'firstWins'
 			return self
 		end 'firstWins'
@@ -115,7 +115,7 @@ export type PromiseConsumes
 		return Self.create(column, consumed: self.consumed + 1)
 	end 'recorded'
 
-	export function unioned(other PromiseConsumes) returns PromiseConsumes
+	function unioned(other PromiseConsumes) returns PromiseConsumes
 		if other.consumed == 0 or other.chunks.shares(self.chunks) 'nothingToAdd'
 			return self
 		end 'nothingToAdd'
@@ -153,7 +153,7 @@ export type PromiseConsumes
 		return Self.create(merged.finished(), consumed: total)
 	end 'unioned'
 
-	export function recordsBeyond(base PromiseConsumes) returns PromiseConsumeRecordArray
+	function recordsBeyond(base PromiseConsumes) returns PromiseConsumeRecordArray
 		let records = PromiseConsumeRecordArray.create(0)
 
 		for index in 0 upto self.chunks.count() 'eachChunk'

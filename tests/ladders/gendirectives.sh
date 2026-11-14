@@ -119,7 +119,7 @@ emit_fn() {
 
 emit_main() {
 	{
-		echo "export typealias LadderInt = int(i64.min to i64.max)"
+		echo "typealias LadderInt = int(i64.min to i64.max)"
 	} > "$OUT/a_types.maxon"
 	{
 		echo "function main() returns ExitCode"

@@ -1070,19 +1070,19 @@ error E3200: <fragment>:23:16: 'spare' is not isolated: only a clean call, a `sw
 
 ```maxon
 // --- file: a.maxon
-export type Bag
-	export var text as String
+type Bag
+	var text as String
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{text: "bag"}
 	end 'create'
 end 'Bag'
 
-export function frozenBag() returns immutable Bag
+function frozenBag() returns immutable Bag
 	return freeze Bag.create()
 end 'frozenBag'
 
-export function describe(bag immutable Bag) returns String
+function describe(bag immutable Bag) returns String
 	return bag.text
 end 'describe'
 

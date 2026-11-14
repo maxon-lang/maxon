@@ -3,7 +3,7 @@ let DebugNotLiveHereReason = "not-live-here"
 let DebugReadFailedReason = "read-failed"
 let DebugLayoutNotDescribedReason = "layout-not-described"
 
-export union DebugValueAnswer
+union DebugValueAnswer
 	rendered(tree DebugValueTree)
 	unknownName(spelling String)
 	unknownField(spelling String)
@@ -57,7 +57,7 @@ let UnionTagOffset = 0
 let FunctionCodeOffset = FunctionRecordCodeOffset as DebugAddress
 let UnionTagBytes = 8
 
-export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
+function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
 	let tree = DebugValueTree.create()
 	let named = DebugNameSet.create()
 	let locals = symbols.localsAt(offset, site: site)
@@ -74,7 +74,7 @@ export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset De
 	return tree
 end 'renderLocals'
 
-export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, path String, registers DebugRegisterAccess) returns DebugValueAnswer
+function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, path String, registers DebugRegisterAccess) returns DebugValueAnswer
 	let pieces = path.trim().split(MemberSeparator)
 	let head = try pieces.get(0) otherwise return DebugValueAnswer.unknownName(path)
 

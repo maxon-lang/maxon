@@ -2267,7 +2267,7 @@ overwrite payload long enough to allocate xxxxxxxx
 ```
 
 <!-- test: error.two-files-of-one-directory-private-generic-functions-of-one-name-collide -->
-Two files of one directory each declare a private generic function of the same name, and each returns a different parameter; the directory is the scope, so the second declaration is a duplicate.
+Two files of one directory each declare an unmarked generic function of the same name, and each returns a different parameter; the directory is the scope, so the second declaration is a duplicate.
 ```maxon
 // --- file: a.maxon
 function settle(src T) uses T returns T
@@ -2299,7 +2299,7 @@ error E3006: <fragment>:15:10: duplicate definition of 'settle' — already decl
 ```
 
 <!-- test: error.a-private-generic-function-and-a-later-files-private-concrete-one-of-one-directory-and-name-collide -->
-One file declares a private generic function that returns a parameter, and a later file of the same directory declares a private non-generic function of the same name; the directory is the scope, so the second declaration is a duplicate.
+One file declares an unmarked generic function that returns a parameter, and a later file of the same directory declares an unmarked non-generic function of the same name; the directory is the scope, so the second declaration is a duplicate.
 ```maxon
 // --- file: b.maxon
 function swap(b T) uses T returns T
@@ -2330,7 +2330,7 @@ error E3006: <fragment>:16:10: duplicate definition of 'swap' — already declar
 ```
 
 <!-- test: error.a-private-generic-function-and-the-next-files-private-concrete-one-of-one-name-collide -->
-A private generic function in `a.maxon` and a private non-generic function of the same name in `b.maxon`, one directory: the second declaration is a duplicate.
+An unmarked generic function in `a.maxon` and an unmarked non-generic function of the same name in `b.maxon`, one directory: the second declaration is a duplicate.
 ```maxon
 // --- file: a.maxon
 function twice(a T) uses T returns T
@@ -2363,7 +2363,7 @@ error E3006: <fragment>:14:10: duplicate definition of 'twice' — already decla
 ```
 
 <!-- test: error.a-private-concrete-function-and-the-next-files-private-generic-one-of-one-name-collide -->
-A private non-generic function in `a.maxon` and a private generic function of the same name in `b.maxon`, one directory: the second declaration is a duplicate.
+An unmarked non-generic function in `a.maxon` and an unmarked generic function of the same name in `b.maxon`, one directory: the second declaration is a duplicate.
 ```maxon
 // --- file: a.maxon
 typealias Reps = int(0 to 100)
@@ -2396,7 +2396,7 @@ error E3006: <fragment>:14:10: duplicate definition of 'twice' — already decla
 ```
 
 <!-- test: two-directories-each-keep-their-own-private-generic-function-of-one-name -->
-Two directories each declare a private generic function `twice`; each directory is its own scope, so each call reaches its own directory's function.
+Two directories each declare an unmarked generic function `twice`; each directory is its own scope, so each call reaches its own directory's function.
 ```maxon
 // --- file: left/left.maxon
 function twice(a T) uses T returns T
@@ -5297,7 +5297,7 @@ over its own parameter, and `Outer` holds a `Holder` over `Outer`'s. The program
 parsed first.
 ```maxon
 // --- file: a_holder.maxon
-export typealias Int = int(0 to 1000)
+typealias Int = int(0 to 1000)
 
 type Cell uses T
 	export var value as T
@@ -5316,12 +5316,12 @@ type Holder uses T
 	end 'replace'
 end 'Holder'
 
-export type Outer uses T
+type Outer uses T
 	var holder as Holder
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{holder: Holder.create(value)}
 	end 'create'
-	export function tag() returns Int
+	function tag() returns Int
 		return 3
 	end 'tag'
 end 'Outer'
@@ -5351,7 +5351,7 @@ end 'main'
 
 
 // --- file: b_holder.maxon
-export typealias Int = int(0 to 1000)
+typealias Int = int(0 to 1000)
 
 type Cell uses T
 	export var value as T
@@ -5370,12 +5370,12 @@ type Holder uses T
 	end 'replace'
 end 'Holder'
 
-export type Outer uses T
+type Outer uses T
 	var holder as Holder
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{holder: Holder.create(value)}
 	end 'create'
-	export function tag() returns Int
+	function tag() returns Int
 		return 3
 	end 'tag'
 end 'Outer'
@@ -7591,30 +7591,30 @@ error E4006: <fragment>:40:14: Type 'Mode' has no method named 'collected'
 The conformer is declared in `a.maxon` and the extension in `main.maxon`: the one E2015 is at the conformer's binding.
 ```maxon
 // --- file: a.maxon
-module interface Named
+interface Named
 	function label() returns String
 end 'Named'
 
-module type Thing implements Named
-	module static function create() returns Self
+type Thing implements Named
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	module function label() returns String
+	function label() returns String
 		return "thing"
 	end 'label'
 end 'Thing'
 
-module interface Source uses Item
+interface Source uses Item
 	function first() returns Item
 end 'Source'
 
-module type Impl implements Source with Named
-	module static function create() returns Self
+type Impl implements Source with Named
+	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	module function first() returns Named
+	function first() returns Named
 		return Thing.create()
 	end 'first'
 end 'Impl'
@@ -7623,7 +7623,7 @@ end 'Impl'
 extension Source
 	typealias ItemArray = Array with Item
 
-	module function collected() returns Count
+	function collected() returns Count
 		var xs = ItemArray{}
 		return xs.count()
 	end 'collected'
@@ -7640,5 +7640,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:41: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: <fragment>:21:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```

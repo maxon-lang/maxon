@@ -42,7 +42,7 @@ typealias NameIndex = int(0 to 65535) implements ElementIndex
 
 // An ABSOLUTE byte position in the ring's write sequence — not a position inside the 2 MB buffer, which
 // wraps. The producer's cursors are this, and the difference between two of them is what is pending.
-module typealias RingPosition = int(0 to u64.max)
+typealias RingPosition = int(0 to u64.max)
 
 // How many bytes one drain takes out of the ring: the distance from the read cursor to the end of the
 // committed prefix. A LENGTH and never a position — the two meet only at the subtraction that makes it.
@@ -53,15 +53,15 @@ typealias SpanByteCount = int(0 to u64.max)
 typealias EntryByteCount = int(1 to 65535)
 
 // How deeply the DEPTH_INC / DEPTH_DEC markers have nested the trace at this event.
-module typealias TraceDepth = int(0 to u32.max)
+typealias TraceDepth = int(0 to u32.max)
 
 // Milliseconds since the header's `start_timestamp`, the delta each entry carries.
-module typealias TraceTimestampMs = int(0 to u32.max)
+typealias TraceTimestampMs = int(0 to u32.max)
 
 // A count of events or entries. The producer's own counters are i64 words in the segment header.
-module typealias EventTally = int(0 to u64.max)
+typealias EventTally = int(0 to u64.max)
 
-module typealias DecodedEventArray = Array with DecodedEvent
+typealias DecodedEventArray = Array with DecodedEvent
 
 // ⭐ **WHICH PAIR OF HOST CALLS BACKS A SEGMENT HERE — for the refusal message and for nothing else.**
 // `stdlib/SharedMemory.maxon` is the door and it says the same thing in its own vocabulary; this is the
@@ -119,14 +119,14 @@ let FamilyChoiceSeparator = "|"
 // ⭐ What every line this consumer authors ABOUT THE RING carries — the schema refusal and the closing
 // summary — so a reader can split them from the child's own stderr, which is exactly what the spec
 // harness does (`SpecTestRunner.childStderrOf`).
-module let DebugStreamLinePrefix = "[debugstream]"
+let DebugStreamLinePrefix = "[debugstream]"
 
 // ⭐ **THE THREE SELECTABLE FAMILIES, AND THE ENUM *IS* BOTH THE ACCEPTED SET AND ITS SPELLING.** A case's
 // `.name` is the `--filter=` value, and `allCases` is the usage line's list in this order — so accepting a
 // family, advertising it and naming it in a report are one fact. They are CONTIGUOUS code ranges (see the
 // event table in `DebugStreamRuntime`), which is what lets `familyOf` be a pair of comparisons rather than
 // a roster kept in step with that table by hand.
-module enum EventFamily
+enum EventFamily
 	mm
 	sched
 	log
@@ -134,7 +134,7 @@ end 'EventFamily'
 
 // Which family a consumer asked for. A union rather than an empty-string default, because "every family"
 // and "a family whose name I could not resolve" are different answers and only one of them is legal.
-module union FamilyFilter
+union FamilyFilter
 	all
 	only(family EventFamily)
 	unknown(spelling String)
@@ -142,12 +142,12 @@ end 'FamilyFilter'
 
 // One decoded entry. The timestamp and the depth travel as DATA rather than baked into `text`, because
 // what a FACE puts around a line is its own: the monitor prefixes the delta and indents by depth.
-module type DecodedEvent
-	module let timestampMs as TraceTimestampMs
-	module let depth as TraceDepth
-	module let text as String
-	module let position as RingPosition
-	module let kind as String
+type DecodedEvent
+	let timestampMs as TraceTimestampMs
+	let depth as TraceDepth
+	let text as String
+	let position as RingPosition
+	let kind as String
 
 	static function create(timestampMs TraceTimestampMs, depth TraceDepth, text String, position RingPosition, kind String) returns DecodedEvent
 		return Self{timestampMs: timestampMs, depth: depth, text: text, position: position, kind: kind}
@@ -156,7 +156,7 @@ end 'DecodedEvent'
 
 // ⭐ How a `drain` ended. The four are DISTINCT because they demand different next moves, and conflating
 // the last two is what lets a consumer spin forever on an entry nobody will ever commit.
-module union DrainOutcome
+union DrainOutcome
 	// Entries were decoded, or an abandoned one was stepped over. Call again immediately.
 	decoded(events DecodedEventArray)
 
@@ -172,13 +172,13 @@ module union DrainOutcome
 end 'DrainOutcome'
 
 // Why a decoder could not be built. Both arms stop the run before a child is ever spawned.
-module union DecoderError implements Error
+union DecoderError implements Error
 	segmentUnavailable(reason SharedMemoryError)
 	nameTablesUnreadable(reason DataSectionReadError)
 
 	/// Follows `PeReadError.displayReason`'s convention so every refusal this command prints reads the
 	/// same way whatever went wrong.
-	module function displayReason() returns String
+	function displayReason() returns String
 		return match self 'k'
 			segmentUnavailable(reason) gives "could not create the shared segment the trace travels in ({sharedMemoryReason(reason)})"
 			nameTablesUnreadable(reason) gives "could not read the interned name tables out of the target ({reason.displayReason()})"
@@ -201,7 +201,7 @@ function sharedMemoryReason(reason SharedMemoryError) returns String
 	end 'k'
 end 'sharedMemoryReason'
 
-module type DebugStreamDecoder
+type DebugStreamDecoder
 	var segment as SharedSegment
 	let filter as FamilyFilter
 
@@ -228,7 +228,7 @@ module type DebugStreamDecoder
 	/// HERE rather than lazily: an executable whose tables cannot be located is not one with no names in
 	/// it, it is a run that would print `tag=1` for every event and a capture block that would fail
 	/// without ever saying why.
-	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
+	static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
 		let segment = try SharedSegment.publish(scratchNameFor(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
 		end 'noSegment'
@@ -247,32 +247,32 @@ module type DebugStreamDecoder
 	end 'create'
 
 	/// The value the child reads from `DsActivationEnvVar` to find this ring.
-	module function segmentName() returns String
+	function segmentName() returns String
 		return segment.segmentName()
 	end 'segmentName'
 
 	/// The producer's own counters, read straight from the segment header — valid at any time, and final
 	/// once the producer has exited.
-	module function totalEvents() returns EventTally
+	function totalEvents() returns EventTally
 		return headerCounterAt(DsOffTotalEvents)
 	end 'totalEvents'
 
-	module function droppedEvents() returns EventTally
+	function droppedEvents() returns EventTally
 		return headerCounterAt(DsOffDroppedEvents)
 	end 'droppedEvents'
 
-	module function peakUsed() returns EventTally
+	function peakUsed() returns EventTally
 		return headerCounterAt(DsOffPeakUsed)
 	end 'peakUsed'
 
 	/// Entries the producer reserved and died before committing. The decoder's OWN count — the producer
 	/// cannot report an entry it never finished.
-	module function abandonedCount() returns EventTally
+	function abandonedCount() returns EventTally
 		return abandonedEntries
 	end 'abandonedCount'
 
 	/// Unmap the view and release the section.
-	module function close()
+	function close()
 		segment.close()
 	end 'close'
 
@@ -281,7 +281,7 @@ module type DebugStreamDecoder
 	/// ⛔ `producerExited` MUST be sampled BEFORE this call reads the cursors. If the producer is already
 	/// gone by that sample, every store it will ever make is in the ring and the cursors read here are
 	/// FINAL. The other order lets a last event land after the check and be lost.
-	module function drain(producerExited bool) returns DrainOutcome
+	function drain(producerExited bool) returns DrainOutcome
 		let writeCursor = segmentWordAt(segment, at: DsOffWriteCursor as SegmentOffset) as RingPosition
 
 		// Before a single entry is decoded: does the target even speak this schema? A mismatch is not a
@@ -309,7 +309,7 @@ module type DebugStreamDecoder
 		return DrainOutcome.decoded(walkEntries(copy, byteCount: pending, spanStart: spanStart))
 	end 'drain'
 
-	module function producerAttached() returns bool
+	function producerAttached() returns bool
 		return segmentWordAt(segment, at: DsOffFlags as SegmentOffset) != 0 or segmentWordAt(segment, at: DsOffWriteCursor as SegmentOffset) != 0
 	end 'producerAttached'
 
@@ -567,14 +567,14 @@ end 'familyOf'
 
 /// Resolve a `--filter=` value. Refused HERE rather than in the decode loop, where the only available
 /// behaviours would be to throw or to silently show everything — which is the opposite of what was asked.
-module function parseFamilyFilter(spelling String) returns FamilyFilter
+function parseFamilyFilter(spelling String) returns FamilyFilter
 	let family = try EventFamily.fromName(spelling) otherwise return FamilyFilter.unknown(spelling)
 	return FamilyFilter.only(family)
 end 'parseFamilyFilter'
 
 /// The families a usage line offers, in declaration order. Derived from the enum, so accepting a family and
 /// advertising it are one fact.
-module function familyChoiceList() returns String
+function familyChoiceList() returns String
 	var choices = ""
 
 	for family in EventFamily.allCases 'each'

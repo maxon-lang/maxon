@@ -17,7 +17,7 @@
 // FULL sync (`textDocumentSync` kind 1) — every `didChange` carries the whole document, so the store is
 // a replace-or-drop map with no patching to do. Incremental sync is a separate mechanism and no method
 // this server answers needs one.
-module typealias LspDocumentTextMap = Map with (String, String)
+typealias LspDocumentTextMap = Map with (String, String)
 
 // `textDocumentSync` kind 1 — the client sends whole documents.
 let FullTextDocumentSync = 1
@@ -28,23 +28,23 @@ let FullTextDocumentSync = 1
 let LspCleanExitCode = 0
 let LspAbnormalExitCode = 1
 
-module let MethodInitialize = "initialize"
-module let MethodShutdown = "shutdown"
+let MethodInitialize = "initialize"
+let MethodShutdown = "shutdown"
 let MethodExit = "exit"
-module let MethodDidOpen = "textDocument/didOpen"
-module let MethodDidChange = "textDocument/didChange"
-module let MethodDidClose = "textDocument/didClose"
-module let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
-module let MethodWorkspaceTrust = "maxon/workspaceTrust"
+let MethodDidOpen = "textDocument/didOpen"
+let MethodDidChange = "textDocument/didChange"
+let MethodDidClose = "textDocument/didClose"
+let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
+let MethodWorkspaceTrust = "maxon/workspaceTrust"
 
 let CapabilitiesKey = "capabilities"
 let ServerInfoKey = "serverInfo"
 let ServerNameKey = "name"
 let TextDocumentSyncKey = "textDocumentSync"
-module let TextDocumentKey = "textDocument"
+let TextDocumentKey = "textDocument"
 let ContentChangesKey = "contentChanges"
-module let TextKey = "text"
-module let VersionKey = "version"
+let TextKey = "text"
+let VersionKey = "version"
 let RootUriKey = "rootUri"
 let WorkspaceKey = "workspace"
 let WorkspaceFoldersKey = "workspaceFolders"
@@ -536,7 +536,7 @@ end 'isRequestNamed'
 // capabilities say what a client can RENDER, not what a server may offer: the server advertises what it
 // serves and the client decides what to ask for. Gating advertisement on them made a client that declared
 // nothing get a hover it was never told about.
-module function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc JsonDoc)
+function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc JsonDoc)
 	lspRememberClientRoots(workspace, roots: clientRootsOf(doc))
 	workspace.trusted = trustedByInitializationOptions(doc)
 
@@ -558,7 +558,7 @@ end 'respondInitialize'
 
 // A client that states no trust is trusted: the option is sent by a client with a trust model of
 // its own, the VS Code extension, and any other client runs a `.maxproj` as `maxon build` would.
-module function trustedByInitializationOptions(doc JsonDoc) returns bool
+function trustedByInitializationOptions(doc JsonDoc) returns bool
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return true
 	let options = try lspMember(doc, of: params, key: InitializationOptionsKey) otherwise return true
 
@@ -576,7 +576,7 @@ end 'serverInfoNode'
 // LSP 3.6, and a client written since sends `rootUri: null` and names the root in the folders. The
 // folders settle it alone where there are any: `rootUri` carries one root and a multi-root window has
 // several, so consulting it first would leave the rest of the window out of the workspace entirely.
-module function clientRootsOf(doc JsonDoc) returns LspClientRootArray
+function clientRootsOf(doc JsonDoc) returns LspClientRootArray
 	let roots = LspClientRootArray.create(0)
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return roots
 
@@ -708,7 +708,7 @@ function areaServedMethods(area LspArea) returns LspMethodArray
 end 'areaServedMethods'
 
 // LSP defines shutdown's result as null.
-module function respondShutdown(writer LspStdoutWriter.handle, id LspRequestId)
+function respondShutdown(writer LspStdoutWriter.handle, id LspRequestId)
 	let doc = JsonDoc.create()
 	writeLspResult(writer, doc: doc, id: id, result: doc.add(JsonNode.nullNode()))
 end 'respondShutdown'
@@ -716,19 +716,19 @@ end 'respondShutdown'
 // `params`, `params.textDocument` and its `uri` — the walk every `textDocument/*` notification begins
 // with. All three are handed back because `didOpen` reads its text out of `textDocument` while
 // `didChange` reads its own out of `params.contentChanges`.
-module function notifiedDocument(doc JsonDoc) returns (JsonNodeId, JsonNodeId, String) throws LspParamsError
+function notifiedDocument(doc JsonDoc) returns (JsonNodeId, JsonNodeId, String) throws LspParamsError
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
 	let textDocument = try lspMember(doc, of: params, key: TextDocumentKey)
 	return (params, textDocument, try lspMemberText(doc, of: textDocument, key: LspUriKey))
 end 'notifiedDocument'
 
-module function openedDocument(doc JsonDoc) returns (JsonNodeId, String, String) throws LspParamsError
+function openedDocument(doc JsonDoc) returns (JsonNodeId, String, String) throws LspParamsError
 	let (_, textDocument, uri) = try notifiedDocument(doc)
 
 	return (textDocument, uri, try lspMemberText(doc, of: textDocument, key: TextKey))
 end 'openedDocument'
 
-module function changedDocument(doc JsonDoc) returns (JsonNodeId, String, String) throws LspParamsError
+function changedDocument(doc JsonDoc) returns (JsonNodeId, String, String) throws LspParamsError
 	let (params, textDocument, uri) = try notifiedDocument(doc)
 	let changes = try lspMember(doc, of: params, key: ContentChangesKey)
 	let changeCount = try doc.arrayLength(changes) otherwise throw LspParamsError.malformed
@@ -743,7 +743,7 @@ module function changedDocument(doc JsonDoc) returns (JsonNodeId, String, String
 	return (textDocument, uri, try lspMemberText(doc, of: latest, key: TextKey))
 end 'changedDocument'
 
-module function clientVersionOf(doc JsonDoc, textDocument JsonNodeId) returns ClientDocumentVersion
+function clientVersionOf(doc JsonDoc, textDocument JsonNodeId) returns ClientDocumentVersion
 	let stated = try doc.getInt(textDocument, key: VersionKey) otherwise return ClientDocumentVersion.unstated
 
 	return ClientDocumentVersion.stated(stated)

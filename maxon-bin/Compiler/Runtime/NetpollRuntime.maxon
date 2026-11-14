@@ -16,7 +16,7 @@
 
 // ⭐⭐ **HOW THIS TARGET'S POLLER REPORTS AN EVENT — the fact the decode keys on, as `IoCompletionShape` is for a
 // read.** Each shape is one OS mechanism, and each reports a break its own way:
-export enum NetpollShape
+enum NetpollShape
 	// Windows: a completion port. A break is a posted packet, consumed by receiving it; the wait answers a BOOL
 	// and writes its entry count through the scratch word.
 	completionPort
@@ -31,7 +31,7 @@ export enum NetpollShape
 end 'NetpollShape'
 
 // Keyed on the OS: the mechanism is the platform's, and only the entry LAYOUT also depends on the CPU.
-export function netpollShape(target Target) returns NetpollShape
+function netpollShape(target Target) returns NetpollShape
 	return match target.os 'os'
 		windows gives NetpollShape.completionPort
 		linux gives NetpollShape.epoll
@@ -115,7 +115,7 @@ let NetpollWakeSigLabel = b"__np_wake_sig"
 // numbered 0 distinct from pidfd mode.
 let NetpollChildSignalLabel = b"__np_child_signal"
 
-export function netpollRuntimeGlobals() returns DataSectionEntryArray
+function netpollRuntimeGlobals() returns DataSectionEntryArray
 	let out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: NetpollPollerLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: NetpollBreakLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
@@ -150,17 +150,17 @@ let WakeSigRaised = 1
 // ==========================================================================
 
 // `__np_init()` — create the poller and its break source. Called by `__sched_init_procs`.
-export let NetpollInitName = b"__np_init"
+let NetpollInitName = b"__np_init"
 
 // `__np_poll(timeoutMs)` — wait until an event or `timeoutMs` (`WaitInfinite` for ever, 0 for a look), and
 // consume what the wait answered. A wait with a timeout of 0 is Go's non-blocking poll: it takes nothing that
 // belongs to the blocking poller. Called with no processor, by the one polling machine or by `__sysmon`.
-export let NetpollPollName = b"__np_poll"
+let NetpollPollName = b"__np_poll"
 
 // `__np_break()` — Go's `netpollBreak`: end the blocking poller's wait early, once however many ask.
-export let NetpollBreakName = b"__np_break"
+let NetpollBreakName = b"__np_break"
 
-export function installNetpollRuntime(module StdModule, target Target)
+function installNetpollRuntime(module StdModule, target Target)
 	buildNetpollInit(module, target: target)
 	buildNetpollPoll(module, target: target)
 	buildNetpollBreak(module, target: target)
@@ -231,7 +231,7 @@ export function installNetpollRuntime(module StdModule, target Target)
 end 'installNetpollRuntime'
 
 // Emit one `osNetpoll`, padding the operands `verb` does not read with a zero, and answer its raw result.
-export function emitNetpoll(module StdModule, block IrBlock, verb NetpollVerb, operands ValueIdArray, ids ValueMinter) returns ValueId
+function emitNetpoll(module StdModule, block IrBlock, verb NetpollVerb, operands ValueIdArray, ids ValueMinter) returns ValueId
 	let padded = operands.clone()
 	let unused = emitConst(module, block: block, value: 0, ids: ids)
 
@@ -330,7 +330,7 @@ function emitNetpollFailed(module StdModule, block IrBlock, shape NetpollShape, 
 end 'emitNetpollFailed'
 
 // Terminate `cur`: to the named failure when `answer` failed, else to `cont`.
-export function emitNetpollRequire(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, verb NetpollVerb, subject ValueId, answer ValueId, cont IrBlock, ids ValueMinter)
+function emitNetpollRequire(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, verb NetpollVerb, subject ValueId, answer ValueId, cont IrBlock, ids ValueMinter)
 	let failed = module.addBlock(func, label: b"npfailed", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(emitNetpollFailed(module, block: cur, shape: shape, answer: answer, ids: ids), thenBlockId: failed.id, elseBlockId: cont.id))
 	emitNetpollFailWith(module, func: func, block: failed, verb: verb, subject: subject, answer: answer, ids: ids)
@@ -340,7 +340,7 @@ end 'emitNetpollRequire'
 // `ProfileRuntime.buildProfileTimerCreate`'s fallback, for its reason: the ordinary timer still sleeps, at the
 // scheduler tick. Terminates `cur` and reaches `cont` with the timer as its one block argument, or aborts with
 // `netpollFailed` when neither can be created. A POSIX lane's answer is never a failure.
-export function emitNetpollOpenTimer(module StdModule, func IrFunction, cur IrBlock, target Target, cont IrBlock, ids ValueMinter)
+function emitNetpollOpenTimer(module StdModule, func IrFunction, cur IrBlock, target Target, cont IrBlock, ids ValueMinter)
 	let shape = netpollShape(target)
 	let coarse = module.addBlock(func, label: b"nptimercoarse", heat: BlockHeat.normal)
 
@@ -920,14 +920,14 @@ let PdExpired = 4
 
 // The two directions, as the index the pairs above are addressed by. EXPORTED because the socket band names
 // the direction of every wait it makes.
-export let NetpollModeRead = 0 as FullRangeInt
-export let NetpollModeWrite = 1 as FullRangeInt
+let NetpollModeRead = 0 as FullRangeInt
+let NetpollModeWrite = 1 as FullRangeInt
 
 // What `__np_pd_wait` answers, with `NetpollWaitStale` below. The socket band's retry loops issue the call again
 // on `NetpollWaitReady` alone; a child's wait has no retry and asks only whether it was ready, so both ends of
 // the pair are exported.
-export let NetpollWaitReady = 0 as FullRangeInt
-export let NetpollWaitTimedOut = 1 as FullRangeInt
+let NetpollWaitReady = 0 as FullRangeInt
+let NetpollWaitTimedOut = 1 as FullRangeInt
 
 // ⛔⛔ **THE WAIT ENDED ON A RECORD THAT IS NO LONGER THIS THREAD’S, AND THE CALLER MUST NOT RETRY.** The
 // generation test (`PdOffGen`) answers this when a release readied the waiter and the descriptor was then
@@ -935,7 +935,7 @@ export let NetpollWaitTimedOut = 1 as FullRangeInt
 // at function entry (`emitLiveSocketOrThrow`), so a retry would issue the syscall on a live descriptor that
 // now belongs to ANOTHER socket — stealing its bytes when data is waiting, and parking on its record when not.
 // The caller reports its own operation’s failure instead, with no syscall (`emitSocketWaitReady`).
-export let NetpollWaitStale = 2 as FullRangeInt
+let NetpollWaitStale = 2 as FullRangeInt
 
 // The record table: how many indices the first allocation covers, and one pointer per slot. 64 covers a POSIX
 // process's whole ordinary descriptor range; a Windows SOCKET is a handle value rather than a low dense index
@@ -982,7 +982,7 @@ end 'mintedRecordTable'
 // at all — without this, a process whose only pending work is a socket read has no timer and no child, so
 // nobody would ever look — and `__sched_checkdead` would call that same process DEADLOCKED, because every
 // machine really is idle and the event it waits for is outside this program.
-export let NetpollWaitersLabel = b"__np_waiters"
+let NetpollWaitersLabel = b"__np_waiters"
 
 // `__np_pd_slot(fd) -> pd | 0` — the bounds-checked lookup. `__sched_lock` held by the caller.
 let NetpollPdSlotName = b"__np_pd_slot"
@@ -1005,11 +1005,11 @@ let NetpollPdAdoptMintedName = b"__np_pd_adopt_minted"
 // `__np_pd_open(source, fd)` — give this descriptor a record at `source` and register the descriptor itself
 // with the poller. Called once per socket, between `socket()` and `connect()`. The two arguments differ only
 // where the record table has a second allocator in it — see `emitNetpollDescriptorIndex`.
-export let NetpollPdOpenName = b"__np_pd_open"
+let NetpollPdOpenName = b"__np_pd_open"
 
 // `__np_pd_release(fd)` — reset the record before the descriptor is closed, so the next owner of a recycled
 // descriptor starts clean. The kernel takes a closed descriptor out of the poller itself.
-export let NetpollPdReleaseName = b"__np_pd_release"
+let NetpollPdReleaseName = b"__np_pd_release"
 
 // `__np_pd_wait(fd, mode, gen) -> NetpollWaitReady | NetpollWaitTimedOut | NetpollWaitStale` — suspend the
 // running green thread until this descriptor is ready in `mode`, or until that direction's deadline. `gen` is
@@ -1018,7 +1018,7 @@ export let NetpollPdReleaseName = b"__np_pd_release"
 let NetpollPdWaitName = b"__np_pd_wait"
 
 // `__np_pd_deadline(fd, mode, ms)` — arm or clear one direction's deadline. `0` clears.
-export let NetpollPdDeadlineName = b"__np_pd_deadline"
+let NetpollPdDeadlineName = b"__np_pd_deadline"
 
 // `__np_pd_op_begin(fd) -> gen` / `__np_pd_mark_timed_out(fd, gen)` / `__np_pd_timed_out(fd) -> 0 | 1` — the
 // deadline mark the socket surface reports through `__ManagedSocket.timedOut()`, and the generation discipline
@@ -1028,7 +1028,7 @@ export let NetpollPdDeadlineName = b"__np_pd_deadline"
 // the mark.
 let NetpollPdOpBeginName = b"__np_pd_op_begin"
 let NetpollPdMarkTimedOutName = b"__np_pd_mark_timed_out"
-export let NetpollPdTimedOutName = b"__np_pd_timed_out"
+let NetpollPdTimedOutName = b"__np_pd_timed_out"
 
 // `__np_pd_wake(fd, readReady, writeReady) -> wakeDebt` — the poller's readiness walk, whose one caller is the
 // decode in this file. Called with `__sched_lock` NOT held; it takes the lock itself. On a POSIX
@@ -1037,11 +1037,11 @@ let NetpollPdWakeName = b"__np_pd_wake"
 
 // `__np_pd_commit(gt) -> wakeDebt` — `__gt_register_park`'s netpoll arm: publish the parked thread into the
 // direction word the poller will find it through, and arm its deadline. `__sched_lock` held.
-export let NetpollPdCommitName = b"__np_pd_commit"
+let NetpollPdCommitName = b"__np_pd_commit"
 
 // `__np_pd_expire(gt) -> wakeDebt` — the deadline fired: take the thread off its direction word and mark why.
 // `__sched_lock` held.
-export let NetpollPdExpireName = b"__np_pd_expire"
+let NetpollPdExpireName = b"__np_pd_expire"
 
 // `__np_pd_drop(gt) -> found` — the promise was dropped while its coroutine was parked here: take
 // it off the poller, disarm its deadline and mark the wait EXPIRED, so its resumption answers
@@ -1050,9 +1050,9 @@ export let NetpollPdExpireName = b"__np_pd_expire"
 // means the readiness walk or the deadline readied the thread first. `__sched_lock` held. On a
 // POSIX lane a record holding a child is also marked orphaned, which hands the child to the poller
 // to reap.
-export let NetpollPdDropName = b"__np_pd_drop"
+let NetpollPdDropName = b"__np_pd_drop"
 
-export let NetpollDropMissed = 0 as FullRangeInt
+let NetpollDropMissed = 0 as FullRangeInt
 
 // ⭐ **IS THIS THREAD'S PARK NOTE A PAIR OR A LIST?** Its ARGUMENT is read as `(fd, mode)` for one source and
 // as a group record for several, and the park KIND is the only thing that says which — so every door that
@@ -1227,18 +1227,18 @@ end 'emitNetpollPdLookupOrAbort'
 
 // The socket band's and every other waiting surface's door to `__np_pd_op_begin`: an operation begins on
 // `source`'s record here and carries the answered generation to its wait and, for a socket, to its late exit.
-export function emitNetpollPdOpBegin(module StdModule, block IrBlock, source ValueId, ids ValueMinter) returns ValueId
+function emitNetpollPdOpBegin(module StdModule, block IrBlock, source ValueId, ids ValueMinter) returns ValueId
 	let gen = ids.mint()
 	module.appendOp(block, op: StdOp.call(gen, callee: NetpollPdOpBeginName, args: argsOf(source)))
 	return gen
 end 'emitNetpollPdOpBegin'
 
-export function emitNetpollPdMarkTimedOut(module StdModule, block IrBlock, source ValueId, gen ValueId, ids ValueMinter)
+function emitNetpollPdMarkTimedOut(module StdModule, block IrBlock, source ValueId, gen ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdMarkTimedOutName, args: twoArgs(source, second: gen)))
 end 'emitNetpollPdMarkTimedOut'
 
 // Call `__np_pd_wait(source, mode, gen)` in `block` and answer its verdict.
-export function emitNetpollPdWait(module StdModule, block IrBlock, source ValueId, mode FullRangeInt, gen ValueId, ids ValueMinter) returns ValueId
+function emitNetpollPdWait(module StdModule, block IrBlock, source ValueId, mode FullRangeInt, gen ValueId, ids ValueMinter) returns ValueId
 	let verdict = ids.mint()
 	module.appendOp(block, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: threeArgs(source, second: emitConst(module, block: block, value: mode, ids: ids), third: gen)))
 	return verdict
@@ -2089,7 +2089,7 @@ end 'buildNetpollPdTimedOut'
 // `FD_CONNECT` and watches it through these three. On the two POSIX lanes the handle really is a child's, and
 // a socket there is polled directly.
 //
-// ⛔ **THE OPEN AND THE ARM ARE FILE-PRIVATE, AND THAT IS WHAT KEEPS THE REFUSAL ANSWERED.** Every holder
+// ⛔ **ONLY THIS FILE CALLS THE OPEN AND THE ARM, AND THAT IS WHAT KEEPS THE REFUSAL ANSWERED.** Every holder
 // reaches them through `emitNetpollAcquireChildSource`, which is the one body that tests the arm's answer; a
 // second spelling outside this file is how a refused registration becomes a park nothing can end.
 //
@@ -2106,7 +2106,7 @@ let NetpollChildOpenName = b"__np_child_open"
 let NetpollChildArmName = b"__np_child_arm"
 
 // `__np_child_close(source, token)` — give the source and its registration back, and reset its record.
-export let NetpollChildCloseName = b"__np_child_close"
+let NetpollChildCloseName = b"__np_child_close"
 
 // What a POSIX lane's arm answers on success. Its close takes the SOURCE back rather than a token, so the
 // value only has to be distinguishable from the 0 that means refused.
@@ -2673,12 +2673,12 @@ end 'emitNetpollCloseChildOnPort'
 //
 // ⚠ **THE COMPLETION-PORT LANE'S SPELLING**: `closeChildSource` takes the REGISTRATION TOKEN here where a
 // POSIX lane's takes the source, so this door serves that lane alone.
-export function emitNetpollUnwatchHandleOnPort(module StdModule, block IrBlock, token ValueId, ids ValueMinter)
+function emitNetpollUnwatchHandleOnPort(module StdModule, block IrBlock, token ValueId, ids ValueMinter)
 	_ = emitNetpoll(module, block: block, verb: NetpollVerb.closeChildSource, operands: argsOf(token), ids: ids)
 end 'emitNetpollUnwatchHandleOnPort'
 
 // What `emitNetpollAcquireChildSource` hands back: the source a wait names, and the token its close takes.
-export type NetpollChildSource
+type NetpollChildSource
 	export let source as ValueId
 	export let token as ValueId
 
@@ -2701,7 +2701,7 @@ end 'NetpollChildSource'
 // The Windows lane cannot reach `gone`: its open allocates a dense key and cannot fail this way,
 // and `RegisterWaitForSingleObject` on an already-signalled handle fires the callback at once, so
 // the packet is posted and the wait ends immediately.
-export function emitNetpollAcquireChildSource(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, hProcess ValueId, cont IrBlock, gone IrBlock) returns NetpollChildSource
+function emitNetpollAcquireChildSource(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, hProcess ValueId, cont IrBlock, gone IrBlock) returns NetpollChildSource
 	let opened = module.addBlock(func, label: b"npchopened", heat: BlockHeat.normal)
 
 	let source = ids.mint()
@@ -2715,7 +2715,7 @@ end 'emitNetpollAcquireChildSource'
 // zombies, so closing the handle is the whole renunciation. A POSIX poller's record keeps both
 // until the child exits, and closing the handle of a still-running child would only attempt a
 // non-blocking reap and leave it a zombie.
-export function emitNetpollRenounceChild(module StdModule, block IrBlock, shape NetpollShape, child NetpollChildSource, hProcess ValueId, ids ValueMinter)
+function emitNetpollRenounceChild(module StdModule, block IrBlock, shape NetpollShape, child NetpollChildSource, hProcess ValueId, ids ValueMinter)
 	match shape 'ownership'
 		completionPort then emitNetpollReleaseRenouncedChild(module, block: block, child: child, hProcess: hProcess, ids: ids)
 
@@ -2738,7 +2738,7 @@ end 'emitNetpollReleaseRenouncedChild'
 // ⛔ **IT IS THE ONE BODY THAT TESTS THE ARM'S ANSWER.** A registration the poller refused, answered with a
 // 0 the caller went on to wait behind, is a park nothing can end — so the refusal stops here, which is what a
 // socket the poller will not take already gets.
-export function emitNetpollWatchHandleOnRecord(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, source ValueId, handle ValueId, cont IrBlock) returns ValueId
+function emitNetpollWatchHandleOnRecord(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, source ValueId, handle ValueId, cont IrBlock) returns ValueId
 	let refused = module.addBlock(func, label: b"npchrefused", heat: BlockHeat.normal)
 
 	let token = ids.mint()
@@ -2859,21 +2859,21 @@ end 'buildNetpollSourceKeyRelease'
 
 // Open a poll source for the read this block is about to issue, and answer it. The caller is the reading green
 // thread, so the stamped key lands on the thread the completion packet will name.
-export function emitNetpollOpOpen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitNetpollOpOpen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let source = ids.mint()
 	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpOpenName, args: ValueIdArray.create(0)))
 	return source
 end 'emitNetpollOpOpen'
 
 // Give one back — see `NetpollOpOpenName`.
-export function emitNetpollOpClose(module StdModule, block IrBlock, source ValueId, ids ValueMinter)
+function emitNetpollOpClose(module StdModule, block IrBlock, source ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpCloseName, args: argsOf(source)))
 end 'emitNetpollOpClose'
 
 // ⭐ **THE ONE POLLER, FOR A CALLER OUTSIDE THIS FILE.** A Windows pipe joins the port when it is CREATED, which
 // is `GtRuntime`'s work rather than this band's — so the handle is read through a door rather than the label
 // being exported, exactly as every other word of this file is reached.
-export function emitNetpollPollerHandle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitNetpollPollerHandle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitLoadGlobalWord(module, block: block, label: NetpollPollerLabel, ids: ids)
 end 'emitNetpollPollerHandle'
 
@@ -3040,15 +3040,15 @@ function buildNetpollOpSettle(module StdModule)
 end 'buildNetpollOpSettle'
 
 // The three doors the socket band reaches the overlapped aim through — see each name's own note.
-export function emitNetpollOpAim(module StdModule, block IrBlock, source ValueId, mode FullRangeInt, handle ValueId, ids ValueMinter)
+function emitNetpollOpAim(module StdModule, block IrBlock, source ValueId, mode FullRangeInt, handle ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpAimName, args: threeArgs(source, second: emitConst(module, block: block, value: mode, ids: ids), third: handle)))
 end 'emitNetpollOpAim'
 
-export function emitNetpollOpClear(module StdModule, block IrBlock, ids ValueMinter)
+function emitNetpollOpClear(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpClearName, args: ValueIdArray.create(0)))
 end 'emitNetpollOpClear'
 
-export function emitNetpollOpSettle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitNetpollOpSettle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let source = ids.mint()
 	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpSettleName, args: ValueIdArray.create(0)))
 	return source
@@ -3062,7 +3062,7 @@ end 'emitNetpollOpSettle'
 // would be two owners of one record, with a child's waiter readied by a socket's packet. So a
 // minted key is ODD and a descriptor's record sits at TWICE the descriptor; the two runs can never
 // meet, whatever values the host hands out.
-export function emitNetpollDescriptorIndex(module StdModule, block IrBlock, target Target, fd ValueId, ids ValueMinter) returns ValueId
+function emitNetpollDescriptorIndex(module StdModule, block IrBlock, target Target, fd ValueId, ids ValueMinter) returns ValueId
 	return match netpollShape(target) 'shape'
 		epoll or
 		kqueue gives fd
@@ -3111,11 +3111,11 @@ end 'buildNetpollChildFired'
 
 // `__np_pipe_open(fd)` — take a pipe's read end off blocking and give it a poll record. Aborts
 // `netpollFailed` when the host refuses, exactly as a socket the poller will not take does.
-export let NetpollPipeOpenName = b"__np_pipe_open"
+let NetpollPipeOpenName = b"__np_pipe_open"
 
 // `__np_pipe_close(fd)` — reset the record before the descriptor is closed. A thread still parked on it is
 // READIED rather than stranded, which is `__np_pd_release`'s whole contract.
-export let NetpollPipeCloseName = b"__np_pipe_close"
+let NetpollPipeCloseName = b"__np_pipe_close"
 
 // `__np_pipe_open(fd)` — see `NetpollPipeOpenName`.
 function buildNetpollPipeOpen(module StdModule, target Target)
@@ -3245,7 +3245,7 @@ let GroupOffArgs = 32
 
 // The most members a group may hold: `__np_pd_wait_any` answers one bit per member in a 64-bit word. EXPORTED
 // so a caller sizing its group can be held to it where the size is chosen.
-export let NetpollGroupMaxMembers = 64 as FullRangeInt
+let NetpollGroupMaxMembers = 64 as FullRangeInt
 
 // ⭐⭐⭐ **A MEMBER IS A PAIR, AND THE SECOND HALF IS THE RECORD'S GENERATION WHEN THE CALLER'S OPERATION
 // BEGAN.** It is written at the build, by `emitNetpollGroupSetMember` from the `__np_pd_op_begin` the caller
@@ -3273,7 +3273,7 @@ end 'emitNetpollGroupDeadline'
 // `__np_pd_wait_any(group) -> fired` — suspend the running green thread until ANY member of `group` is ready in
 // its direction, and answer which members it found ready: bit `i` for member `i`. EXPORTED for the collect
 // drain, its one caller.
-export let NetpollPdWaitAnyName = b"__np_pd_wait_any"
+let NetpollPdWaitAnyName = b"__np_pd_wait_any"
 
 // `__np_group_unhook(gt)` — take `gt` off every direction word of its group that still names it, leaving each
 // held as `PdWait` until the wait resumes (see `PdWoken`). Called under `__sched_lock` by whatever ends the
@@ -3281,8 +3281,8 @@ export let NetpollPdWaitAnyName = b"__np_pd_wait_any"
 let NetpollGroupUnhookName = b"__np_group_unhook"
 
 // EXPORTED so the caller can SIZE the record it owns: its header plus one slot per member.
-export let NetpollGroupHeaderBytes = GroupOffArgs as FullRangeInt
-export let NetpollGroupSlotBytes = GroupSlotBytes
+let NetpollGroupHeaderBytes = GroupOffArgs as FullRangeInt
+let NetpollGroupSlotBytes = GroupSlotBytes
 
 // `&group[index]` — the one place a member's address is computed, for the writer above and the walk below.
 function emitNetpollGroupSlotAddr(module StdModule, block IrBlock, group ValueId, index ValueId, ids ValueMinter) returns ValueId
@@ -3294,7 +3294,7 @@ end 'emitNetpollGroupSlotAddr'
 // Write one member into `group` at `index`: its `(fd, mode)` pair and `gen`, the generation `__np_pd_op_begin`
 // answered for `fd` (see `GroupSlotGen`). EXPORTED for the collect drain, which fills a group from whichever of
 // its sources are still live.
-export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, mode FullRangeInt, gen ValueId, ids ValueMinter)
+function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, mode FullRangeInt, gen ValueId, ids ValueMinter)
 	let arg = emitNetpollParkArg(module, block: block, fd: fd, mode: emitConst(module, block: block, value: mode, ids: ids), ids: ids)
 	let slot = emitNetpollGroupSlotAddr(module, block: block, group: group, index: index, ids: ids)
 	emitStoreField(module, block: block, record: slot, offset: GroupSlotArg, value: arg)
@@ -3303,16 +3303,16 @@ end 'emitNetpollGroupSetMember'
 
 // Whether the last `__np_pd_wait_any` on `group` refused it for a member whose record left the caller's life —
 // see `GroupOffStale`. EXPORTED for the same caller.
-export function emitNetpollGroupStale(module StdModule, block IrBlock, group ValueId, ids ValueMinter) returns ValueId
+function emitNetpollGroupStale(module StdModule, block IrBlock, group ValueId, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: group, offset: GroupOffStale, ids: ids)
 end 'emitNetpollGroupStale'
 
 // EXPORTED for the same caller: how many members the group holds, and when the wait gives up.
-export function emitNetpollGroupSetCount(module StdModule, block IrBlock, group ValueId, count ValueId)
+function emitNetpollGroupSetCount(module StdModule, block IrBlock, group ValueId, count ValueId)
 	emitStoreField(module, block: block, record: group, offset: GroupOffCount, value: count)
 end 'emitNetpollGroupSetCount'
 
-export function emitNetpollGroupSetDeadline(module StdModule, block IrBlock, group ValueId, deadline ValueId)
+function emitNetpollGroupSetDeadline(module StdModule, block IrBlock, group ValueId, deadline ValueId)
 	emitStoreField(module, block: block, record: group, offset: GroupOffDeadline, value: deadline)
 end 'emitNetpollGroupSetDeadline'
 

@@ -1,24 +1,24 @@
-module let ParameterCellValueOffset = 0 as ByteOffset
+let ParameterCellValueOffset = 0 as ByteOffset
 
-module let ParameterCellWitnessOffset = ParameterCellValueOffset + InterfaceWitnessHalfOffset
+let ParameterCellWitnessOffset = ParameterCellValueOffset + InterfaceWitnessHalfOffset
 
-module let ParameterCellBytes = (ParameterCellWitnessOffset + MachineWordBytes) as FullRangeInt
+let ParameterCellBytes = (ParameterCellWitnessOffset + MachineWordBytes) as FullRangeInt
 
-module let ParameterCellAllocName = b"__mm_param_cell"
+let ParameterCellAllocName = b"__mm_param_cell"
 
-module function parameterCellCrossesASpawn(tag ValueTypeTag) returns bool
+function parameterCellCrossesASpawn(tag ValueTypeTag) returns bool
 	return tag != ValueTypeTag.typeParameter
 end 'parameterCellCrossesASpawn'
 
-module function parameterRidesACellIntoASpawn(byReference ParamPositionMask, param ParamCount, paramType MaxonType) returns bool
+function parameterRidesACellIntoASpawn(byReference ParamPositionMask, param ParamCount, paramType MaxonType) returns bool
 	return maskHasParam(byReference, param: param) and parameterCellCrossesASpawn(maxonTypeTag(paramType))
 end 'parameterRidesACellIntoASpawn'
 
-module function parameterCellHoldsAWitness(cellType MaxonType) returns bool
+function parameterCellHoldsAWitness(cellType MaxonType) returns bool
 	return maxonTypeTag(cellType) == ValueTypeTag.interfaceRef
 end 'parameterCellHoldsAWitness'
 
-module function byReferenceMaskOf(byRef ByRefConvention, paramCount ParamCount) returns ParamPositionMask
+function byReferenceMaskOf(byRef ByRefConvention, paramCount ParamCount) returns ParamPositionMask
 	var mask = NoParamPositions
 
 	if not byRef.statesAnything() 'everyParameterByValue'

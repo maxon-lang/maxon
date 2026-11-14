@@ -124,7 +124,7 @@ export let GtOffFuncPtr = GtOffThrew + PointerFieldBytes  // the async function'
 // The chain of whichever one list this GT is on: its owner's strand queue or — once reclaimed — a free
 // list. (The global run queue has its own link, `GtOffRunqNext`.) EXPORTED because the free lists are
 // `SchedRuntime`'s.
-export let GtOffNext = GtOffFuncPtr + PointerFieldBytes
+let GtOffNext = GtOffFuncPtr + PointerFieldBytes
 
 // ⭐⭐ **THE PER-CALLEE RELEASER — the address of this GT's `__gt_release_<callee>`, or 0.** A spawn
 // whose callee has NO managed argument, result or error writes nothing here and both release sites
@@ -208,7 +208,7 @@ let GtTeardownBytes = 8
 // same green thread.
 //
 // EXPORTED because `SchedRuntime.emitSchedBecomeM` stamps the scheduler context's self-ownership.
-export let GtOffOwner = GtOffTeardown + GtTeardownBytes
+let GtOffOwner = GtOffTeardown + GtTeardownBytes
 
 // ⭐⭐ **THE GT PARKED WAITING FOR THIS ONE TO COMPLETE, OR 0.** Written under this GT's record lock
 // (`GtOffRecordLock`) by the await and awaitAny registrations, taken under it by
@@ -221,14 +221,14 @@ let GtOffAwaiter = GtOffOwner + PointerFieldBytes
 // here before `__gt_cell_complete` publishes (`ServiceBehaviour.storeReplyWitness`) and the awaiter takes it
 // through `__gt_reply_witness`; the reply releaser drops through it (`AsyncReleaser.asyncSlotsAt`).
 // Read only on a reply cell: a green thread's holds a stale word.
-export let GtOffReplyWitness = GtOffAwaiter + PointerFieldBytes
+let GtOffReplyWitness = GtOffAwaiter + PointerFieldBytes
 
 let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 
 // A reply cell is the record's first `GtCellBytes` and is carved exactly that long, so every field a cell
 // is read or written through lies below it: one past it reads a neighbouring cell's bytes. The layout check
 // sees only that the prefix tiles, never which fields a cell's readers touch.
-export let GtCellBytes = GtOffRenounced + PointerFieldBytes
+let GtCellBytes = GtOffRenounced + PointerFieldBytes
 
 export let GtOffSp = GtCellBytes  // the SP the thread resumes with, once the switch has returned
 export let GtOffFp = GtOffSp + PointerFieldBytes  // saved frame pointer (rbp / x29) at the switch
@@ -260,18 +260,18 @@ export let GtOffArgBuf = GtOffWaiter + PointerFieldBytes  // the inline region (
 // builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited before each ReadFile (a dirty
 // `hEvent` low bit suppresses the completion packet) — every transfer issued against it zeroes it
 // first (`emitGtZeroOverlapped`).
-export let GtOffOverlapped = GtOffArgBuf + PointerFieldBytes
+let GtOffOverlapped = GtOffArgBuf + PointerFieldBytes
 let GtOverlappedBytes = 32
 
 // ⭐ **THE NTSTATUS THE COMPLETION PACKET CARRIED, masked to its 32 bits.** Written by the poller's decode
 // (`NetpollRuntime.emitNetpollDecodeCompletion`) beside `io_result` and read by `__gt_subp_yield_read` after
 // its wait, which is how a parked read tells bytes from a clean end of stream from a failure. EXPORTED because
 // `NetpollRuntime` writes it.
-export let GtOffIoStatus = GtOffOverlapped + GtOverlappedBytes
+let GtOffIoStatus = GtOffOverlapped + GtOverlappedBytes
 
 // The bytes the completion packet reported transferred (`OVERLAPPED_ENTRY.dwNumberOfBytesTransferred`), read
 // back by `__gt_subp_yield_read` once its wait ends. EXPORTED — the poller's decode writes it.
-export let GtOffIoResult = GtOffIoStatus + PointerFieldBytes
+let GtOffIoResult = GtOffIoStatus + PointerFieldBytes
 
 // The GT's OWN Windows TIB stack bounds, saved so the syscall shim can repoint `gs:[0x08]`
 // (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
@@ -293,19 +293,19 @@ export let GtOffTibStackLimit = GtOffTibStackBase + PointerFieldBytes
 // reads this word to tell a dropped READ from a dropped socket or child wait, so a live read must never
 // stamp a zero — and it cannot: `__np_pd_adopt` BUMPS the record's generation, so every stamped key carries
 // a generation of at least one in its high half whatever index it got, index zero included.
-export let GtOffIoSource = GtOffTibStackLimit + PointerFieldBytes
+let GtOffIoSource = GtOffTibStackLimit + PointerFieldBytes
 
 // ⭐ **THE PIPE HANDLE THE IN-FLIGHT READ WAS ISSUED ON.** Written before the read, read by
 // `__gt_promise_drop` to cancel it — and READ ONLY WHERE `io_source` IS NON-ZERO, which is exactly while the
 // kernel owns the operation. EXPORTED because `NetpollRuntime`'s aim writes it.
-export let GtOffIoHandle = GtOffIoSource + PointerFieldBytes
+let GtOffIoHandle = GtOffIoSource + PointerFieldBytes
 
 // ⭐⭐ **WHICH DIRECTION THE IN-FLIGHT OVERLAPPED OPERATION IS, `NetpollModeRead` or `NetpollModeWrite`.**
 // A completion packet names the OPERATION through its `lpOverlapped` and carries no direction of its own, so
 // the decode reads it off the thread to know which of the record's two direction words to ready. Written
 // before the operation is issued, beside `io_handle` and under the same guard: it is read only where
 // `io_source` is non-zero. EXPORTED because `NetpollRuntime`'s decode reads it.
-export let GtOffIoMode = GtOffIoHandle + PointerFieldBytes
+let GtOffIoMode = GtOffIoHandle + PointerFieldBytes
 
 // The TEB's `DeallocationStack` (`gs:[0x1478]`), saved, repointed and restored at every site that
 // moves the two bounds above, so the three always name one stack.
@@ -352,7 +352,7 @@ let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 export let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
 
 // EXPORTED because `NetpollRuntime` reads a netpoll park's `(fd, mode)` note out of it.
-export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
+let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 
 // ⭐⭐ **WHICH LIFE OF ITS POLL RECORD A NETPOLL PARK BELONGS TO** (`NetpollRuntime.PdOffGen`). A netpoll
 // park is registered on the FAR side of the context switch (`__np_pd_commit`, out of `__gt_register_park`),
@@ -360,7 +360,7 @@ export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 // only mark the commit could otherwise test, `PdWait`, reads identically across two lives of it. So the wait
 // stamps the record's generation here before it switches, and the commit publishes only on a match.
 // A park of any other kind never reads this and never writes it.
-export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
+let GtOffParkGen = GtOffParkArg + PointerFieldBytes
 
 // ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL is measured with.** Every
 // process-wide figure sums every row, so a bracket opened inside one worker would count every other worker's
@@ -378,9 +378,9 @@ export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
 //
 // EXPORTED because the allocator steps them and their readers are built in `MmRuntime`'s counter family,
 // which is where a caller looks for a memory column.
-export let GtOffThreadAllocs = GtOffParkGen + PointerFieldBytes
-export let GtOffThreadFrees = GtOffThreadAllocs + PointerFieldBytes
-export let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
+let GtOffThreadAllocs = GtOffParkGen + PointerFieldBytes
+let GtOffThreadFrees = GtOffThreadAllocs + PointerFieldBytes
+let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
 
 // ⭐⭐ **WHAT MAKES `__Builtins.threadCpuTicks()` THIS GREEN THREAD's CLOCK RATHER THAN ITS MACHINE's.** The
 // OS counter belongs to the OS thread, and a green thread that parks may resume on another machine, so a
@@ -500,10 +500,10 @@ export let GtOffLastError = GtOffPinDepth + PointerFieldBytes
 // chain through `GtOffSendNext` until it readies the sender); its absolute deadline,
 // `GtDeadlineMaxNs` when it armed no timer; and the `CownSendWake` a waker claims it with
 // (`CownRuntime.emitCownClaimSender`), which the sender reads with an acquire.
-export let GtOffSendNext = GtOffLastError + PointerFieldBytes
-export let GtOffSendPrev = GtOffSendNext + PointerFieldBytes
-export let GtOffSendDeadline = GtOffSendPrev + PointerFieldBytes
-export let GtOffSendOutcome = GtOffSendDeadline + PointerFieldBytes
+let GtOffSendNext = GtOffLastError + PointerFieldBytes
+let GtOffSendPrev = GtOffSendNext + PointerFieldBytes
+let GtOffSendDeadline = GtOffSendPrev + PointerFieldBytes
+let GtOffSendOutcome = GtOffSendDeadline + PointerFieldBytes
 
 export enum GtLastErrorDirection
 	intoGt
@@ -513,7 +513,7 @@ end 'GtLastErrorDirection'
 // The thread's message staging buffer (`CownRuntime.CownStagingName`), or 0 until its first
 // send. The spawn's zeroing leaves it: the buffer is arena memory that is never freed, so a reused
 // record keeps the one it has, and a zeroed word would carve a second.
-export let GtOffStaging = GtOffSendOutcome + PointerFieldBytes
+let GtOffStaging = GtOffSendOutcome + PointerFieldBytes
 
 let GtOffReplyCell = GtOffStaging + PointerFieldBytes
 
@@ -525,7 +525,7 @@ let GtOffReplyCell = GtOffStaging + PointerFieldBytes
 // walks them all along correctly.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffReplyCell + PointerFieldBytes
+let GtStructSize = GtOffReplyCell + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -533,7 +533,7 @@ export let GtStructSize = GtOffReplyCell + PointerFieldBytes
 //
 // EXPORTED because `CownRuntime` and `NetpollRuntime` produce kinds whose arms are here — the
 // files must spell one number.
-export enum GtParkKind
+enum GtParkKind
 	timer = 1
 
 	// ⚠ **2 AND 3 ARE RESERVED, NOT FREE** — a park kind travels in a green thread's own record, so a number is
@@ -723,7 +723,7 @@ end 'programInstallsPreemptSignal'
 // its fault handler `SA_ONSTACK`, and a lane that stops threads by signal registers the preemption handler
 // the same way beside it, so the fault handler's answer covers both. Neither frame fits in a green thread's
 // few kilobytes.
-export function targetInstallsSignalStack(target Target) returns bool
+function targetInstallsSignalStack(target Target) returns bool
 	return gtFaultFrameHome(target) == FaultFrameHome.signalStack
 end 'targetInstallsSignalStack'
 
@@ -904,7 +904,7 @@ let GtStackGuardMarginBytes = 0x3A0 as FullRangeInt
 // function, whose entry already proved `sp >= stackBase + gtStackGuardHeight + margin` — comfortably above
 // this. The floor exists for the case that argument stops covering: it is read where the stop is decided,
 // not where the guard is.
-export function gtAsyncPreemptFloor(target Target) returns FullRangeInt
+function gtAsyncPreemptFloor(target Target) returns FullRangeInt
 	return gtAsyncPreemptMargin(target) + gtStackSystemBytes(target)
 end 'gtAsyncPreemptFloor'
 
@@ -1003,18 +1003,18 @@ let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 // kind.
 let TimerTagSleep = 0
 let TimerTagReadDeadline = 1
-export let TimerTagSend = 3
+let TimerTagSend = 3
 
 // A netpoll park's direction (`NetpollModeRead`/`NetpollModeWrite`) as the tag its deadline entry carries.
 // EXPORTED for `NetpollRuntime`, which arms an entry at the park and removes it whenever the wait ends.
-export function emitTimerTagOfNetpollMode(module StdModule, block IrBlock, mode ValueId, ids ValueMinter) returns ValueId
+function emitTimerTagOfNetpollMode(module StdModule, block IrBlock, mode ValueId, ids ValueMinter) returns ValueId
 	return emitBin(module, block: block, a: mode, b: emitConst(module, block: block, value: TimerTagReadDeadline, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 end 'emitTimerTagOfNetpollMode'
 
 // What `__gt_timer_when` holds while the store is empty: a deadline no clock reading reaches, so *"is the
 // earliest deadline past?"* is one compare that answers no. EXPORTED for the scheduler's owed-poller test
 // (`SchedRuntime.emitSchedPollerOwed`), which asks whether any timer is pending.
-export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as FullRangeInt
+let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as FullRangeInt
 
 // --- Win32 wait / process constants ---
 // `WAIT_OBJECT_0` (0) is what `WaitForSingleObject` returns for a SIGNALED handle (an exited
@@ -1092,7 +1092,7 @@ let SpawnPreparationShift = 32
 // slot must arrive with its high half already zero — which a fresh `__slab_alloc` slot does. A slot REUSED
 // across calls would need an explicit `store 0` in `reap` to re-establish that; the per-call slot does not.
 let ExitCodeSlotBytes = 8
-export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
+let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
 // ⭐ **`runProcess` IS A THROWING BUILTIN — its USER-REACHABLE failure path THROWS, it does not
 // ABORT.** A command the user typed is not a compiler invariant, so the failure hands the caller a
@@ -1166,11 +1166,11 @@ let NanosPerSecond = 1000000000
 
 // EXPORTED for `NetpollRuntime`, which turns a deadline in milliseconds into the absolute nanoseconds the
 // timer store keys on.
-export let NanosPerMilli = 1000000
+let NanosPerMilli = 1000000
 
 // Where `emitGtDeadlineAfterMs` saturates. A send whose deadline is this waits with no timer armed,
 // which `ForeverMs` and every timeout too long to reach it share.
-export let GtDeadlineMaxNs = i64.max - NanosPerMilli
+let GtDeadlineMaxNs = i64.max - NanosPerMilli
 
 let GtDeadlineMaxMs = GtDeadlineMaxNs / NanosPerMilli
 
@@ -1221,7 +1221,7 @@ export let GtStackRelocateName = b"__gt_stack_relocate"
 
 export let GtStackAllocName = b"__gt_stack_alloc"
 export let GtStackFreeName = b"__gt_stack_free"
-export let GtSystemStackAllocName = b"__gt_system_stack_alloc"
+let GtSystemStackAllocName = b"__gt_system_stack_alloc"
 
 // ⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`, at a park.** See `buildGtStackShrink`.
 let GtStackShrinkName = b"__gt_stack_shrink"
@@ -1248,7 +1248,7 @@ export let GtSpawnName = b"__gt_spawn"
 // copies its spawner's owner, a green thread is stamped with ITSELF and heads a strand of its own.
 //
 // ⭐ EXPORTED for `CownRuntime`, which calls it by name.
-export let GtSpawnGreenName = b"__gt_spawn_green"
+let GtSpawnGreenName = b"__gt_spawn_green"
 
 // `__gt_spawn_main(entry) -> gt` — `main`'s own green thread (`GtSpawnKind.mainThread`). Its one caller is
 // `__gt_run_main`.
@@ -1296,16 +1296,16 @@ let GtReadyRunnableHeldName = b"__gt_ready_runnable_held"
 // What the two ready doors answer. Named because every waker compares against them and a bare
 // literal at each end would be one fact written twice.
 let WakeDebtOwed = 1
-export let WakeDebtNone = 0 as FullRangeInt
+let WakeDebtNone = 0 as FullRangeInt
 
 // ⭐⭐ **THE GLOBAL FIFO's TWO DOORS**, linked through `GtOffRunqNext`. The global queue holds owner tokens: a
 // full ring's overflow, a publish by an OS thread with no processor, and a yielding strand. Both require the
 // caller to hold `__sched_lock`.
-export let GtEnqueueName = b"__gt_enqueue"
+let GtEnqueueName = b"__gt_enqueue"
 
 // EXPORTED because `SchedRuntime` pops the global run queue — `__sched_find_runnable`'s fairness and batch
 // arms.
-export let GtDequeueName = b"__gt_dequeue"
+let GtDequeueName = b"__gt_dequeue"
 
 // ⭐⭐⭐ **THE STRAND QUEUE's DOORS — the per-green-thread counterparts of the global FIFO's.** They
 // differ from their global twins only in where the ends live (the OWNER's struct) and which link
@@ -1333,7 +1333,7 @@ end 'isStrandGuardCallee'
 // half of its teardown), parked (commit a send park, or register any other on its store), or yielded or
 // preempted (place it). Called by the scheduler loop (`SchedRuntime.buildSchedLoop`) on the machine that
 // popped `owner`'s token, which owns the strand for the whole call.
-export let GtRunStrandName = b"__gt_run_strand"
+let GtRunStrandName = b"__gt_run_strand"
 
 export let GtAwaitName = b"__gt_await"
 export let GtTryAwaitName = b"__gt_try_await"
@@ -1391,7 +1391,7 @@ let GtNoHeldStrand = 0
 
 // ⭐ EXPORTED: a cown's runner has no promise, so it is its own consumer and calls this itself when
 // it ends (`CownRuntime`'s `__cown_run`).
-export let GtOwnerDoneName = b"__gt_owner_done"
+let GtOwnerDoneName = b"__gt_owner_done"
 let GtReclaimName = b"__gt_reclaim"
 
 // ⭐⭐ **THE NON-BLOCKING PEEK.** `__gt_is_complete(gt) -> 1 if that green thread has reached
@@ -1429,7 +1429,7 @@ export let GtCellAllocName = b"__gt_cell_alloc"
 // awaiter and whose stack free `stackBase == 0` skips). **Nothing may read the cell after that call**: if the
 // awaiter had already renounced its promise, the runner is the second arrival and the struct is on a free
 // list.
-export let GtCellCompleteName = b"__gt_cell_complete"
+let GtCellCompleteName = b"__gt_cell_complete"
 
 // ⭐⭐ **A REPLY HELD AT AN INTERFACE TYPE IS TAKEN IN TWO CALLS, AND THE CELL OUTLIVES THE FIRST.**
 // `__gt_try_await_holding(cell)` is `__gt_try_await` — the wait, its trace and scheduler event, the value and
@@ -1760,7 +1760,7 @@ end 'registerIoOperationTags'
 // clocks. The WALL clock has no such relationship to the scheduler and correctly rides its own
 // `usesWallClock` bit instead (see `ClockRuntime.maxon`'s header).
 export let GtNowNsName = b"__gt_now_ns"
-export let GtTimerAddName = b"__gt_timer_add"
+let GtTimerAddName = b"__gt_timer_add"
 
 let GtTimerCheckName = b"__gt_timer_check"
 
@@ -1845,7 +1845,7 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // struct goes back only when both the runner and the consumer are finished (`GtOffTeardown`).
 
 export let GtQuiesceName = b"__gt_quiesce"
-export let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
+let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
 
 export let GtPanicFlushName = b"__gt_panic_flush"
 export let GtFaultFlushName = b"__gt_fault_flush"
@@ -1862,7 +1862,7 @@ let GtPanicFlushFinished = 2
 // space an oracle would, and a thread that needs more still grows. `MultiMSharing.lastWriterWins`:
 // the adapt and the scan write it under `__gt_seed_guard` and a spawn reads it without, and every value a
 // spawn can read is a seed some window or scan chose.
-export let GtSeedBytesLabel = b"__gt_seed_bytes"
+let GtSeedBytesLabel = b"__gt_seed_bytes"
 
 // The summed per-P sample counters (`POffStackSampleSum`, `POffStackSampleCount`) as the last window close
 // read them, touched only inside `__gt_seed_guard`'s claim (`__gt_seed_adapt`).
@@ -1995,8 +1995,8 @@ export let ErrorBrokenPipe = 109
 // two ends of stream are the child's write end gone (`STATUS_PIPE_BROKEN`) and the last byte already delivered
 // (`STATUS_END_OF_FILE`); a socket transfer tells a request its cancel reached (`STATUS_CANCELLED`) from one the
 // kernel finished first.
-export let NtStatusSuccess = 0 as FullRangeInt
-export let NtStatusCancelled = 0xC0000120 as FullRangeInt
+let NtStatusSuccess = 0 as FullRangeInt
+let NtStatusCancelled = 0xC0000120 as FullRangeInt
 let NtStatusPipeBroken = 0xC000014B
 let NtStatusEndOfFile = 0xC0000011
 
@@ -2053,7 +2053,7 @@ let GtRuntimeCallPrefix = b"__gt_"
 // narrower than MmRuntime's `isRuntimeCallee`: a `__gt_*` call implies the whole scheduler (spawn enqueues,
 // await parks, both context-switch), and it also implies the HEAP (the scheduler's tables come from
 // `__slab_alloc`), which is why `scanRuntimeUsage` turns on `usesHeap` alongside `usesGt`.
-export function isGtRuntimeCallee(callee ByteArray) returns bool
+function isGtRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: GtRuntimeCallPrefix)
 end 'isGtRuntimeCallee'
 
@@ -2377,13 +2377,13 @@ end 'runtimeCalleeSourceMethod'
 // front of an author in place of the method they wrote, which is the same class of wrong answer the map
 // exists to prevent — just spelled with no characters. One home for the rule, so five families
 // cannot word it five ways.
-export function requireQuotableSourceSpelling(spelling ByteArray, callee ByteArray)
+function requireQuotableSourceSpelling(spelling ByteArray, callee ByteArray)
 	if spelling.count() == 0 'unquotable'
 		panic("requireQuotableSourceSpelling: the source-method map answers an EMPTY spelling for '{String.from(callee)}' — an E3057 would quote '' at an author in place of the method they actually wrote")
 	end 'unquotable'
 end 'requireQuotableSourceSpelling'
 
-export function requireThrowsStampMatchesPredicate(installer String, predicate String, callee ByteArray, stamped bool, named bool)
+function requireThrowsStampMatchesPredicate(installer String, predicate String, callee ByteArray, stamped bool, named bool)
 	if stamped and not named 'stampedNotNamed'
 		let drift = "{installer}: '{String.from(callee)}' stamps a `throws` clause but {predicate} does NOT name it — the throwing-builder set and the predicate have drifted"
 		panic("{drift}")
@@ -2399,7 +2399,7 @@ end 'requireThrowsStampMatchesPredicate'
 // quotable. Separate from the single-name form because a `match` arm binds two values and may not
 // drop one: a check that read only the first would leave the second — the very spelling the case
 // exists to carry — unverified.
-export function requireQuotableSharedSpellings(spelling ByteArray, alsoSpelled ByteArray, callee ByteArray)
+function requireQuotableSharedSpellings(spelling ByteArray, alsoSpelled ByteArray, callee ByteArray)
 	requireQuotableSourceSpelling(spelling, callee: callee)
 	requireQuotableSourceSpelling(alsoSpelled, callee: callee)
 end 'requireQuotableSharedSpellings'
@@ -2477,7 +2477,7 @@ end 'ioRuntimeGlobals'
 // ⚠ **THIS IS NOT `usesChildPipes`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesChildPipes` asks *"does this
 // program read a pipe?"*; this asks *"does a read on this target complete somewhere else?"*, and only the
 // second one is about the target.
-export enum IoCompletionShape
+enum IoCompletionShape
 	// Windows: the read is handed to a completion port and finishes as a packet on it.
 	completionPort
 
@@ -2487,7 +2487,7 @@ end 'IoCompletionShape'
 
 // ⚠ Keyed on the OS, like every other shape question in this compiler: whether a read can be in flight is a
 // property of the platform's IO model, not of its instruction set.
-export function ioCompletionShape(target Target) returns IoCompletionShape
+function ioCompletionShape(target Target) returns IoCompletionShape
 	return match target.os 'os'
 		windows gives IoCompletionShape.completionPort
 		linux or
@@ -2673,7 +2673,7 @@ function emitGtSpawnZeroing(module StdModule, block IrBlock, gt ValueId, kind Gt
 	end 'eachField'
 end 'emitGtSpawnZeroing'
 
-export function emitGtZeroOverlapped(module StdModule, block IrBlock, overlapped ValueId, ids ValueMinter)
+function emitGtZeroOverlapped(module StdModule, block IrBlock, overlapped ValueId, ids ValueMinter)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 
 	for word in 0 upto GtOverlappedBytes / PointerFieldBytes 'eachWord'
@@ -3009,7 +3009,7 @@ function emitGtHonourPreemptRequest(module StdModule, func IrFunction, block IrB
 	return resume
 end 'emitGtHonourPreemptRequest'
 
-export function emitGtHonourPreemptRequestOnMachine(module StdModule, func IrFunction, block IrBlock, machine ValueId, ids ValueMinter) returns IrBlock
+function emitGtHonourPreemptRequestOnMachine(module StdModule, func IrFunction, block IrBlock, machine ValueId, ids ValueMinter) returns IrBlock
 	let honour = module.addBlock(func, label: b"honourpreempt", heat: BlockHeat.cold)
 	let resume = module.addBlock(func, label: b"honourresume", heat: BlockHeat.normal)
 	resume.blockArgs.push(IrBlockArg.create(machine, argType: StdType.i64))
@@ -3033,7 +3033,7 @@ function emitHonourPreemptSplit(module StdModule, block IrBlock, machine ValueId
 	module.appendOp(honour, op: StdOp.call(ids.mint(), callee: GtPreemptName, args: argsOf(gt)))
 end 'emitHonourPreemptSplit'
 
-export function emitBranchOnPreemptRequest(module StdModule, block IrBlock, gt ValueId, requested IrBlock, notRequested IrBlock, ids ValueMinter)
+function emitBranchOnPreemptRequest(module StdModule, block IrBlock, gt ValueId, requested IrBlock, notRequested IrBlock, ids ValueMinter)
 	let guard = emitLoadField(module, block: block, record: gt, offset: GtOffStackGuard, ids: ids)
 	emitBranchOnCompare(module, block: block, value: guard, pred: StdCmpPred.eq, against: GtStackGuardPreempt, whenTrue: requested, whenFalse: notRequested, ids: ids)
 end 'emitBranchOnPreemptRequest'
@@ -3050,7 +3050,7 @@ end 'emitGtRestoreStackGuard'
 // 1 when a stack allocation's answer `stackBase` is a refusal, for `__gt_free_get`'s seed and a
 // shrink's smaller stack alike. The test is the sign, for `__slab_assert_os_alloc`'s reason:
 // `VirtualAlloc` refuses with NULL and a raw `mmap` with a negative errno.
-export function emitGtStackRefused(module StdModule, block IrBlock, stackBase ValueId, ids ValueMinter) returns ValueId
+function emitGtStackRefused(module StdModule, block IrBlock, stackBase ValueId, ids ValueMinter) returns ValueId
 	return emitCompareWithConstant(module, block: block, value: stackBase, pred: StdCmpPred.le, against: 0, ids: ids)
 end 'emitGtStackRefused'
 
@@ -3163,13 +3163,13 @@ function buildGtReady(module StdModule)
 	module.functions.push(func)
 end 'buildGtReady'
 
-export function emitGtReady(module StdModule, block IrBlock, gt ValueId, gate GtReadyGate, hold SchedLockHold, ids ValueMinter) returns ValueId
+function emitGtReady(module StdModule, block IrBlock, gt ValueId, gate GtReadyGate, hold SchedLockHold, ids ValueMinter) returns ValueId
 	let debt = ids.mint()
 	module.appendOp(block, op: StdOp.call(debt, callee: gtReadyNameOf(gate, hold: hold), args: argsOf(gt)))
 	return debt
 end 'emitGtReady'
 
-export enum GtReadyGate
+enum GtReadyGate
 	fromWaiting
 	alreadyRunnable
 end 'GtReadyGate'
@@ -3289,7 +3289,7 @@ function emitGtCasWaitingToReady(module StdModule, func IrFunction, cur IrBlock,
 	return won
 end 'emitGtCasWaitingToReady'
 
-export function emitGtMarkWaiting(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+function emitGtMarkWaiting(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: gt, offset: GtOffStatus, value: emitConst(module, block: block, value: GtStatus.waiting.rawValue, ids: ids))
 end 'emitGtMarkWaiting'
 
@@ -3322,7 +3322,7 @@ end 'emitGtPublishClaimedOwner'
 // ⛔⛔ **THE TWO QUEUES ARE ONE ALGORITHM, SO THEY HAVE ONE BODY PER OPERATION.** The intrusive-list protocol
 // is ONE fact — the `next = 0` seed, the empty/append split, the tail clear when the queue drains, the
 // tombstone refusal — and a clause added to one copy and not its twin would read as correct at both sites.
-export union GtQueueEnds
+union GtQueueEnds
 	// The GLOBAL run queue — its head and tail are two `.data` words, and it threads `GtOffRunqNext`.
 	globalLabels
 
@@ -3343,7 +3343,7 @@ end 'emitQueueLinkOffset'
 // The four one-word accesses a FIFO's ends need, and the pop CALL that goes with them. The head load is
 // exported because every emptiness PEEK (`SchedRuntime.emitSchedGlobalQueueIs`) reads through it, so a peek
 // cannot read a word the FIFO does not.
-export function emitQueueLoadHead(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter) returns ValueId
+function emitQueueLoadHead(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter) returns ValueId
 	return match ends 'ends'
 		globalLabels gives emitLoadGlobalWord(module, block: block, label: GtRunQueueHeadLabel, ids: ids)
 		ownerFields(owner) gives emitLoadField(module, block: block, record: owner, offset: GtOffCoroHead, ids: ids)
@@ -3469,7 +3469,7 @@ end 'emitGtFifoPop'
 // claim, made in the same critical section as the peek that identified the thread.
 //
 // ⚠ EXPORTED for `SchedRuntime.buildSchedSweepDropped`'s global half, which is its other caller.
-export function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ends GtQueueEnds, ids ValueMinter)
+function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ends GtQueueEnds, ids ValueMinter)
 	let loopHdr = module.addBlock(func, label: b"fifosweephdr", heat: BlockHeat.normal)
 	let peek = module.addBlock(func, label: b"fifosweeppeek", heat: BlockHeat.normal)
 	let free = module.addBlock(func, label: b"fifosweepfree", heat: BlockHeat.normal)
@@ -3511,12 +3511,12 @@ end 'emitGtFifoSweepDropped'
 //
 // ⚠ **THE RECLAIM RUNS WITH THE QUEUE's LOCK RELEASED AT BOTH CALLERS**, and the POP is what makes
 // that safe: a GT taken off a queue is unreachable by anyone else.
-export union GtHandOffAnswer
+union GtHandOffAnswer
 	giveTheProcessor(answer FullRangeInt)
 	giveUpTheStrand(strandOwner ValueId)
 end 'GtHandOffAnswer'
 
-export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, requeue ByteArray, handOff GtHandOffAnswer, ids ValueMinter)
+function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, requeue ByteArray, handOff GtHandOffAnswer, ids ValueMinter)
 	let noWork = module.addBlock(func, label: b"tsnowork", heat: BlockHeat.normal)
 	let checkDropped = module.addBlock(func, label: b"tscheckdropped", heat: BlockHeat.normal)
 	let reclaim = module.addBlock(func, label: b"tsreclaim", heat: BlockHeat.normal)
@@ -3535,7 +3535,7 @@ end 'emitGtTombstoneHandback'
 
 let GtRestrainedRefusePauseUs = 200
 
-export let GtProcessorHandedOff = -1 as FullRangeInt
+let GtProcessorHandedOff = -1 as FullRangeInt
 
 let GtAllGSeedSlots = 64
 
@@ -3672,7 +3672,7 @@ export let GtPinMachineName = b"__gt_pin_m"
 
 export let GtUnpinMachineName = b"__gt_unpin_m"
 
-export let GtUnpinOwnerName = b"__gt_unpin_owner"
+let GtUnpinOwnerName = b"__gt_unpin_owner"
 
 export let GtPinDepthName = b"__gt_pin_depth"
 
@@ -3902,9 +3902,9 @@ export let GtPinDestructName = b"__gt_pin_destruct"
 export let ManagedPinTokenOffset = 0 as ByteOffset
 export let ManagedPinBoxBytes = 8 as FullRangeInt
 
-export let GtReplyArmName = b"__gt_reply_arm"
+let GtReplyArmName = b"__gt_reply_arm"
 
-export let GtReplyDeferredName = b"__gt_reply_deferred"
+let GtReplyDeferredName = b"__gt_reply_deferred"
 
 export let GtReplyLaterName = b"__gt_reply_later"
 
@@ -4093,7 +4093,7 @@ function buildGtPinSurrender(module StdModule)
 	module.functions.push(func)
 end 'buildGtPinSurrender'
 
-export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
 	let grow = module.addBlock(func, label: b"allggrow", heat: BlockHeat.cold)
 	let copyHead = module.addBlock(func, label: b"allgcopyhead", heat: BlockHeat.cold)
 	let copyBody = module.addBlock(func, label: b"allgcopybody", heat: BlockHeat.cold)
@@ -4403,7 +4403,7 @@ function buildGtCoroSweepDropped(module StdModule)
 end 'buildGtCoroSweepDropped'
 
 // `__gt_now_ns()`, into a fresh value.
-export function emitGtNowNs(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitGtNowNs(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let now = ids.mint()
 	module.appendOp(block, op: StdOp.call(now, callee: GtNowNsName, args: ValueIdArray.create(0)))
 	return now
@@ -4414,7 +4414,7 @@ end 'emitGtNowNs'
 // the OVERFLOW-SAFE split identity `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq`. Both terms stay
 // inside i64 for any realistic QPF (Windows fixes it at 10 MHz; even a TSC-derived few-GHz value keeps
 // `(freq-1)*1e9 < 2^63`) and centuries of uptime — so no 128-bit MUL/DIV, and no new Target op, is needed.
-export function buildGtNowNs(module StdModule)
+function buildGtNowNs(module StdModule)
 	let func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	let ids = ValueMinter.create(0)
 
@@ -4783,7 +4783,7 @@ end 'emitGtPublishTimerWhen'
 
 // `__gt_timer_when`, read UNLOCKED with acquire — see `GtTimerWhenLabel` for why that is sound. EXPORTED for
 // the scheduler's poller deadline and its owed-poller test (`SchedRuntime`).
-export function emitGtLoadTimerWhen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitGtLoadTimerWhen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitLoadAcquireGlobalWord(module, block: block, label: GtTimerWhenLabel, ids: ids)
 end 'emitGtLoadTimerWhen'
 
@@ -4792,7 +4792,7 @@ end 'emitGtLoadTimerWhen'
 // both edges into it. The clock is read only when a timer is pending, and the answer is that reading: it is
 // minted in a block that dominates `due`, for the fire that follows. EXPORTED for the scheduler loop's top
 // (`SchedRuntime.buildSchedLoop`).
-export function emitGtBranchOnTimerDue(module StdModule, func IrFunction, cur IrBlock, due IrBlock, notDue IrBlock, notDueArgs ValueIdArray, ids ValueMinter) returns ValueId
+function emitGtBranchOnTimerDue(module StdModule, func IrFunction, cur IrBlock, due IrBlock, notDue IrBlock, notDueArgs ValueIdArray, ids ValueMinter) returns ValueId
 	let ask = module.addBlock(func, label: b"timerdueask", heat: BlockHeat.normal)
 
 	let when = emitGtLoadTimerWhen(module, block: cur, ids: ids)
@@ -4934,7 +4934,7 @@ end 'buildGtTimerCheck'
 // poller waits for. Every caller has established `earliest > now`, and rounding UP then guarantees ≥1 ms, so a
 // sub-millisecond remainder cannot busy-spin. EXPORTED for the scheduler loop's idle tail
 // (`SchedRuntime.buildSchedLoop`), beside the nanosecond constants it divides by.
-export function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest ValueId, now ValueId) returns ValueId
+function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest ValueId, now ValueId) returns ValueId
 	let delta = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(delta, lhs: earliest, rhs: now, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let milliMinusOne = ids.mint()
@@ -5333,7 +5333,7 @@ end 'buildGtDrainAtExit'
 // caller answers without that wait, for the reason the renounce mark in `buildGtPromiseDrop` gives;
 // its sum is taken unlocked, so steps in flight on other machines can leave it transiently negative,
 // and it is clamped to 0.
-export function emitBranchOnRenounced(module StdModule, block IrBlock, gt ValueId, whenRenounced IrBlock, whenHeld IrBlock, ids ValueMinter)
+function emitBranchOnRenounced(module StdModule, block IrBlock, gt ValueId, whenRenounced IrBlock, whenHeld IrBlock, ids ValueMinter)
 	let renounced = emitLoadField(module, block: block, record: gt, offset: GtOffRenounced, ids: ids)
 	emitBranchOnCompare(module, block: block, value: renounced, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: whenRenounced, whenFalse: whenHeld, ids: ids)
 end 'emitBranchOnRenounced'
@@ -5802,7 +5802,7 @@ end 'emitGtArriveAndReclaimIfSecond'
 // one of the seed's size, so one of any other size would be recorded, framed and freed at the wrong
 // size. The seed can move while a record waits, so `__gt_runner_done`,
 // `__gt_reclaim` and `__gt_free_get` each check against the size current there.
-export function emitGtDropStackUnlessSized(module StdModule, func IrFunction, cur IrBlock, record ValueId, kept ValueId, cont IrBlock, ids ValueMinter)
+function emitGtDropStackUnlessSized(module StdModule, func IrFunction, cur IrBlock, record ValueId, kept ValueId, cont IrBlock, ids ValueMinter)
 	let checkSize = module.addBlock(func, label: b"stackkeepcheck", heat: BlockHeat.normal)
 	let dropStack = module.addBlock(func, label: b"stackkeepdrop", heat: BlockHeat.normal)
 
@@ -5816,7 +5816,7 @@ export function emitGtDropStackUnlessSized(module StdModule, func IrFunction, cu
 	module.setTerminator(dropStack, op: StdOp.branch(cont.id))
 end 'emitGtDropStackUnlessSized'
 
-export function emitGtDropStack(module StdModule, func IrFunction, cur IrBlock, record ValueId, cont IrBlock, ids ValueMinter)
+function emitGtDropStack(module StdModule, func IrFunction, cur IrBlock, record ValueId, cont IrBlock, ids ValueMinter)
 	let dropStack = module.addBlock(func, label: b"stackdrop", heat: BlockHeat.normal)
 
 	let base = emitLoadField(module, block: cur, record: record, offset: GtOffStackBase, ids: ids)
@@ -5967,7 +5967,7 @@ end 'emitGtIsGreenThread'
 // ⚠ The scheduler's dropped-thread askers do NOT come through here: `emitGtIsDropped` reads the TEARDOWN
 // word, which is a different question about a different field, and folding the two would put a status
 // offset behind a name that no longer names one.
-module function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want GtStatus, ids ValueMinter) returns ValueId
+function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want GtStatus, ids ValueMinter) returns ValueId
 	return emitCompareWithConstant(module, block: block, value: status, pred: StdCmpPred.eq, against: want.rawValue, ids: ids)
 end 'emitGtStatusEquals'
 
@@ -6001,7 +6001,7 @@ end 'emitGtPublishCompleted'
 
 // The fill zeroes the status word, and `completed` is republished after it: a stale `awaitAny` or
 // `gtIsComplete` through a spent handle reads this cell's status and must still find it answered.
-export function emitGtCellScrub(module StdModule, block IrBlock, cell ValueId, ids ValueMinter)
+function emitGtCellScrub(module StdModule, block IrBlock, cell ValueId, ids ValueMinter)
 	let start = emitFieldAddr(module, block: block, record: cell, offset: GtOffStackBase, ids: ids)
 	module.appendOp(block, op: StdOp.memFill(start, byteCountId: emitConst(module, block: block, value: (GtCellBytes - GtOffStackBase) as FullRangeInt, ids: ids), value: 0))
 	emitGtPublishCompleted(module, block: block, gt: cell, ids: ids)
@@ -6103,7 +6103,7 @@ end 'assertOneFuncPublishesInOrder'
 // The op at an index the live-op walk just handed out — so an out-of-range answer is a broken module rather
 // than a bad argument, and every walk over an installed runtime says so once instead of each spelling it.
 // `reader` names the checker, because the panic sends a reader to the walk that tripped it.
-export function liveRuntimeOpAt(module StdModule, opIdx ElementIndex, reader String) returns StdOp
+function liveRuntimeOpAt(module StdModule, opIdx ElementIndex, reader String) returns StdOp
 	return try module.ops.get(opIdx) otherwise panic("{reader}: opIdx {opIdx} from the live-op walk is not in module.ops")
 end 'liveRuntimeOpAt'
 
@@ -6900,7 +6900,7 @@ end 'buildGtRunnerDone'
 // last live entry fills the hole, and from there it may be too EARLY for its new parent or too LATE for its
 // new children — never both, because the rest of the array is still a heap. Comparing it against its parent
 // answers which, so exactly one sift walk runs. Removing the last entry itself leaves a heap already.
-export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, tag ValueId, found IrBlock, missing IrBlock)
+function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, tag ValueId, found IrBlock, missing IrBlock)
 	let scanHdr = module.addBlock(func, label: b"tmscanhdr", heat: BlockHeat.normal)
 	let scanBody = module.addBlock(func, label: b"tmscanbody", heat: BlockHeat.normal)
 	let advance = module.addBlock(func, label: b"tmadvance", heat: BlockHeat.normal)
@@ -6986,7 +6986,7 @@ end 'emitGtTimerStoreRemove'
 // negative, so it is decided before the clock is read: a waiting send computes this inside its
 // cown lock, and where reading the clock is a system call every `ForeverMs` send would hold
 // the lock across one, serialising the cown's producers.
-export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrBlock, ms ValueId, joined IrBlock, ids ValueMinter) returns ValueId
+function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrBlock, ms ValueId, joined IrBlock, ids ValueMinter) returns ValueId
 	let saturated = module.addBlock(func, label: b"deadlinesaturated", heat: BlockHeat.normal)
 	let finite = module.addBlock(func, label: b"deadlinefinite", heat: BlockHeat.normal)
 
@@ -7014,7 +7014,7 @@ export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrB
 	return value
 end 'emitGtDeadlineAfterMs'
 
-export function emitMillisecondsAbove(module StdModule, block IrBlock, ms ValueId, ceilingMs FullRangeInt, ids ValueMinter) returns ValueId
+function emitMillisecondsAbove(module StdModule, block IrBlock, ms ValueId, ceilingMs FullRangeInt, ids ValueMinter) returns ValueId
 	let aboveSignedRange = emitCompareWithConstant(module, block: block, value: ms, pred: StdCmpPred.lt, against: 0, ids: ids)
 	let aboveCeiling = emitCompareWithConstant(module, block: block, value: ms, pred: StdCmpPred.gt, against: ceilingMs, ids: ids)
 	return emitBin(module, block: block, a: aboveSignedRange, b: aboveCeiling, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -7080,7 +7080,7 @@ end 'emitGtParkOnDeadline'
 // terminates `cur`; the CALLER terminates `cont`. EXPORTED because `CownRuntime`'s `__cown_send_wait` parks too, and
 // must come through this door rather than write its own — a second spelling would skip the note
 // `__gt_run_strand` reads to commit the park after the switch.
-export function emitGtPark(module StdModule, ids ValueMinter, cur IrBlock, kind FullRangeInt, arg ValueId, cont IrBlock)
+function emitGtPark(module StdModule, ids ValueMinter, cur IrBlock, kind FullRangeInt, arg ValueId, cont IrBlock)
 	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: GtParkName, args: twoArgs(emitConst(module, block: cur, value: kind, ids: ids), second: arg)))
 	module.setTerminator(cur, op: StdOp.branch(cont.id))
 end 'emitGtPark'
@@ -7141,7 +7141,7 @@ end 'emitGtSwitchAway'
 
 // The running green thread's CPU-clock offset (`GtOffCpuOffset`). EXPORTED for its one reader,
 // `ClockRuntime.__thread_cpu_ticks`, which adds it to the OS thread's counter in a green-thread program.
-export function emitLoadCurrentGtCpuOffset(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitLoadCurrentGtCpuOffset(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: emitLoadCurrentGt(module, block: block, ids: ids), offset: GtOffCpuOffset, ids: ids)
 end 'emitLoadCurrentGtCpuOffset'
 
@@ -7311,7 +7311,7 @@ end 'buildGtRegisterPark'
 //
 // Go's `maybeAdd`: `when < wakeTime`, read against the root before the add, is what makes this the deadline
 // the scheduler waits for next. An empty store publishes `TimerWhenEmpty`, which every deadline precedes.
-export function emitGtArmTimerDeadline(module StdModule, func IrFunction, cur IrBlock, gt ValueId, deadline ValueId, tag FullRangeInt, ids ValueMinter) returns IrBlock
+function emitGtArmTimerDeadline(module StdModule, func IrFunction, cur IrBlock, gt ValueId, deadline ValueId, tag FullRangeInt, ids ValueMinter) returns IrBlock
 	let wake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
 	let paid = module.addBlock(func, label: b"parktimerpaid", heat: BlockHeat.normal)
 
@@ -7360,7 +7360,7 @@ end 'emitGtExecute'
 // outstanding wait is a read — or a child — has no timer at all, so without that count the idle tail would
 // never enter the poller and `__sched_checkdead` would declare a program that is merely waiting to be
 // deadlocked.
-export function emitGtStoresPending(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitGtStoresPending(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let anyStore = emitBin(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtTimerCountLabel, ids: ids), b: emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
 	return emitCompareWithConstant(module, block: block, value: anyStore, pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitGtStoresPending'
@@ -7373,7 +7373,7 @@ end 'emitGtStoresPending'
 //
 // ⚠ **A PARKED CHILD IS NOT SWEPT HERE, BECAUSE NOTHING SWEEPS IT.** It is a source on the poller like a
 // socket, so its exit arrives as an entry the poller's own walk turns into a ready.
-export function emitGtPollStores(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, hold SchedLockHold, ids ValueMinter)
+function emitGtPollStores(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, hold SchedLockHold, ids ValueMinter)
 	let fire = module.addBlock(func, label: b"pollfire", heat: BlockHeat.normal)
 
 	let noDebt = emitConst(module, block: cur, value: WakeDebtNone, ids: ids)
@@ -7655,7 +7655,7 @@ let GtStackCacheClassCount = GtStackCacheMaxShift - GtStackPoolMinShift + 1
 let GtStackCacheEntryBytes = 16
 let GtStackCacheOffHead = 0
 let GtStackCacheOffBytes = 8
-export let GtStackCacheBytes = GtStackCacheClassCount * GtStackCacheEntryBytes
+let GtStackCacheBytes = GtStackCacheClassCount * GtStackCacheEntryBytes
 
 function requireStackPoolGeometry()
 	if (1 shl GtStackPoolMinShift) != GtMinStackBytes 'minDrifted'
@@ -8540,7 +8540,7 @@ end 'buildGtIoPark'
 // serves two entry points, `__ms_tcp_connect` and `__ml_bind`, and `buildManagedFileOpen` and
 // `buildManagedFilePathOperation` are each invoked for several entry points. Say which noun is being counted
 // wherever either number is quoted.
-export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
+function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
 	// ⭐ **A TARGET WITH NO SCHEDULER EMITS NO PARK.** The park exists to let OTHER green threads run while
 	// this one waits; a lane `targetProvidesFacility` denies `greenThreads` has exactly one thread of
 	// execution and nothing to yield to, so the call would be a `bl` into machinery nothing installed —
@@ -8560,7 +8560,7 @@ end 'emitIoPark'
 // rises and the exit's drain still meets. Refusing any later leaves that count standing at one
 // and the process in the poller for good — `__sched_checkdead` short-circuits on the same term,
 // so nothing reports it.
-export function emitIoParkBranchOnRenounced(module StdModule, cur IrBlock, operation GtIoOperation, proceed IrBlock, renounced IrBlock, ids ValueMinter)
+function emitIoParkBranchOnRenounced(module StdModule, cur IrBlock, operation GtIoOperation, proceed IrBlock, renounced IrBlock, ids ValueMinter)
 	if not (module.parksOnIo and ioParkRefusesARenouncedCoroutine(operation)) 'carriesOn'
 		emitIoPark(module, block: cur, operation: operation, ids: ids)
 		module.setTerminator(cur, op: StdOp.branch(proceed.id))
@@ -9200,17 +9200,17 @@ let SubpSlotInUse = 0
 let SubpSlotFree = 0
 let SubpSlotClaimed = 1
 let SubpSlotLive = 2
-export let SubpSlotHProcess = 8
-export let SubpSlotStdinWrite = 16
+let SubpSlotHProcess = 8
+let SubpSlotStdinWrite = 16
 
 // Every OS count and exit status lands here, and each Win32 out-param writes only its low DWORD over
 // what the last user left: every read is an `emitLoadDword`, never an `emitLoadField`.
-export function emitSubpCountWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitSubpCountWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitFieldAddr(module, block: block, record: emitLoadCurrentGt(module, block: block, ids: ids), offset: GtOffIoResult, ids: ids)
 end 'emitSubpCountWord'
 
-export let SubpStdoutBase = 32
-export let SubpStderrBase = 72
+let SubpStdoutBase = 32
+let SubpStderrBase = 72
 let SubpSlotWriteBuf = 112
 let SubpSlotWriteCap = 120
 
@@ -9233,30 +9233,30 @@ let SubpSlotGeneration = 128
 // is 0, so a NUL in the payload is pushed like any other byte. A pointer of 0 means "nothing
 // queued", which is what every non-`bytes` stdin kind leaves it. The two limits are capture
 // ceilings in bytes, 0 meaning uncapped.
-export let SubpSlotPid = 136 as ByteOffset
-export let SubpSlotStdinPend = 144 as ByteOffset
-export let SubpSlotOutLimit = 152 as ByteOffset
-export let SubpSlotErrLimit = 160 as ByteOffset
+let SubpSlotPid = 136 as ByteOffset
+let SubpSlotStdinPend = 144 as ByteOffset
+let SubpSlotOutLimit = 152 as ByteOffset
+let SubpSlotErrLimit = 160 as ByteOffset
 
 // The wall-clock reading (in milliseconds) taken when `waitCollect` begins, so the result struct can report
 // how long the child ran. It is a SPAWN-to-WAIT span rather than a spawn-to-exit one because the corpus asks
 // for `durationMs` off the WAIT and a handle may be spawned long before anyone waits on it.
-export let SubpSlotWaitStartMs = 168 as ByteOffset
+let SubpSlotWaitStartMs = 168 as ByteOffset
 
 // What a deadline's kill is aimed at, and it always names something terminate-able: the child's job object
 // where the lane has one, the child's own process handle where it has not (a POSIX wait object, whose pid is
 // also its process-group id). `osProcessTerminate` takes this word and nothing else.
-export let SubpSlotProcessTree = 176 as ByteOffset
+let SubpSlotProcessTree = 176 as ByteOffset
 
-export let SubpSlotStdinRemaining = 192 as ByteOffset
+let SubpSlotStdinRemaining = 192 as ByteOffset
 
 // Who may touch the stdin write end, and every move is a CAS. `pushing` is the collect writing one
 // chunk; `closeRequested` is a close that found a push in flight, which the pusher carries out on
 // its way out; `closing` is the one closer, which stores `idle` once the end is closed and zeroed.
 // So the end is closed exactly once, and never under a write.
 let SubpSlotStdinState = 200
-export let SubpStdinIdle = 0 as FullRangeInt
-export let SubpStdinPushing = 1 as FullRangeInt
+let SubpStdinIdle = 0 as FullRangeInt
+let SubpStdinPushing = 1 as FullRangeInt
 let SubpStdinCloseRequested = 2
 let SubpStdinClosing = 3
 
@@ -9265,7 +9265,7 @@ let SubpStdinClosing = 3
 // one, so the release cannot double-close.
 let SubpSlotOwnedTreeObject = 184
 
-export let SubpSlotTraced = 208 as ByteOffset
+let SubpSlotTraced = 208 as ByteOffset
 
 // ⛔⛔ **THE COLLECT INTERLOCK — the one word a collect and a release contend for, and the last word of the
 // slot.** Nothing else serialises `__gt_subp_wait_collect` against `__gt_subp_release`: the release closes the
@@ -9276,12 +9276,12 @@ export let SubpSlotTraced = 208 as ByteOffset
 // `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
 // again.
 let SubpSlotCollector = 216
-export let SubpSlotStdinRegistered = 224 as ByteOffset
-export let SubpSlotStdinBase = 232 as ByteOffset
+let SubpSlotStdinRegistered = 224 as ByteOffset
+let SubpSlotStdinBase = 232 as ByteOffset
 let SubpCollectorFree = 0
-export let SubpCollectorHeld = 1 as FullRangeInt
+let SubpCollectorHeld = 1 as FullRangeInt
 let SubpCollectorReleased = 2
-export let SubpStreamReadEnd = 0
+let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
 let SubpStreamBufLen = 24
@@ -9344,17 +9344,17 @@ let SubpOwnedStdinOff = 24
 let SubpOwnedStdoutOff = 32
 let SubpOwnedStderrOff = 40
 let SubpNewlineByte = 10
-export let SubpWaitInfinite = 0xFFFFFFFF as FullRangeInt
+let SubpWaitInfinite = 0xFFFFFFFF as FullRangeInt
 
-export let SubpYieldReadName = b"__gt_subp_yield_read"
+let SubpYieldReadName = b"__gt_subp_yield_read"
 export let SubpSpawnName = b"__gt_subp_spawn"
 
 // The ONE `CreateProcessW` path. Every spelling a program can spawn a child with fills a request record and
 // calls this; see `SubpReqCmdline` for why there is only one.
-export let SubpSpawnCoreName = b"__gt_subp_spawn_core"
+let SubpSpawnCoreName = b"__gt_subp_spawn_core"
 export let SubpReadLineName = b"__gt_subp_read_line"
 export let SubpReadErrLineName = b"__gt_subp_read_err_line"
-export let SubpReadAvailableName = b"__gt_subp_read_available"
+let SubpReadAvailableName = b"__gt_subp_read_available"
 
 export let SubpWriteLineName = b"__gt_subp_write_line"
 export let SubpCloseStdinName = b"__gt_subp_close_stdin"
@@ -9403,13 +9403,13 @@ end 'subpRuntimeGlobals'
 // ⭐ **THE LAST WIN32 ERROR A SUBPROCESS OPERATION FAILED WITH**, which `__Builtins.subprocessLastErrorMessage()`
 // renders. ONE word rather than a message buffer — see `SubprocessRuntime`'s `buildSubpLastError` for the
 // argument.
-export let SubpLastErrorLabel = b"__subp_last_error"
+let SubpLastErrorLabel = b"__subp_last_error"
 
 // Capture `GetLastError()` into that word. Called at every site that is about to answer a failure, and
 // IMMEDIATELY after the failing OS call: nothing between the call and this reads or writes the thread's
 // last-error word (the shim's TIB writes do not touch the TEB's LastError), which is the same adjacency
 // `osLastError`'s own header states for the overlapped read.
-export function emitSubpRecordLastError(module StdModule, block IrBlock, ids ValueMinter)
+function emitSubpRecordLastError(module StdModule, block IrBlock, ids ValueMinter)
 	emitSubpRecordSpawnError(module, block: block, preparation: emitConst(module, block: block, value: SpawnPreparation.none.rawValue, ids: ids), ids: ids)
 end 'emitSubpRecordLastError'
 
@@ -9451,7 +9451,7 @@ end 'emitSubpSlotAddr'
 //
 // ⭐ **THE RULE IS STRUCTURAL RATHER THAN REMEMBERED, AND IT IS GREPPABLE:**
 //
-//   * `emitSubpSlotAddr` (above) is the RAW arithmetic and is file-private. Its only callers are the spawn
+//   * `emitSubpSlotAddr` (above) is the RAW arithmetic. Its only callers are the spawn
 //     CORE, which passes a slot index it produced itself, and `emitSubpSlotOf`.
 //   * **`emitSubpSlotOf` is the ONE door from a CALLER'S HANDLE to a slot address**, and every FUNCTION that
 //     calls it either opens with this guard or is an interior step of `__gt_subp_wait_collect`'s loop,
@@ -9470,7 +9470,7 @@ end 'emitSubpSlotAddr'
 // across a release, which `emitSubpTopUpStream` closes by re-reading the generation on resume.
 //
 // It terminates `cur` and returns the block where the handle is known good.
-export function emitSubpRequireHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, handle ValueId, whenBad IrBlock) returns IrBlock
+function emitSubpRequireHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, handle ValueId, whenBad IrBlock) returns IrBlock
 	let liveCheck = module.addBlock(func, label: b"subphlive", heat: BlockHeat.normal)
 	let sameGeneration = module.addBlock(func, label: b"subphgen", heat: BlockHeat.normal)
 	let good = module.addBlock(func, label: b"subphok", heat: BlockHeat.normal)
@@ -9499,7 +9499,7 @@ end 'emitSubpRequireHandle'
 // Take `slot`'s collect interlock (`SubpSlotCollector`) from `free` to `replacement`, or stop: a taken word is a
 // collect still holding the slot or a release that already took it. EXPORTED for the collect, which takes
 // `held`; the release takes `released`. Terminates `cur` and answers the block where the word is this caller's.
-export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction, cur IrBlock, slot ValueId, replacement FullRangeInt, ids ValueMinter) returns IrBlock
+function emitSubpRequireCollectorTaken(module StdModule, func IrFunction, cur IrBlock, slot ValueId, replacement FullRangeInt, ids ValueMinter) returns IrBlock
 	let taken = module.addBlock(func, label: b"subpcolltaken", heat: BlockHeat.normal)
 	let contended = module.addBlock(func, label: b"subpcollheld", heat: BlockHeat.normal)
 
@@ -9511,11 +9511,11 @@ export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction,
 end 'emitSubpRequireCollectorTaken'
 
 // Leave `slot`'s collect interlock free: the collect's every exit, and the spawn's claim. EXPORTED for the former.
-export function emitSubpCollectorFree(module StdModule, block IrBlock, slot ValueId, ids ValueMinter)
+function emitSubpCollectorFree(module StdModule, block IrBlock, slot ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: slot, offset: SubpSlotCollector, value: emitConst(module, block: block, value: SubpCollectorFree, ids: ids))
 end 'emitSubpCollectorFree'
 
-export function emitSubpStdinTransition(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, expected FullRangeInt, replacement FullRangeInt, whenLost IrBlock) returns IrBlock
+function emitSubpStdinTransition(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, expected FullRangeInt, replacement FullRangeInt, whenLost IrBlock) returns IrBlock
 	let won = module.addBlock(func, label: b"stdinwon", heat: BlockHeat.normal)
 
 	let answer = emitCasField(module, block: cur, record: slot, offset: SubpSlotStdinState, expected: emitConst(module, block: cur, value: expected, ids: ids), replacement: emitConst(module, block: cur, value: replacement, ids: ids), ids: ids)
@@ -9536,7 +9536,7 @@ function emitSubpStoreStdinState(module StdModule, block IrBlock, slot ValueId, 
 	module.appendOp(block, op: StdOp.storeRelease(stateAddr, offset: 0, valueId: emitConst(module, block: block, value: value, ids: ids), valueType: StdType.i64))
 end 'emitSubpStoreStdinState'
 
-export function emitSubpStoreStdinQueue(module StdModule, block IrBlock, slot ValueId, cursor ValueId, remaining ValueId)
+function emitSubpStoreStdinQueue(module StdModule, block IrBlock, slot ValueId, cursor ValueId, remaining ValueId)
 	emitStoreField(module, block: block, record: slot, offset: SubpSlotStdinPend, value: cursor)
 	emitStoreField(module, block: block, record: slot, offset: SubpSlotStdinRemaining, value: remaining)
 end 'emitSubpStoreStdinQueue'
@@ -9544,7 +9544,7 @@ end 'emitSubpStoreStdinQueue'
 // ⭐ **THE ONE DOOR FROM A CALLER'S HANDLE TO A SLOT ADDRESS** — see the roster rule above. The address is
 // freshly recomputed in `block` rather than threaded, because a pointer threaded across a loop is a live
 // register across that loop, which is the pressure discipline this whole runtime is built around.
-export function emitSubpSlotOf(module StdModule, block IrBlock, ids ValueMinter, handle ValueId) returns ValueId
+function emitSubpSlotOf(module StdModule, block IrBlock, ids ValueMinter, handle ValueId) returns ValueId
 	let table = emitLoadAcquireGlobalWord(module, block: block, label: SubpTableLabel, ids: ids)
 	return emitSubpSlotAddr(module, block: block, ids: ids, table: table, slotIdx: emitSubpHandleSlotIndex(module, block: block, ids: ids, handle: handle))
 end 'emitSubpSlotOf'
@@ -10166,24 +10166,24 @@ end 'emitSubpSecurityAttributes'
 // would otherwise arrive as one live value per argument across a spawn that immediately spills them all.
 // Its fields are i64 because every one of them is a machine word: a buffer address, a `cstring`, a Win32
 // flag word or a kind discriminator.
-export let SubpReqCmdline = 0 as ByteOffset  // NUL-terminated; a wide host spawns from `SubpReqWideCmdline`
-export let SubpReqCwd = 8 as ByteOffset  // cstring, or 0 to inherit the parent's working directory
-export let SubpReqFlags = 16 as ByteOffset  // Win32 dwCreationFlags, already translated from the surface bitfield
-export let SubpReqStdinKind = 24 as ByteOffset
-export let SubpReqStdinData = 32 as ByteOffset  // cstring: a path for `file`; for `bytes`, `SubpReqStdinLength` bytes
-export let SubpReqOutKind = 40 as ByteOffset
-export let SubpReqOutData = 48 as ByteOffset
-export let SubpReqOutLimit = 56 as ByteOffset
-export let SubpReqErrKind = 64 as ByteOffset
-export let SubpReqErrData = 72 as ByteOffset
-export let SubpReqErrLimit = 80 as ByteOffset
-export let SubpReqDetach = 88 as ByteOffset  // 1 ⇒ answer the child's PID and let it go, rather than a handle
+let SubpReqCmdline = 0 as ByteOffset  // NUL-terminated; a wide host spawns from `SubpReqWideCmdline`
+let SubpReqCwd = 8 as ByteOffset  // cstring, or 0 to inherit the parent's working directory
+let SubpReqFlags = 16 as ByteOffset  // Win32 dwCreationFlags, already translated from the surface bitfield
+let SubpReqStdinKind = 24 as ByteOffset
+let SubpReqStdinData = 32 as ByteOffset  // cstring: a path for `file`; for `bytes`, `SubpReqStdinLength` bytes
+let SubpReqOutKind = 40 as ByteOffset
+let SubpReqOutData = 48 as ByteOffset
+let SubpReqOutLimit = 56 as ByteOffset
+let SubpReqErrKind = 64 as ByteOffset
+let SubpReqErrData = 72 as ByteOffset
+let SubpReqErrLimit = 80 as ByteOffset
+let SubpReqDetach = 88 as ByteOffset  // 1 ⇒ answer the child's PID and let it go, rather than a handle
 
 // The child's whole environment, as a NUL-separated UTF-8 `NAME=VALUE` block, or 0 to
 // inherit this process's. ⚠ ZERO IS THE INHERIT ANSWER AND THE SLAB ZERO-FILLS, so the two entry points that
 // have no environment to pass (`__gt_subp_stream_spawn` and the two `runProcess(cmd)` shapes) say nothing at
 // all and get it — the same arrangement `SubpReqDetach` has.
-export let SubpReqEnv = 96 as ByteOffset
+let SubpReqEnv = 96 as ByteOffset
 
 // UTF-16 copies of the command, the working directory and the environment, used only when the host
 // is wide. `__gt_subp_widen_request` fills them just before the spawn, and
@@ -10192,7 +10192,7 @@ export let SubpReqEnv = 96 as ByteOffset
 let SubpReqWideCmdline = 104
 let SubpReqWideCwd = 112
 let SubpReqWideEnv = 120
-export let SubpReqStdinLength = 128 as ByteOffset
+let SubpReqStdinLength = 128 as ByteOffset
 let SubpReqBytes = 136
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
@@ -10207,7 +10207,7 @@ let SubpReqBytes = 136
 let SubpStdioInherit = 1
 let SubpStdioFile = 3
 let SubpStdinBytes = 2
-export let SubpOutCollect = 2 as FullRangeInt
+let SubpOutCollect = 2 as FullRangeInt
 
 // ⭐⭐ **`hold` — A STDIN PIPE THE PARENT OPENS AND NEVER WRITES TO, SO THE CHILD'S READ BLOCKS IN THE KERNEL
 // INSTEAD OF SEEING EOF.** `StreamingSubprocess` wants exactly that (a pipe with no payload preloaded), and so
@@ -10217,7 +10217,7 @@ export let SubpOutCollect = 2 as FullRangeInt
 // says *"the number is 4 because that is the value the compiler's runtime decodes"*, so the two are
 // one fact, and spelling it `hold` here is what stops a reader from concluding that `hold` is
 // unimplemented because no constant says so.
-export let SubpStdinHold = 4 as FullRangeInt
+let SubpStdinHold = 4 as FullRangeInt
 
 // ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE.** A chain of equality tests per kind
 // ending in *"everything else gets the null device"* gives a kind added to the stdlib and not to the chain
@@ -10871,7 +10871,7 @@ end 'emitSubpWideOperandStep'
 // A zeroed spawn request carrying only the command line — every other field's zero IS its default (inherit the
 // cwd, no creation flags, `StdinKind.none`, `OutputKind.discard`, no capture limit, do not detach), which the
 // slab's zeroing contract supplies for free. Callers overwrite exactly the fields they mean to change.
-export function emitSubpNewRequest(module StdModule, block IrBlock, ids ValueMinter, cmdline ValueId) returns ValueId
+function emitSubpNewRequest(module StdModule, block IrBlock, ids ValueMinter, cmdline ValueId) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: SubpReqBytes, ids: ids)
 	let req = emitSlabAlloc(module, block: block, bytes: sizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: block, record: req, offset: SubpReqCmdline, value: cmdline)
@@ -10949,14 +10949,14 @@ function emitSubpCloseStdinIfIdle(module StdModule, func IrFunction, ids ValueMi
 	return closing
 end 'emitSubpCloseStdinIfIdle'
 
-export function emitSubpCloseStdinThenIdle(module StdModule, block IrBlock, ids ValueMinter, slot ValueId)
+function emitSubpCloseStdinThenIdle(module StdModule, block IrBlock, ids ValueMinter, slot ValueId)
 	emitSubpCloseStdinWrite(module, block: block, ids: ids, slot: slot)
 	emitSubpStoreStdinState(module, block: block, slot: slot, value: SubpStdinIdle, ids: ids)
 end 'emitSubpCloseStdinThenIdle'
 
 // The queue is dropped with the write end, so a slot whose write end is 0 never has bytes left to
 // push; `emitSubpPushStdin` writes without testing for a pipe because of it.
-export function emitSubpCloseStdinWrite(module StdModule, block IrBlock, ids ValueMinter, slot ValueId)
+function emitSubpCloseStdinWrite(module StdModule, block IrBlock, ids ValueMinter, slot ValueId)
 	emitSubpClosePipeEnd(module, block: block, ids: ids, record: slot, offset: SubpSlotStdinWrite as ByteOffset)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SubpQueueDropName, args: argsOf(slot)))
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
@@ -11287,14 +11287,14 @@ function buildSubpStreamStateQuery(module StdModule, name ByteArray, streamBase 
 	module.functions.push(func)
 end 'buildSubpStreamStateQuery'
 
-export function emitSubpChunkOf(module StdModule, block IrBlock, remaining ValueId, ids ValueMinter) returns ValueId
+function emitSubpChunkOf(module StdModule, block IrBlock, remaining ValueId, ids ValueMinter) returns ValueId
 	let limit = emitConst(module, block: block, value: SubpReadChunkBytes as FullRangeInt, ids: ids)
 	let overLimit = emitCmp(module, block: block, a: remaining, b: limit, pred: StdCmpPred.gt, ids: ids)
 
 	return emitSelectWord(module, block: block, cond: overLimit, whenSet: limit, whenClear: remaining, ids: ids)
 end 'emitSubpChunkOf'
 
-export function emitSubpRequireNoQueue(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, whenQueued IrBlock) returns IrBlock
+function emitSubpRequireNoQueue(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, whenQueued IrBlock) returns IrBlock
 	let clear = module.addBlock(func, label: b"subpnoqueue", heat: BlockHeat.normal)
 	let queued = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: queued, pred: StdCmpPred.ne, against: 0, whenTrue: whenQueued, whenFalse: clear, ids: ids)
@@ -11302,7 +11302,7 @@ export function emitSubpRequireNoQueue(module StdModule, func IrFunction, ids Va
 	return clear
 end 'emitSubpRequireNoQueue'
 
-export function emitSubpWriteFailureTails(module StdModule, ids ValueMinter, closed IrBlock, failed IrBlock, answer FullRangeInt)
+function emitSubpWriteFailureTails(module StdModule, ids ValueMinter, closed IrBlock, failed IrBlock, answer FullRangeInt)
 	emitSubpStoreLastError(module, block: closed, code: ErrorBrokenPipe, ids: ids)
 	emitConstReturn(module, block: closed, value: answer, ids: ids)
 
@@ -11310,7 +11310,7 @@ export function emitSubpWriteFailureTails(module StdModule, ids ValueMinter, clo
 	emitConstReturn(module, block: failed, value: answer, ids: ids)
 end 'emitSubpWriteFailureTails'
 
-export function emitSubpWriteAll(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, writeEnd ValueId, buffer ValueId, length ValueId, whenClosed IrBlock, whenFailed IrBlock) returns IrBlock
+function emitSubpWriteAll(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, writeEnd ValueId, buffer ValueId, length ValueId, whenClosed IrBlock, whenFailed IrBlock) returns IrBlock
 	let writable = module.addBlock(func, label: b"subpwopen", heat: BlockHeat.normal)
 	let header = module.addBlock(func, label: b"subpwloop", heat: BlockHeat.normal)
 	let attempt = module.addBlock(func, label: b"subpwchunk", heat: BlockHeat.normal)

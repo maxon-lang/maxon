@@ -213,7 +213,7 @@
 		let SeizedWordBytes = 8
 		let SeizedTableCapacity = (SeizedTableBytes - SeizedTableThreadsOffset) / SeizedWordBytes
 
-		module typealias SeizedCount = int(0 to u64.max)
+		typealias SeizedCount = int(0 to u64.max)
 
 		union SeizedSlot
 			none
@@ -304,14 +304,14 @@
 	typealias OpenThreadArray = Array with OpenThread
 
 	#if os(Linux)
-		module type SeizedThreads
+		type SeizedThreads
 			var table as __ManagedHandle
 
-			module static function open(process Pid, pin MachinePin) returns SeizedThreads
+			static function open(process Pid, pin MachinePin) returns SeizedThreads
 				return Self{table: __ManagedHandle.adopting(__Builtins.profileSeizedOpen(process as RegisterWord, pin.surrender() as RegisterWord))}
 			end 'open'
 
-			module function held() returns bool
+			function held() returns bool
 				return self.table.handle() != 0
 			end 'held'
 
@@ -331,7 +331,7 @@
 				__Builtins.profileWriteWord(self.base(), offset, value)
 			end 'setWord'
 
-			module function count() returns SeizedCount
+			function count() returns SeizedCount
 				return self.word(SeizedTableCountOffset) as SeizedCount
 			end 'count'
 
@@ -349,14 +349,14 @@
 				return SeizedSlot.none
 			end 'indexOf'
 
-			module function contains(thread DebuggeeThreadId) returns bool
+			function contains(thread DebuggeeThreadId) returns bool
 				return match self.indexOf(thread) 'found'
 					none gives false
 					at gives true
 				end 'found'
 			end 'contains'
 
-			module function add(thread DebuggeeThreadId)
+			function add(thread DebuggeeThreadId)
 				if self.contains(thread) 'alreadyHeld'
 					return
 				end 'alreadyHeld'
@@ -371,7 +371,7 @@
 				self.setWord(SeizedTableCountOffset, value: (count + 1) as RegisterWord)
 			end 'add'
 
-			module function remove(thread DebuggeeThreadId)
+			function remove(thread DebuggeeThreadId)
 				match self.indexOf(thread) 'found'
 					none then return
 					at(index) then self.removeAt(index)
@@ -384,12 +384,12 @@
 				self.setWord(SeizedTableCountOffset, value: last as RegisterWord)
 			end 'removeAt'
 
-			module function killProcessHolding(thread DebuggeeThreadId)
+			function killProcessHolding(thread DebuggeeThreadId)
 				self.remove(thread)
 				__Builtins.profileSeizedKill(self.base(), thread as RegisterWord)
 			end 'killProcessHolding'
 
-			module function release()
+			function release()
 				self.table.release()
 			end 'release'
 		end 'SeizedThreads'
@@ -399,8 +399,8 @@
 
 	#if not os(Windows)
 		type ThreadWatch
-			module let id as SampledThreadId
-			module var cycles as SampleCycles
+			let id as SampledThreadId
+			var cycles as SampleCycles
 
 			static function starting(id SampledThreadId, cycles SampleCycles) returns ThreadWatch
 				return Self{id: id, cycles: cycles}
@@ -432,14 +432,14 @@
 		end 'StopKind'
 
 		type PendingStop
-			module let id as SampledThreadId
-			module let kind as StopKind
-			module let programCounter as RegisterWord
-			module let framePointer as RegisterWord
-			module let stackPointer as RegisterWord
-			module let linkRegister as LinkRegister
-			module let copied as RegisterWord
-			module let cycles as SampleCycles
+			let id as SampledThreadId
+			let kind as StopKind
+			let programCounter as RegisterWord
+			let framePointer as RegisterWord
+			let stackPointer as RegisterWord
+			let linkRegister as LinkRegister
+			let copied as RegisterWord
+			let cycles as SampleCycles
 
 			static function none() returns PendingStop
 				return Self{id: 0, kind: StopKind.nothing, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, cycles: 0}

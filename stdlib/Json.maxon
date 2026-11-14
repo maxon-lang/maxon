@@ -67,8 +67,7 @@ end 'JsonKind'
 ///   jsonArray       → children
 ///   jsonObject      → keys parallel to children
 // JsonNode's fields and static constructors are `public`-marked because
-// sibling types (`JsonDoc`, the parser, the emitter) read/construct nodes
-// by field. Maxon's field visibility is type-scoped rather than file-scoped.
+// programs read and construct nodes by field.
 // The type itself is also `public` because callers in other files build
 // nodes via `JsonNode.stringNode(...)` when constructing response payloads.
 public type JsonNode
@@ -111,10 +110,6 @@ typealias JsonNodeArray = Array with JsonNode
 public typealias StringArray = Array with String
 
 /// Owns the parsed JSON tree. Passed and assigned by reference, so every holder shares one tree.
-// Field/method visibility in Maxon is type-scoped, not file-scoped. The
-// emitter functions (`writeNode` etc.) and the parser (`JsonParser`) live
-// outside `JsonDoc` but need to read `root`/`nodes` and call `get`/`add` —
-// so those are `public`-marked.
 // `JsonDoc` is `public` so callers in other files can hold one (returned
 // from `Json.parse`) and pass it to other entry points. Methods on it
 // (other than `create`/`add`/`get`/`rootKind`, which the parser needs) are

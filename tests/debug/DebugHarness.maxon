@@ -8,8 +8,8 @@
 //
 // ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006).
 // So the corpus gets ONE shared half, exported from this file, and a case file beside it declares
-// only what that case alone uses. A file-private `let` does NOT collide, so a constant declared
-// twice is the half nothing catches: every constant this corpus shares is declared here or in
+// only what that case alone uses. A constant collides the same way, and a copy in another directory
+// does not, which is the half nothing catches: every constant this corpus shares is declared here or in
 // `tests/support/`.
 //
 // ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
@@ -27,17 +27,17 @@
 // Where the corpus lives, relative to the checkout root. Staging goes to this process's test scratch
 // directory outside the checkout (`testScratchDir`): a live `.maxon` under `tests/` is one `maxon fmt`
 // over the checkout rewrites.
-export let FixturesDirName = "tests/debug/fixtures"
-export let SpansFixtureName = "spans"
-export let GreenThreadFixtureName = "greenthread"
+let FixturesDirName = "tests/debug/fixtures"
+let SpansFixtureName = "spans"
+let GreenThreadFixtureName = "greenthread"
 
 // How a declaration is recognized in the staged fixture source.
-export let FunctionDeclarationPrefix = "function "
-export let DeclarationNameEnd = "("
+let FunctionDeclarationPrefix = "function "
+let DeclarationNameEnd = "("
 
 // How the dump writes its numbers, and the ASCII runs their digits come from. Spelled as numbers rather
 // than as character literals, which a receiver position cannot carry.
-export let HexPrefix = "0x"
+let HexPrefix = "0x"
 let HexBase = 16
 
 // ============================================================================================
@@ -46,22 +46,22 @@ let HexBase = 16
 
 // Every section heading the dump prints. The roster is complete because a section ends where the NEXT one
 // begins: a heading missing from it would have its rows read as the previous section's.
-export let DumpFilesHeading = "files ("
-export let DumpFunctionsHeading = "functions ("
-export let DumpTypesHeading = "types ("
-export let DumpLineTableHeading = "line table ("
-export let DumpInlineSitesHeading = "inline sites ("
-export let DumpInlineRangesHeading = "inline ranges ("
-export let DumpGlobalsSectionHeading = "globals ("
-export let DumpLayoutSectionHeading = "layout ("
+let DumpFilesHeading = "files ("
+let DumpFunctionsHeading = "functions ("
+let DumpTypesHeading = "types ("
+let DumpLineTableHeading = "line table ("
+let DumpInlineSitesHeading = "inline sites ("
+let DumpInlineRangesHeading = "inline ranges ("
+let DumpGlobalsSectionHeading = "globals ("
+let DumpLayoutSectionHeading = "layout ("
 
-export let RosterGlobalName = "__gt_allg"
-export let RosterLengthGlobalName = "__gt_allglen"
-export let DebugStreamGlobalName = "__ds_base"
+let RosterGlobalName = "__gt_allg"
+let RosterLengthGlobalName = "__gt_allglen"
+let DebugStreamGlobalName = "__ds_base"
 
 let SidecarNameTerminator = ":"
 
-export function sidecarTableNames(rows StringArray, names StringArray, published bool) returns StringArray
+function sidecarTableNames(rows StringArray, names StringArray, published bool) returns StringArray
 	let matching = StringArray.create(0)
 
 	for name in names 'eachName'
@@ -73,7 +73,7 @@ export function sidecarTableNames(rows StringArray, names StringArray, published
 	return matching
 end 'sidecarTableNames'
 
-export function sidecarTableRowsName(rows StringArray, name String) returns bool
+function sidecarTableRowsName(rows StringArray, name String) returns bool
 	for row in rows 'eachRow'
 		for token in whitespaceTokens(row) 'eachToken'
 			if token.replace(SidecarNameTerminator, with: "") == name 'namesIt'
@@ -87,7 +87,7 @@ end 'sidecarTableRowsName'
 
 // The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
 // heading nothing opens yields no rows, which the caller reports as the section being absent.
-export function dumpSectionRows(dump String, heading String) returns StringArray
+function dumpSectionRows(dump String, heading String) returns StringArray
 	let rows = StringArray.create(0)
 	var inSection = false
 
@@ -126,7 +126,7 @@ end 'opensASection'
 // A hex token's value. An optional `0x` opens it and the digits are read until the first character that
 // is not one, so a token carrying no digits reads 0 — which fails the assertion that consumes it rather
 // than standing in for a number nobody published.
-export function hexValue(token String) returns PrintedNumber
+function hexValue(token String) returns PrintedNumber
 	var value = 0 as PrintedNumber
 
 	for c in token.trim().replace(HexPrefix, with: "") 'eachCharacter'
@@ -139,7 +139,7 @@ export function hexValue(token String) returns PrintedNumber
 	return value
 end 'hexValue'
 
-export function hexDigitOf(c Character) returns UrlHexDigitReading
+function hexDigitOf(c Character) returns UrlHexDigitReading
 	let code = try c.asciiValue() otherwise return UrlHexDigitReading.notAHexDigit
 
 	return urlHexDigitOf(code as Byte)
@@ -151,7 +151,7 @@ end 'hexDigitOf'
 
 // Every line of every staged source, CR folded — the roster a case over a multi-file fixture derives its
 // demands from.
-export function everyStagedSourceLine(staged FilePath) returns StringArray
+function everyStagedSourceLine(staged FilePath) returns StringArray
 	let lines = StringArray.create(0)
 
 	for entry in listing(staged) 'eachEntry'
@@ -172,7 +172,7 @@ end 'everyStagedSourceLine'
 //
 // ⚠ The prefix is unindented on purpose: a `static function` inside a `type` opens with a TAB, and a
 // method is not what a case asking "which functions did this file declare" means.
-export function declaredFunctionNames(staged FilePath) returns StringArray
+function declaredFunctionNames(staged FilePath) returns StringArray
 	let names = StringArray.create(0)
 
 	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
@@ -195,89 +195,89 @@ end 'declaredNameIn'
 // THE DEBUGGER: FIXTURES, THE `maxon debug` FACES, AND THE EVENTS ONE PRINTS
 // ============================================================================================
 
-export let SteppingFixtureName = "stepping"
-export let ValuesFixtureName = "values"
-export let InlinedFixtureName = "inlined"
-export let FuzzyFixtureName = "fuzzy"
-export let CoroutineFixtureName = "coroutine"
-export let HeaplessFixtureName = "heapless"
-export let LongTextFixtureName = "longtext"
-export let CrashFixtureName = "crash"
-export let SpinFixtureName = "spin"
-export let LongCallFixtureName = "longcall"
-export let TestBodyFixtureName = "testbody"
-export let LeafPairFixtureName = "leafpair"
-export let ExitCascadeFixtureName = "exitcascade"
-export let PromotedDropFixtureName = "promoteddrop"
-export let PromotedValueFixtureName = "promotedvalue"
-export let LeafFoldFixtureName = "leaffold"
-export let CastLineFixtureName = "castline"
-export let ClosuresFixtureName = "closures"
-export let TestBodyTestFileName = "doubling.maxtest"
-export let TestBodyLibraryFileName = "doubling.maxon"
-export let GenericsFixtureName = "generics"
-export let SplicedFixtureName = "spliced"
-export let TwoPassFixtureName = "twopass"
-export let LoopsFixtureName = "loops"
-export let TwoDirsFixtureName = "twodirs"
-export let PrologueFixtureName = "prologue"
-export let WalksFixtureName = "walks"
-export let EnderFixtureName = "ender"
-export let FaultCalleeFixtureName = "faultcallee"
-export let HotConditionFixtureName = "hotcondition"
-export let HotServiceFixtureName = "hotservice"
-export let LeadingCallFixtureName = "leadingcall"
-export let SplicedClosureFixtureName = "splicedclosure"
-export let InlineStressFixtureName = "inlinestress"
-export let SplicedLoopFixtureName = "splicedloop"
-export let SplicedLibraryCallFixtureName = "splicedlibrarycall"
-export let StaleStepFixtureName = "stalestep"
-export let TableChurnFixtureName = "tablechurn"
-export let HoldConflictFixtureName = "holdconflict"
-export let SpilledVarFixtureName = "spilledvar"
-export let SiblingArmsFixtureName = "siblingarms"
-export let RivalArmFixtureName = "rivalarm"
-export let RivalLoopFixtureName = "rivalloop"
-export let DeadStoreFixtureName = "deadstore"
-export let DeadSplitFixtureName = "deadsplit"
-export let DeadPhiFixtureName = "deadphi"
-export let ScopeShadowFixtureName = "scopeshadow"
-export let BorrowedVarFixtureName = "borrowedvar"
-export let ScopeSplitFixtureName = "scopesplit"
-export let PhiBorrowFixtureName = "phiborrow"
-export let ReboundTotalFixtureName = "reboundtotal"
-export let EqualBindsFixtureName = "equalbinds"
-export let LoopBreakFixtureName = "loopbreak"
-export let ArmScopeFixtureName = "armscope"
-export let LogicLineFixtureName = "logicline"
-export let VoidCallFixtureName = "voidcall"
-export let RecursionFixtureName = "recursion"
-export let LibraryCallbackFixtureName = "librarycallback"
-export let ValueCallFixtureName = "valuecall"
-export let ParkingCallFixtureName = "parkingcall"
-export let ServiceHandlerFixtureName = "servicehandler"
+let SteppingFixtureName = "stepping"
+let ValuesFixtureName = "values"
+let InlinedFixtureName = "inlined"
+let FuzzyFixtureName = "fuzzy"
+let CoroutineFixtureName = "coroutine"
+let HeaplessFixtureName = "heapless"
+let LongTextFixtureName = "longtext"
+let CrashFixtureName = "crash"
+let SpinFixtureName = "spin"
+let LongCallFixtureName = "longcall"
+let TestBodyFixtureName = "testbody"
+let LeafPairFixtureName = "leafpair"
+let ExitCascadeFixtureName = "exitcascade"
+let PromotedDropFixtureName = "promoteddrop"
+let PromotedValueFixtureName = "promotedvalue"
+let LeafFoldFixtureName = "leaffold"
+let CastLineFixtureName = "castline"
+let ClosuresFixtureName = "closures"
+let TestBodyTestFileName = "doubling.maxtest"
+let TestBodyLibraryFileName = "doubling.maxon"
+let GenericsFixtureName = "generics"
+let SplicedFixtureName = "spliced"
+let TwoPassFixtureName = "twopass"
+let LoopsFixtureName = "loops"
+let TwoDirsFixtureName = "twodirs"
+let PrologueFixtureName = "prologue"
+let WalksFixtureName = "walks"
+let EnderFixtureName = "ender"
+let FaultCalleeFixtureName = "faultcallee"
+let HotConditionFixtureName = "hotcondition"
+let HotServiceFixtureName = "hotservice"
+let LeadingCallFixtureName = "leadingcall"
+let SplicedClosureFixtureName = "splicedclosure"
+let InlineStressFixtureName = "inlinestress"
+let SplicedLoopFixtureName = "splicedloop"
+let SplicedLibraryCallFixtureName = "splicedlibrarycall"
+let StaleStepFixtureName = "stalestep"
+let TableChurnFixtureName = "tablechurn"
+let HoldConflictFixtureName = "holdconflict"
+let SpilledVarFixtureName = "spilledvar"
+let SiblingArmsFixtureName = "siblingarms"
+let RivalArmFixtureName = "rivalarm"
+let RivalLoopFixtureName = "rivalloop"
+let DeadStoreFixtureName = "deadstore"
+let DeadSplitFixtureName = "deadsplit"
+let DeadPhiFixtureName = "deadphi"
+let ScopeShadowFixtureName = "scopeshadow"
+let BorrowedVarFixtureName = "borrowedvar"
+let ScopeSplitFixtureName = "scopesplit"
+let PhiBorrowFixtureName = "phiborrow"
+let ReboundTotalFixtureName = "reboundtotal"
+let EqualBindsFixtureName = "equalbinds"
+let LoopBreakFixtureName = "loopbreak"
+let ArmScopeFixtureName = "armscope"
+let LogicLineFixtureName = "logicline"
+let VoidCallFixtureName = "voidcall"
+let RecursionFixtureName = "recursion"
+let LibraryCallbackFixtureName = "librarycallback"
+let ValueCallFixtureName = "valuecall"
+let ParkingCallFixtureName = "parkingcall"
+let ServiceHandlerFixtureName = "servicehandler"
 
-export let DebugBatchOption = "--batch"
-export let DebugCommandsOptionPrefix = "--commands="
-export let DebugCompleteOptionPrefix = "--complete="
-export let DebugStopTimeoutOptionPrefix = "--stop-timeout="
+let DebugBatchOption = "--batch"
+let DebugCommandsOptionPrefix = "--commands="
+let DebugCompleteOptionPrefix = "--complete="
+let DebugStopTimeoutOptionPrefix = "--stop-timeout="
 let DebugTargetEnvOptionPrefix = "--target-env="
-export let NoDebugAgentOption = "--no-debug-agent"
+let NoDebugAgentOption = "--no-debug-agent"
 let CommandSeparator = ";"
 
-export typealias EventIndex = int(0 to u32.max)
-export typealias EventTally = int(0 to u32.max)
-export typealias EventNumber = int(i64.min to i64.max)
-export typealias JsonDocArray = Array with JsonDoc
+typealias EventIndex = int(0 to u32.max)
+typealias EventTally = int(0 to u32.max)
+typealias EventNumber = int(i64.min to i64.max)
+typealias JsonDocArray = Array with JsonDoc
 
 // What a reader answers for a key an event does not carry. The caller reports the absence naming the
 // key and printing the whole event, exactly as `describedLocalType` reports an absent local row.
-export let AbsentEventText = ""
+let AbsentEventText = ""
 let AbsentEventNumber = i64.min
 
 let JsonObjectOpen = "\{"
 
-export union CodeRangeLookup
+union CodeRangeLookup
 	none
 	range(start PrintedNumber, limit PrintedNumber)
 end 'CodeRangeLookup'
@@ -301,11 +301,11 @@ function debugBatchArguments(executable FilePath, commands String, extraOptions 
 	return arguments
 end 'debugBatchArguments'
 
-export function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment = Environment.inherit, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput
+function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment = Environment.inherit, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput
 	return spawnCompiler(debugBatchArguments(executable, commands: commands, extraOptions: extraOptions), staged: staged, what: "`{DebugSubcommandName} {DebugBatchOption}`", environment: environment, deadline: deadline)
 end 'spawnDebugBatch'
 
-export union BoundedSession
+union BoundedSession
 	finished(run CollectedOutput)
 	cutOff(stdout String, stderr String, elapsedMs DurationMs)
 
@@ -345,7 +345,7 @@ export union BoundedSession
 	end 'exitText'
 end 'BoundedSession'
 
-export function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs WaitDeadlineMs) returns BoundedSession
+function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs WaitDeadlineMs) returns BoundedSession
 	let config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: WorkingDirectory.at(staged))
 	config.arguments = debugBatchArguments(executable, commands: commands, extraOptions: extraOptions)
 	config.environment = environment
@@ -371,7 +371,7 @@ function cutOffBy(failure SubprocessError) returns BoundedSession
 	end 'which'
 end 'cutOffBy'
 
-export function spawnDebugComplete(executable FilePath, staged FilePath, partial String) returns CollectedOutput
+function spawnDebugComplete(executable FilePath, staged FilePath, partial String) returns CollectedOutput
 	let arguments = StringArray.create(0)
 	arguments.push(DebugSubcommandName)
 	arguments.push("{DebugCompleteOptionPrefix}{partial}")
@@ -381,17 +381,17 @@ export function spawnDebugComplete(executable FilePath, staged FilePath, partial
 end 'spawnDebugComplete'
 
 // The REPL face: no `--batch`, the script on the driver's own stdin, one command per line.
-export function spawnDebugRepl(executable FilePath, staged FilePath, script String) returns CollectedOutput
+function spawnDebugRepl(executable FilePath, staged FilePath, script String) returns CollectedOutput
 	return spawnCompiler([DebugSubcommandName, executable.toString()], staged: staged, what: "the `{DebugSubcommandName}` REPL", standardInput: InputSource.bytes(script))
 end 'spawnDebugRepl'
 
 // `--target-env=NAME=VALUE`, the one option that reaches the DEBUGGEE's environment rather than the
 // driver's.
-export function targetEnvOption(name String, value String) returns String
+function targetEnvOption(name String, value String) returns String
 	return "{DebugTargetEnvOptionPrefix}{name}={value}"
 end 'targetEnvOption'
 
-export function debugCommandLine(commands StringArray) returns String
+function debugCommandLine(commands StringArray) returns String
 	var line = ""
 
 	for command in commands 'eachCommand'
@@ -408,7 +408,7 @@ end 'debugCommandLine'
 // ⛔ A line that OPENS an object and does not parse PANICS: `--batch` promises a pure-JSON stdout, so a
 // line that is neither blank nor an object is the gate having nothing to read rather than a driver
 // answering wrongly.
-export function batchEvents(stdout String) returns JsonDocArray
+function batchEvents(stdout String) returns JsonDocArray
 	let events = JsonDocArray.create(0)
 
 	for rawLine in withoutCarriageReturns(stdout).split(LineFeed) 'eachLine'
@@ -429,7 +429,7 @@ function eventKind(event JsonDoc) returns String
 	return textOf(event, node: event.root, key: "event")
 end 'eventKind'
 
-export function eventKinds(events JsonDocArray) returns StringArray
+function eventKinds(events JsonDocArray) returns StringArray
 	let kinds = StringArray.create(0)
 
 	for event in events 'eachEvent'
@@ -439,7 +439,7 @@ export function eventKinds(events JsonDocArray) returns StringArray
 	return kinds
 end 'eventKinds'
 
-export function eventsOfKind(events JsonDocArray, kind String) returns JsonDocArray
+function eventsOfKind(events JsonDocArray, kind String) returns JsonDocArray
 	let matching = JsonDocArray.create(0)
 
 	for event in events 'eachEvent'
@@ -451,7 +451,7 @@ export function eventsOfKind(events JsonDocArray, kind String) returns JsonDocAr
 	return matching
 end 'eventsOfKind'
 
-export function eventAt(events JsonDocArray, index EventIndex) returns JsonDoc
+function eventAt(events JsonDocArray, index EventIndex) returns JsonDoc
 	return try events.get(index as ElementIndex) otherwise panic("debug tests: the gate could not run — event {index} was looked up in a stream of {events.count()}")
 end 'eventAt'
 
@@ -459,21 +459,21 @@ end 'eventAt'
 // READING ONE EVENT'S FIELDS
 // ============================================================================================
 
-export function textOf(doc JsonDoc, node JsonNodeId, key String) returns String
+function textOf(doc JsonDoc, node JsonNodeId, key String) returns String
 	return try doc.getString(node, key: key) otherwise AbsentEventText
 end 'textOf'
 
-export function numberOf(doc JsonDoc, node JsonNodeId, key String) returns EventNumber
+function numberOf(doc JsonDoc, node JsonNodeId, key String) returns EventNumber
 	return try doc.getInt(node, key: key) otherwise AbsentEventNumber
 end 'numberOf'
 
-export function flagOf(doc JsonDoc, node JsonNodeId, key String) returns bool
+function flagOf(doc JsonDoc, node JsonNodeId, key String) returns bool
 	return try doc.getBool(node, key: key) otherwise false
 end 'flagOf'
 
 // The one node a key names, as a list of AT MOST ONE — so "the key is absent" is a count of zero
 // rather than a node id standing in for nothing.
-export function memberOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
+function memberOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
 	let found = JsonNodeIdArray.create(0)
 	let child = try doc.getChild(node, key: key) otherwise return found
 	found.push(child)
@@ -483,7 +483,7 @@ end 'memberOf'
 
 // The elements of an array-valued key, EMPTY when the key is absent or is not an array — which the
 // caller reports as the list being missing, naming the key.
-export function childrenOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
+function childrenOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
 	let children = JsonNodeIdArray.create(0)
 	let arrayId = try doc.getChild(node, key: key) otherwise return children
 	let length = try doc.arrayLength(arrayId) otherwise return children
@@ -496,7 +496,7 @@ export function childrenOf(doc JsonDoc, node JsonNodeId, key String) returns Jso
 end 'childrenOf'
 
 // The whole stream as the text a failure report shows.
-export function renderedEvents(stdout String, stderr String) returns String
+function renderedEvents(stdout String, stderr String) returns String
 	return "It wrote to stdout:{listedLines(withoutCarriageReturns(stdout).split(LineFeed))}{LineFeed}and to stderr:{listedLines(withoutCarriageReturns(stderr).split(LineFeed))}"
 end 'renderedEvents'
 
@@ -504,7 +504,7 @@ end 'renderedEvents'
 // THE STAGED SOURCE — every line a case names is found by its anchor, never written down
 // ============================================================================================
 
-export function stagedLinesContaining(staged FilePath, needle String) returns EventTally
+function stagedLinesContaining(staged FilePath, needle String) returns EventTally
 	var tally = 0 as EventTally
 
 	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
@@ -521,11 +521,11 @@ end 'stagedLinesContaining'
 
 // A function row carries the frame column; a local row nested under it does not, which is what tells
 // the two apart once `dumpSectionRows` has trimmed the indentation away.
-export let FunctionRowColumn = "frame="
+let FunctionRowColumn = "frame="
 let TypeFieldRowPrefix = "+0x"
 let TypeRowPrefix = "["
 
-export function functionRowOf(functionRows StringArray, name String) returns String
+function functionRowOf(functionRows StringArray, name String) returns String
 	for row in functionRows 'eachRow'
 		if row.contains(FunctionRowColumn) and firstToken(row) == name 'thisFunction'
 			return row
@@ -535,7 +535,7 @@ export function functionRowOf(functionRows StringArray, name String) returns Str
 	return AbsentEventText
 end 'functionRowOf'
 
-export function localRowsOf(functionRows StringArray, name String) returns StringArray
+function localRowsOf(functionRows StringArray, name String) returns StringArray
 	let locals = StringArray.create(0)
 	var inside = false
 
@@ -553,7 +553,7 @@ export function localRowsOf(functionRows StringArray, name String) returns Strin
 	return locals
 end 'localRowsOf'
 
-export function declaredFunctionRows(functionRows StringArray) returns StringArray
+function declaredFunctionRows(functionRows StringArray) returns StringArray
 	let rows = StringArray.create(0)
 
 	for row in functionRows 'eachRow'
@@ -565,7 +565,7 @@ export function declaredFunctionRows(functionRows StringArray) returns StringArr
 	return rows
 end 'declaredFunctionRows'
 
-export function typeRowOf(typeRows StringArray, name String) returns String
+function typeRowOf(typeRows StringArray, name String) returns String
 	for row in typeRows 'eachRow'
 		if row.startsWith(TypeRowPrefix) and typeNameIn(row) == name 'thisType'
 			return row
@@ -575,7 +575,7 @@ export function typeRowOf(typeRows StringArray, name String) returns String
 	return AbsentEventText
 end 'typeRowOf'
 
-export function typeFieldRowsOf(typeRows StringArray, name String) returns StringArray
+function typeFieldRowsOf(typeRows StringArray, name String) returns StringArray
 	let fields = StringArray.create(0)
 	var inside = false
 
@@ -599,13 +599,13 @@ function typeNameIn(row String) returns String
 	return try whitespaceTokens(row).get(1) otherwise AbsentEventText
 end 'typeNameIn'
 
-export function typeKindIn(row String) returns String
+function typeKindIn(row String) returns String
 	return try whitespaceTokens(row).get(2) otherwise AbsentEventText
 end 'typeKindIn'
 
 // The type a local row or a field row names: everything past its last `: ` separator, because a type's
 // rendering may be several words (`<generic instance>`) and a last-WORD reader answers half of one.
-export function describedTypeIn(row String) returns String
+function describedTypeIn(row String) returns String
 	let pieces = row.split(TypeSeparatorToken)
 
 	if pieces.count() < 2 'namesNoType'
@@ -617,12 +617,12 @@ end 'describedTypeIn'
 
 let TypeSeparatorToken = ": "
 
-export function firstToken(row String) returns String
+function firstToken(row String) returns String
 	return try whitespaceTokens(row).get(0) otherwise AbsentEventText
 end 'firstToken'
 
 // The `lines=` column of a function row, as a number.
-export function columnValueIn(row String, column String) returns PrintedNumber
+function columnValueIn(row String, column String) returns PrintedNumber
 	for token in whitespaceTokens(row) 'eachToken'
 		if token.startsWith(column) 'thisColumn'
 			return decimalValue(token.replace(column, with: ""))
@@ -635,7 +635,7 @@ end 'columnValueIn'
 // A `[0xSTART, 0xLIMIT)` pair anywhere in a row: the function row's code range, or the scope range a
 // local row carries. A location column spells `[rbp-0x18]`, which opens no pair because it does not
 // close with a comma.
-export function codeRangeIn(row String) returns CodeRangeLookup
+function codeRangeIn(row String) returns CodeRangeLookup
 	let tokens = whitespaceTokens(row)
 
 	for (iter, token) in tokens.withIterator() 'eachToken'
@@ -656,79 +656,79 @@ export function codeRangeIn(row String) returns CodeRangeLookup
 end 'codeRangeIn'
 
 let RangeOpen = "[0x"
-module let RangeSeparator = ","
-module let RangeClose = ")"
+let RangeSeparator = ","
+let RangeClose = ")"
 
 // ============================================================================================
 // THE VOCABULARY EVERY CASE SPELLS — commands, event names, keys and the values they take
 // ============================================================================================
 //
-// ⛔ ONE HOME, because a file-private `let` does not collide: a command word or an event key written
-// down twice is the duplication nothing in this corpus catches for you.
+// ⛔ ONE HOME, because a copy in another directory does not collide: a command word or an event key
+// written down twice is the duplication nothing in this corpus catches for you.
 
-export let BreakCommand = "break"
-export let ClearCommand = "clear"
-export let RunCommand = "run"
-export let ContinueCommand = "continue"
-export let StepCommand = "step"
-export let NextCommand = "next"
-export let FinishCommand = "finish"
-export let UntilCommand = "until"
-export let BacktraceCommand = "backtrace"
-export let PrintCommand = "print"
-export let LocalsCommand = "locals"
-export let QuitCommand = "quit"
+let BreakCommand = "break"
+let ClearCommand = "clear"
+let RunCommand = "run"
+let ContinueCommand = "continue"
+let StepCommand = "step"
+let NextCommand = "next"
+let FinishCommand = "finish"
+let UntilCommand = "until"
+let BacktraceCommand = "backtrace"
+let PrintCommand = "print"
+let LocalsCommand = "locals"
+let QuitCommand = "quit"
 
-export let BreakpointEventName = "breakpoint"
-export let StopEventName = "stop"
-export let BacktraceEventName = "backtrace"
-export let LocalsEventName = "locals"
-export let ValueEventName = "value"
-export let ExitEventName = "exit"
-export let CrashEventName = "crash"
-export let TimeoutEventName = "timeout"
-export let ErrorEventName = "error"
+let BreakpointEventName = "breakpoint"
+let StopEventName = "stop"
+let BacktraceEventName = "backtrace"
+let LocalsEventName = "locals"
+let ValueEventName = "value"
+let ExitEventName = "exit"
+let CrashEventName = "crash"
+let TimeoutEventName = "timeout"
+let ErrorEventName = "error"
 
-export let ActionKey = "action"
-export let FunctionKey = "function"
-export let FileKey = "file"
-export let LineKey = "line"
-export let ColumnKey = "col"
-export let ReasonKey = "reason"
-export let CodeKey = "code"
-export let FramesKey = "frames"
-export let BacktraceKey = "backtrace"
-export let LocalsKey = "locals"
-export let InlinedKey = "inlined"
-export let OffsetsKey = "offsets"
-export let CandidatesKey = "candidates"
-export let SuggestionKey = "suggestion"
+let ActionKey = "action"
+let FunctionKey = "function"
+let FileKey = "file"
+let LineKey = "line"
+let ColumnKey = "col"
+let ReasonKey = "reason"
+let CodeKey = "code"
+let FramesKey = "frames"
+let BacktraceKey = "backtrace"
+let LocalsKey = "locals"
+let InlinedKey = "inlined"
+let OffsetsKey = "offsets"
+let CandidatesKey = "candidates"
+let SuggestionKey = "suggestion"
 let NameKey = "name"
-export let DisplayKey = "display"
-export let UnavailableKey = "unavailable"
-export let MessageKey = "message"
-export let ValueKey = "value"
-export let FrameKey = "frame"
+let DisplayKey = "display"
+let UnavailableKey = "unavailable"
+let MessageKey = "message"
+let ValueKey = "value"
+let FrameKey = "frame"
 
-export let SetAction = "set"
-export let ClearedAction = "cleared"
-export let AmbiguousAction = "ambiguous"
-export let NoMatchAction = "no-match"
-export let NoCodeAction = "no-code"
+let SetAction = "set"
+let ClearedAction = "cleared"
+let AmbiguousAction = "ambiguous"
+let NoMatchAction = "no-match"
+let NoCodeAction = "no-code"
 
-export let BreakpointStopReason = "breakpoint"
-export let StepStopReason = "step"
+let BreakpointStopReason = "breakpoint"
+let StepStopReason = "step"
 
-export let OptimizedOutReason = "optimized-out"
+let OptimizedOutReason = "optimized-out"
 
-export function lineTarget(line SourceLine, file String = StagedProgramFileName) returns String
+function lineTarget(line SourceLine, file String = StagedProgramFileName) returns String
 	return "{file}:{line}"
 end 'lineTarget'
 
 let HeldStopWording = "stopped ("
 let HeldStopDeadlineMs = 120000
 
-export function sessionHeldAt(staged FilePath, anchor String, environment Environment = Environment.inherit) returns ReplSession
+function sessionHeldAt(staged FilePath, anchor String, environment Environment = Environment.inherit) returns ReplSession
 	let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
 	let session = ReplSession.open(builtExecutable(staged), staged: staged, environment: environment)
 
@@ -745,7 +745,7 @@ end 'sessionHeldAt'
 // One staged, built fixture — the preamble every case in this corpus opens with, in ONE place. A build
 // that failed stops the case running at all, so it panics naming the fixture rather than failing an
 // assertion about a debugger that was never handed a program.
-export function builtFixture(caseLabel String, fixture String, extraArguments StringArray = StringArray.create(0)) returns FilePath
+function builtFixture(caseLabel String, fixture String, extraArguments StringArray = StringArray.create(0)) returns FilePath
 	let staged = stagedFixtureTree(FixturesDirName, caseLabel: caseLabel, fixture: fixture)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: "{fixture} for case {caseLabel}", extraArguments: extraArguments)
 
@@ -754,7 +754,7 @@ end 'builtFixture'
 
 // The program run with nothing attached — the control every case comparing a debugged run with an
 // undebugged one needs, because "the answer looks right" is not the claim; "the answer is the SAME" is.
-export function runBuiltProgram(staged FilePath, arguments StringArray = StringArray.create(0)) returns CollectedOutput
+function runBuiltProgram(staged FilePath, arguments StringArray = StringArray.create(0)) returns CollectedOutput
 	let program = builtExecutable(staged)
 
 	if not File.exists(program) 'noProgram'
@@ -766,7 +766,7 @@ end 'runBuiltProgram'
 
 // A command repeated: the only honest way to drive a session past a breakpoint whose hit count is a
 // property of the fixture's loops rather than of the debugger.
-export function repeatedCommand(command String, times EventTally) returns StringArray
+function repeatedCommand(command String, times EventTally) returns StringArray
 	let commands = StringArray.create(0)
 
 	for _ in 0 upto times 'eachRepeat'
@@ -776,7 +776,7 @@ export function repeatedCommand(command String, times EventTally) returns String
 	return commands
 end 'repeatedCommand'
 
-export function appendedCommands(first StringArray, rest StringArray) returns StringArray
+function appendedCommands(first StringArray, rest StringArray) returns StringArray
 	let all = StringArray.create(0)
 
 	for command in first 'eachFirst'
@@ -792,11 +792,11 @@ end 'appendedCommands'
 
 // A string element of an array-valued key — a candidate name, a completion — read off the node itself
 // rather than out of an object field, because the element IS the string.
-export function stringAt(doc JsonDoc, node JsonNodeId) returns String
+function stringAt(doc JsonDoc, node JsonNodeId) returns String
 	return doc.get(node).stringValue
 end 'stringAt'
 
-export function stringsOf(doc JsonDoc, node JsonNodeId, key String) returns StringArray
+function stringsOf(doc JsonDoc, node JsonNodeId, key String) returns StringArray
 	let strings = StringArray.create(0)
 
 	for element in childrenOf(doc, node: node, key: key) 'eachElement'
@@ -812,7 +812,7 @@ end 'stringsOf'
 
 // Every value of a list as `name=display`, which is what a disagreement has to show a reader: a
 // display that is wrong is only legible beside the name it was rendered for.
-export function valueRows(doc JsonDoc, node JsonNodeId, key String) returns StringArray
+function valueRows(doc JsonDoc, node JsonNodeId, key String) returns StringArray
 	let rows = StringArray.create(0)
 
 	for value in childrenOf(doc, node: node, key: key) 'eachValue'
@@ -824,7 +824,7 @@ end 'valueRows'
 
 // The one value of a list carrying `name` — EMPTY when the list holds none, which the caller reports
 // as the value being missing rather than as a wrong rendering of it.
-export function valueNamed(doc JsonDoc, node JsonNodeId, key String, name String) returns JsonNodeIdArray
+function valueNamed(doc JsonDoc, node JsonNodeId, key String, name String) returns JsonNodeIdArray
 	let found = JsonNodeIdArray.create(0)
 
 	for value in childrenOf(doc, node: node, key: key) 'eachValue'
@@ -836,25 +836,25 @@ export function valueNamed(doc JsonDoc, node JsonNodeId, key String, name String
 	return found
 end 'valueNamed'
 
-export function nodeAt(nodes JsonNodeIdArray, index EventIndex) returns JsonNodeId
+function nodeAt(nodes JsonNodeIdArray, index EventIndex) returns JsonNodeId
 	return try nodes.get(index as ElementIndex) otherwise panic("debug tests: the gate could not run — node {index} was looked up in a list of {nodes.count()}")
 end 'nodeAt'
 
-export let ChildrenKey = "children"
+let ChildrenKey = "children"
 
 // A row whose code range is a PRECONDITION rather than the claim — a function row, whose
 // `[0xSTART, 0xLIMIT)` the dump has printed since `sidecar-dump` first pinned it.
-export function requiredCodeRange(row String, what String) returns (PrintedNumber, PrintedNumber)
+function requiredCodeRange(row String, what String) returns (PrintedNumber, PrintedNumber)
 	match codeRangeIn(row) 'theRange'
 		none then panic("debug tests: the gate could not run — {what} carries no `[0xSTART, 0xLIMIT)` code range: {row}")
 		range(start, limit) then return (start, limit)
 	end 'theRange'
 end 'requiredCodeRange'
 
-export let MostBytesOfOneInstruction = 15
+let MostBytesOfOneInstruction = 15
 
 // The location column of a local row (`reg0`, `[rbp-0x70]`): the token after its code range.
-export function placeOfRow(row String) returns String
+function placeOfRow(row String) returns String
 	let tokens = whitespaceTokens(row)
 
 	for (iter, token) in tokens.withIterator() 'eachToken'
@@ -867,7 +867,7 @@ export function placeOfRow(row String) returns String
 end 'placeOfRow'
 
 // The inline site a local row names (`in [1]`), or empty for a local of the function's own text.
-export function inlineSiteOfRow(row String) returns String
+function inlineSiteOfRow(row String) returns String
 	let tokens = whitespaceTokens(row)
 
 	for (iter, token) in tokens.withIterator() 'eachToken'
@@ -883,7 +883,7 @@ let InlineSiteWord = "in"
 
 // How far two rows of one name that sit in different places overlap, or 0 when they do not overlap or
 // share a place.
-export function overlapOfRowsInDifferentPlaces(left String, right String) returns PrintedNumber
+function overlapOfRowsInDifferentPlaces(left String, right String) returns PrintedNumber
 	if placeOfRow(left) == placeOfRow(right) 'thePlaceTheyShare'
 		return 0
 	end 'thePlaceTheyShare'
@@ -896,7 +896,7 @@ export function overlapOfRowsInDifferentPlaces(left String, right String) return
 	return overlapLimit - overlapStart if overlapLimit > overlapStart else 0
 end 'overlapOfRowsInDifferentPlaces'
 
-export function pairsOfRowsThatShadow(rows StringArray) returns StringArray
+function pairsOfRowsThatShadow(rows StringArray) returns StringArray
 	let shadowing = StringArray.create(0)
 
 	for (leftAt, left) in rows.withIterator() 'eachRow'
@@ -912,13 +912,13 @@ export function pairsOfRowsThatShadow(rows StringArray) returns StringArray
 	return shadowing
 end 'pairsOfRowsThatShadow'
 
-export function functionCodeStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
+function functionCodeStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
 	let (start, _) = requiredCodeRange(dumpedFunctionRow(executable, staged: staged, name: name), what: "`{name}`'s function row")
 
 	return start
 end 'functionCodeStart'
 
-export function functionPrologueStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
+function functionPrologueStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
 	let row = dumpedFunctionRow(executable, staged: staged, name: name)
 	let (start, _) = requiredCodeRange(row, what: "`{name}`'s function row")
 
@@ -943,7 +943,7 @@ end 'dumpedFunctionRow'
 
 let PrologueColumn = "prologue=+"
 
-export let InsideRuntimeSymbolReason = "inside-runtime-symbol"
+let InsideRuntimeSymbolReason = "inside-runtime-symbol"
 
 #if arch(arm64)
 	export let PushedFramePointerBytes = 4 as PrintedNumber
@@ -951,25 +951,25 @@ export let InsideRuntimeSymbolReason = "inside-runtime-symbol"
 #endif
 
 #if not arch(arm64)
-	export let PushedFramePointerBytes = 1 as PrintedNumber
-	export let StackSlotMark = "[rbp"
+	let PushedFramePointerBytes = 1 as PrintedNumber
+	let StackSlotMark = "[rbp"
 #endif
 
-export typealias SidecarNumberArray = Array with PrintedNumber
+typealias SidecarNumberArray = Array with PrintedNumber
 
 let LinesSectionName = "lines"
 let StatementRowTag = "statement"
-export let LineEntryRowTag = "line-entry"
+let LineEntryRowTag = "line-entry"
 let RowTagListOpen = "["
 let RowTagListClose = "]"
 let RowTagSeparator = ", "
 let ExactOffsetMarker = "*"
 let DumpPositionColumn = 1
-export let OffsetKey = "offset"
-export let RefusedAction = "refused"
-export let OutOfTextReason = "out-of-text"
+let OffsetKey = "offset"
+let RefusedAction = "refused"
+let OutOfTextReason = "out-of-text"
 
-export type DumpedLineRow
+type DumpedLineRow
 	export let offset as PrintedNumber
 	export let tags as StringArray
 
@@ -978,14 +978,14 @@ export type DumpedLineRow
 	end 'create'
 end 'DumpedLineRow'
 
-export typealias DumpedLineRowArray = Array with DumpedLineRow
+typealias DumpedLineRowArray = Array with DumpedLineRow
 
-export union DumpedRowScope
+union DumpedRowScope
 	theProgram
 	line(number SourceLine)
 end 'DumpedRowScope'
 
-export function lowestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
+function lowestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
 	var lowest = try offsets.get(0) otherwise panic("debug tests: a line of code has at least one statement row")
 
 	for offset in offsets 'eachOffset'
@@ -995,7 +995,7 @@ export function lowestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
 	return lowest
 end 'lowestOffsetOf'
 
-export function armedAndClearedAtEvery(offsets SidecarNumberArray) returns StringArray
+function armedAndClearedAtEvery(offsets SidecarNumberArray) returns StringArray
 	let commands = StringArray.create(0)
 
 	for offset in offsets 'eachOffset'
@@ -1006,7 +1006,7 @@ export function armedAndClearedAtEvery(offsets SidecarNumberArray) returns Strin
 	return commands
 end 'armedAndClearedAtEvery'
 
-export function breakpointAnswersWithAction(events JsonDocArray, action String) returns EventTally
+function breakpointAnswersWithAction(events JsonDocArray, action String) returns EventTally
 	var tally = 0 as EventTally
 
 	for answer in eventsOfKind(events, kind: BreakpointEventName) 'eachAnswer'
@@ -1018,7 +1018,7 @@ export function breakpointAnswersWithAction(events JsonDocArray, action String) 
 	return tally
 end 'breakpointAnswersWithAction'
 
-export function statementOffsetsOfTheProgram(executable FilePath, staged FilePath, atMost EventTally) returns SidecarNumberArray
+function statementOffsetsOfTheProgram(executable FilePath, staged FilePath, atMost EventTally) returns SidecarNumberArray
 	return statementOffsetsAmong(dumpedRowsAt(executable, staged: staged, scope: DumpedRowScope.theProgram), atMost: atMost as ElementIndex)
 end 'statementOffsetsOfTheProgram'
 
@@ -1038,7 +1038,7 @@ function statementOffsetsAmong(rows DumpedLineRowArray, atMost ElementIndex) ret
 	return offsets
 end 'statementOffsetsAmong'
 
-export function dumpedRowsAt(executable FilePath, staged FilePath, scope DumpedRowScope) returns DumpedLineRowArray
+function dumpedRowsAt(executable FilePath, staged FilePath, scope DumpedRowScope) returns DumpedLineRowArray
 	let position = match scope 'rows'
 		theProgram gives "{StagedProgramFileName}:"
 		line(number) gives "{StagedProgramFileName}:{number}:"
@@ -1059,7 +1059,7 @@ export function dumpedRowsAt(executable FilePath, staged FilePath, scope DumpedR
 	return rows
 end 'dumpedRowsAt'
 
-export function statementOffsetsOfLine(executable FilePath, staged FilePath, line SourceLine) returns SidecarNumberArray
+function statementOffsetsOfLine(executable FilePath, staged FilePath, line SourceLine) returns SidecarNumberArray
 	let rows = dumpedRowsAt(executable, staged: staged, scope: DumpedRowScope.line(line))
 
 	return statementOffsetsAmong(rows, atMost: rows.count())
@@ -1082,86 +1082,86 @@ function lineRowTagsIn(row String) returns StringArray
 	return tags
 end 'lineRowTagsIn'
 
-export function exactOffsetTarget(offset PrintedNumber) returns String
+function exactOffsetTarget(offset PrintedNumber) returns String
 	return "{ExactOffsetMarker}{hexSpelling(offset)}"
 end 'exactOffsetTarget'
 
-export function hexSpelling(offset PrintedNumber) returns String
+function hexSpelling(offset PrintedNumber) returns String
 	return "{HexPrefix}{offset:x}"
 end 'hexSpelling'
 
-export let ConditionFixtureName = "condition"
-export let WideConditionFixtureName = "conditionwide"
-export let WorkersFixtureName = "workers"
-export let TracedFixtureName = "traced"
-export let LiveSpinFixtureName = "livespin"
+let ConditionFixtureName = "condition"
+let WideConditionFixtureName = "conditionwide"
+let WorkersFixtureName = "workers"
+let TracedFixtureName = "traced"
+let LiveSpinFixtureName = "livespin"
 
-export let DebugTraceOption = "--trace"
-export let DebugStreamBuildOption = "--debugstream"
+let DebugTraceOption = "--trace"
+let DebugStreamBuildOption = "--debugstream"
 
-export let ThreadsCommand = "threads"
-export let GtBacktraceCommand = "gt-backtrace"
-export let GtSelectCommand = "gt"
-export let GtParkCommand = "gt-park"
-export let GtResumeCommand = "gt-resume"
-export let TraceCommand = "trace"
-export let PauseCommand = "pause"
+let ThreadsCommand = "threads"
+let GtBacktraceCommand = "gt-backtrace"
+let GtSelectCommand = "gt"
+let GtParkCommand = "gt-park"
+let GtResumeCommand = "gt-resume"
+let TraceCommand = "trace"
+let PauseCommand = "pause"
 
-export let ThreadsEventName = "threads"
-export let GtBacktraceEventName = "gt-backtrace"
-export let GtSelectEventName = "gt-select"
-export let GtParkEventName = "gt-park"
-export let GtResumeEventName = "gt-resume"
-export let TraceEventName = "trace"
+let ThreadsEventName = "threads"
+let GtBacktraceEventName = "gt-backtrace"
+let GtSelectEventName = "gt-select"
+let GtParkEventName = "gt-park"
+let GtResumeEventName = "gt-resume"
+let TraceEventName = "trace"
 
 let ThreadsKey = "threads"
-export let StatusKey = "status"
-export let TruncatedKey = "truncated"
+let StatusKey = "status"
+let TruncatedKey = "truncated"
 let IdKey = "id"
-export let ThreadKey = "thread"
-export let MachineKey = "machine"
-export let EventsKey = "events"
-export let EventsUnavailableKey = "eventsUnavailable"
-export let ResultKey = "result"
-module let TextKey = "text"
+let ThreadKey = "thread"
+let MachineKey = "machine"
+let EventsKey = "events"
+let EventsUnavailableKey = "eventsUnavailable"
+let ResultKey = "result"
+let TextKey = "text"
 
-export let RunningThreadStatus = "running"
-export let WaitingThreadStatus = "waiting"
-export let ReadyThreadStatus = "ready"
+let RunningThreadStatus = "running"
+let WaitingThreadStatus = "waiting"
+let ReadyThreadStatus = "ready"
 
-export let SelectedResult = "selected"
-export let ClearedSelectionResult = "cleared"
-export let HeldResult = "held"
-export let ReleasedResult = "released"
-export let RefusedResult = "refused"
+let SelectedResult = "selected"
+let ClearedSelectionResult = "cleared"
+let HeldResult = "held"
+let ReleasedResult = "released"
+let RefusedResult = "refused"
 
-export let FinisherFixtureName = "finisher"
-export let NoSuchThreadReason = "no-such-thread"
+let FinisherFixtureName = "finisher"
+let NoSuchThreadReason = "no-such-thread"
 
-export let ConditionUnsupportedAction = "condition-unsupported"
-export let PauseStopReason = "pause"
-export let FaultStopReason = "fault"
+let ConditionUnsupportedAction = "condition-unsupported"
+let PauseStopReason = "pause"
+let FaultStopReason = "fault"
 
-export let NotTracedReason = "not-traced"
-export let NotBuiltWithDebugStreamReason = "program-not-built-with-debugstream"
+let NotTracedReason = "not-traced"
+let NotBuiltWithDebugStreamReason = "program-not-built-with-debugstream"
 
-export let AbsentThreadId = -1
-export let AbsentEventIndex = -1 as EventNumber
+let AbsentThreadId = -1
+let AbsentEventIndex = -1 as EventNumber
 let SelectorFunctionSeparator = ":"
 
-export let GreenThreadPlaceholderText = "green-thread"
-export let ProgramGoneText = "no longer running"
+let GreenThreadPlaceholderText = "green-thread"
+let ProgramGoneText = "no longer running"
 
-export let SpawnSchedEventText = "sched_spawn"
-export let AwaitSchedEventText = "sched_await"
+let SpawnSchedEventText = "sched_spawn"
+let AwaitSchedEventText = "sched_await"
 
 let ConditionWord = " if "
 
-export function conditionalBreak(target String, condition String) returns String
+function conditionalBreak(target String, condition String) returns String
 	return "{BreakCommand} {target}{ConditionWord}{condition}"
 end 'conditionalBreak'
 
-export function linesStartingWith(text String, prefix String) returns EventTally
+function linesStartingWith(text String, prefix String) returns EventTally
 	var tally = 0 as EventTally
 
 	for line in withoutCarriageReturns(text).split(LineFeed) 'eachLine'
@@ -1171,11 +1171,11 @@ export function linesStartingWith(text String, prefix String) returns EventTally
 	return tally
 end 'linesStartingWith'
 
-export function threadRows(doc JsonDoc) returns JsonNodeIdArray
+function threadRows(doc JsonDoc) returns JsonNodeIdArray
 	return childrenOf(doc, node: doc.root, key: ThreadsKey)
 end 'threadRows'
 
-export function threadIdWithStatus(doc JsonDoc, status String, functionName String) returns EventNumber
+function threadIdWithStatus(doc JsonDoc, status String, functionName String) returns EventNumber
 	for row in threadRows(doc) 'eachRow'
 		if textOf(doc, node: row, key: StatusKey) == status and textOf(doc, node: row, key: FunctionKey) == functionName 'thisRow'
 			return numberOf(doc, node: row, key: IdKey)
@@ -1185,7 +1185,7 @@ export function threadIdWithStatus(doc JsonDoc, status String, functionName Stri
 	return AbsentThreadId
 end 'threadIdWithStatus'
 
-export function threadFieldOfId(doc JsonDoc, id EventNumber, key String) returns String
+function threadFieldOfId(doc JsonDoc, id EventNumber, key String) returns String
 	for row in threadRows(doc) 'eachRow'
 		if numberOf(doc, node: row, key: IdKey) == id 'thisRow'
 			return textOf(doc, node: row, key: key)
@@ -1195,7 +1195,7 @@ export function threadFieldOfId(doc JsonDoc, id EventNumber, key String) returns
 	return AbsentEventText
 end 'threadFieldOfId'
 
-export function countThreadsWhere(doc JsonDoc, key String, value String) returns EventTally
+function countThreadsWhere(doc JsonDoc, key String, value String) returns EventTally
 	var tally = 0 as EventTally
 
 	for row in threadRows(doc) 'eachRow'
@@ -1205,7 +1205,7 @@ export function countThreadsWhere(doc JsonDoc, key String, value String) returns
 	return tally
 end 'countThreadsWhere'
 
-export function renderedThreads(doc JsonDoc) returns String
+function renderedThreads(doc JsonDoc) returns String
 	let rows = StringArray.create(0)
 
 	for row in threadRows(doc) 'eachRow'
@@ -1215,7 +1215,7 @@ export function renderedThreads(doc JsonDoc) returns String
 	return listedLines(rows)
 end 'renderedThreads'
 
-export function stopsAtLine(events JsonDocArray, line SourceLine) returns EventTally
+function stopsAtLine(events JsonDocArray, line SourceLine) returns EventTally
 	var tally = 0 as EventTally
 
 	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
@@ -1225,7 +1225,7 @@ export function stopsAtLine(events JsonDocArray, line SourceLine) returns EventT
 	return tally
 end 'stopsAtLine'
 
-export function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after EventNumber, upto EventNumber) returns EventTally
+function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after EventNumber, upto EventNumber) returns EventTally
 	var tally = 0 as EventTally
 
 	for (iter, event) in events.withIterator() 'eachEvent'
@@ -1239,7 +1239,7 @@ export function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after 
 	return tally
 end 'stopsOnThreadInRange'
 
-export function eventsOfKindBeforeTheExit(events JsonDocArray, kind String) returns JsonDocArray
+function eventsOfKindBeforeTheExit(events JsonDocArray, kind String) returns JsonDocArray
 	let matching = JsonDocArray.create(0)
 	let ended = firstIndexOfKind(events, kind: ExitEventName)
 
@@ -1256,7 +1256,7 @@ export function eventsOfKindBeforeTheExit(events JsonDocArray, kind String) retu
 	return matching
 end 'eventsOfKindBeforeTheExit'
 
-export function firstIndexOfKind(events JsonDocArray, kind String) returns EventNumber
+function firstIndexOfKind(events JsonDocArray, kind String) returns EventNumber
 	for (iter, event) in events.withIterator() 'eachEvent'
 		if eventKind(event) == kind 'thisKind'
 			return iter.index() as EventNumber
@@ -1266,7 +1266,7 @@ export function firstIndexOfKind(events JsonDocArray, kind String) returns Event
 	return AbsentEventIndex
 end 'firstIndexOfKind'
 
-export function lastIndexOfKind(events JsonDocArray, kind String) returns EventNumber
+function lastIndexOfKind(events JsonDocArray, kind String) returns EventNumber
 	var found = AbsentEventIndex
 
 	for (iter, event) in events.withIterator() 'eachEvent'
@@ -1276,7 +1276,7 @@ export function lastIndexOfKind(events JsonDocArray, kind String) returns EventN
 	return found
 end 'lastIndexOfKind'
 
-export function stopsAfterIndex(events JsonDocArray, index EventNumber) returns EventTally
+function stopsAfterIndex(events JsonDocArray, index EventNumber) returns EventTally
 	var tally = 0 as EventTally
 
 	for (iter, event) in events.withIterator() 'eachEvent'
@@ -1288,7 +1288,7 @@ export function stopsAfterIndex(events JsonDocArray, index EventNumber) returns 
 	return tally
 end 'stopsAfterIndex'
 
-export function innermostPhysicalFrameFunction(doc JsonDoc, key String) returns String
+function innermostPhysicalFrameFunction(doc JsonDoc, key String) returns String
 	for frame in childrenOf(doc, node: doc.root, key: key) 'eachFrame'
 		if not flagOf(doc, node: frame, key: InlinedKey) 'aFrameOfItsOwn'
 			return textOf(doc, node: frame, key: FunctionKey)
@@ -1298,7 +1298,7 @@ export function innermostPhysicalFrameFunction(doc JsonDoc, key String) returns 
 	return AbsentEventText
 end 'innermostPhysicalFrameFunction'
 
-export function tracedEventTexts(doc JsonDoc) returns String
+function tracedEventTexts(doc JsonDoc) returns String
 	let rows = StringArray.create(0)
 
 	for event in childrenOf(doc, node: doc.root, key: EventsKey) 'eachEvent'
@@ -1308,82 +1308,82 @@ export function tracedEventTexts(doc JsonDoc) returns String
 	return listedLines(rows)
 end 'tracedEventTexts'
 
-export function tracedEventCount(doc JsonDoc) returns EventTally
+function tracedEventCount(doc JsonDoc) returns EventTally
 	return childrenOf(doc, node: doc.root, key: EventsKey).count() as EventTally
 end 'tracedEventCount'
 
-export function threadSelector(status String, functionName String) returns String
+function threadSelector(status String, functionName String) returns String
 	return status if functionName.isEmpty() else "{status}{SelectorFunctionSeparator}{functionName}"
 end 'threadSelector'
 
-export function selectorCommand(word String, selector String) returns String
+function selectorCommand(word String, selector String) returns String
 	return "{word} {selector}"
 end 'selectorCommand'
 
-export function reportedThreadId(doc JsonDoc) returns EventNumber
+function reportedThreadId(doc JsonDoc) returns EventNumber
 	return numberOf(doc, node: doc.root, key: IdKey)
 end 'reportedThreadId'
 
-export function kindAfter(events JsonDocArray, index EventNumber) returns String
+function kindAfter(events JsonDocArray, index EventNumber) returns String
 	let next = try events.get((index + 1) as ElementIndex) otherwise return AbsentEventText
 
 	return eventKind(next)
 end 'kindAfter'
 
-export function reportsNoThreadId(doc JsonDoc) returns bool
+function reportsNoThreadId(doc JsonDoc) returns bool
 	return memberOf(doc, node: doc.root, key: IdKey).count() == 0
 end 'reportsNoThreadId'
 
-module let MainFunctionName = "main"
-module let MeasureFunctionName = "measure"
-module let ChurnedInstructions = 150
-module let DetachCommand = "detach"
-module let NeverTrueCondition = "k == 999999999"
-module let StepsTaken = 10
-module let StopTimeoutSeconds = 5
-module let SpawnSpelling = "async worker("
-module let FaultedSessionExitCode = 1
-module let LeafFunctionName = "double"
-module let AnchorName = "hit-body"
-module let FirstCondition = "i == 7"
-module let SecondCondition = "i == 9"
-module let SharedConditionReason = "condition-differs-at-a-shared-offset"
-module let PassesThroughTheLine = 3
-module let ContinuesPastEveryPass = 10
-module let HotAnchorName = "hot"
-module let CompletedSessionExitCode = 0
-module let ContinuesPastEveryHit = 60
-module let LoopLocalName = "i"
-module let ChosenIteration = "7"
-module let TwoProcessors = "2"
-module let OneSecond = 1
-module let CalleeFunctionName = "countdown"
-module let CallerFunctionName = "main"
-module let PlainClass = 1
-module let DirectCallClass = 3
-module let DirectJumpClass = 4
-module let ConditionalJumpClass = 5
-module let ReturnClass = 6
-module let IndirectCallClass = 7
-module let IndirectJumpClass = 8
-module let InnerFunctionName = "inner"
-module let OuterFunctionName = "outer"
-module let TestBodyDisplayName = "test 'doubling two gives four'"
-module let AccountMethodName = "Account.deposit"
-module let LedgerMethodName = "Ledger.deposit"
-module let TimedOutSessionExitCode = 1
-module let ContinuesPastEveryWorker = 60
-module let CountedLinePrefix = "hit "
-module let ConditionText = "i == 7"
-module let HitFunctionName = "hit"
-module let ChurnFunctionName = "churn"
-module let WorkerFunctionName = "worker"
-module let OneProcessor = "1"
-module let FramesOfTheOutermostCall = 2
-module let RenderFunctionName = "render"
-module let JumpRowOfTheBranchLine = 1
-module let StatementRowsOfTheBranchLine = 2
-module let TracedBuildLabel = "debugstream"
+let MainFunctionName = "main"
+let MeasureFunctionName = "measure"
+let ChurnedInstructions = 150
+let DetachCommand = "detach"
+let NeverTrueCondition = "k == 999999999"
+let StepsTaken = 10
+let StopTimeoutSeconds = 5
+let SpawnSpelling = "async worker("
+let FaultedSessionExitCode = 1
+let LeafFunctionName = "double"
+let AnchorName = "hit-body"
+let FirstCondition = "i == 7"
+let SecondCondition = "i == 9"
+let SharedConditionReason = "condition-differs-at-a-shared-offset"
+let PassesThroughTheLine = 3
+let ContinuesPastEveryPass = 10
+let HotAnchorName = "hot"
+let CompletedSessionExitCode = 0
+let ContinuesPastEveryHit = 60
+let LoopLocalName = "i"
+let ChosenIteration = "7"
+let TwoProcessors = "2"
+let OneSecond = 1
+let CalleeFunctionName = "countdown"
+let CallerFunctionName = "main"
+let PlainClass = 1
+let DirectCallClass = 3
+let DirectJumpClass = 4
+let ConditionalJumpClass = 5
+let ReturnClass = 6
+let IndirectCallClass = 7
+let IndirectJumpClass = 8
+let InnerFunctionName = "inner"
+let OuterFunctionName = "outer"
+let TestBodyDisplayName = "test 'doubling two gives four'"
+let AccountMethodName = "Account.deposit"
+let LedgerMethodName = "Ledger.deposit"
+let TimedOutSessionExitCode = 1
+let ContinuesPastEveryWorker = 60
+let CountedLinePrefix = "hit "
+let ConditionText = "i == 7"
+let HitFunctionName = "hit"
+let ChurnFunctionName = "churn"
+let WorkerFunctionName = "worker"
+let OneProcessor = "1"
+let FramesOfTheOutermostCall = 2
+let RenderFunctionName = "render"
+let JumpRowOfTheBranchLine = 1
+let StatementRowsOfTheBranchLine = 2
+let TracedBuildLabel = "debugstream"
 
 let TraceeFixtureName = "tracee"
 let TraceeReadyLine = "ready"
@@ -1394,7 +1394,7 @@ let TraceeQuietSlices = 6
 let TraceeThreadsNeeded = 2
 let TraceeSignalTrap = 5
 let TraceeSignalStop = 19
-module let TraceeProcDirectory = "/proc"
+let TraceeProcDirectory = "/proc"
 
 typealias TraceeThreadIds = Array with DebuggeeThreadId
 typealias TraceeTally = int(0 to u32.max)
@@ -1437,7 +1437,7 @@ type TraceeRoster
 	end 'lines'
 end 'TraceeRoster'
 
-export type TracedChild
+type TracedChild
 	export var child as StreamingSubprocess
 	export var trace as ProcessTrace
 	export let pid as Pid
@@ -1460,7 +1460,7 @@ export type TracedChild
 	end 'release'
 end 'TracedChild'
 
-export function unservicedTracee(caseLabel String) returns TracedChild
+function unservicedTracee(caseLabel String) returns TracedChild
 	let staged = builtFixture(caseLabel, fixture: TraceeFixtureName)
 	let child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: WorkingDirectory.at(staged), environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
 	let process = try child.processId() otherwise panic("tracee: the spawned child recorded no process id")
@@ -1468,7 +1468,7 @@ export function unservicedTracee(caseLabel String) returns TracedChild
 	return TracedChild.create(child, trace: ProcessTrace.create(), pid: process, threads: StringArray.create(0), staged: staged)
 end 'unservicedTracee'
 
-export function startedTracee(caseLabel String) returns TracedChild
+function startedTracee(caseLabel String) returns TracedChild
 	let spawned = unservicedTracee(caseLabel)
 	let roster = traceeServiced(spawned.trace, child: spawned.child, process: spawned.pid as DebuggeeProcessId)
 
@@ -1536,7 +1536,7 @@ function traceeResumed(trace ProcessTrace, thread DebuggeeThreadId, signal Debug
 	_ = trace.resume(thread, signal: traceeSignalToHandOn(signal, event: event), stepping: false)
 end 'traceeResumed'
 
-export function traceeSignalToHandOn(signal DebuggeeSignal, event TraceEvent) returns DebuggeeSignal
+function traceeSignalToHandOn(signal DebuggeeSignal, event TraceEvent) returns DebuggeeSignal
 	if event != TraceEvent.signalStop or signal == TraceeSignalTrap or signal == TraceeSignalStop 'ours'
 		return NoTraceSignal
 	end 'ours'
@@ -1545,7 +1545,7 @@ export function traceeSignalToHandOn(signal DebuggeeSignal, event TraceEvent) re
 end 'traceeSignalToHandOn'
 
 #if os(Linux)
-	module let TraceeWaitDeadlineMs = 10000
+	let TraceeWaitDeadlineMs = 10000
 	let TraceeHeldObserveBudgetMs = 5000
 
 	typealias TraceeWaitReturnedCell = SharedValue with bool
@@ -1558,7 +1558,7 @@ end 'traceeSignalToHandOn'
 		return code
 	end 'traceeWaitedOn'
 
-	export function traceeWaitOutcome(tracee TracedChild, deadline WaitDeadline) returns (bool, ExitInt)
+	function traceeWaitOutcome(tracee TracedChild, deadline WaitDeadline) returns (bool, ExitInt)
 		let returned = TraceeWaitReturnedCell.create(false)
 		let waiting = async traceeWaitedOn(tracee.child, deadline: deadline, returned: returned.clone())
 		var waitedMs = 0 as TraceeTally
@@ -1580,7 +1580,7 @@ end 'traceeSignalToHandOn'
 		return (returnedInTime, code)
 	end 'traceeWaitOutcome'
 
-	export function heldTraceeWaitOutcome(tracee TracedChild, settleMs Milliseconds) returns (bool, bool)
+	function heldTraceeWaitOutcome(tracee TracedChild, settleMs Milliseconds) returns (bool, bool)
 		let returned = TraceeWaitReturnedCell.create(false)
 		let waiting = async traceeWaitedOn(tracee.child, deadline: WaitDeadline.none, returned: returned.clone())
 

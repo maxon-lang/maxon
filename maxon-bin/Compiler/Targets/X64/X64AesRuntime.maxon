@@ -132,7 +132,7 @@ end 'emitAesCtrCounters'
 
 // Eight blocks run as two four-wide passes: the states, the round key and the counter template fill
 // xmm0 to xmm5, and xmm6 to xmm15 are callee-saved in the custom ABI while these chunks keep no frame.
-export function buildAesCtrChunk(blocks AesCtrGroupBlocks) returns FunctionCodeChunk
+function buildAesCtrChunk(blocks AesCtrGroupBlocks) returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(0)
 	let control = X64Register.rcx
 	let keys = X64Register.rdx
@@ -176,11 +176,11 @@ export function buildAesCtrChunk(blocks AesCtrGroupBlocks) returns FunctionCodeC
 	return asm.finishFunction(cryptoChunkName(aesCtrRoutine(blocks)))
 end 'buildAesCtrChunk'
 
-export function buildAesEncryptBlockChunk() returns FunctionCodeChunk
+function buildAesEncryptBlockChunk() returns FunctionCodeChunk
 	return buildAesBlockChunk(AesEncryptBlockChunkName, round: AesNiInstruction.aesenc, last: AesNiInstruction.aesenclast)
 end 'buildAesEncryptBlockChunk'
 
-export function buildAesDecryptBlockChunk() returns FunctionCodeChunk
+function buildAesDecryptBlockChunk() returns FunctionCodeChunk
 	return buildAesBlockChunk(AesDecryptBlockChunkName, round: AesNiInstruction.aesdec, last: AesNiInstruction.aesdeclast)
 end 'buildAesDecryptBlockChunk'
 
@@ -252,7 +252,7 @@ end 'emitExpand192Step'
 
 // Takes the round count, the key, the encryption keys and the decryption keys in rcx, rdx, r8 and r9,
 // under the register rule of `buildAesBlockChunk`.
-export function buildAesExpandKeyChunk() returns FunctionCodeChunk
+function buildAesExpandKeyChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(0)
 	let rounds = X64Register.rcx
 	let key = X64Register.rdx
@@ -728,7 +728,7 @@ function emitGcmMaskTail(asm X64RuntimeAsm, block X64Register, count X64Register
 	encodeSseRegReg(asm.code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePand, dest: block, src: mask, wide: false)
 end 'emitGcmMaskTail'
 
-export function buildAesGcmHashChunk() returns FunctionCodeChunk
+function buildAesGcmHashChunk() returns FunctionCodeChunk
 	let asm = beginGcmFrame(GcmHashAreaSlots)
 	let high = GcmRegs.high()
 	let low = GcmRegs.low(X64Register.rax)
@@ -799,7 +799,7 @@ export function buildAesGcmHashChunk() returns FunctionCodeChunk
 	return finishGcmFrame(asm, name: cryptoChunkName(CryptoRoutine.aesGcmHash))
 end 'buildAesGcmHashChunk'
 
-export function buildAesGcmFinishChunk() returns FunctionCodeChunk
+function buildAesGcmFinishChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(0)
 	let low = GcmRegs.low(X64Register.rax)
 	let additionalBytes = GcmControl
@@ -849,7 +849,7 @@ function emitGcmUpperRounds(asm X64RuntimeAsm, states FullRangeInt, roundKey X64
 	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: roundKey, base: GcmTable, disp: gcmKeyDisp(AesLongRounds))
 end 'emitGcmUpperRounds'
 
-export function buildAesGcmInitChunk() returns FunctionCodeChunk
+function buildAesGcmInitChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(0)
 	let low = GcmRegs.low(X64Register.rax)
 	let rounds = GcmControl
@@ -1094,7 +1094,7 @@ function emitGcmSingleBlockLoop(asm X64RuntimeAsm, low GcmRegs, counters Imm32, 
 	end 'hashesTheOutputTail'
 end 'emitGcmSingleBlockLoop'
 
-export function buildAesGcmEncryptChunk() returns FunctionCodeChunk
+function buildAesGcmEncryptChunk() returns FunctionCodeChunk
 	let asm = beginGcmFrame(GcmEncryptAreaSlots)
 	let high = GcmRegs.high()
 	let low = GcmRegs.low(GcmControl)
@@ -1182,7 +1182,7 @@ export function buildAesGcmEncryptChunk() returns FunctionCodeChunk
 	return finishGcmFrame(asm, name: cryptoChunkName(CryptoRoutine.aesGcmEncrypt))
 end 'buildAesGcmEncryptChunk'
 
-export function buildAesGcmDecryptChunk() returns FunctionCodeChunk
+function buildAesGcmDecryptChunk() returns FunctionCodeChunk
 	let asm = beginGcmFrame(GcmDecryptAreaSlots)
 	let high = GcmRegs.high()
 	let low = GcmRegs.low(GcmControl)

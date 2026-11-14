@@ -240,14 +240,14 @@ end 'main'
 The extension sits in a file of its own, and the method is `export` because the call is in a third file.
 ```maxon
 // --- file: suite.maxon
-export enum Suite
+enum Suite
 	a
 	b
 end 'Suite'
 
 // --- file: widths.maxon
 extension Suite
-	export function width() returns ExitCode
+	function width() returns ExitCode
 		return match self 'which'
 			a gives 4
 			b gives 7
@@ -267,14 +267,14 @@ end 'main'
 <!-- test: a-union-extension-in-another-file-of-the-directory-adds-a-method -->
 ```maxon
 // --- file: shape.maxon
-export union Shape
+union Shape
 	dot
 	line(length ExitCode)
 end 'Shape'
 
 // --- file: lengths.maxon
 extension Shape
-	export function length() returns ExitCode
+	function length() returns ExitCode
 		return match self 'which'
 			dot gives 1
 			line(length) gives length
@@ -347,14 +347,14 @@ end 'main'
 ```
 
 <!-- test: error.a-private-enum-extension-method-is-not-callable-from-another-file -->
-An extension method is file-private without a visibility word, as a type's is.
+An unmarked extension method is visible only in its declaring directory and its subdirectories, as a type's is.
 ```maxon
 // --- file: suite.maxon
 export enum Suite
 	a
 end 'Suite'
 
-// --- file: widths.maxon
+// --- file: widths/widths.maxon
 extension Suite
 	function width() returns ExitCode
 		return 3
@@ -742,11 +742,11 @@ end 'main'
 The same program with the union, the extension and the caller in three files.
 ```maxon
 // --- file: note.maxon
-export interface Describable
+interface Describable
 	function describe() returns ExitCode
 end 'Describable'
 
-export union Note
+union Note
 	blank
 	text(body String)
 end 'Note'

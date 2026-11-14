@@ -1,4 +1,4 @@
-module union TlsNegotiation
+union TlsNegotiation
 	pending
 	accepted(suite Tls13CipherSuite)
 	keyed(suite Tls13CipherSuite, group TlsGroupCode)
@@ -10,7 +10,7 @@ public union TlsAlpnChoice
 	absent
 	negotiated(protocol ByteArray)
 
-	module function appendTo(extensions TlsExtensionArray)
+	function appendTo(extensions TlsExtensionArray)
 		match self 'alpn'
 			negotiated(protocol) then extensions.push(TlsExtension.applicationProtocols(TlsProtocolNameArray from [protocol]))
 			absent then return
@@ -18,7 +18,7 @@ public union TlsAlpnChoice
 	end 'appendTo'
 end 'TlsAlpnChoice'
 
-module union TlsTrafficSecrets
+union TlsTrafficSecrets
 	none
 	handshake(clientTraffic ByteArray, serverTraffic ByteArray, master ByteArray)
 	flightSent(clientHandshakeTraffic ByteArray, clientTraffic ByteArray, serverTraffic ByteArray)
@@ -35,30 +35,30 @@ public interface TlsEndpoint
 	function session() returns TlsSession
 end 'TlsEndpoint'
 
-module interface TlsMessageHandler
+interface TlsMessageHandler
 	function dispatch(mutable self, message ByteArray) throws TlsHandshakeError
 end 'TlsMessageHandler'
 
 public type TlsSession
 	public var input as TlsRecordInput
-	module var writer as TlsRecordWriter
-	module var transcript as TlsTranscript
-	module var negotiation as TlsNegotiation
+	var writer as TlsRecordWriter
+	var transcript as TlsTranscript
+	var negotiation as TlsNegotiation
 	public var alpn as TlsAlpnChoice
-	module var keys as TlsTrafficSecrets
-	module var peerVerified as bool
+	var keys as TlsTrafficSecrets
+	var peerVerified as bool
 	public var peerChain as ByteArrays
-	module var compatibility as bool
+	var compatibility as bool
 	var role as TlsRole
 	var health as TlsConnectionHealth
 	var received as ByteArray
 	var closedByPeer as bool
 
-	module static function create(role TlsRole, firstRecordVersion TlsRecordVersion) returns TlsSession
+	static function create(role TlsRole, firstRecordVersion TlsRecordVersion) returns TlsSession
 		return Self{input: TlsRecordInput.create(), writer: TlsRecordWriter.create(firstRecordVersion), transcript: TlsTranscript.create(), negotiation: TlsNegotiation.pending, alpn: TlsAlpnChoice.absent, keys: TlsTrafficSecrets.none, peerVerified: false, peerChain: ByteArrays.create(0), compatibility: false, role: role, health: TlsConnectionHealth.healthy, received: ByteArray.create(0), closedByPeer: false}
 	end 'create'
 
-	module function receive(record ByteArray, handler TlsMessageHandler) throws TlsHandshakeError
+	function receive(record ByteArray, handler TlsMessageHandler) throws TlsHandshakeError
 		if not (try isOpen()) 'ignored'
 			return
 		end 'ignored'
@@ -123,7 +123,7 @@ public type TlsSession
 		try writer.writeAlert(TlsAlertLevel.warning, alert: TlsAlert.closeNotify)
 	end 'close'
 
-	module function emit(flight ByteArray, message TlsHandshakeMessage) throws TlsHandshakeError
+	function emit(flight ByteArray, message TlsHandshakeMessage) throws TlsHandshakeError
 		let encoded = try tlsEncodedMessage(message)
 
 		transcript.append(encoded)
@@ -149,13 +149,13 @@ public type TlsSession
 		return closedByPeer
 	end 'hasPeerClosed'
 
-	module function writeCompatibilityChangeCipherSpec()
+	function writeCompatibilityChangeCipherSpec()
 		if compatibility 'needed'
 			writer.writeChangeCipherSpecOnce()
 		end 'needed'
 	end 'writeCompatibilityChangeCipherSpec'
 
-	module function negotiatedSuite() returns Tls13CipherSuite throws TlsHandshakeError
+	function negotiatedSuite() returns Tls13CipherSuite throws TlsHandshakeError
 		match negotiation 'negotiation'
 			accepted(suite) then return suite
 			keyed(suite, _) then return suite
@@ -175,7 +175,7 @@ public type TlsSession
 		end 'negotiation'
 	end 'negotiatedCipherSuite'
 
-	module function handshakeSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
+	function handshakeSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
 		match keys 'keys'
 			handshake(clientTraffic, serverTraffic, master) then return (clientTraffic, serverTraffic, master)
 			none or
@@ -184,7 +184,7 @@ public type TlsSession
 		end 'keys'
 	end 'handshakeSecrets'
 
-	module function flightSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
+	function flightSecrets() returns (ByteArray, ByteArray, ByteArray) throws TlsHandshakeError
 		match keys 'keys'
 			flightSent(clientHandshakeTraffic, clientTraffic, serverTraffic) then return (clientHandshakeTraffic, clientTraffic, serverTraffic)
 			none or
@@ -193,7 +193,7 @@ public type TlsSession
 		end 'keys'
 	end 'flightSecrets'
 
-	module function requireTls13Finished(verifyData ByteArray, baseKey ByteArray) throws TlsHandshakeError
+	function requireTls13Finished(verifyData ByteArray, baseKey ByteArray) throws TlsHandshakeError
 		let suite = try negotiatedSuite()
 
 		if verifyData.count() != suite.hashAlgorithm().digestBytes() 'length'
@@ -207,7 +207,7 @@ public type TlsSession
 		end 'forged'
 	end 'requireTls13Finished'
 
-	module function followKeyUpdate(request TlsKeyUpdateRequest) throws TlsHandshakeError
+	function followKeyUpdate(request TlsKeyUpdateRequest) throws TlsHandshakeError
 		try input.requireKeyBoundary()
 
 		let suite = try negotiatedSuite()
@@ -240,7 +240,7 @@ public type TlsSession
 		end 'keys'
 	end 'followKeyUpdate'
 
-	module function followTls12Message(raw ByteArray) throws TlsHandshakeError
+	function followTls12Message(raw ByteArray) throws TlsHandshakeError
 		let message = try tlsDecodeHandshake(raw, protocol: TlsProtocol.tls12)
 
 		match message 'message'
@@ -249,7 +249,7 @@ public type TlsSession
 		end 'message'
 	end 'followTls12Message'
 
-	module function acceptApplicationProtocol(selected TlsProtocolNameArray, offered TlsProtocolNameArray) throws TlsHandshakeError
+	function acceptApplicationProtocol(selected TlsProtocolNameArray, offered TlsProtocolNameArray) throws TlsHandshakeError
 		let name = try selected.first() otherwise throw TlsHandshakeError.internalError
 
 		if not offered.contains(name) 'unoffered'
@@ -282,7 +282,7 @@ public type TlsSession
 	end 'applicationSecrets'
 end 'TlsSession'
 
-module function tlsTrafficCipher(suite Tls13CipherSuite, secret ByteArray) returns TlsTls13Cipher throws TlsHandshakeError
+function tlsTrafficCipher(suite Tls13CipherSuite, secret ByteArray) returns TlsTls13Cipher throws TlsHandshakeError
 	let trafficKeys = try Tls13KeySchedule.trafficKeys(suite, trafficSecret: secret) otherwise throw TlsHandshakeError.internalError
 
 	return try TlsTls13Cipher.create(suite, keys: trafficKeys)

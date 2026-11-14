@@ -1,151 +1,151 @@
-export enum WindowKind
+enum WindowKind
 	modify
 	oneStatement
 	acquire
 end 'WindowKind'
 
-export type OpenWindow
-	module let label as immutable ByteArray
-	module let rootText as immutable ByteArray
-	module let rootName as immutable ByteArray
-	module let kind as WindowKind
-	module let floor as ValueId
-	module let openedValue as ValueId
-	module let holderValue as ValueId
-	module let holderField as FieldIndex
-	module let opensAField as bool
-	module let ownerStatement as ElementIndex
+type OpenWindow
+	let label as immutable ByteArray
+	let rootText as immutable ByteArray
+	let rootName as immutable ByteArray
+	let kind as WindowKind
+	let floor as ValueId
+	let openedValue as ValueId
+	let holderValue as ValueId
+	let holderField as FieldIndex
+	let opensAField as bool
+	let ownerStatement as ElementIndex
 
-	export static function create(label ByteArray, rootText ByteArray, rootName ByteArray, kind WindowKind, floor ValueId, openedValue ValueId, holderValue ValueId, holderField FieldIndex, opensAField bool, ownerStatement ElementIndex) returns OpenWindow
+	static function create(label ByteArray, rootText ByteArray, rootName ByteArray, kind WindowKind, floor ValueId, openedValue ValueId, holderValue ValueId, holderField FieldIndex, opensAField bool, ownerStatement ElementIndex) returns OpenWindow
 		return Self{label: label, rootText: rootText, rootName: rootName, kind: kind, floor: floor, openedValue: openedValue, holderValue: holderValue, holderField: holderField, opensAField: opensAField, ownerStatement: ownerStatement}
 	end 'create'
 end 'OpenWindow'
 
-export typealias WindowStack = Array with OpenWindow
+typealias WindowStack = Array with OpenWindow
 
-export type AcquiredStateName
-	module let state as ValueId
-	module let name as immutable ByteArray
+type AcquiredStateName
+	let state as ValueId
+	let name as immutable ByteArray
 
-	export static function create(state ValueId, name ByteArray) returns AcquiredStateName
+	static function create(state ValueId, name ByteArray) returns AcquiredStateName
 		return Self{state: state, name: name}
 	end 'create'
 end 'AcquiredStateName'
 
-export typealias AcquiredStateNameArray = Array with AcquiredStateName
+typealias AcquiredStateNameArray = Array with AcquiredStateName
 
-export type FieldOrigin
-	module let holder as ValueId
-	module let layoutName as immutable ByteArray
-	module let field as FieldIndex
-	module let slot as ParamCapability
+type FieldOrigin
+	let holder as ValueId
+	let layoutName as immutable ByteArray
+	let field as FieldIndex
+	let slot as ParamCapability
 
-	export static function create(holder ValueId, layoutName ByteArray, field FieldIndex, slot ParamCapability) returns FieldOrigin
+	static function create(holder ValueId, layoutName ByteArray, field FieldIndex, slot ParamCapability) returns FieldOrigin
 		return Self{holder: holder, layoutName: layoutName, field: field, slot: slot}
 	end 'create'
 end 'FieldOrigin'
 
-export typealias FieldOriginMap = Map with (ValueId, FieldOrigin)
+typealias FieldOriginMap = Map with (ValueId, FieldOrigin)
 
-export type CarriedDerivation
-	module let derived as ValueId
-	module let source as ValueId
-	module let slot as ParamCapability
-	module let joins as bool
+type CarriedDerivation
+	let derived as ValueId
+	let source as ValueId
+	let slot as ParamCapability
+	let joins as bool
 
-	export static function create(derived ValueId, source ValueId, slot ParamCapability, joins bool) returns CarriedDerivation
+	static function create(derived ValueId, source ValueId, slot ParamCapability, joins bool) returns CarriedDerivation
 		return Self{derived: derived, source: source, slot: slot, joins: joins}
 	end 'create'
 end 'CarriedDerivation'
 
-export typealias CarriedDerivationArray = Array with CarriedDerivation
+typealias CarriedDerivationArray = Array with CarriedDerivation
 
-export union StoreHolder
+union StoreHolder
 	unheld
 	building
 	held(box ValueId, assumed ValueCapability, placeText String, line LineNumber, column ColumnNumber)
 end 'StoreHolder'
 
-export type HeldStore
-	module let value as ValueId
-	module let line as LineNumber
-	module let place as String
-	module let valueStart as ElementIndex
-	module let statementStart as ElementIndex
+type HeldStore
+	let value as ValueId
+	let line as LineNumber
+	let place as String
+	let valueStart as ElementIndex
+	let statementStart as ElementIndex
 
-	export static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex, statementStart ElementIndex) returns HeldStore
+	static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex, statementStart ElementIndex) returns HeldStore
 		return Self{value: value, line: line, place: place, valueStart: valueStart, statementStart: statementStart}
 	end 'create'
 end 'HeldStore'
 
-export typealias HeldStoreArray = Array with HeldStore
+typealias HeldStoreArray = Array with HeldStore
 
-export typealias HeldLiteralMap = Map with (ValueId, HeldStoreArray)
+typealias HeldLiteralMap = Map with (ValueId, HeldStoreArray)
 
-export type CarriedStore
-	module let holder as StoreHolder
-	module let value as ValueId
-	module let slot as ParamCapability
-	module let assumedValue as ValueCapability
-	module let windows as WindowStack
-	module let fieldName as String
-	module let valueStart as ElementIndex
-	module let valueEnd as ElementIndex
-	module let line as LineNumber
-	module let statementStart as ElementIndex
+type CarriedStore
+	let holder as StoreHolder
+	let value as ValueId
+	let slot as ParamCapability
+	let assumedValue as ValueCapability
+	let windows as WindowStack
+	let fieldName as String
+	let valueStart as ElementIndex
+	let valueEnd as ElementIndex
+	let line as LineNumber
+	let statementStart as ElementIndex
 
-	export static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber, statementStart ElementIndex) returns CarriedStore
+	static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber, statementStart ElementIndex) returns CarriedStore
 		return Self{holder: holder, value: value, slot: slot, assumedValue: assumedValue, windows: windows, fieldName: fieldName, valueStart: valueStart, valueEnd: valueEnd, line: line, statementStart: statementStart}
 	end 'create'
 end 'CarriedStore'
 
-export type CarriedStoredSlot
-	module let noteIndex as ElementIndex
-	module let value as ValueId
-	module let windows as WindowStack
+type CarriedStoredSlot
+	let noteIndex as ElementIndex
+	let value as ValueId
+	let windows as WindowStack
 
-	export static function create(noteIndex ElementIndex, value ValueId, windows WindowStack) returns CarriedStoredSlot
+	static function create(noteIndex ElementIndex, value ValueId, windows WindowStack) returns CarriedStoredSlot
 		return Self{noteIndex: noteIndex, value: value, windows: windows}
 	end 'create'
 end 'CarriedStoredSlot'
 
-export typealias CarriedStoredSlotArray = Array with CarriedStoredSlot
+typealias CarriedStoredSlotArray = Array with CarriedStoredSlot
 
-export typealias CarriedStoreArray = Array with CarriedStore
+typealias CarriedStoreArray = Array with CarriedStore
 
-export type CarriedHolder
-	module let holder as ValueId
-	module let assumed as ValueCapability
-	module let pathText as String
-	module let action as String
-	module let line as LineNumber
-	module let column as ColumnNumber
+type CarriedHolder
+	let holder as ValueId
+	let assumed as ValueCapability
+	let pathText as String
+	let action as String
+	let line as LineNumber
+	let column as ColumnNumber
 
-	export static function create(holder ValueId, assumed ValueCapability, pathText String, action String, line LineNumber, column ColumnNumber) returns CarriedHolder
+	static function create(holder ValueId, assumed ValueCapability, pathText String, action String, line LineNumber, column ColumnNumber) returns CarriedHolder
 		return Self{holder: holder, assumed: assumed, pathText: pathText, action: action, line: line, column: column}
 	end 'create'
 end 'CarriedHolder'
 
-export typealias CarriedHolderArray = Array with CarriedHolder
+typealias CarriedHolderArray = Array with CarriedHolder
 
-export type LentLocal
-	module var binding as VarInfo
-	module let promise as ValueId
-	module let line as LineNumber
-	module let column as ColumnNumber
+type LentLocal
+	var binding as VarInfo
+	let promise as ValueId
+	let line as LineNumber
+	let column as ColumnNumber
 
-	export static function create(binding VarInfo, promise ValueId, line LineNumber, column ColumnNumber) returns LentLocal
+	static function create(binding VarInfo, promise ValueId, line LineNumber, column ColumnNumber) returns LentLocal
 		return Self{binding: binding, promise: promise, line: line, column: column}
 	end 'create'
 end 'LentLocal'
 
-export typealias LentLocalArray = Array with LentLocal
+typealias LentLocalArray = Array with LentLocal
 
-export typealias UseLineMap = Map with (ValueId, LineNumber)
+typealias UseLineMap = Map with (ValueId, LineNumber)
 
-export typealias WindowBirthMap = Map with (ValueId, ValueId)
+typealias WindowBirthMap = Map with (ValueId, ValueId)
 
-export typealias PhiParamSourceMap = Map with (ValueId, ParamPositionMask)
+typealias PhiParamSourceMap = Map with (ValueId, ParamPositionMask)
 
 export typealias PausedOperandMaskArray = Array with ParamPositionMask
 
@@ -523,17 +523,17 @@ end 'cacheReadStoredSlotArgArray'
 
 // @generated library-cache end
 
-module type OpenKeptSite
-	module let site as ElementIndex
-	module let value as ValueId
-	module let holder as ValueId
+type OpenKeptSite
+	let site as ElementIndex
+	let value as ValueId
+	let holder as ValueId
 
-	module static function create(site ElementIndex, value ValueId, holder ValueId) returns OpenKeptSite
+	static function create(site ElementIndex, value ValueId, holder ValueId) returns OpenKeptSite
 		return Self{site: site, value: value, holder: holder}
 	end 'create'
 end 'OpenKeptSite'
 
-module typealias OpenKeptSiteArray = Array with OpenKeptSite
+typealias OpenKeptSiteArray = Array with OpenKeptSite
 
 export enum DroppedOwnedKind
 	promise
@@ -568,7 +568,7 @@ function cacheTableAgreesDroppedOwnedKind() returns bool
 	return true
 end 'cacheTableAgreesDroppedOwnedKind'
 
-module function cacheEnumTablesAgreeInCompilerRegionWindows() returns bool
+function cacheEnumTablesAgreeInCompilerRegionWindows() returns bool
 	if not cacheTableAgreesDroppedOwnedKind() 'disagreesCacheTableAgreesDroppedOwnedKind'
 		return false
 	end 'disagreesCacheTableAgreesDroppedOwnedKind'
@@ -993,7 +993,7 @@ export type CapabilityNotes
 	end 'argumentNameAt'
 
 	// @generated library-cache begin
-	module function cacheWrite(writer LibraryCacheWriter)
+	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteFuncIndexArray(writer, value: self.windowCallOps)
 		cacheWriteNameRoster(writer, value: self.windowCallLabels)
 		cacheWritePausedOperandMaskArray(writer, value: self.windowCallPausedOperands)
@@ -1038,7 +1038,7 @@ export type CapabilityNotes
 		cacheWriteSparseNotesSlot(writer, value: self.sparse)
 	end 'cacheWrite'
 
-	module static function cacheRead(reader LibraryCacheReader) returns CapabilityNotes throws LibraryCacheDamage
+	static function cacheRead(reader LibraryCacheReader) returns CapabilityNotes throws LibraryCacheDamage
 		let f_windowCallOps = try cacheReadFuncIndexArray(reader)
 		let f_windowCallLabels = try cacheReadNameRoster(reader)
 		let f_windowCallPausedOperands = try cacheReadPausedOperandMaskArray(reader)
@@ -1092,44 +1092,44 @@ export type CapabilityNotes
 	// @generated library-cache end
 end 'CapabilityNotes'
 
-export union DeferredRefusal
+union DeferredRefusal
 	none
 	at(line LineNumber, column ColumnNumber, code ErrorCode, message String)
 end 'DeferredRefusal'
 
-module typealias JoinArmFlags = bits(8)
+typealias JoinArmFlags = bits(8)
 
-module let NoJoinArmFlags = 0 as JoinArmFlags
+let NoJoinArmFlags = 0 as JoinArmFlags
 
-module let UndecidedParameterArm = 1 as JoinArmFlags
+let UndecidedParameterArm = 1 as JoinArmFlags
 
-module let LocalMutableArm = 2 as JoinArmFlags
+let LocalMutableArm = 2 as JoinArmFlags
 
-module let ResultStillToSettleArm = 4 as JoinArmFlags
+let ResultStillToSettleArm = 4 as JoinArmFlags
 
-module let FrozenDataArm = 8 as JoinArmFlags
+let FrozenDataArm = 8 as JoinArmFlags
 
-module function joinArmIs(flags JoinArmFlags, wanted JoinArmFlags) returns bool
+function joinArmIs(flags JoinArmFlags, wanted JoinArmFlags) returns bool
 	return (flags and wanted) != 0
 end 'joinArmIs'
 
-export type ParamSourceTable
-	module var derived as PhiParamSourceMap
-	module var joinedParams as PhiParamSourceMap
-	module var besideLocalData as ValueMarkSet
-	module var besideOther as ValueMarkSet
-	module var besideFrozen as ValueMarkSet
-	module var heldReturned as ParamPositionMask
+type ParamSourceTable
+	var derived as PhiParamSourceMap
+	var joinedParams as PhiParamSourceMap
+	var besideLocalData as ValueMarkSet
+	var besideOther as ValueMarkSet
+	var besideFrozen as ValueMarkSet
+	var heldReturned as ParamPositionMask
 
-	export static function create() returns ParamSourceTable
+	static function create() returns ParamSourceTable
 		return Self{derived: PhiParamSourceMap.create(), joinedParams: PhiParamSourceMap.create(), besideLocalData: ValueMarkSet.create(), besideOther: ValueMarkSet.create(), besideFrozen: ValueMarkSet.create(), heldReturned: NoParamPositions}
 	end 'create'
 
-	module function derivedSourcesOf(value ValueId) returns ParamPositionMask
+	function derivedSourcesOf(value ValueId) returns ParamPositionMask
 		return try self.derived.get(value) otherwise NoParamPositions
 	end 'derivedSourcesOf'
 
-	module function carry(target ValueId, source ValueId, sources ParamPositionMask)
+	function carry(target ValueId, source ValueId, sources ParamPositionMask)
 		self.derived.upsert(target, value: sources)
 
 		if self.besideLocalData.contains(source) 'aMixedJoin'
@@ -1137,12 +1137,12 @@ export type ParamSourceTable
 		end 'aMixedJoin'
 	end 'carry'
 
-	module function noteMixedJoin(phi ValueId, sources ParamPositionMask)
+	function noteMixedJoin(phi ValueId, sources ParamPositionMask)
 		self.derived.upsert(phi, value: sources)
 		self.besideLocalData.insert(phi)
 	end 'noteMixedJoin'
 
-	module function noteParameterArm(phi ValueId, incoming ValueId, sources ParamPositionMask)
+	function noteParameterArm(phi ValueId, incoming ValueId, sources ParamPositionMask)
 		let joined = (try self.joinedParams.get(phi) otherwise NoParamPositions) or sources
 		self.joinedParams.upsert(phi, value: joined)
 
@@ -1157,22 +1157,22 @@ export type ParamSourceTable
 		end 'incomingBesideLocalData'
 	end 'noteParameterArm'
 
-	module function noteLocalDataArm(phi ValueId)
+	function noteLocalDataArm(phi ValueId)
 		self.besideLocalData.insert(phi)
 	end 'noteLocalDataArm'
 
-	module function noteDerivedBesideOtherData(value ValueId)
+	function noteDerivedBesideOtherData(value ValueId)
 		if self.derived.contains(value) 'sourcedFromAParameter'
 			self.besideLocalData.insert(value)
 		end 'sourcedFromAParameter'
 	end 'noteDerivedBesideOtherData'
 
-	module function noteOtherArm(phi ValueId)
+	function noteOtherArm(phi ValueId)
 		self.besideOther.insert(phi)
 		_ = self.derived.remove(phi)
 	end 'noteOtherArm'
 
-	module function noteParametersBesideFrozenData(phi ValueId, sources ParamPositionMask, joinedOnlyParameters bool)
+	function noteParametersBesideFrozenData(phi ValueId, sources ParamPositionMask, joinedOnlyParameters bool)
 		self.joinedParams.upsert(phi, value: sources)
 
 		if joinedOnlyParameters 'noOtherArm'
@@ -1180,12 +1180,12 @@ export type ParamSourceTable
 		end 'noOtherArm'
 	end 'noteParametersBesideFrozenData'
 
-	module function adoptJoinedParameters(phi ValueId)
+	function adoptJoinedParameters(phi ValueId)
 		let joined = try self.joinedParams.get(phi) otherwise return
 		self.derived.upsert(phi, value: joined)
 	end 'adoptJoinedParameters'
 
-	module function mixedJoinSources() returns JoinedParamSourceArray
+	function mixedJoinSources() returns JoinedParamSourceArray
 		let mixed = JoinedParamSourceArray.create(0)
 
 		if self.besideLocalData.count() == 0 'noMixedJoin'
@@ -1202,70 +1202,70 @@ export type ParamSourceTable
 	end 'mixedJoinSources'
 end 'ParamSourceTable'
 
-module union PendingCallOpen
+union PendingCallOpen
 	none
 	opened(box ValueId, range SourceRange, label immutable ByteArray)
 end 'PendingCallOpen'
 
-module union PendingWindowReceiver
+union PendingWindowReceiver
 	none
 	moved(line LineNumber, column ColumnNumber, label immutable ByteArray)
 end 'PendingWindowReceiver'
 
-module union SuspendedStatementFacts
+union SuspendedStatementFacts
 	nothing
 	held(reached ValueIdArray, merged ValueMarkSet)
 end 'SuspendedStatementFacts'
 
 export type RegionFactTable
-	module var windows as WindowStack
-	module var windowBirths as WindowBirthMap
-	module var pendingWindowReceiver as PendingWindowReceiver
-	module var fieldOrigins as FieldOriginMap
-	module var mutableUseLines as UseLineMap
-	module var paramSources as ParamSourceTable
-	module var callOpens as WindowStack
-	module var callGuards as ElementIndex
-	module var deferredRefusal as DeferredRefusal
-	module var handedBack as ValueIdArray
-	module var carriedRoots as ValueMarkSet
-	module var carriedDerivations as CarriedDerivationArray
-	module var carriedStores as CarriedStoreArray
-	module var carriedStoredSlots as CarriedStoredSlotArray
-	module var carriedHolders as CarriedHolderArray
-	module var lentUniques as ValueMarkSet
-	module var destructuredUniques as ValueMarkSet
-	module var acquiredNames as AcquiredStateNameArray
-	module var reachedStates as ValueIdArray
-	module var mergedValues as ValueMarkSet
-	module var pendingCallOpen as PendingCallOpen
+	var windows as WindowStack
+	var windowBirths as WindowBirthMap
+	var pendingWindowReceiver as PendingWindowReceiver
+	var fieldOrigins as FieldOriginMap
+	var mutableUseLines as UseLineMap
+	var paramSources as ParamSourceTable
+	var callOpens as WindowStack
+	var callGuards as ElementIndex
+	var deferredRefusal as DeferredRefusal
+	var handedBack as ValueIdArray
+	var carriedRoots as ValueMarkSet
+	var carriedDerivations as CarriedDerivationArray
+	var carriedStores as CarriedStoreArray
+	var carriedStoredSlots as CarriedStoredSlotArray
+	var carriedHolders as CarriedHolderArray
+	var lentUniques as ValueMarkSet
+	var destructuredUniques as ValueMarkSet
+	var acquiredNames as AcquiredStateNameArray
+	var reachedStates as ValueIdArray
+	var mergedValues as ValueMarkSet
+	var pendingCallOpen as PendingCallOpen
 
 	// Filed for an alias of an immutable holder and for a view of read-only elements, never for a `let` that
 	// owns a fresh record: a by-reference cell write is refused only for a filed root.
-	module var cellRefusedRoots as ValueMarkSet
-	module var cleanFunctionValues as ValueMarkSet
-	module var lentLocals as LentLocalArray
-	module var pendingHeld as HeldStoreArray
-	module var heldLiterals as HeldLiteralMap
+	var cellRefusedRoots as ValueMarkSet
+	var cleanFunctionValues as ValueMarkSet
+	var lentLocals as LentLocalArray
+	var pendingHeld as HeldStoreArray
+	var heldLiterals as HeldLiteralMap
 
 	export static function create() returns RegionFactTable
 		return Self{windows: WindowStack.create(0), windowBirths: WindowBirthMap.create(), pendingWindowReceiver: PendingWindowReceiver.none, fieldOrigins: FieldOriginMap.create(), mutableUseLines: UseLineMap.create(), paramSources: ParamSourceTable.create(), callOpens: WindowStack.create(0), callGuards: 0, deferredRefusal: DeferredRefusal.none, handedBack: ValueIdArray.create(0), carriedRoots: ValueMarkSet.create(), carriedDerivations: CarriedDerivationArray.create(0), carriedStores: CarriedStoreArray.create(0), carriedStoredSlots: CarriedStoredSlotArray.create(0), carriedHolders: CarriedHolderArray.create(0), lentUniques: ValueMarkSet.create(), destructuredUniques: ValueMarkSet.create(), acquiredNames: AcquiredStateNameArray.create(0), reachedStates: ValueIdArray.create(0), mergedValues: ValueMarkSet.create(), pendingCallOpen: PendingCallOpen.none, cellRefusedRoots: ValueMarkSet.create(), cleanFunctionValues: ValueMarkSet.create(), lentLocals: LentLocalArray.create(0), pendingHeld: HeldStoreArray.create(0), heldLiterals: HeldLiteralMap.create()}
 	end 'create'
 
-	module function birthOf(value ValueId) returns ValueId
+	function birthOf(value ValueId) returns ValueId
 		return try self.windowBirths.get(value) otherwise value
 	end 'birthOf'
 
-	module function carriesABirth(value ValueId) returns bool
+	function carriesABirth(value ValueId) returns bool
 		return self.windowBirths.contains(value)
 	end 'carriesABirth'
 
-	module function forgetStatement()
+	function forgetStatement()
 		self.reachedStates.clear()
 		self.mergedValues = ValueMarkSet.create()
 	end 'forgetStatement'
 
-	module function suspendStatement() returns SuspendedStatementFacts
+	function suspendStatement() returns SuspendedStatementFacts
 		let suspended = SuspendedStatementFacts.held(self.reachedStates, merged: self.mergedValues)
 		self.reachedStates = ValueIdArray.create(0)
 		self.mergedValues = ValueMarkSet.create()
@@ -1273,12 +1273,12 @@ export type RegionFactTable
 		return suspended
 	end 'suspendStatement'
 
-	module function resumeStatement(reached ValueIdArray, merged ValueMarkSet)
+	function resumeStatement(reached ValueIdArray, merged ValueMarkSet)
 		self.reachedStates = reached
 		self.mergedValues = merged
 	end 'resumeStatement'
 
-	module function clearCarried()
+	function clearCarried()
 		self.carriedRoots = ValueMarkSet.create()
 		self.carriedDerivations = CarriedDerivationArray.create(0)
 		self.carriedStores = CarriedStoreArray.create(0)
@@ -1287,22 +1287,22 @@ export type RegionFactTable
 	end 'clearCarried'
 end 'RegionFactTable'
 
-export union RegionFacts
+union RegionFacts
 	unwritten
 	entries(table RegionFactTable)
 end 'RegionFacts'
 
-module let noRegionFacts = RegionFacts.unwritten
+let noRegionFacts = RegionFacts.unwritten
 
-module function windowIsOpen(windows WindowStack) returns bool
+function windowIsOpen(windows WindowStack) returns bool
 	return not windows.isEmpty()
 end 'windowIsOpen'
 
-module function innermostWindowOf(windows WindowStack) returns OpenWindow
+function innermostWindowOf(windows WindowStack) returns OpenWindow
 	return try windows.last() otherwise panic("innermostWindowOf: asked with no window open — every caller checks `windowIsOpen` first")
 end 'innermostWindowOf'
 
-module function capabilityWithinWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
+function capabilityWithinWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
 	if windows.isEmpty() 'noWindow'
 		return intrinsic
 	end 'noWindow'
@@ -1310,7 +1310,7 @@ module function capabilityWithinWindows(windows WindowStack, value ValueId, intr
 	return capabilityWithinWindowAt(windows, position: windows.count() - 1, value: value, intrinsic: intrinsic)
 end 'capabilityWithinWindows'
 
-module function capabilityWithinExplicitWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
+function capabilityWithinExplicitWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
 	var position = windows.count()
 
 	while position > 0 'outwardFromTheInnermost'
@@ -1354,7 +1354,7 @@ function standingInWindowAt(windows WindowStack, position ElementIndex, value Va
 	return WindowStanding.outerData
 end 'standingInWindowAt'
 
-module function valueIsOutsideInnermostWindow(windows WindowStack, value ValueId) returns bool
+function valueIsOutsideInnermostWindow(windows WindowStack, value ValueId) returns bool
 	return match standingInWindowAt(windows, position: windows.count() - 1, value: value) 'standing'
 		anEnclosingRoot or
 		outerData gives true
@@ -1363,11 +1363,11 @@ module function valueIsOutsideInnermostWindow(windows WindowStack, value ValueId
 	end 'standing'
 end 'valueIsOutsideInnermostWindow'
 
-module function keepingPositionText(callee ByteArray, parameter ByteArray) returns String
+function keepingPositionText(callee ByteArray, parameter ByteArray) returns String
 	return "the parameter '{displayParamName(parameter)}' of '{String.from(callee)}', which keeps it"
 end 'keepingPositionText'
 
-module function outerValueIntoOpenWindowMessage(label ByteArray, into String) returns String
+function outerValueIntoOpenWindowMessage(label ByteArray, into String) returns String
 	return "an isolated value from outside '{String.from(label)}' cannot be moved into {into} while '{String.from(label)}' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it"
 end 'outerValueIntoOpenWindowMessage'
 
@@ -1392,13 +1392,13 @@ function valueIsAnEnclosingWindowsRoot(windows WindowStack, value ValueId, below
 	return false
 end 'valueIsAnEnclosingWindowsRoot'
 
-module enum FieldWindowState
+enum FieldWindowState
 	notOpen
 	open
 	paused
 end 'FieldWindowState'
 
-module function windowOpenedOnRoot(windows WindowStack, rootName ByteArray) returns OpenWindow throws AbsentError
+function windowOpenedOnRoot(windows WindowStack, rootName ByteArray) returns OpenWindow throws AbsentError
 	var position = windows.count()
 
 	while position > 0 'outwardFromTheInnermost'
@@ -1413,7 +1413,7 @@ module function windowOpenedOnRoot(windows WindowStack, rootName ByteArray) retu
 	throw AbsentError.absent
 end 'windowOpenedOnRoot'
 
-module function windowOpensValue(windows WindowStack, value ValueId) returns bool
+function windowOpensValue(windows WindowStack, value ValueId) returns bool
 	for window in windows 'eachWindow'
 		if windowOpensARoot(window) and window.openedValue == value 'theOpenedValue'
 			return true
@@ -1423,7 +1423,7 @@ module function windowOpensValue(windows WindowStack, value ValueId) returns boo
 	return false
 end 'windowOpensValue'
 
-module function modifyWindowCount(windows WindowStack) returns ElementIndex
+function modifyWindowCount(windows WindowStack) returns ElementIndex
 	var count = 0 as ElementIndex
 
 	for window in windows 'eachWindow'
@@ -1435,7 +1435,7 @@ module function modifyWindowCount(windows WindowStack) returns ElementIndex
 	return count
 end 'modifyWindowCount'
 
-module function statementWindowIsOpen(windows WindowStack) returns bool
+function statementWindowIsOpen(windows WindowStack) returns bool
 	for window in windows 'eachWindow'
 		if window.kind == WindowKind.oneStatement 'aStatementOpen'
 			return true
@@ -1453,11 +1453,11 @@ function operandStartsWith(kind TokenKind) returns bool
 	return kind == TokenKind.identifier or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.try or kind == TokenKind.leftBracket or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.true or kind == TokenKind.false
 end 'operandStartsWith'
 
-module function tokenKindIsPostfixChainPart(kind TokenKind) returns bool
+function tokenKindIsPostfixChainPart(kind TokenKind) returns bool
 	return kind == TokenKind.identifier or kind == TokenKind.dot or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.charLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.true or kind == TokenKind.false
 end 'tokenKindIsPostfixChainPart'
 
-module function regionOperatorAt(tokens TokenArray, index ElementIndex) returns bool
+function regionOperatorAt(tokens TokenArray, index ElementIndex) returns bool
 	let tok = try tokens.get(index) otherwise return false
 
 	if tok.kind != TokenKind.identifier or not wordIsARegionOperator(tok.value) 'notTheWord'

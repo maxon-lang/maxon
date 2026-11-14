@@ -34,12 +34,12 @@ typealias CovTally = int(0 to u64.max)
 
 // ⭐ The status the measured program returned, or the absence of one. ABSENT — not zero — for a `report`,
 // because that verb ran nothing: printing a 0 there would be this tool inventing a status nobody observed.
-module union CovTargetStatus
+union CovTargetStatus
 	notObserved
 	observed(code CovTargetExitCode)
 end 'CovTargetStatus'
 
-module typealias CovTargetExitCode = int(0 to u32.max)
+typealias CovTargetExitCode = int(0 to u32.max)
 
 // ⭐ What a report can say about one source line, and the reason there are FOUR answers rather than three.
 //
@@ -654,14 +654,14 @@ end 'CovLoad'
 
 // ⭐ The one entry point both verbs reach. `targetStatus` carries the measured program's exit code for a
 // `run` and says nothing for a `report`, which watched no program exit.
-module function printCoverageReport(exePath String, dataPath String, targetStatus CovTargetStatus, json bool) returns ExitCode
+function printCoverageReport(exePath String, dataPath String, targetStatus CovTargetStatus, json bool) returns ExitCode
 	return match loadCoverageReport(exePath, dataPath: dataPath, targetStatus: targetStatus) 'loaded'
 		refused(reason) gives refuseCoverageReport(reason)
 		built(report) gives emitCoverageReport(report, json: json)
 	end 'loaded'
 end 'printCoverageReport'
 
-module function refuseCoverageReport(reason String) returns ExitCode
+function refuseCoverageReport(reason String) returns ExitCode
 	printError("coverage: {reason}\n")
 
 	return OwnFailureExit

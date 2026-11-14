@@ -104,12 +104,12 @@
 //
 // DENSE COLUMNS, indexed by ValueId, NOT a Map: block-arg ids are function-local and dense, which is
 // the same discipline the register allocator's columns follow.
-export type CarriedValues
+type CarriedValues
 	var seen as FixedBoolArray
 	var only as FixedValueIdArray
 	var differs as FixedBoolArray
 
-	export static function create(bound ValueId) returns CarriedValues
+	static function create(bound ValueId) returns CarriedValues
 		let seen = FixedBoolArray.create(bound)
 		let only = FixedValueIdArray.create(bound)
 		let differs = FixedBoolArray.create(bound)
@@ -242,13 +242,13 @@ end 'FeedTriggers'
 
 // The pass's summary line, from the tally its runs summed into (`StdPassPool`): over the
 // functions that hold an op in the fan-out, and over the band's functions in the appended band.
-module function elimTrivialBlockArgsSummary(tally StdPassTally, funcCount ElementIndex) returns String
+function elimTrivialBlockArgsSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "elimTrivialBlockArgs: folded {tally.removedBlockArgs} trivial block-arg(s) across {funcCount} function(s)"
 end 'elimTrivialBlockArgsSummary'
 
 // Fold one function to its fixpoint in a SINGLE pass over the IR. Returns how many block-args it
 // folded away.
-module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
 	let bound = blockArgIdBound(module, func: func)
 
 	if bound == 0 'noBlockArgs'

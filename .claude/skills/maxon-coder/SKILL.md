@@ -88,9 +88,11 @@ After each edit:
   `var`, or copy it into a local `var`.
 - **A method is not a function value.** `apply(Ops.twice, …)` is E2078, for a static or an instance
   method; pass `function(n) gives Ops.twice(n)`.
-- **An unmarked field is private to its type (E3014); an unmarked method is private to its file (E3008).**
-  An `export` no other file uses is E3092, and an exported signature naming a file-private typealias is
-  E3167 — so a one-file program marks nothing `export`, and files sharing one directory use `module`.
+- **An unmarked declaration — top-level, method, static, nested typealias or field — is visible to its
+  directory and that directory's subdirectories** (E3008, E3014 from anywhere else). An `export` nothing
+  outside its directory uses is E3092, the root included, and an exported signature naming an unexported
+  typealias is E3167 — so files sharing one directory mark nothing `export`, and `export` is for a reader in
+  another directory.
 - **An unused parameter is E3012**, like an unused variable.
 - **Never add `.clone()` "just in case": it allocates and copies.** Reassigning a `var` to a freshly
   produced value needs none. Add one only where the compiler refuses a write without it (E3197, E3207) or the

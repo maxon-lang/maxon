@@ -12,8 +12,8 @@
 let RtLockOffKey = 0
 export let RtLockOffOwner = 8 as ByteOffset
 export let RtLockOffDepth = 16 as ByteOffset
-export let RecursiveLockBytes = 24 as FullRangeInt
-export let ExclusiveLockBytes = 8 as FullRangeInt
+let RecursiveLockBytes = 24 as FullRangeInt
+let ExclusiveLockBytes = 8 as FullRangeInt
 
 export let RtLockHeld = 1 as FullRangeInt
 let RtLockHeldSleeping = 3
@@ -39,7 +39,7 @@ export let RtLockEnterSlowName = b"__rtlock_enter_slow"
 export let RtLockPoolAcquireName = b"__rtlock_pool_acquire"
 export let RtLockPoolReleaseName = b"__rtlock_pool_release"
 
-export enum RuntimeLockKind
+enum RuntimeLockKind
 	recursive
 	exclusive
 	pool
@@ -80,11 +80,11 @@ export typealias RuntimeLockRequirementArray = Array with RuntimeLockRequirement
 // Registers `func` as running only inside the exclusive global lock `lockLabel`. E5006 then refuses
 // every call to it where the lock may be free and every return from it where the lock may be free,
 // and its body is checked as entered holding the lock (`RuntimeLockUse`).
-export function requireRuntimeLockHeld(module StdModule, func IrFunction, lockLabel ByteArray)
+function requireRuntimeLockHeld(module StdModule, func IrFunction, lockLabel ByteArray)
 	module.runtimeLockRequirements.push(RuntimeLockRequirement.create(func.name, lockLabel: lockLabel))
 end 'requireRuntimeLockHeld'
 
-export function runtimeLockMarkOf(kind RuntimeLockKind, entering bool) returns RuntimeLockMark
+function runtimeLockMarkOf(kind RuntimeLockKind, entering bool) returns RuntimeLockMark
 	return match kind 'kind'
 		recursive gives RuntimeLockMark.enterRecursive if entering else RuntimeLockMark.leaveRecursive
 		exclusive gives RuntimeLockMark.enterExclusive if entering else RuntimeLockMark.leaveExclusive
@@ -105,7 +105,7 @@ end 'runtimeLockMarkerName'
 
 // A mark is a call to a function no one defines; `expandRuntimeLocks` replaces it with the inline
 // fast path and finds it by the op index recorded here, so the call must be the next op appended.
-export function emitRuntimeLockMark(module StdModule, block IrBlock, lock ValueId, mark RuntimeLockMark, ids ValueMinter)
+function emitRuntimeLockMark(module StdModule, block IrBlock, lock ValueId, mark RuntimeLockMark, ids ValueMinter)
 	module.runtimeLockSites.push(RuntimeLockSite.create(module.opCount(), mark: mark, lock: lock))
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: runtimeLockMarkerName(mark), args: argsOf(lock)))
 end 'emitRuntimeLockMark'
@@ -114,7 +114,7 @@ function runtimeLockWordLabel(label ByteArray, suffix ByteArray) returns immutab
 	return freeze "{String.from(label)}{String.from(suffix)}".toByteArray()
 end 'runtimeLockWordLabel'
 
-export function pushRecursiveRuntimeLock(out DataSectionEntryArray, label ByteArray)
+function pushRecursiveRuntimeLock(out DataSectionEntryArray, label ByteArray)
 	pushRuntimeGlobal(out, label: label, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
 	pushRuntimeGlobal(out, label: runtimeLockWordLabel(label, suffix: b"_owner"), sharing: MultiMSharing.lastWriterWins, reach: DataReach.declared)
 	pushRuntimeGlobal(out, label: runtimeLockWordLabel(label, suffix: b"_depth"), sharing: MultiMSharing.underOwnLock, reach: DataReach.declared)

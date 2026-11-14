@@ -2799,14 +2799,14 @@ error E3005: <fragment>:14:4: Value 300 is outside the range of 'Byte' (int(0 to
 ### Error: a call argument is checked against the CALLEE's declaration of the alias
 
 A parameter's range is the one its FUNCTION was declared with, so `narrow(500)` is refused against
-`lib.maxon`'s `int(0 to 10)` even though the file that wrote the call has a wider alias of its own that
+`lib/lib.maxon`'s `int(0 to 10)` even though the file that wrote the call has a wider alias of its own that
 would admit it. The diagnostic still points at the line that wrote the argument: the range comes from one
 file and the error belongs to the other, and conflating them reported a caller's line and column against
 the callee's path.
 
 <!-- test: error.crossfile-call-argument-uses-callee-range -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Limit = int(0 to 10)
 
 export function narrow(x Limit) returns Limit

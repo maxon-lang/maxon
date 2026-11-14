@@ -1,49 +1,49 @@
 // Longer than the gap between keystrokes in a burst, so a burst is checked once, at its last version.
 let LspProjectCheckSettleMs = 300
 
-module type LspEditorFacts
-	module let version as LspDocumentVersion
-	module let facts as EditorFacts
+type LspEditorFacts
+	let version as LspDocumentVersion
+	let facts as EditorFacts
 
-	module static function checked(version LspDocumentVersion, facts EditorFacts) returns LspEditorFacts
+	static function checked(version LspDocumentVersion, facts EditorFacts) returns LspEditorFacts
 		return Self{version: version, facts: facts}
 	end 'checked'
 
-	module static function unchecked() returns LspEditorFacts
+	static function unchecked() returns LspEditorFacts
 		return Self{version: LspNoDocumentVersion, facts: EditorFacts.empty()}
 	end 'unchecked'
 end 'LspEditorFacts'
 
-module typealias LspEditorFactsCell = SharedValue with LspEditorFacts
+typealias LspEditorFactsCell = SharedValue with LspEditorFacts
 
-module union LspEditorFactsAnswer
+union LspEditorFactsAnswer
 	fresh(held immutable LspEditorFacts)
 	stale
 end 'LspEditorFactsAnswer'
 
-module type LspProjectCheckRequest
+type LspProjectCheckRequest
 	export let uri as String
 	export let path as FilePath
 	export let text as String
 	export let version as LspDocumentVersion
 	export let clientVersion as ClientDocumentVersion
 	export let alone as DiagnosticArray
-	module let inputs as ProjectInputsAnswer
-	module let root as FilePath
-	module let stdlibDir as FilePath
-	module let runtimeDir as FilePath
+	let inputs as ProjectInputsAnswer
+	let root as FilePath
+	let stdlibDir as FilePath
+	let runtimeDir as FilePath
 
-	module static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, inputs ProjectInputsAnswer, root FilePath, stdlibDir FilePath, runtimeDir FilePath) returns LspProjectCheckRequest
+	static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, inputs ProjectInputsAnswer, root FilePath, stdlibDir FilePath, runtimeDir FilePath) returns LspProjectCheckRequest
 		return Self{uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, inputs: inputs, root: root, stdlibDir: stdlibDir, runtimeDir: runtimeDir}
 	end 'create'
 end 'LspProjectCheckRequest'
 
-module type LspQueuedCheck
-	module let request as immutable LspProjectCheckRequest
-	module let interest as CompileInterest
-	module let facts as LspEditorFactsCell
+type LspQueuedCheck
+	let request as immutable LspProjectCheckRequest
+	let interest as CompileInterest
+	let facts as LspEditorFactsCell
 
-	module static function create(request immutable LspProjectCheckRequest, interest CompileInterest, facts LspEditorFactsCell) returns LspQueuedCheck
+	static function create(request immutable LspProjectCheckRequest, interest CompileInterest, facts LspEditorFactsCell) returns LspQueuedCheck
 		return Self{request: request, interest: interest, facts: facts}
 	end 'create'
 end 'LspQueuedCheck'
@@ -225,15 +225,15 @@ type LspProjectChecker implements CompileReceiver
 	end 'preparedCold'
 end 'LspProjectChecker'
 
-module type LspCheckerPool
+type LspCheckerPool
 	let writer as LspStdoutWriter.handle
 	var checkers as LspCheckerMap
 
-	module static function create(writer LspStdoutWriter.handle) returns LspCheckerPool
+	static function create(writer LspStdoutWriter.handle) returns LspCheckerPool
 		return Self{writer: writer, checkers: LspCheckerMap.create()}
 	end 'create'
 
-	module function submit(work immutable LspQueuedCheck)
+	function submit(work immutable LspQueuedCheck)
 		let checker = self.checkerFor(work.request.root.path)
 
 		try checker.check(work, receiver: checker.clone() as CompileReceiver.handle, sendTimeout: ForeverMs) otherwise (e) 'refused'
@@ -244,7 +244,7 @@ module type LspCheckerPool
 		end 'refused'
 	end 'submit'
 
-	module function forget(root String)
+	function forget(root String)
 		let checker = try self.checkers.get(root) otherwise return
 
 		try checker.forget(sendTimeout: ForeverMs) otherwise (e) 'refused'
@@ -255,7 +255,7 @@ module type LspCheckerPool
 		end 'refused'
 	end 'forget'
 
-	module function shutdown()
+	function shutdown()
 		for (_, checker) in self.checkers 'eachChecker'
 			checker.shutdown()
 		end 'eachChecker'
@@ -275,7 +275,7 @@ module type LspCheckerPool
 	end 'checkerFor'
 end 'LspCheckerPool'
 
-module function settledProjectCheck(request immutable LspProjectCheckRequest, interest CompileInterest) returns LspArrival
+function settledProjectCheck(request immutable LspProjectCheckRequest, interest CompileInterest) returns LspArrival
 	if interest.stillWanted() 'worthSettling'
 		sleep(LspProjectCheckSettleMs)
 	end 'worthSettling'
@@ -301,7 +301,7 @@ function publishProjectDiagnostics(writer LspStdoutWriter.handle, request LspPro
 	postToLspWriter(writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
 end 'publishProjectDiagnostics'
 
-module function reportProjectCheck(writer LspStdoutWriter.handle, request LspProjectCheckRequest, outcome ProjectCheckOutcome)
+function reportProjectCheck(writer LspStdoutWriter.handle, request LspProjectCheckRequest, outcome ProjectCheckOutcome)
 	postToLspWriter(writer, command: LspWriterCommand.report(request.uri.clone(), clientVersion: request.clientVersion.clone(), outcome: outcome))
 end 'reportProjectCheck'
 
@@ -379,7 +379,7 @@ function projectCheckFailedWith(failure CompileError) returns ProjectCheck
 	end 'failure'
 end 'projectCheckFailedWith'
 
-module function projectFailureLines(failure CompileError) returns StringArray
+function projectFailureLines(failure CompileError) returns StringArray
 	let sink = DiagnosticSink.capturing()
 	reportCompileError(failure, sink: sink)
 

@@ -1,4 +1,4 @@
-export let ProjectRootsMaxonExtension = ".maxon"
+let ProjectRootsMaxonExtension = ".maxon"
 let ProjectRootsFileUriPrefix = "file://"
 
 let CeilingDecoyDirName = "decoy"
@@ -7,77 +7,77 @@ let CeilingReaderDirName = "a"
 let CeilingReaderFileName = "main.maxon"
 let CeilingNeighbourFileName = "neighbour.maxon"
 let CeilingDecoyFileName = "outer-only.maxon"
-export let CeilingReaderSource = "function reachesOutside() returns ExitCode\n\treturn outerOnly()\nend 'reachesOutside'\n\nfunction main() returns ExitCode\n\treturn neighbour()\nend 'main'\n"
+let CeilingReaderSource = "function reachesOutside() returns ExitCode\n\treturn outerOnly()\nend 'reachesOutside'\n\nfunction main() returns ExitCode\n\treturn neighbour()\nend 'main'\n"
 let CeilingNeighbourSource = "export function neighbour() returns ExitCode\n\treturn 0\nend 'neighbour'\n"
 let CeilingDecoySource = "export function outerOnly() returns ExitCode\n\treturn 0\nend 'outerOnly'\n"
 let CeilingOuterCallLine = 1
 let CeilingNeighbourCallLine = 5
 let CeilingCallCharacter = 12
-export let ProjectRootsUnsweptFileCount = 0
-export let ProjectRootsFillerFileName = "filler.maxon"
-export let ProjectRootsFillerSource = "export function firstFolderFiller() returns ExitCode\n\treturn 0\nend 'firstFolderFiller'\n"
-export let ProjectRootsDeclarationLine = 0 as LspCoordinate
+let ProjectRootsUnsweptFileCount = 0
+let ProjectRootsFillerFileName = "filler.maxon"
+let ProjectRootsFillerSource = "export function firstFolderFiller() returns ExitCode\n\treturn 0\nend 'firstFolderFiller'\n"
+let ProjectRootsDeclarationLine = 0 as LspCoordinate
 
-export union ListProjectsProbe
+union ListProjectsProbe
 	answered(result ListProjectsResult, notices ProjectLoadingNoticeArray)
 	unanswered(reason String)
 end 'ListProjectsProbe'
 
-export union ProjectRootsSession
+union ProjectRootsSession
 	atFolders(folders WorkspaceFolderRootArray)
 	atFoldersThenRemoved(folders WorkspaceFolderRootArray)
 	atFoldersThenSomeRemoved(folders WorkspaceFolderRootArray, removed WorkspaceFolderRootArray)
 	unrooted
 end 'ProjectRootsSession'
 
-export union WorkspaceFolderDefinitionOutcome
+union WorkspaceFolderDefinitionOutcome
 	answered(probes CorpusDefinitionProbeArray)
 	broke(detail String)
 end 'WorkspaceFolderDefinitionOutcome'
 
-export union WorkspaceFolderFollowUp
+union WorkspaceFolderFollowUp
 	none
 	definitionAt(line LspCoordinate, character LspCoordinate)
 end 'WorkspaceFolderFollowUp'
 
-export type WorkspaceFolderDocument
+type WorkspaceFolderDocument
 	export var uri as String
 	export var content as String
 	export var followUp as WorkspaceFolderFollowUp
 
-	export static function create(uri String, content String) returns WorkspaceFolderDocument
+	static function create(uri String, content String) returns WorkspaceFolderDocument
 		return Self{uri: uri, content: content, followUp: WorkspaceFolderFollowUp.none}
 	end 'create'
 
-	export static function followedByDefinition(uri String, content String, line LspCoordinate, character LspCoordinate) returns WorkspaceFolderDocument
+	static function followedByDefinition(uri String, content String, line LspCoordinate, character LspCoordinate) returns WorkspaceFolderDocument
 		return Self{uri: uri, content: content, followUp: WorkspaceFolderFollowUp.definitionAt(line, character: character)}
 	end 'followedByDefinition'
 end 'WorkspaceFolderDocument'
 
-export typealias WorkspaceFolderDocumentArray = Array with WorkspaceFolderDocument
+typealias WorkspaceFolderDocumentArray = Array with WorkspaceFolderDocument
 
-export function projectRootsFolders(first FilePath) returns WorkspaceFolderRootArray
+function projectRootsFolders(first FilePath) returns WorkspaceFolderRootArray
 	let folders = WorkspaceFolderRootArray.create(0)
 	folders.push(first)
 
 	return folders
 end 'projectRootsFolders'
 
-export function projectRootsFolderPair(first FilePath, second FilePath) returns WorkspaceFolderRootArray
+function projectRootsFolderPair(first FilePath, second FilePath) returns WorkspaceFolderRootArray
 	let folders = projectRootsFolders(first)
 	folders.push(second)
 
 	return folders
 end 'projectRootsFolderPair'
 
-export function projectRootsDocument(uri String, content String) returns WorkspaceFolderDocumentArray
+function projectRootsDocument(uri String, content String) returns WorkspaceFolderDocumentArray
 	let documents = WorkspaceFolderDocumentArray.create(0)
 	documents.push(WorkspaceFolderDocument.create(uri, content: content))
 
 	return documents
 end 'projectRootsDocument'
 
-export function stagedUnmarkedTree(dirName String) returns FilePath
+function stagedUnmarkedTree(dirName String) returns FilePath
 	let outer = freshOutsideCheckoutDir(dirName)
 	let decoyDirectory = createdStagingDirectory(CeilingDecoyDirName, under: outer)
 	let folder = createdStagingDirectory(CeilingFolderDirName, under: outer)
@@ -90,29 +90,29 @@ export function stagedUnmarkedTree(dirName String) returns FilePath
 	return outer
 end 'stagedUnmarkedTree'
 
-export function stagedCeilingTree(dirName String) returns FilePath
+function stagedCeilingTree(dirName String) returns FilePath
 	let outer = stagedUnmarkedTree(dirName)
 	markedAsAProject(outer)
 
 	return outer
 end 'stagedCeilingTree'
 
-export function ceilingFolder(outer FilePath) returns FilePath
+function ceilingFolder(outer FilePath) returns FilePath
 	return outer.join(CeilingFolderDirName)
 end 'ceilingFolder'
 
-export function ceilingReaderUri(outer FilePath) returns String
+function ceilingReaderUri(outer FilePath) returns String
 	return fileUriOf(ceilingFolder(outer).join(CeilingReaderDirName).join(CeilingReaderFileName))
 end 'ceilingReaderUri'
 
-export function ceilingPositions(uri String) returns CorpusProbePointArray
+function ceilingPositions(uri String) returns CorpusProbePointArray
 	let positions = projectRootsPosition(CorpusProbePoint.at(uri, line: CeilingOuterCallLine, character: CeilingCallCharacter))
 	positions.push(CorpusProbePoint.at(uri, line: CeilingNeighbourCallLine, character: CeilingCallCharacter))
 
 	return positions
 end 'ceilingPositions'
 
-export function ceilingProbePair(probes CorpusDefinitionProbeArray, offset ElementIndex) returns (CorpusDefinitionProbe, CorpusDefinitionProbe)
+function ceilingProbePair(probes CorpusDefinitionProbeArray, offset ElementIndex) returns (CorpusDefinitionProbe, CorpusDefinitionProbe)
 	let outerCall = try probes.get(offset) otherwise panic("project roots: the ceiling positions were probed in pairs and the session answered {probes.count()} probes")
 	let neighbourCall = try probes.get(offset + 1) otherwise panic("project roots: the ceiling positions were probed in pairs and the session answered {probes.count()} probes")
 
@@ -131,24 +131,24 @@ function requireTheDecoyResolves(outerCall CorpusDefinitionProbe, dirName String
 	try expectDefinitionInFile(outerCall, fileTail: ceilingTail(dirName, path: "{CeilingDecoyDirName}{PortablePathSeparator}{CeilingDecoyFileName}"), startLine: ProjectRootsDeclarationLine, note: "{note} `outerOnly`, declared beside the `.maxproj` above the open document, did not resolve.")
 end 'requireTheDecoyResolves'
 
-export function requireTheDocumentIsASingleFile(control CorpusDefinitionProbe, outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+function requireTheDocumentIsASingleFile(control CorpusDefinitionProbe, outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
 	try requireTheDecoyResolves(control, dirName: dirName, note: "The control session named no workspace folder, so nothing stops the climb from reaching the `.maxproj` above the open document, and the fixture's `outerOnly` must resolve through it.")
 	try expectNoDefinitionInProject(neighbourCall, note: "{note} `neighbour` is declared beside the open document and resolves, so the document's own directory was built for it. A document that no `.maxproj` reaches within its folder is a single file, and no directory is built for one.")
 	try expectNoDefinitionInProject(outerCall, note: "{note} `outerOnly` resolves from an unbounded climb, and is declared outside the document's own directory: a document that no `.maxproj` reaches within its folder is a single file.")
 end 'requireTheDocumentIsASingleFile'
 
-export function requireClimbReachesTheMaxproj(outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+function requireClimbReachesTheMaxproj(outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
 	try requireTheNeighbourResolves(neighbourCall, dirName: dirName, note: note)
 	try requireTheDecoyResolves(outerCall, dirName: dirName, note: "{note} With no workspace folder left to stop it, the climb reaches the `.maxproj` above.")
 end 'requireClimbReachesTheMaxproj'
 
-export function ceilingControl(outer FilePath) returns CorpusDefinitionProbe
+function ceilingControl(outer FilePath) returns CorpusDefinitionProbe
 	markedAsAProject(outer)
 
 	return probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: ceilingReaderUri(outer), content: CeilingReaderSource, line: CeilingOuterCallLine, character: CeilingCallCharacter)
 end 'ceilingControl'
 
-export function listedProjects(probe ListProjectsProbe) returns ListProjectsResult throws TestFailure
+function listedProjects(probe ListProjectsProbe) returns ListProjectsResult throws TestFailure
 	match probe 'probe'
 		answered(result, _) then return result
 		unanswered(reason) then try Expect.fail(reason)
@@ -157,7 +157,7 @@ export function listedProjects(probe ListProjectsProbe) returns ListProjectsResu
 	panic("project roots: the `unanswered` arm always throws, so this line is unreachable")
 end 'listedProjects'
 
-export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
+function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
 	let client = LspClient.start()
 	let probe = collectListedProjects(client, session: session, documents: documents)
 	client.release()
@@ -217,14 +217,14 @@ function followUpTheOpen(client LspClient, document WorkspaceFolderDocument) thr
 	end 'followUp'
 end 'followUpTheOpen'
 
-export function projectRootsPosition(position CorpusProbePoint) returns CorpusProbePointArray
+function projectRootsPosition(position CorpusProbePoint) returns CorpusProbePointArray
 	let positions = CorpusProbePointArray.create(0)
 	positions.push(position)
 
 	return positions
 end 'projectRootsPosition'
 
-export function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbeArray throws TestFailure
+function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbeArray throws TestFailure
 	match outcome 'outcome'
 		answered(probes) then return probes
 		broke(detail) then try Expect.fail(detail)
@@ -233,7 +233,7 @@ export function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns
 	panic("project roots: the `broke` arm always throws, so this line is unreachable")
 end 'probesAnswered'
 
-export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns WorkspaceFolderDefinitionOutcome
+function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns WorkspaceFolderDefinitionOutcome
 	let client = LspClient.start()
 	let outcome = collectWorkspaceFolderDefinitions(client, initialFolders: initialFolders, addedFolders: addedFolders, removedFolders: removedFolders, documents: documents, positions: positions)
 	client.release()
@@ -284,19 +284,19 @@ function workspaceFolderOutcomeOfFailure(e LspClientError) returns WorkspaceFold
 	end 'reason'
 end 'workspaceFolderOutcomeOfFailure'
 
-export function soleProbeAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbe throws TestFailure
+function soleProbeAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbe throws TestFailure
 	let probes = try probesAnswered(outcome)
 
 	return try probes.get(0) otherwise panic("project roots: one position was probed and the session answered {probes.count()} probes")
 end 'soleProbeAnswered'
 
-export function soleProject(result ListProjectsResult, note String) returns ProjectEntry throws TestFailure
+function soleProject(result ListProjectsResult, note String) returns ProjectEntry throws TestFailure
 	try Expect.equal(result.projects.count(), expected: 1, message: "{note} The server answered {result.projects.count()} projects instead of one, which is what it does when it files every OPEN DOCUMENT as a project of its own instead of asking which project each document belongs to.")
 
 	return try result.projects.get(0) otherwise panic("project roots: the count was just held to one")
 end 'soleProject'
 
-export function requireProjectRootedAtADirectory(project ProjectEntry, expectedTail String, note String) throws TestFailure
+function requireProjectRootedAtADirectory(project ProjectEntry, expectedTail String, note String) throws TestFailure
 	let folded = foldedRootPath(project.rootPath)
 
 	try Expect.isFalse(project.rootPath.startsWith(ProjectRootsFileUriPrefix), message: "{note} The rootPath is a URI, and the status bar shows a path: {project.rootPath}")
@@ -305,7 +305,7 @@ export function requireProjectRootedAtADirectory(project ProjectEntry, expectedT
 	try Expect.isFalse(project.isSingleFile, message: "{note} The project was answered as a SINGLE FILE although it is a directory holding a `.maxproj` and several sources — which is the flag the extension reads to decide whether cross-file answers are available at all.")
 end 'requireProjectRootedAtADirectory'
 
-export function requireADriverFileStandsAlone(result ListProjectsResult, notices ProjectLoadingNoticeArray, note String) throws TestFailure
+function requireADriverFileStandsAlone(result ListProjectsResult, notices ProjectLoadingNoticeArray, note String) throws TestFailure
 	try requireNoAnnouncedLoad(notices, note: note)
 
 	let project = try soleProject(result, note: note)
@@ -313,7 +313,7 @@ export function requireADriverFileStandsAlone(result ListProjectsResult, notices
 	try Expect.isTrue(project.isSingleFile, message: "{note} The document was answered as part of a project rooted at {project.rootPath} rather than as a single file.")
 end 'requireADriverFileStandsAlone'
 
-export function requireListedAsTheSingleFile(result ListProjectsResult, notices ProjectLoadingNoticeArray, fileName String, note String) throws TestFailure
+function requireListedAsTheSingleFile(result ListProjectsResult, notices ProjectLoadingNoticeArray, fileName String, note String) throws TestFailure
 	try requireADriverFileStandsAlone(result, notices: notices, note: note)
 
 	let project = try soleProject(result, note: note)
@@ -321,7 +321,7 @@ export function requireListedAsTheSingleFile(result ListProjectsResult, notices 
 	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(fileName), message: "{note} The single file listed is {project.rootPath}, not {fileName}.")
 end 'requireListedAsTheSingleFile'
 
-export function projectsRootedAt(result ListProjectsResult, expectedTail String) returns Count
+function projectsRootedAt(result ListProjectsResult, expectedTail String) returns Count
 	var found = 0 as Count
 
 	for project in result.projects 'eachProject'
@@ -333,6 +333,6 @@ export function projectsRootedAt(result ListProjectsResult, expectedTail String)
 	return found
 end 'projectsRootedAt'
 
-export function foldedRootPath(rootPath String) returns String
+function foldedRootPath(rootPath String) returns String
 	return rootPath.replace(WindowsPathSeparator, with: PortablePathSeparator)
 end 'foldedRootPath'

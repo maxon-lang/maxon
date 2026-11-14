@@ -24,7 +24,7 @@
 // How the arm64 backend reaches the OS. ONE door, asked by every OS-primitive lowering
 // (`osExit`/`osWriteStdout`/`osAllocPages`) and by the entry stub below, so those four sites cannot
 // drift on which OSes this backend supports or on how each one gets there.
-export enum Arm64OsCallKind
+enum Arm64OsCallKind
 	// A GOT-indirect libSystem call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`), the slot
 	// named by an `OsImportSlot` and bound by dyld. macOS's only route.
 	importCall
@@ -35,7 +35,7 @@ end 'Arm64OsCallKind'
 
 // Exported: the isel (`StdToArm64Conversion`) asks it for every OS-primitive lowering and for the
 // mmap flag word, and this stub asks it for its exit route — the one place either can ask.
-export function arm64OsCallKind(os Os) returns Arm64OsCallKind
+function arm64OsCallKind(os Os) returns Arm64OsCallKind
 	return match os 'os'
 		macos gives Arm64OsCallKind.importCall
 		linux gives Arm64OsCallKind.syscall
@@ -49,12 +49,12 @@ end 'arm64OsCallKind'
 // `mrt_linux_hwcap_probe` sets at init, and falls back to an LL/SC loop. The flag reads 0 until the
 // probe runs and the loop is correct on every part, so an atomic that runs before the probe is
 // correct too.
-export enum Arm64AtomicsMode
+enum Arm64AtomicsMode
 	lse
 	hwcapChecked
 end 'Arm64AtomicsMode'
 
-export function arm64AtomicsModeOf(os Os) returns Arm64AtomicsMode
+function arm64AtomicsModeOf(os Os) returns Arm64AtomicsMode
 	return match os 'os'
 		macos gives Arm64AtomicsMode.lse
 		linux gives Arm64AtomicsMode.hwcapChecked
@@ -79,7 +79,7 @@ end 'Arm64ThreadPointerSource'
 
 // Exported: the isel (`StdToArm64Conversion.lowerTlsSlotLoad`) and the two hand-assembled current-P readers
 // in `Arm64GtRuntime` ask it — the one place either can.
-export function arm64ThreadPointerSource(os Os) returns Arm64ThreadPointerSource
+function arm64ThreadPointerSource(os Os) returns Arm64ThreadPointerSource
 	return match os 'os'
 		macos gives Arm64ThreadPointerSource.darwinMaskedReadOnly
 		linux gives Arm64ThreadPointerSource.linuxWritable
@@ -141,7 +141,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way — `false` for a program with no managed
 // top-level global, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	let code = ByteArray.create(0)
 	let callFixups = CallFixupArray.create(0)
 	let iatRelocs = RelocationArray.create(0)
@@ -293,7 +293,7 @@ end 'arm64EmitMainCall'
 // saves x30 because it calls, and it NEVER WRITES x29: a fresh green thread's zero stays in place,
 // so `main`'s saved x29 ends the walk right after the return address into this chunk — which
 // carries no symbol and so prints `in mrt_start`, the line a program without green threads prints.
-export function buildArm64MainThreadEntryChunk(initGlobals bool, gatesDescendants bool, entryFunction ByteArray) returns FunctionCodeChunk
+function buildArm64MainThreadEntryChunk(initGlobals bool, gatesDescendants bool, entryFunction ByteArray) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))

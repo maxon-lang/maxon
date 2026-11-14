@@ -165,7 +165,7 @@ mkdir -p "$OUT"
 find "$OUT" -maxdepth 1 -name '*.maxon' -delete
 
 emit_prelude() {
-	echo "export typealias Int = int(i64.min to i64.max)"
+	echo "typealias Int = int(i64.min to i64.max)"
 	echo ""
 }
 
@@ -185,7 +185,7 @@ emit_corpus() {
 			i=0
 			while [ "$i" -lt "$FUNCS_PER_FILE" ]; do
 				idx=$((f * FUNCS_PER_FILE + i))
-				echo "export function corpus${idx}(a Int, b Int) returns Int"
+				echo "function corpus${idx}(a Int, b Int) returns Int"
 				echo -e "\tvar acc = a"
 				# Two `if`s rather than an if/else: the compiler does not accept `else` (E2015), and
 				# the corpus this ladder sits beside does not emit one either.

@@ -28,7 +28,7 @@ export let MainFunctionName = b"main"
 // `__maxon_test_main`, naming the one function it was never going to look for. A constant cannot say that,
 // so there is no constant: one producer, at the one place the name is in hand.
 
-module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
+function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
 	try requireStillWanted(project)
 	beginEditorFunctionFacts(project)
 	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(project, module: module)
@@ -179,7 +179,7 @@ function replaceDeferredArgument(args ValueIdArray, func IrFunction, column Para
 	try args.set(column, value: value) otherwise panic("replaceDeferredArgument: args.set OOB at {column}")
 end 'replaceDeferredArgument'
 
-export function withdrawOpsDefining(module MaxonModule, func IrFunction, fromBlock BlockId, results ValueMarkSet)
+function withdrawOpsDefining(module MaxonModule, func IrFunction, fromBlock BlockId, results ValueMarkSet)
 	if results.count() == 0 'nothingToWithdraw'
 		return
 	end 'nothingToWithdraw'
@@ -212,7 +212,7 @@ function opDefinesOneOf(op MaxonOp, results ValueMarkSet) returns bool
 	return results.contains(defined)
 end 'opDefinesOneOf'
 
-export function valueIdArrayContains(values ValueIdArray, value ValueId) returns bool
+function valueIdArrayContains(values ValueIdArray, value ValueId) returns bool
 	for candidate in values 'each'
 		if candidate == value 'found'
 			return true
@@ -331,7 +331,7 @@ function calleeIsUnresolved(callee ByteArray, mint CalleeMint, signatures Progra
 	return not calleeIsBuilderBuilt(callee, mint: mint, signatures: signatures, funcSignatures: funcSignatures) and not funcSignatures.contains(callee)
 end 'calleeIsUnresolved'
 
-module function namePositionOf(func IrFunction) returns PositionKey
+function namePositionOf(func IrFunction) returns PositionKey
 	return positionKey(func.nameLine, column: func.nameColumn)
 end 'namePositionOf'
 
@@ -450,7 +450,7 @@ type UnthrownClauses
 	end 'reportUnsettled'
 end 'UnthrownClauses'
 
-module function functionCanThrow(module MaxonModule, func IrFunction) returns bool
+function functionCanThrow(module MaxonModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionCanThrow: blockRef from func.blockRefs not in module.blocks")
 
@@ -519,7 +519,7 @@ end 'buildThrowsMap'
 // resolves its callee's name once (`funcIndexByName`, which the edge walk already needs) and reads the mask
 // off an i64 array. A map of masks would be a second index over the same key space, built by N upserts, to
 // answer a question the first one already answers.
-export type ParamMutationSummary
+type ParamMutationSummary
 	// One mask per function of the merged module, by function index. Zero for the overwhelming majority.
 	export let masks as ParamPositionMaskArray
 
@@ -532,9 +532,9 @@ export type ParamMutationSummary
 
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as FuncIndexByName
-	module let instancesOfTemplate as TemplateInstanceMap
+	let instancesOfTemplate as TemplateInstanceMap
 
-	module static function create(masks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, byRefWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName, instancesOfTemplate TemplateInstanceMap) returns ParamMutationSummary
+	static function create(masks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, byRefWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName, instancesOfTemplate TemplateInstanceMap) returns ParamMutationSummary
 		return Self{masks: masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplate}
 	end 'create'
 
@@ -586,7 +586,7 @@ end 'ParamMutationSummary'
 // Dense columns rather than an `Array with <a record>`: a `type` has reference semantics, so an array of
 // them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that runs
 // over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
-export enum FrozenCarry
+enum FrozenCarry
 	carries
 	opaqueElement
 	valuesOnly
@@ -599,7 +599,7 @@ end 'FrozenCarry'
 
 typealias FrozenCarryArray = Array with FrozenCarry
 
-export type CallParamEdges
+type CallParamEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as FuncIndexArray
 	export var callerParams as ParamCountArray
@@ -607,7 +607,7 @@ export type CallParamEdges
 	var frozenCarries as FrozenCarryArray
 	var uniqueHoldings as BoolArray
 
-	export static function create() returns CallParamEdges
+	static function create() returns CallParamEdges
 		return Self{calleeIndices: CsrColumn.create(0), callerIndices: FuncIndexArray.create(0), callerParams: ParamCountArray.create(0), calleeParams: ParamCountArray.create(0), frozenCarries: FrozenCarryArray.create(0), uniqueHoldings: BoolArray.create(0)}
 	end 'create'
 
@@ -617,7 +617,7 @@ export type CallParamEdges
 
 	// The four columns are only ever pushed together here, so they stay the same length by construction —
 	// `pushCallArg`'s reason, reaching the third family of parallel columns in the compiler.
-	export function record(calleeIndex ElementIndex, callerIndex ElementIndex, callerParam ParamCount, calleeParam ParamCount, carry FrozenCarry, holdsUnique bool)
+	function record(calleeIndex ElementIndex, callerIndex ElementIndex, callerParam ParamCount, calleeParam ParamCount, carry FrozenCarry, holdsUnique bool)
 		self.calleeIndices.push(calleeIndex as CsrIndex)
 		self.callerIndices.push(callerIndex)
 		self.callerParams.push(callerParam)
@@ -630,13 +630,13 @@ export type CallParamEdges
 		return try self.uniqueHoldings.get(row) otherwise panic("CallParamEdges.holdsUniqueOf: uniqueHoldings.get OOB at {row} — the columns are parallel by construction")
 	end 'holdsUniqueOf'
 
-	export function frozenCarryOf(row ElementIndex) returns FrozenCarry
+	function frozenCarryOf(row ElementIndex) returns FrozenCarry
 		return try self.frozenCarries.get(row) otherwise panic("CallParamEdges.frozenCarryOf: frozenCarries.get OOB at {row} — the columns are parallel by construction")
 	end 'frozenCarryOf'
 
 	// This relation with `rows` added, as a second list the base does not see — or this very list when `rows` is
 	// empty, so a caller's `is` can tell that the two relations are one and share an adjacency (`adjacencyOf`).
-	export function widenedBy(rows CallParamEdges) returns CallParamEdges
+	function widenedBy(rows CallParamEdges) returns CallParamEdges
 		if rows.count() == 0 'nothingToAdd'
 			return self
 		end 'nothingToAdd'
@@ -647,7 +647,7 @@ export type CallParamEdges
 		return edges
 	end 'widenedBy'
 
-	export function appendRowsIn(other CallParamEdges, firstRow CsrIndex, stopRow CsrIndex)
+	function appendRowsIn(other CallParamEdges, firstRow CsrIndex, stopRow CsrIndex)
 		for k in firstRow upto stopRow 'eachRow'
 			let callee = try other.calleeIndices.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: calleeIndices.get OOB at {k}")
 			let caller = try other.callerIndices.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: callerIndices.get OOB at {k} — the four columns are parallel by construction")
@@ -721,7 +721,7 @@ function buildParamMutationSummary(project Project, signatures ProgramSignatures
 	return ParamMutationSummary.create(masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplates(signatures, funcNames: funcNames))
 end 'buildParamMutationSummary'
 
-module function recordWriteSeedOf(func IrFunction, writeSeeds ParamWriteSeeds, index ElementIndex) returns ParamPositionMask
+function recordWriteSeedOf(func IrFunction, writeSeeds ParamWriteSeeds, index ElementIndex) returns ParamPositionMask
 	return func.writesThroughParamMask or summaryMaskAt(writeSeeds.identity, index: index) or summaryMaskAt(writeSeeds.within, index: index)
 end 'recordWriteSeedOf'
 
@@ -860,9 +860,9 @@ end 'adjacencyOf'
 // The conformer list of one interface, memoized across the walk:
 // `DeclaredConformerIndex.conformersOf` builds a fresh roster per ask, and the witness-dispatch arm
 // below asks once per DISPATCH OP.
-module typealias ConformersByInterface = Map with (ByteArray, NameRoster)
+typealias ConformersByInterface = Map with (ByteArray, NameRoster)
 
-module typealias TemplateInstanceMap = Map with (ByteArray, FuncIndexArray)
+typealias TemplateInstanceMap = Map with (ByteArray, FuncIndexArray)
 
 function addClosureEnvEdges(project Project, addr ValueId, offset ByteOffset, value ValueId, callerIndex ElementIndex, edges CallParamEdges, viewed ViewedSources)
 	let func = viewed.sources.func
@@ -907,9 +907,9 @@ function slotSelected(selector SlotSelector, offset ByteOffset) returns bool
 end 'slotSelected'
 
 type SlotAccess
-	module let addr as ValueId
-	module let offset as ByteOffset
-	module let value as ValueId
+	let addr as ValueId
+	let offset as ByteOffset
+	let value as ValueId
 
 	static function create(addr ValueId, offset ByteOffset, value ValueId) returns Self
 		return Self{addr: addr, offset: offset, value: value}
@@ -926,7 +926,7 @@ typealias SlotAccessByRoot = Map with (ValueId, SlotAccessArray)
 
 type AggregateOrigins
 	let signatures as ProgramSignatures
-	module let sources as ParamSources
+	let sources as ParamSources
 	let storesByRoot as SlotAccessByRoot
 	let loads as SlotAccessByResult
 	let calls as CallOpByResult
@@ -1009,17 +1009,17 @@ type AggregateOrigins
 	end 'callProducing'
 end 'AggregateOrigins'
 
-module type ViewedSources
+type ViewedSources
 	let signatures as ProgramSignatures
-	module let sources as ParamSources
+	let sources as ParamSources
 	let origins as AggregateOrigins
 	var seen as ValueMarkSet
 
-	module static function over(signatures ProgramSignatures, sources ParamSources) returns Self
+	static function over(signatures ProgramSignatures, sources ParamSources) returns Self
 		return Self{signatures: signatures, sources: sources, origins: AggregateOrigins.of(signatures, sources: sources), seen: ValueMarkSet.create()}
 	end 'over'
 
-	module function indexElementHolders(into ParamMaskByValue)
+	function indexElementHolders(into ParamMaskByValue)
 		for opIdx in self.sources.ir.liveOpIndices(self.sources.func) 'eachOp'
 			let op = try self.sources.ir.ops.get(opIdx) otherwise panic("ViewedSources.indexElementHolders: opIdx {opIdx} from liveOpIndices is not in module.ops")
 			let parts = try directCallPartsOf(op) otherwise continue
@@ -1267,10 +1267,10 @@ function collectCallParamEdgesAt(project Project, op MaxonOp, sources ParamSourc
 end 'collectCallParamEdgesAt'
 
 type ReturnedCallResults
-	module let functionIndex as ElementIndex
+	let functionIndex as ElementIndex
 	let values as ValueIdArray
 	let heldOps as FuncIndexArray
-	module let sources as ParamSources
+	let sources as ParamSources
 
 	static function create(functionIndex ElementIndex, values ValueIdArray, heldOps FuncIndexArray, sources ParamSources) returns ReturnedCallResults
 		return Self{functionIndex: functionIndex, values: values, heldOps: heldOps, sources: sources}
@@ -1591,13 +1591,13 @@ end 'addWitnessParamEdges'
 // module declares none of, which no summary describes (`unresolved`): its result may be anything the operands
 // reach, and unless it is a compiler-synthesized witness it may also store any operand into any other
 // (`unresolvedMayStore`).
-export type CallLandingBodies
+type CallLandingBodies
 	export var impls as FuncIndexArray
 	export var unresolved as bool
 	export var unresolvedMayStore as bool
 	export let set as ElementIndex
 
-	module static function registered(contents LandingContents, set ElementIndex) returns CallLandingBodies
+	static function registered(contents LandingContents, set ElementIndex) returns CallLandingBodies
 		return Self{impls: contents.impls, unresolved: contents.unresolved, unresolvedMayStore: contents.unresolvedMayStore, set: set}
 	end 'registered'
 end 'CallLandingBodies'
@@ -1605,12 +1605,12 @@ end 'CallLandingBodies'
 // A landing's bodies before `CallSummaryIndex.registerLanding` gives them a set. Every per-landing
 // memo is keyed by `CallLandingBodies.set`, so a landing that never registered would read another
 // set's answers.
-export type LandingContents
+type LandingContents
 	export var impls as FuncIndexArray
 	export var unresolved as bool
 	export var unresolvedMayStore as bool
 
-	export static function create() returns LandingContents
+	static function create() returns LandingContents
 		return Self{impls: FuncIndexArray.create(0), unresolved: false, unresolvedMayStore: false}
 	end 'create'
 end 'LandingContents'
@@ -1618,7 +1618,7 @@ end 'LandingContents'
 // A witness dispatch lands on one body per conformer of the requirement's interface whose implementation this
 // module declares; a conformer's implementation it does not declare is compiler-synthesized. See
 // `addWitnessParamEdges` for why the union over them is the answer.
-module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns LandingContents
+function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns LandingContents
 	let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	let landing = witnessRequirementImplNames(project, signatures: signatures, slot: slot, conformers: conformers)
 	let found = LandingContents.create()
@@ -1636,16 +1636,16 @@ module function witnessDispatchImpls(project Project, signatures ProgramSignatur
 	return found
 end 'witnessDispatchImpls'
 
-module type WitnessImplNames
-	module var names as NameRoster
-	module var unselected as bool
+type WitnessImplNames
+	var names as NameRoster
+	var unselected as bool
 
-	module static function create() returns WitnessImplNames
+	static function create() returns WitnessImplNames
 		return Self{names: NameRoster.create(0), unselected: false}
 	end 'create'
 end 'WitnessImplNames'
 
-module function witnessRequirementImplNames(project Project, signatures ProgramSignatures, slot CollectedInterfaceMethod, conformers ConformersByInterface) returns WitnessImplNames
+function witnessRequirementImplNames(project Project, signatures ProgramSignatures, slot CollectedInterfaceMethod, conformers ConformersByInterface) returns WitnessImplNames
 	let found = WitnessImplNames.create()
 
 	for conformer in conformersOfMemoized(signatures, interfaceName: slot.sourceInterfaceName, memo: conformers) 'eachConformer'
@@ -1764,7 +1764,7 @@ end 'addFunctionValueBodiesEdges'
 // terminate rather than spin. No hashing: the CSR is keyed by node index throughout, a function's
 // index or a landing set's node past them (`LandingSets.virtualNodeOf`), whose masks are dropped
 // once the drain settles.
-module enum PropagatedNeed
+enum PropagatedNeed
 	written
 	frozen
 	frozenIfRecordsHeld
@@ -1780,7 +1780,7 @@ function edgeCarriesNeed(edges CallParamEdges, row ElementIndex, need Propagated
 	end 'need'
 end 'edgeCarriesNeed'
 
-module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph, funcCount ElementIndex, need PropagatedNeed, hops NeedHops)
+function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph, funcCount ElementIndex, need PropagatedNeed, hops NeedHops)
 	while masks.count() < byCallee.nodeCount() as ElementIndex 'eachLandingNode'
 		masks.push(NoParamPositions)
 	end 'eachLandingNode'
@@ -2367,7 +2367,7 @@ end 'roleIfEqual'
 // a `switch` — never from a body op; every other terminator (`ret`, `retVoid`, `throwError`,
 // `propagateError`, `panicAbort`) leaves the function and has no in-function successor. A block
 // with no terminator op (`dead`/`unset`) has none.
-module function collectMaxonBlockSuccessors(module MaxonModule, block IrBlock, into BlockIdArray)
+function collectMaxonBlockSuccessors(module MaxonModule, block IrBlock, into BlockIdArray)
 	if not block.hasTerminatorOp() 'noTerminator'
 		return
 	end 'noTerminator'
@@ -2912,7 +2912,7 @@ end 'callDiagnosticNoun'
 //
 // ⚠ It takes the name as the caller HAS it (a `ByteArray`, which is what both a callee and a method constant
 // are) rather than the callee plus a flag, so the sentence has no branch inside it to get wrong.
-module function throwingCallRequiresTryMessage(name ByteArray) returns String
+function throwingCallRequiresTryMessage(name ByteArray) returns String
 	return "throwing function requires try: '{String.from(name)}'"
 end 'throwingCallRequiresTryMessage'
 
@@ -3006,15 +3006,15 @@ function fixedArrayIndexRangeText(count FixedElementCount) returns String
 	return "int(0 to {count - 1})"
 end 'fixedArrayIndexRangeText'
 
-module function provenFixedArrayTryMessage(accessor String, count FixedElementCount) returns String
+function provenFixedArrayTryMessage(accessor String, count FixedElementCount) returns String
 	return "try requires a throwing function: this `{accessor}` cannot fail — its index is already proven inside the fixed array's {count} elements, so there is no out-of-bounds error to catch"
 end 'provenFixedArrayTryMessage'
 
-module function fixedArrayIndexPastTheSizeMessage(value String, count FixedElementCount) returns String
+function fixedArrayIndexPastTheSizeMessage(value String, count FixedElementCount) returns String
 	return "Value {value} is outside the range of the indices of '{String.from(FixedArrayBuiltinBaseName)} with {count}' ({fixedArrayIndexRangeText(count)})"
 end 'fixedArrayIndexPastTheSizeMessage'
 
-module function unsignedNegationMessage(alias String) returns String
+function unsignedNegationMessage(alias String) returns String
 	return "unary '-' cannot negate a value of '{alias}': it holds 0 to u64.max, so the negation of any value above 0 is outside it. Write a deliberately wrapping negation over a `bits(64)` typealias, or convert the value to a signed typealias first with `as`"
 end 'unsignedNegationMessage'
 
@@ -3301,7 +3301,7 @@ function valueComesFromARefusedDeclaration(project Project, module MaxonModule, 
 	return firstOperandComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, operands: operands, readerFilePath: readerFilePath)
 end 'valueComesFromARefusedDeclaration'
 
-module function opDefiningValue(module MaxonModule, func IrFunction, value ValueId) returns MaxonOp throws AbsentError
+function opDefiningValue(module MaxonModule, func IrFunction, value ValueId) returns MaxonOp throws AbsentError
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		if opDefinesValue(module, opIdx: opIdx, value: value) 'theProducer'
 			return try module.ops.get(opIdx) otherwise panic("opDefiningValue: live op index not in module.ops")
@@ -3366,7 +3366,7 @@ end 'calleeVisibleFrom'
 // "minted, therefore the compiler's", it would exempt every method call in every program from
 // E3008, so a non-exported method would be callable from any file with a value in hand, and no test
 // in the suite asks that question of a method.
-module function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
+function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
 	return match mint 'm'
 		notMinted or
 		resolvedTypeQualifier or
@@ -3386,7 +3386,7 @@ end 'mintSpellsTheWholeCallee'
 //
 // **THE CANDIDATE SET IS THE ONE THE PARSER CHOSE AMONG** (`ProgramSignatures.resolveFunctionName`), so a
 // declaration this file cannot name is neither what makes the call ambiguous nor offered as a fix. Asked
-// before either of `validateCall`'s other refusals — E3004 for no declaration, E3008/E3088 for an invisible
+// before either of `validateCall`'s other refusals — E3004 for no declaration, E3008 for an invisible
 // one — because both are true only once no two visible candidates remain.
 function reportAmbiguousCrossFileCall(project Project, signatures ProgramSignatures, callee ByteArray, callRange SourceRange, filePath FilePath) returns bool
 	match signatures.resolveFunctionName(callee, readerFilePath: filePath) 'resolution'
@@ -3402,7 +3402,7 @@ function reportAmbiguousCall(project Project, callee ByteArray, candidates NameR
 	reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareNameMessage(String.from(callee), candidates: renderAmbiguousCandidates(candidates), use: BareNameUse.call), line: callRange.line, column: callRange.column, filePath: filePath)
 end 'reportAmbiguousCall'
 
-module function checkNonConstantCallInitializers(project Project, signatures ProgramSignatures)
+function checkNonConstantCallInitializers(project Project, signatures ProgramSignatures)
 	let refused = DiagnosedLines.of(project)
 
 	for site in signatures.nonConstantCallInitializers() 'eachSite'
@@ -3451,7 +3451,7 @@ function undefinedFunctionMessage(name String) returns String
 	return "call to undefined function '{name}'"
 end 'undefinedFunctionMessage'
 
-module function reservedFunctionUndefinedMessage(name String, reason ReservedCalleeReason) returns String
+function reservedFunctionUndefinedMessage(name String, reason ReservedCalleeReason) returns String
 	return "{undefinedFunctionMessage(name)}: {reservedNameReason(name, reason: reason)}"
 end 'reservedFunctionUndefinedMessage'
 
@@ -3464,7 +3464,7 @@ export enum BareNameUse
 end 'BareNameUse'
 
 // E3095's sentence, naming the door — a function value and an enum case's backing are not calls.
-export function ambiguousBareNameMessage(name String, candidates String, use BareNameUse) returns String
+function ambiguousBareNameMessage(name String, candidates String, use BareNameUse) returns String
 	let subject = match use 'use'
 		call gives "bare-name call to '{name}'"
 		value gives "bare function name '{name}' used as a value"
@@ -3475,13 +3475,13 @@ export function ambiguousBareNameMessage(name String, candidates String, use Bar
 	return ambiguousNameMessage(subject, candidates: candidates)
 end 'ambiguousBareNameMessage'
 
-module function ambiguousNameMessage(subject String, candidates String) returns String
+function ambiguousNameMessage(subject String, candidates String) returns String
 	return "Ambiguous {subject}: more than one visible declaration matches it. Qualify it as one of: {candidates}"
 end 'ambiguousNameMessage'
 
 // The candidate trailer, sorted through the shared `insertCandidateName` so E3063 and E3095 order their
 // candidates by one rule — see there for the rule.
-export function renderAmbiguousCandidates(spellings NameRoster) returns String
+function renderAmbiguousCandidates(spellings NameRoster) returns String
 	let candidates = StringArray.create(0)
 
 	for spelling in spellings 'eachSpelling'
@@ -3491,12 +3491,11 @@ export function renderAmbiguousCandidates(spellings NameRoster) returns String
 	return joinedWith(candidates, separator: CandidateListSeparator)
 end 'renderAmbiguousCandidates'
 
-// The two refusals, told apart by the TIER the declaration wrote — E3008 for a file-private callee, E3088
-// for one scoped to a directory subtree the caller is outside of. Both messages are pinned byte for byte
-// (`export-keyword`, `module-keyword`), and both are anchored on the CALL.
+// The refusal of a callee scoped to a directory subtree the caller is outside of — E3008, pinned byte for
+// byte (`export-keyword`, `directory-scope`) and anchored on the CALL.
 //
 // The `global` arm is unreachable by construction — `isVisibleFrom` answers `true` for it and this is
-// reached only when it answered `false` — so it panics rather than inventing a third sentence.
+// reached only when it answered `false` — so it panics rather than inventing a sentence.
 function reportCalleeNotVisible(project Project, funcNames FunctionNameIndex, callee ByteArray, noun ByteArray, callRange SourceRange, filePath FilePath)
 	let declared = try funcNames.funcNamed(callee) otherwise panic("reportCalleeNotVisible: '{String.from(callee)}' has no declaration — `calleeVisibleFrom` answered `false`, which it can only do for a callee it found")
 	reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath))
@@ -3516,11 +3515,11 @@ end 'HiddenSymbolKind'
 // hidden name can be written in. A call in a function body or a top-level initializer reaches it from
 // `validateCall` above, off `FunctionNameIndex`; a read or store of a hidden static member reaches it from
 // `Queries.parseErrorDiagnostic`'s `symbolNotVisible` arm, because the parse decides it. Several askers,
-// one wording, so a static and a function cannot come to disagree about what `module` means.
+// one wording, so a static and a function cannot come to disagree about what a tier means.
 //
 // A program-wide symbol (`global` or `public`) cannot be refused by any door, so reaching here with one is
 // an invariant break.
-export function hiddenSymbolDiagnostic(kind HiddenSymbolKind, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns Diagnostic
+function hiddenSymbolDiagnostic(kind HiddenSymbolKind, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns Diagnostic
 	let word = match kind 'kind'
 		functionDeclaration gives "function"
 		staticMember gives "static"
@@ -3529,8 +3528,7 @@ export function hiddenSymbolDiagnostic(kind HiddenSymbolKind, noun String, tier 
 	end 'kind'
 
 	return match tier 'tier'
-		file gives Diagnostic.create(ErrorCode.symbolNotExported, message: "{word} '{noun}' is not exported", line: line, column: column, filePath: filePath)
-		module gives Diagnostic.create(ErrorCode.symbolNotInModuleScope, message: "{word} '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
+		unexported gives Diagnostic.create(ErrorCode.symbolNotExported, message: "{word} '{noun}' is not exported", line: line, column: column, filePath: filePath)
 		global or
 		public panic("hiddenSymbolDiagnostic: '{noun}' is program-wide and visible from every file — no visibility door can have refused it")
 	end 'tier'
@@ -3619,7 +3617,7 @@ end 'checkIndirectArgBrands'
 // `named` column entry, because `MaxonType.function(id)` carries exactly that (see MaxonType's `function`
 // arm); the parser reads the same fact through its file-local interner in `functionValueReturnType`. The id
 // becomes the name through `TypeResolution.functionTypeNameOf`, the one reader every pass shares.
-module function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns immutable ByteArray
+function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns immutable ByteArray
 	// A function value cast to an alias (`h as Callback`) wears that alias as its BRAND and keeps its own
 	// type — `Parser.rebrandValue` — so the brand is the name every door compares by.
 	let brand = valueBrandOf(project, func: func, value: value)
@@ -3633,7 +3631,7 @@ end 'functionValueGoverningName'
 
 // The function type a value was MINTED with — a declared function's own signature, a closure literal's, or
 // the alias a parameter or field was declared at — read off the type column and never off the brand.
-module function functionValueOwnTypeName(project Project, func IrFunction, value ValueId) returns immutable ByteArray
+function functionValueOwnTypeName(project Project, func IrFunction, value ValueId) returns immutable ByteArray
 	let nameId = try func.valueNameIds.get(value) otherwise panic("functionValueOwnTypeName: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	return functionTypeNameOf(functionTypeRegistryOf(project), nameId: nameId)
 end 'functionValueOwnTypeName'
@@ -3670,7 +3668,7 @@ function doorShapesAgree(project Project, door PendingFunctionTypeDoor) returns 
 	return functionShapesAgree(functionTypeRegistryOf(project), signatures: programSignaturesIn(project, asker: "doorShapesAgree"), declared: declared, got: got, readerFilePath: door.filePath)
 end 'doorShapesAgree'
 
-module function aliasDisplayOf(project Project, name ByteArray) returns String
+function aliasDisplayOf(project Project, name ByteArray) returns String
 	return programSignaturesIn(project, asker: "aliasDisplayOf").aliasIdentityDisplay(name)
 end 'aliasDisplayOf'
 
@@ -4075,7 +4073,7 @@ typealias FunctionByBareName = Map with (ByteArray, ElementIndex)
 // The two MEMOS and the two stores they are derived from, carried together because both must outlive the
 // per-op walk: one transitive slot walk per interface and one candidate scan per requirement, never one per
 // dispatch (see `WitnessSlotsByDeclIndex` for why the slot memo is owed).
-export type WitnessDispatchTargets
+type WitnessDispatchTargets
 	var signatures as ProgramSignatures
 	var functions as IrFunctionArray
 
@@ -4085,7 +4083,7 @@ export type WitnessDispatchTargets
 	var slots as WitnessSlotsByDeclIndex
 	var byRequirement as WitnessTargetsByRequirement
 
-	module static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
+	static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
 		return Self{signatures: signatures, functions: functions, firstWithName: FunctionByBareName.create(), nextWithName: FuncIndexArray.create(0), hasNextWithName: BoolArray.create(0), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create()}
 	end 'create'
 
@@ -4127,7 +4125,7 @@ export type WitnessDispatchTargets
 
 	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
 	// set and the argument check cannot come to name different requirements for one op.
-	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns immutable ByteArray
+	function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns immutable ByteArray
 		return witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.slots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
 	end 'requirementNameAt'
 
@@ -4146,7 +4144,7 @@ export type WitnessDispatchTargets
 	// pull is one no dispatch here can land on, since the witness table that would name it would then hold a
 	// relocation to a symbol with no code. A demand walk that missed such a body would already be
 	// miscompiling that dispatch, so this cannot be the first thing to notice.
-	module function candidatesFor(requirement ByteArray) returns NameRoster
+	function candidatesFor(requirement ByteArray) returns NameRoster
 		if let memoized = try self.byRequirement.get(requirement) 'alreadyScanned'
 			return memoized
 		end 'alreadyScanned'
@@ -4218,7 +4216,7 @@ end 'buildYieldingSummary'
 // difference stays where it is, because carrying it in here would mean either a function-value parameter (a
 // mechanism no other call site in this compiler uses) or a mode flag selecting between two predicates, which
 // is the enumerated door this file spends its length arguing against.
-module function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
+function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
 	return reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: nodeCount), seeds: seeds)
 end 'markSeededCallers'
 
@@ -4342,7 +4340,7 @@ end 'calleeYields'
 // the yield summary reads it as *"assume it yields"* (its accepting direction), and the blocking graph reads
 // it as *"no edge"* (its accepting direction). The two answers are opposite because the two diagnostics
 // refuse in opposite directions, which is exactly why the verdict is the CALLER's and the recording is
-// shared. ⚠ `module`, for `CallGraphEdges`' reason.
+// shared.
 function recordCallGraphEdge(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges) returns bool
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return false
 	edges.record(calleeIndex, callerIndex: callerIndex)
@@ -4414,11 +4412,11 @@ end 'ioYieldingRuntimeCallee'
 // written that way first, and it read GREEN on its own acceptance case for the only reason a wrong answer
 // ever reads green: nothing propagated at all, because the single callee in that program was not a seed.
 // These neighbours ARE the callers.
-export type CallGraphEdges
+type CallGraphEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as CsrColumn
 
-	export static function create() returns CallGraphEdges
+	static function create() returns CallGraphEdges
 		return Self{calleeIndices: CsrColumn.create(0), callerIndices: CsrColumn.create(0)}
 	end 'create'
 
@@ -4438,19 +4436,19 @@ end 'CallGraphEdges'
 // the parser left behind after walking past a stdlib body no path from `main` demanded, or past a body it
 // abandoned. The second reads as an ordinary function that happens to do nothing, which is why it has to
 // be asked for by name.
-module function bodyIsUnreadable(func IrFunction) returns bool
+function bodyIsUnreadable(func IrFunction) returns bool
 	return func.blockRefs.count() == 0 or func.bodyStatus != BodyStatus.parsed
 end 'bodyIsUnreadable'
 
 // An abandoned body is unknown rather than opaque: assumed to wait, yield or write, it would earn
 // findings about code its reported refusal already rejects.
-module function bodyIsOpaqueToSummaries(func IrFunction, libraryFacts LibraryFacts) returns bool
+function bodyIsOpaqueToSummaries(func IrFunction, libraryFacts LibraryFacts) returns bool
 	return bodyIsUnreadable(func) and func.bodyStatus != BodyStatus.abandoned and not libraryFacts.bodyIsSwept(func.name) and not libraryFacts.runtimeTier.contains(func.name)
 end 'bodyIsOpaqueToSummaries'
 
 // Does this function promise a value at all? A `void` return is the language's way of saying the call is
 // worth making for something other than what it hands back.
-module function functionReturnsNothing(func IrFunction) returns bool
+function functionReturnsNothing(func IrFunction) returns bool
 	return match func.maxonReturnType 'rt'
 		void gives true
 		value gives false
@@ -4474,7 +4472,7 @@ end 'functionReturnsNothing'
 // roster and the sixty comparisons cannot answer anything. This runs at every call op of the program, ahead
 // of the lookup that resolves the DECLARED callee almost all of them are, and a declared name is the one
 // shape that reaches here wearing no prefix.
-module function effectFreeRuntimeCallee(callee ByteArray) returns bool
+function effectFreeRuntimeCallee(callee ByteArray) returns bool
 	if not wearsTheCompilerInternalPrefix(callee) 'noRosterEntryWearsThisShape'
 		return false
 	end 'noRosterEntryWearsThisShape'
@@ -4499,7 +4497,7 @@ end 'allocationCounterCallee'
 //
 // ⛔ **CLOSED, FOR `effectFreeRuntimeCallee`'s REASON AND IN ITS DIRECTION.** A callee named nowhere here may
 // store any operand into any other, so a new mutator is at worst over-refused until it is added.
-export enum RuntimeStoreShape
+enum RuntimeStoreShape
 	intoAnyOperand
 	intoTheReceiver
 	intoTheReceiverPastAnAnchor
@@ -4507,7 +4505,7 @@ export enum RuntimeStoreShape
 	theSourcesElementsIntoTheReceiver
 end 'RuntimeStoreShape'
 
-module function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreShape
+function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreShape
 	if not wearsTheCompilerInternalPrefix(callee) 'noRosterEntryWearsThisShape'
 		return RuntimeStoreShape.intoAnyOperand
 	end 'noRosterEntryWearsThisShape'
@@ -4527,7 +4525,7 @@ module function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreSh
 	return RuntimeStoreShape.intoAnyOperand
 end 'runtimeCalleeStoreShape'
 
-export enum ArrayMutation
+enum ArrayMutation
 	notOne
 	pushesAnElement
 	appendsASource
@@ -4537,7 +4535,7 @@ export enum ArrayMutation
 	movesLayout
 end 'ArrayMutation'
 
-export function arrayMutationOf(callee ByteArray) returns ArrayMutation
+function arrayMutationOf(callee ByteArray) returns ArrayMutation
 	if not wearsTheCompilerInternalPrefix(callee) 'noRosterEntryWearsThisShape'
 		return ArrayMutation.notOne
 	end 'noRosterEntryWearsThisShape'
@@ -4573,7 +4571,7 @@ function takesRecordsOutCallee(callee ByteArray) returns bool
 	return arrayMutationOf(callee) == ArrayMutation.removesElements or callee.equals(GtPromiseFieldVacateName) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName)
 end 'takesRecordsOutCallee'
 
-module function copiesItsSourceCallee(callee ByteArray) returns bool
+function copiesItsSourceCallee(callee ByteArray) returns bool
 	return arrayMutationOf(callee) == ArrayMutation.appendsASource
 end 'copiesItsSourceCallee'
 
@@ -4591,7 +4589,7 @@ end 'containerMutatorCallee'
 
 // A reinsertion unlinks its node from the chain the node names, which need not be the receiver, so it
 // also writes that chain's header and its neighbouring links.
-module function movesANodeOutOfItsChainCallee(callee ByteArray) returns bool
+function movesANodeOutOfItsChainCallee(callee ByteArray) returns bool
 	return callee.equals(ListReinsertFirstName) or callee.equals(ListReinsertLastName)
 end 'movesANodeOutOfItsChainCallee'
 
@@ -4602,7 +4600,7 @@ end 'listMutatorCallee'
 // Entries that write their first operand, and nothing else but what `movesANodeOutOfItsChainCallee`
 // names. A promise vacate is left out: it hands a green thread's result to a waiter, which is more than
 // a write to its receiver.
-module function rawResourceWritingCallee(callee ByteArray) returns bool
+function rawResourceWritingCallee(callee ByteArray) returns bool
 	if callee.equals(SharedMemoryCloseName) or callee.equals(SharedMemoryReleaseName) 'releasesAMapping'
 		return true
 	end 'releasesAMapping'
@@ -4621,7 +4619,7 @@ end 'rawResourceWritingCallee'
 // The operand a call to a runtime callee writes: its receiver, or for a hardware AES callee the operand
 // `AesWrittenOperandPosition` names, which is where the parser notes write-blame. `EffectSummary` asks
 // here so that both agree.
-module function writtenOperandOf(callee ByteArray) returns ParamCount
+function writtenOperandOf(callee ByteArray) returns ParamCount
 	if isHardwareAesRuntimeCallee(callee) 'aesCipher'
 		return AesWrittenOperandPosition as ParamCount
 	end 'aesCipher'
@@ -4631,7 +4629,7 @@ end 'writtenOperandOf'
 
 // The hardware AES callees are on this roster so that `Aes` and `AesGcm` calls, which write only an array
 // of their own, are as pure on a target with AES instructions as the software cipher is on the others.
-module function receiverWritingRuntimeCallee(callee ByteArray) returns bool
+function receiverWritingRuntimeCallee(callee ByteArray) returns bool
 	return match arrayMutationOf(callee) 'mutation'
 		pushesAnElement or
 		appendsASource or
@@ -4649,17 +4647,17 @@ end 'receiverWritingRuntimeCallee'
 // `makePair` included. `isRuntimeCallee` (the `__mm_` heap band) already draws exactly this line
 // for exactly this reason; the managed, String, List and type-parameter families, and the per-type
 // `__destruct_` and `__clone_` cascades, are the same fact one prefix over.
-module function ownershipBookkeepingCallee(callee ByteArray) returns bool
+function ownershipBookkeepingCallee(callee ByteArray) returns bool
 	return wearsTheCompilerInternalPrefix(callee) and (isRuntimeCallee(callee) or bytesStartWith(callee, prefix: UnionRetainPrefix) or callee.equals(StrRetainName) or callee.equals(StrUnshareName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName) or isTypeParamOwnershipCallee(callee) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName) or bytesStartWith(callee, prefix: DestructorPrefix) or bytesStartWith(callee, prefix: ClonerPrefix))
 end 'ownershipBookkeepingCallee'
 
-module function containerReadCallee(callee ByteArray) returns bool
+function containerReadCallee(callee ByteArray) returns bool
 	return isWordGetCallee(callee) or callee.equals(ManagedCreateName) or isManagedSizedCreateCallee(callee) or callee.equals(ManagedMemCreateName) or callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedSlotUnfilledName) or callee.equals(ManagedFirstName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedEqName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or callee.equals(ManagedCursorCreateName) or callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorIndexName) or callee.equals(ManagedCursorPeekName) or callee.equals(ListCreateName) or callee.equals(ListCountName) or callee.equals(ListIsEmptyName) or callee.equals(ListNodeValueName) or callee.equals(ListHeadCheckedName) or callee.equals(ListTailCheckedName) or callee.equals(ListNodeNextCheckedName) or callee.equals(ListNodePrevCheckedName) or callee.equals(StrEqName) or callee.equals(StrBytesViewName) or callee.equals(StrToBytesName) or callee.equals(StrFromBytesName) or callee.equals(StrOfBufferName)
 end 'containerReadCallee'
 
 // ⭐ **A VALUE IN, A VALUE OUT.** A Unicode table lookup, an enum's name/raw-value lookup, a `Character`
 // primitive, a number's decimal rendering: each answers from its arguments and a `.rdata` table.
-module function pureComputationCallee(callee ByteArray) returns bool
+function pureComputationCallee(callee ByteArray) returns bool
 	return isUcdRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee) or checkedDivisionExpansion(callee) or callee.equals(CharAtName) or callee.equals(CharAsciiValueName) or callee.equals(CharCmpName) or callee.equals(CharFromCodepointName) or callee.equals(IntToStringName) or callee.equals(UIntToStringName) or callee.equals(BoolToStringName)
 end 'pureComputationCallee'
 
@@ -4720,7 +4718,7 @@ end 'namedDoorPlace'
 // opposite case and IS quoted: its name is exactly what the user wrote.
 let TargetUnsupportedUnnamedSubject = "this construct"
 
-module function opIsTheCompilersOwn(project Project, func IrFunction, opIndex ElementIndex) returns bool
+function opIsTheCompilersOwn(project Project, func IrFunction, opIndex ElementIndex) returns bool
 	return authoredFileOf(project, func: func, opIndex: opIndex).isEmpty()
 end 'opIsTheCompilersOwn'
 
@@ -4990,13 +4988,13 @@ end 'requireFunctionValueTargetTakesNoWitness'
 
 // The rank picks the diagnostic, not only the name quoted: a subprocess entry on WASI is E3074 (it can never
 // exist there) and outranks E3104 (no lowering yet); a `__Raw` row ranks below the entry it underlies.
-export typealias SubstrateEntryRank = int(0 to 2)
+typealias SubstrateEntryRank = int(0 to 2)
 
 let RawMachineOperationRank = 0
 let RuntimeEntryRank = 1
-export let ProcessSpawnRank = 2
+let ProcessSpawnRank = 2
 
-export function substrateEntryRank(entry ByteArray) returns SubstrateEntryRank
+function substrateEntryRank(entry ByteArray) returns SubstrateEntryRank
 	if isSubprocessRuntimeCallee(entry) 'processSpawn'
 		return ProcessSpawnRank
 	end 'processSpawn'
@@ -5098,7 +5096,7 @@ end 'namesAComparisonMethod'
 
 let ComparisonMethodParamCount = 2
 
-module function functionDisplay(project Project, func IrFunction) returns FunctionDisplay
+function functionDisplay(project Project, func IrFunction) returns FunctionDisplay
 	return programSignaturesIn(project, asker: "functionDisplay").functionDisplay(func, authoredPath: project.stagedSourceOrigins.authoredPathOf(func.sourceFilePath))
 end 'functionDisplay'
 
@@ -5821,7 +5819,7 @@ end 'returnSlotIdentityThroughCallInstance'
 // have when the alias was parsed (`substitutedSlotIdentity`). Those are two facts about one slot and they
 // must never be decided differently for it: a slot crossed as opaque but scored as concrete would compare a
 // project-space type against an index-space name, which is the pair of bugs both headers record.
-module function slotIsBareTypeParameter(slotType MaxonType) returns bool
+function slotIsBareTypeParameter(slotType MaxonType) returns bool
 	return maxonTypeTag(slotType) == ValueTypeTag.typeParameter
 end 'slotIsBareTypeParameter'
 
@@ -5860,7 +5858,7 @@ end 'returnTypeThroughCallInstance'
 // ⚠ **THROUGH `displayParamName`, WHICH IS WHAT MAKES THE RECEIVER PRINTABLE.** `__self` is the IR's name
 // for parameter 0 and appears nowhere in the author's program; `self` is the keyword they wrote. It is
 // the same mapping E3207 renders its receiver half through, asked here rather than restated.
-export function argParamLabel(param ArgumentParameter, position ParamCount) returns String
+function argParamLabel(param ArgumentParameter, position ParamCount) returns String
 	return match param 'param'
 		unnamed gives "{position + 1}"
 		named(name) gives quotedParamLabel(displayParamName(name))
@@ -5872,7 +5870,7 @@ end 'argParamLabel'
 // `builtinArgumentType` arm), and a builtin's parameters always have names — they are written in
 // this compiler's own signature tables, so there is no positional fallback for it to choose
 // between.
-export function quotedParamLabel(paramName String) returns String
+function quotedParamLabel(paramName String) returns String
 	return "'{paramName}'"
 end 'quotedParamLabel'
 
@@ -5901,15 +5899,15 @@ end 'argTypeMismatchMessage'
 // ONE file.
 // ⚠ A note goes OUTSIDE the quotes and the type stays inside. The quoted span is the spelling an author can
 // search their own source for; a fact about WHICH declaration that spelling resolves to is not part of it.
-export function argTypeMismatchSentence(label String, expected String, got String, expectedNote String, gotNote String, crossesRange bool) returns String
+function argTypeMismatchSentence(label String, expected String, got String, expectedNote String, gotNote String, crossesRange bool) returns String
 	return withRangeCrossingFix("argument type mismatch for {label}: expected '{expected}'{expectedNote}, got '{got}'{gotNote}", subject: RangeCrossingSubject.argument, target: expected, expectedNote: expectedNote, crossesRange: crossesRange)
 end 'argTypeMismatchSentence'
 
-export function assignMismatchSentence(place String, got String, gotNote String, expected String, expectedNote String, crossesRange bool) returns String
+function assignMismatchSentence(place String, got String, gotNote String, expected String, expectedNote String, crossesRange bool) returns String
 	return withRangeCrossingFix("cannot assign a value of type '{got}'{gotNote} to {place}, which holds '{expected}'{expectedNote}", subject: RangeCrossingSubject.value, target: expected, expectedNote: expectedNote, crossesRange: crossesRange)
 end 'assignMismatchSentence'
 
-export function expectedGotSentence(expected String, got String, expectedNote String, crossesRange bool) returns String
+function expectedGotSentence(expected String, got String, expectedNote String, crossesRange bool) returns String
 	return withRangeCrossingFix("type mismatch: 'expected {expected}{expectedNote}, got {got}'", subject: RangeCrossingSubject.value, target: expected, expectedNote: expectedNote, crossesRange: crossesRange)
 end 'expectedGotSentence'
 
@@ -6975,7 +6973,7 @@ end 'argMismatchWithOpaqueTail'
 // whole-program index, so they cannot spell a type two ways. **The twinning stops at the LOOKUP and the
 // instance arm — the tail is `ProgramSignatures.displayNameOfAggregate`, shared, because a tag and an
 // already-resolved name belong to no tier.**
-module function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
+function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
 	if tag == ValueTypeTag.genericInstance 'genericInstance'
 		return String.from(programSignaturesIn(project, asker: "typeDisplayName").instanceDisplayName(nameId as GenericInstanceId))
 	end 'genericInstance'
@@ -7151,7 +7149,7 @@ function baseNameOfInstanceOrDeclaration(project Project, signatures ProgramSign
 	return try project.typeNames.nameOf(nameId) otherwise panic("baseNameOfInstanceOrDeclaration: type name {nameId} is not in the project interner")
 end 'baseNameOfInstanceOrDeclaration'
 
-export union ArgumentParameter
+union ArgumentParameter
 	unnamed
 	named(name immutable ByteArray)
 end 'ArgumentParameter'

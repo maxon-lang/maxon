@@ -30,7 +30,7 @@ let SymtabSectionName = ".symtab"
 // The PE spelling of a `LinkedSectionKind` — this format's half of the one name table
 // `LinkedSection.linkedSectionName` reads. Exhaustive, so a third section cannot be added to the
 // kind without a PE name for it.
-export function peSectionName(section LinkedSectionKind) returns String
+function peSectionName(section LinkedSectionKind) returns String
 	return match section 'k'
 		globals gives DataSectionName
 		readOnly gives RdataSectionName
@@ -96,7 +96,7 @@ end 'PeReadError'
 // ⛔ **A BLOCK MAY NOT MIX THEM**, and that is a REFUSAL rather than a guess: the two forms disagree about
 // whether a block's lines are one payload or many, so a mixed block has no meaning to compute. Guessing one
 // is the "reads as coverage, pins nothing" shape this file refuses everywhere else.
-export union SectionPinExpectation
+union SectionPinExpectation
 	// One payload, compared as a run from byte 0 — see `compareSectionPrefix` for why a PREFIX and not an
 	// equality.
 	contiguousRun(bytes ByteArray)
@@ -106,7 +106,7 @@ export union SectionPinExpectation
 end 'SectionPinExpectation'
 
 // Why a ```RequiredData block could not be turned into bytes.
-export union TypedValueError implements Error
+union TypedValueError implements Error
 	missingValue(line String)
 	unknownType(typeName String)
 	badNumber(typeName String, text String)
@@ -198,7 +198,7 @@ end 'readPeSectionData'
 //
 // `u16`/`u32` serve `enum-narrow-storage`'s ladder (`u16[] 100, 1000, 10000`); `f64` is the gate on the
 // eight bytes `3.14` actually lays down (`data-section-f64-*`).
-export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
+function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
 	let out = ByteArray.create(0)
 	let payloads = ByteBlobArray.create(0)
 
@@ -578,7 +578,7 @@ end 'appendLittleEndian'
 // is the same rendering, and the harness may call into the compiler while the compiler may not
 // call out here, so the one spelling sits on the lower side.
 
-export function formatHexBytes(bytes ByteArray) returns String
+function formatHexBytes(bytes ByteArray) returns String
 	let hexes = StringArray.create(bytes.count(), zeroed: false)
 
 	for b in bytes 'each'

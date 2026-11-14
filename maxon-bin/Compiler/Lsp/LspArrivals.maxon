@@ -1,4 +1,4 @@
-module union LspArrival
+union LspArrival
 	framed(body String)
 	endOfStream
 	framingError(detail String)
@@ -12,18 +12,18 @@ module union LspArrival
 	reapDeadline
 end 'LspArrival'
 
-module typealias LspArrivalPromise = Promise with LspArrival
+typealias LspArrivalPromise = Promise with LspArrival
 
-module typealias LspArrivalPromiseArray = Array with LspArrivalPromise
+typealias LspArrivalPromiseArray = Array with LspArrivalPromise
 
-module typealias ResolutionTicket = int(0 to u64.max)
+typealias ResolutionTicket = int(0 to u64.max)
 
-module let LspFrameSlot = 0 as ElementIndex
+let LspFrameSlot = 0 as ElementIndex
 
-module type LspStdinReader
+type LspStdinReader
 	var stdin as StdinReader
 
-	module static function create() returns LspStdinReader
+	static function create() returns LspStdinReader
 		return Self{stdin: Console.stdin()}
 	end 'create'
 
@@ -36,11 +36,11 @@ module type LspStdinReader
 	end 'next'
 end 'LspStdinReader'
 
-module type LspChildStdoutReader
+type LspChildStdoutReader
 	let generation as LspChildGeneration
 	var reader as ChildOutputReader
 
-	module static function create(reader isolated ChildOutputReader, generation LspChildGeneration) returns LspChildStdoutReader
+	static function create(reader isolated ChildOutputReader, generation LspChildGeneration) returns LspChildStdoutReader
 		return Self{generation: generation, reader: merge reader}
 	end 'create'
 
@@ -53,13 +53,13 @@ module type LspChildStdoutReader
 	end 'next'
 end 'LspChildStdoutReader'
 
-module function nextChildArrival(reader LspChildStdoutReader.handle) returns LspArrival
+function nextChildArrival(reader LspChildStdoutReader.handle) returns LspArrival
 	let arrival = try await reader.next() otherwise panic("a child's output reader stopped while the relay still held its handle")
 
 	return merge arrival
 end 'nextChildArrival'
 
-module function nextChildStderrArrival(reader ChildLineReader.handle, generation LspChildGeneration) returns LspArrival
+function nextChildStderrArrival(reader ChildLineReader.handle, generation LspChildGeneration) returns LspArrival
 	let event = try await reader.next() otherwise panic("a child's error reader stopped while the relay still held its handle")
 
 	return match event 'event'
@@ -71,7 +71,7 @@ module function nextChildStderrArrival(reader ChildLineReader.handle, generation
 	end 'event'
 end 'nextChildStderrArrival'
 
-module function reapDeadlineAfter(deadlineMs Milliseconds) returns LspArrival
+function reapDeadlineAfter(deadlineMs Milliseconds) returns LspArrival
 	sleep(deadlineMs)
 
 	return LspArrival.reapDeadline
@@ -80,6 +80,6 @@ end 'reapDeadlineAfter'
 // Runs a `.maxproj` off the session loop, which answers every other request while a manifest
 // compiles and runs. ⚠ Each held project runs one at a time (`HeldRoot.resolution`), so a slow
 // `.maxproj` delays only its own project's later answers.
-module function resolvedProjectArrival(dirPath String, ticket ResolutionTicket, previous immutable DeclaredInputStamps) returns LspArrival
+function resolvedProjectArrival(dirPath String, ticket ResolutionTicket, previous immutable DeclaredInputStamps) returns LspArrival
 	return LspArrival.projectResolved(projectDirectoryAt(dirPath), answer: resolvedProjectInputs(dirPath, previous: previous), ticket: ticket)
 end 'resolvedProjectArrival'

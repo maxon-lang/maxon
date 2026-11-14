@@ -1,12 +1,12 @@
-module typealias LspChildGeneration = int(0 to u64.max)
+typealias LspChildGeneration = int(0 to u64.max)
 
-module typealias LspRelayIdSet = Set with String
+typealias LspRelayIdSet = Set with String
 
-module typealias LspRelayInFlightMap = Map with (String, LspInFlightRequest)
+typealias LspRelayInFlightMap = Map with (String, LspInFlightRequest)
 
-module typealias LspChildLinkArray = Array with LspChildLink
+typealias LspChildLinkArray = Array with LspChildLink
 
-module typealias LspRelayDocumentMap = Map with (String, LspRelayDocument)
+typealias LspRelayDocumentMap = Map with (String, LspRelayDocument)
 
 let RelayWatchRequestId = "maxon-relay-watch"
 let RelayWatchRegistrationId = "maxon-relay-slot"
@@ -42,29 +42,29 @@ let RelayUnstatedDocumentVersion = 1
 let RelayContentModifiedText = "the compiler serving this checkout was replaced; ask again"
 let RelayDetachedText = "no compiler is built into this checkout's slot yet; ask again once it is"
 
-module union LspRelayRoute
+union LspRelayRoute
 	stay
 	slot(path FilePath)
 end 'LspRelayRoute'
 
-module union LspAttachOutcome
+union LspAttachOutcome
 	attached
 	detached
 	failed(reason String)
 end 'LspAttachOutcome'
 
-module union LspRelayChild
+union LspRelayChild
 	none
 	running(link LspChildLink)
 end 'LspRelayChild'
 
-module union RelayWatchSupport
+union RelayWatchSupport
 	unsupported
 	absolute
 	relative
 end 'RelayWatchSupport'
 
-module function relayWatchSupportOf(doc JsonDoc) returns RelayWatchSupport
+function relayWatchSupportOf(doc JsonDoc) returns RelayWatchSupport
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return RelayWatchSupport.unsupported
 	let capabilities = try lspMember(doc, of: params, key: RelayCapabilitiesKey) otherwise return RelayWatchSupport.unsupported
 	let workspace = try lspMember(doc, of: capabilities, key: RelayWorkspaceKey) otherwise return RelayWatchSupport.unsupported
@@ -97,7 +97,7 @@ function relayGlobEscaped(text String) returns String
 	return String.from(escaped)
 end 'relayGlobEscaped'
 
-module function lspRelayRoute(doc JsonDoc) returns LspRelayRoute throws RunCacheError
+function lspRelayRoute(doc JsonDoc) returns LspRelayRoute throws RunCacheError
 	if not trustedByInitializationOptions(doc) 'untrusted'
 		return LspRelayRoute.stay
 	end 'untrusted'
@@ -162,15 +162,15 @@ function relayDidOpenText(uri String, document LspRelayDocument) returns String
 	return lspNotificationText(doc, method: MethodDidOpen, params: params.finish())
 end 'relayDidOpenText'
 
-module type LspRelayDocument
-	module let text as String
-	module let version as ClientDocumentVersion
+type LspRelayDocument
+	let text as String
+	let version as ClientDocumentVersion
 
-	module static function create(text String, version ClientDocumentVersion) returns LspRelayDocument
+	static function create(text String, version ClientDocumentVersion) returns LspRelayDocument
 		return Self{text: text, version: version}
 	end 'create'
 
-	module function replayedVersion() returns JsonInt
+	function replayedVersion() returns JsonInt
 		return match self.version 'stated'
 			stated(number) gives number
 			unstated gives RelayUnstatedDocumentVersion
@@ -178,31 +178,31 @@ module type LspRelayDocument
 	end 'replayedVersion'
 end 'LspRelayDocument'
 
-module type LspInFlightRequest
-	module let id as LspRequestId
-	module let method as String
+type LspInFlightRequest
+	let id as LspRequestId
+	let method as String
 
-	module static function create(id LspRequestId, method String) returns LspInFlightRequest
+	static function create(id LspRequestId, method String) returns LspInFlightRequest
 		return Self{id: id, method: method}
 	end 'create'
 
-	module function isShutdown() returns bool
+	function isShutdown() returns bool
 		return self.method == MethodShutdown
 	end 'isShutdown'
 end 'LspInFlightRequest'
 
 // Size and modification time only: `createdTime` is `st_ctime` on Linux, which a chmod moves, and a
 // mode change must not read as a rebuilt compiler.
-module type LspSlotStamp
-	module let exists as bool
+type LspSlotStamp
+	let exists as bool
 	let size as FileSize
 	let modifiedTime as Timestamp
 
-	module static function absent() returns LspSlotStamp
+	static function absent() returns LspSlotStamp
 		return Self{exists: false, size: 0, modifiedTime: 0}
 	end 'absent'
 
-	module static function of(slot FilePath) returns LspSlotStamp throws FileInfoError
+	static function of(slot FilePath) returns LspSlotStamp throws FileInfoError
 		let info = try File.info(slot) otherwise (failure) 'unread'
 			match failure 'reason'
 				notFound then return Self.absent()
@@ -219,14 +219,14 @@ module type LspSlotStamp
 		return Self{exists: true, size: info.size, modifiedTime: info.modifiedTime}
 	end 'of'
 
-	module function agrees(other LspSlotStamp) returns bool
+	function agrees(other LspSlotStamp) returns bool
 		return self.exists == other.exists and self.size == other.size and self.modifiedTime == other.modifiedTime
 	end 'agrees'
 end 'LspSlotStamp'
 
 type LspChildProcess
-	module let generation as LspChildGeneration
-	module let process as StreamingSubprocess
+	let generation as LspChildGeneration
+	let process as StreamingSubprocess
 
 	static function create(generation LspChildGeneration, process StreamingSubprocess) returns LspChildProcess
 		return Self{generation: generation, process: process}
@@ -235,21 +235,21 @@ end 'LspChildProcess'
 
 typealias LspChildProcessList = List with LspChildProcess
 
-module type LspChildLink
-	module let generation as LspChildGeneration
-	module let reader as LspChildStdoutReader.handle
-	module let errorReader as ChildLineReader.handle
-	module let swallowed as LspRelayIdSet
-	module var stdoutOpen as bool
-	module var stderrOpen as bool
-	module var pendingStderr as String
-	module var omittedStderrLines as Count
+type LspChildLink
+	let generation as LspChildGeneration
+	let reader as LspChildStdoutReader.handle
+	let errorReader as ChildLineReader.handle
+	let swallowed as LspRelayIdSet
+	var stdoutOpen as bool
+	var stderrOpen as bool
+	var pendingStderr as String
+	var omittedStderrLines as Count
 
-	module static function create(generation LspChildGeneration, reader LspChildStdoutReader.handle, errorReader ChildLineReader.handle) returns LspChildLink
+	static function create(generation LspChildGeneration, reader LspChildStdoutReader.handle, errorReader ChildLineReader.handle) returns LspChildLink
 		return Self{generation: generation, reader: reader, errorReader: errorReader, swallowed: LspRelayIdSet.create(), stdoutOpen: true, stderrOpen: true, pendingStderr: "", omittedStderrLines: 0}
 	end 'create'
 
-	module function noteStderrLine(line String)
+	function noteStderrLine(line String)
 		if self.pendingStderr.byteLength() >= RelayStderrPendingCapBytes 'full'
 			self.omittedStderrLines = self.omittedStderrLines + 1
 			return
@@ -258,7 +258,7 @@ module type LspChildLink
 		self.pendingStderr.append("{line}\n")
 	end 'noteStderrLine'
 
-	module function takePendingStderr() returns String
+	function takePendingStderr() returns String
 		var text = self.pendingStderr
 		self.pendingStderr = ""
 
@@ -270,12 +270,12 @@ module type LspChildLink
 		return text
 	end 'takePendingStderr'
 
-	module function drained() returns bool
+	function drained() returns bool
 		return not self.stdoutOpen and not self.stderrOpen
 	end 'drained'
 end 'LspChildLink'
 
-module type LspRelay
+type LspRelay
 	let slot as FilePath
 	let initializeBody as String
 	let initializeId as LspRequestId
@@ -292,15 +292,15 @@ module type LspRelay
 	var unreadableTold as StatedText
 	let watch as RelayWatchSupport
 
-	module static function create(slot FilePath, initializeBody String, initializeId LspRequestId, watch RelayWatchSupport) returns LspRelay
+	static function create(slot FilePath, initializeBody String, initializeId LspRequestId, watch RelayWatchSupport) returns LspRelay
 		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), processes: LspChildProcessList.create(), nextGeneration: 0, attached: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated, watch: watch}
 	end 'create'
 
-	module function report(reason String, workspace LspWorkspaceState)
+	function report(reason String, workspace LspWorkspaceState)
 		announceLspLog(workspace.writer, sentence: "maxon lsp-server: {reason}")
 	end 'report'
 
-	module function attachInitial(workspace LspWorkspaceState) returns LspAttachOutcome
+	function attachInitial(workspace LspWorkspaceState) returns LspAttachOutcome
 		let stamp = try LspSlotStamp.of(self.slot) otherwise (failure) 'unreadable'
 			let reason = self.unreadableReason(failure)
 			self.unreadableTold = StatedText.stated(reason)
@@ -311,7 +311,7 @@ module type LspRelay
 		return self.attach(stamp, initial: true, workspace: workspace)
 	end 'attachInitial'
 
-	module function clientFrame(body String, doc JsonDoc, workspace LspWorkspaceState)
+	function clientFrame(body String, doc JsonDoc, workspace LspWorkspaceState)
 		let id = readRequestId(doc)
 		self.forwardStderr(workspace)
 
@@ -410,7 +410,7 @@ module type LspRelay
 		end 'answer'
 	end 'watchAnswered'
 
-	module function childArrived(arrival LspArrival, workspace LspWorkspaceState)
+	function childArrived(arrival LspArrival, workspace LspWorkspaceState)
 		match arrival 'arrival'
 			childFramed(generation, body) then self.childFrame(generation, body: body, workspace: workspace)
 			childEnded(generation, reason) then self.childEnded(generation, reason: reason, workspace: workspace)
@@ -438,7 +438,7 @@ module type LspRelay
 		end 'replaced'
 	end 'slotChanged'
 
-	module function shutDown(workspace LspWorkspaceState)
+	function shutDown(workspace LspWorkspaceState)
 		match self.current 'child'
 			running(link) then self.endGracefully(link, workspace: workspace)
 			none then break

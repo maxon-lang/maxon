@@ -3549,7 +3549,7 @@ digesting 3
 ```
 
 <!-- test: a-witness-argument-of-a-contested-nominal-name-reads-the-interfaces-file -->
-A witness call's formal names the type the interface's own file declares, not a file-private alias of the same name in another file.
+A witness call's formal names the type the interface's own file declares, not an unmarked alias of the same name in another directory.
 ```maxon
 // --- file: a.maxon
 typealias Integer = int(i64.min to i64.max)

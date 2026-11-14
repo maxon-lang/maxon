@@ -722,7 +722,7 @@ end 'main'
 
 <!-- test: enum-method-export-cross-file -->
 ```maxon
-// --- file: signal.maxon
+// --- file: signal/signal.maxon
 export enum Signal
 	on
 	off
@@ -750,7 +750,7 @@ end 'main'
 
 <!-- test: error.enum-method-non-exported-cross-file -->
 ```maxon
-// --- file: signal.maxon
+// --- file: signal/signal.maxon
 export enum Signal
 	on
 	off
@@ -832,7 +832,7 @@ end 'main'
 
 <!-- test: union-method-export-cross-file -->
 ```maxon
-// --- file: outcome.maxon
+// --- file: outcome/outcome.maxon
 
 public typealias Code = int(0 to 1000)
 

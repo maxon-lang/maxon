@@ -6,7 +6,7 @@
 // A request id as JSON-RPC admits it. `absent` is a NOTIFICATION — a message that must never be
 // answered — and is also what an id of any other JSON type degrades to, since there is no response this
 // server could address to it.
-module union LspRequestId
+union LspRequestId
 	number(value LspIdNumber)
 	text(value String)
 	absent
@@ -14,11 +14,11 @@ end 'LspRequestId'
 
 // A numeric request id. JSON numbers arrive as floats; an id is used only to address the reply, so it is
 // carried as the integer a client actually sends.
-module typealias LspIdNumber = int(i64.min to i64.max)
+typealias LspIdNumber = int(i64.min to i64.max)
 
 // The reserved JSON-RPC error codes this server emits. They are the WIRE protocol's own numbers and have
 // nothing to do with Maxon's `E####` diagnostics — a client reads them, a Maxon author never does.
-module enum LspJsonRpcErrorCode
+enum LspJsonRpcErrorCode
 	parseError = -32700
 	invalidRequest = -32600
 	methodNotFound = -32601
@@ -29,28 +29,28 @@ end 'LspJsonRpcErrorCode'
 
 // Builds one JSON object into a document. `JsonNode.objectNode` wants two parallel arrays, and every
 // object this server writes was pushing onto them by hand — this is that assembly, once.
-module type LspJsonObject
+type LspJsonObject
 	var doc as JsonDoc
 	var keys as StringArray
 	var children as JsonNodeIdArray
 
-	module static function create(doc JsonDoc) returns LspJsonObject
+	static function create(doc JsonDoc) returns LspJsonObject
 		return Self{doc: doc, keys: StringArray.create(0), children: JsonNodeIdArray.create(0)}
 	end 'create'
 
 	/// Add `key`, whose value is a subtree already in the document.
-	module function putNode(key String, value JsonNodeId)
+	function putNode(key String, value JsonNodeId)
 		keys.push(key)
 		children.push(value)
 	end 'putNode'
 
 	/// Add `key`, whose value is a leaf this call puts into the document.
-	module function put(key String, value JsonNode)
+	function put(key String, value JsonNode)
 		putNode(key, value: doc.add(value))
 	end 'put'
 
 	/// The finished object, added to the document.
-	module function finish() returns JsonNodeId
+	function finish() returns JsonNodeId
 		return doc.add(JsonNode.objectNode(keys, children: children))
 	end 'finish'
 end 'LspJsonObject'
@@ -63,40 +63,40 @@ end 'LspJsonObject'
 // of one member from two members that merely agree today. Each is as visible as its readers need — the two
 // `Position` members are written and read here alone, since every area reaches a position through
 // `lspPositionMember` and `lspPositionNode` rather than through the wire names.
-module let LspPositionKey = "position"
+let LspPositionKey = "position"
 
 let LspLineKey = "line"
 
 let LspCharacterKey = "character"
 
-module let LspRangeKey = "range"
+let LspRangeKey = "range"
 
-module let LspStartKey = "start"
+let LspStartKey = "start"
 
-module let LspEndKey = "end"
+let LspEndKey = "end"
 
-module let LspUriKey = "uri"
+let LspUriKey = "uri"
 
-module let LspNewTextKey = "newText"
+let LspNewTextKey = "newText"
 
 // LSP spells every discriminator `kind` — `MarkupContent`, `CompletionItem`, `CodeAction` and
 // `SymbolInformation` all carry one, and the protocol never renames a member.
-module let LspKindKey = "kind"
+let LspKindKey = "kind"
 
 // A Maxon extension member, not an LSP one: `maxon/listProjects` and `maxon/projectLoading` both
 // name a project's root under it, spelled alike, so a client can match one to the other.
-module let LspRootPathKey = "rootPath"
+let LspRootPathKey = "rootPath"
 
 /// The `Range` a byte span occupies. ⚠ Every byte offset becomes protocol coordinates through
 /// `LspLineIndex.positionOf`, so the UTF-16 conversion cannot be skipped by one reader and applied by
 /// another.
-module function lspSpanRangeNode(doc JsonDoc, source String, index LspLineIndex, span LspSpan) returns JsonNodeId
+function lspSpanRangeNode(doc JsonDoc, source String, index LspLineIndex, span LspSpan) returns JsonNodeId
 	let start = index.positionOf(source, offset: span.startByte)
 	let finish = index.positionOf(source, offset: span.endByte)
 	return lspRangeNode(doc, startLine: start.line, startCharacter: start.character, endLine: finish.line, endCharacter: finish.character)
 end 'lspSpanRangeNode'
 
-module function lspRangeNode(doc JsonDoc, startLine LspLineNumber, startCharacter LspCharacter, endLine LspLineNumber, endCharacter LspCharacter) returns JsonNodeId
+function lspRangeNode(doc JsonDoc, startLine LspLineNumber, startCharacter LspCharacter, endLine LspLineNumber, endCharacter LspCharacter) returns JsonNodeId
 	let range = LspJsonObject.create(doc)
 	range.putNode(LspStartKey, value: lspPositionNode(doc, line: startLine, character: startCharacter))
 	range.putNode(LspEndKey, value: lspPositionNode(doc, line: endLine, character: endCharacter))
@@ -113,7 +113,7 @@ end 'lspPositionNode'
 /// The `Position` held by `of` under `key` — `params.position` for a cursor, and a `Range`'s own `start`
 /// and `end`. LSP spells all three with the same two members, and a second reader of them would be a
 /// second place the 0-based, UTF-16 contract could be got wrong.
-module function lspPositionMember(incoming JsonDoc, of JsonNodeId, key String) returns LspPosition throws LspParamsError
+function lspPositionMember(incoming JsonDoc, of JsonNodeId, key String) returns LspPosition throws LspParamsError
 	let position = try lspMember(incoming, of: of, key: key)
 	let line = try incoming.getInt(position, key: LspLineKey) otherwise throw LspParamsError.malformed
 	let character = try incoming.getInt(position, key: LspCharacterKey) otherwise throw LspParamsError.malformed
@@ -132,9 +132,9 @@ let JsonRpcVersion = "2.0"
 let JsonRpcVersionKey = "jsonrpc"
 let JsonRpcIdKey = "id"
 
-module let JsonRpcMethodKey = "method"
+let JsonRpcMethodKey = "method"
 
-module let JsonRpcParamsKey = "params"
+let JsonRpcParamsKey = "params"
 
 let JsonRpcResultKey = "result"
 let JsonRpcErrorKey = "error"
@@ -142,7 +142,7 @@ let JsonRpcErrorCodeKey = "code"
 let JsonRpcErrorMessageKey = "message"
 
 // The id a message is addressed by, or `absent` when it carries none.
-module function readRequestId(doc JsonDoc) returns LspRequestId
+function readRequestId(doc JsonDoc) returns LspRequestId
 	let idNode = try doc.getChild(doc.root, key: JsonRpcIdKey) otherwise return LspRequestId.absent
 	let node = doc.get(idNode)
 
@@ -157,22 +157,22 @@ module function readRequestId(doc JsonDoc) returns LspRequestId
 end 'readRequestId'
 
 // Answer the request `id` with `result`, a node already added to `doc`.
-module function writeLspResult(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequestId, result JsonNodeId)
+function writeLspResult(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequestId, result JsonNodeId)
 	writeLspResponse(writer, doc: doc, id: id, memberKey: JsonRpcResultKey, payload: result)
 end 'writeLspResult'
 
-module function writeLspNotification(writer LspStdoutWriter.handle, doc JsonDoc, method String, params JsonNodeId)
+function writeLspNotification(writer LspStdoutWriter.handle, doc JsonDoc, method String, params JsonNodeId)
 	submitToLspWriter(writer, command: LspWriterCommand.write(lspNotificationText(doc, method: method, params: params)))
 end 'writeLspNotification'
 
-module function lspNotificationText(doc JsonDoc, method String, params JsonNodeId) returns String
+function lspNotificationText(doc JsonDoc, method String, params JsonNodeId) returns String
 	let envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
 	envelope.putNode(JsonRpcParamsKey, value: params)
 	return jsonRpcMessageText(doc, envelope: envelope)
 end 'lspNotificationText'
 
-module function writeLspRequest(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequestId, method String, params JsonNodeId)
+function writeLspRequest(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequestId, method String, params JsonNodeId)
 	let envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
 	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
@@ -180,7 +180,7 @@ module function writeLspRequest(writer LspStdoutWriter.handle, doc JsonDoc, id L
 	submitToLspWriter(writer, command: LspWriterCommand.write(jsonRpcMessageText(doc, envelope: envelope)))
 end 'writeLspRequest'
 
-module function lspResponseErrorMessage(doc JsonDoc) returns StatedText
+function lspResponseErrorMessage(doc JsonDoc) returns StatedText
 	let failure = try doc.getChild(doc.root, key: JsonRpcErrorKey) otherwise return StatedText.unstated
 
 	return StatedText.stated(try doc.getString(failure, key: JsonRpcErrorMessageKey) otherwise "no reason stated")
@@ -188,7 +188,7 @@ end 'lspResponseErrorMessage'
 
 // Refuse the request `id`. `message` is the human-readable sentence the client displays; `code` is the
 // machine-readable reason it branches on.
-module function writeLspError(writer LspStdoutWriter.handle, id LspRequestId, code LspJsonRpcErrorCode, message String)
+function writeLspError(writer LspStdoutWriter.handle, id LspRequestId, code LspJsonRpcErrorCode, message String)
 	let doc = JsonDoc.create()
 
 	let error = LspJsonObject.create(doc)

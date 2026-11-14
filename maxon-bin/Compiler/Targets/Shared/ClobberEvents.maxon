@@ -5,12 +5,12 @@
 // `forbidden`, a wanted register for `contested`. Only each register's latest record — the lowest
 // position yet — is kept: every window closes at the sweep's current point, so that one lies inside
 // whenever any does.
-export type ClobberEvents
+type ClobberEvents
 	var seenAt as FixedDenseColumn
 	var seenMask as RegMask
 	var entry as DenseColumn
 
-	export static function create() returns ClobberEvents
+	static function create() returns ClobberEvents
 		let seenAt = FixedDenseColumn.create(RegisterFileSize)
 		return Self{seenAt: seenAt, seenMask: 0, entry: DenseColumn.create(0)}
 	end 'create'
@@ -29,7 +29,7 @@ export type ClobberEvents
 		end 'eachLiveOut'
 	end 'enterLiveOut'
 
-	export function closeDefWindows(buf OperandList, row BitRow, forbidden RegMaskColumn)
+	function closeDefWindows(buf OperandList, row BitRow, forbidden RegMaskColumn)
 		for o in buf 'eachOperand'
 			if operandIsDef(o) and operandIsVirtual(o) and row.test(operandValueId(o) as BitIndex) 'aLiveDef'
 				self.finalize(operandValueId(o), forbidden: forbidden)
@@ -37,7 +37,7 @@ export type ClobberEvents
 		end 'eachOperand'
 	end 'closeDefWindows'
 
-	export function openUseWindows(buf OperandList, row BitRow, pos ElementIndex)
+	function openUseWindows(buf OperandList, row BitRow, pos ElementIndex)
 		for o in buf 'eachOperand'
 			if not operandIsDef(o) and operandIsVirtual(o) and (not row.test(operandValueId(o) as BitIndex) or operandDefinesValue(buf, v: operandValueId(o))) 'aNewWindow'
 				self.enter(operandValueId(o), pos: pos)
@@ -45,7 +45,7 @@ export type ClobberEvents
 		end 'eachOperand'
 	end 'openUseWindows'
 
-	export function closeEntryWindows(liveIn ValueIdArray, block IrBlock, row BitRow, forbidden RegMaskColumn)
+	function closeEntryWindows(liveIn ValueIdArray, block IrBlock, row BitRow, forbidden RegMaskColumn)
 		for v in liveIn 'eachLiveIn'
 			if row.test(v as BitIndex) 'aLiveIn'
 				self.finalize(v, forbidden: forbidden)
@@ -75,7 +75,7 @@ export type ClobberEvents
 		try self.entry.set(v, value: pos as DenseInt) otherwise panic("ClobberEvents.enter: entry.set OOB for value {v}")
 	end 'enter'
 
-	export function finalize(v ValueId, forbidden RegMaskColumn)
+	function finalize(v ValueId, forbidden RegMaskColumn)
 		let entryPos = try self.entry.get(v) otherwise panic("ClobberEvents.finalize: entry.get OOB for value {v}")
 		var remaining = self.seenMask
 		var crossed = 0 as RegMask

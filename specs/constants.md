@@ -488,7 +488,7 @@ end 'main'
 
 <!-- test: export -->
 ```maxon
-// --- file: defs.maxon
+// --- file: defs/defs.maxon
 export enum Permission
 	none = 0
 	read = 1

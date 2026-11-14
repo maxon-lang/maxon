@@ -17,14 +17,14 @@
 // Where a stream no memo holds comes from: lexed here, on the query's own thread, or already lexed by a
 // front-end pool worker (`FrontEndPool.lexEveryFile`), whose answer then lands through exactly the memo steps
 // a lex here takes — so a pooled file's memos, counters and diagnostics are the ones a serial query leaves.
-export union LexSource
+union LexSource
 	onThisThread
 	pooled(outcome LexOutcome)
 end 'LexSource'
 
 // Tokenizing reads ONE input — the file — so the memo's key is that file's content hash and nothing
 // else. Contrast `queryParseOps`, whose key mixes in the signature index.
-module function queryTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
+function queryTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe for the whole query: `entry` carries both the bytes to lex and the hash
 	// that validates and stamps the memo. See `sourceEntryOf` for why a probe is worth not repeating.
 	let entry = try sourceEntryOf(project, path: path)
@@ -63,14 +63,14 @@ module function queryTokens(project Project, path FilePath, lexing LexSource = L
 end 'queryTokens'
 
 // Why a per-file token memo could not answer.
-module enum TokenMemoMiss implements Error
+enum TokenMemoMiss implements Error
 	absent
 	stale
 end 'TokenMemoMiss'
 
 // Read off the RAW stream, so a `__` spelling in an inactive `#if` branch counts. The facts held with
 // the bytes answer for a library file whose view came from the disk tier and was never lexed here.
-module function reservedSpellingsOf(project Project, path FilePath, entry SourceFileEntry) returns NameRoster throws TokenMemoMiss
+function reservedSpellingsOf(project Project, path FilePath, entry SourceFileEntry) returns NameRoster throws TokenMemoMiss
 	if let facts = try sharedRawStreamFactsOf(project, contentHash: entry.contentHash) 'heldWithTheBytes'
 		return facts.reservedSpellings
 	end 'heldWithTheBytes'
@@ -78,7 +78,7 @@ module function reservedSpellingsOf(project Project, path FilePath, entry Source
 	return reservedSpellingsIn(try validMemoValue(project.db.tokenCache, path: path, entry: entry))
 end 'reservedSpellingsOf'
 
-module function conditionalSpellingsOf(project Project, path FilePath) returns NameRoster throws CompileError
+function conditionalSpellingsOf(project Project, path FilePath) returns ConditionalSpellings throws CompileError
 	let entry = try sourceEntryOf(project, path: path)
 
 	if let facts = try sharedRawStreamFactsOf(project, contentHash: entry.contentHash) 'heldWithTheBytes'
@@ -139,7 +139,7 @@ end 'tokenizedHere'
 // compile). Two targets or two flag settings are therefore two `Project`s and two databases, so
 // this cache can never be asked about a build it was not filled for. The shared store below
 // has no such guarantee — it outlives every `Project` — and so carries both in its key.
-module function queryActiveTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
+function queryActiveTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
 	let entry = try sourceEntryOf(project, path: path)
 
@@ -191,7 +191,7 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 	return filtered.value
 end 'queryActiveTokens'
 
-module function queryDeclarationHeads(project Project, path FilePath) returns DeclarationHeadIndex throws CompileError
+function queryDeclarationHeads(project Project, path FilePath) returns DeclarationHeadIndex throws CompileError
 	let entry = try sourceEntryOf(project, path: path)
 
 	if let memo = try project.db.declarationHeadCache.get(path) 'held'
@@ -334,7 +334,7 @@ function declarationOpensABlock(tokens TokenArray, position ElementIndex) return
 	while at < tokens.count() 'eachModifier'
 		let kind = tokenKindAt(tokens, index: at)
 
-		if kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.at or (kind == TokenKind.identifier and modifierOpensADeclaration(tokens, position: at)) 'aModifier'
+		if kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.at 'aModifier'
 			at = at + 1
 			continue
 		end 'aModifier'
@@ -360,13 +360,8 @@ function startsATopLevelDeclaration(tokens TokenArray, position ElementIndex) re
 		return true
 	end 'aBindingOrModifier'
 
-	return testDeclarationAt(tokens, index: position) or (kind == TokenKind.identifier and modifierOpensADeclaration(tokens, position: position))
+	return testDeclarationAt(tokens, index: position)
 end 'startsATopLevelDeclaration'
-
-function modifierOpensADeclaration(tokens TokenArray, position ElementIndex) returns bool
-	let word = try tokens.get(position) otherwise return false
-	return word.value.equals(ModuleModifierName) and tokenKindAt(tokens, index: position + 1) != TokenKind.newline
-end 'modifierOpensADeclaration'
 
 function declarationStartWithItsDocComments(tokens TokenArray, position ElementIndex) returns ElementIndex
 	var start = position
@@ -400,7 +395,7 @@ end 'filteredHere'
 
 // Whether a query of `path`'s resolved stream would be answered without a lex — by this project's memo or by
 // the shared store — asked without counting, so the query that later answers is the one that counts.
-module function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
+function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
 	let entry = try sourceEntryOf(project, path: path)
 
 	if memoHolds(project.db.activeTokenCache, path: path, entry: entry) 'heldHere'
@@ -466,7 +461,7 @@ function foldedUserFilesOf(project Project, recordingClaims bool) returns UserFi
 		userPaths.push(path)
 	end 'eachFile'
 
-	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create(0), handedOver: DiscoveredTokenFacts.none())
+	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create(0), deferred: FilePathArray.create(0), handedOver: DiscoveredTokenFacts.none(), extents: BlockExtentsByPath.create())
 	closeDeclarationFold(signatures)
 	return UserFileFold.create(signatures, paths: userPaths)
 end 'foldedUserFilesOf'
@@ -521,7 +516,7 @@ type UserFileFold
 	end 'create'
 end 'UserFileFold'
 
-export function claimsOfUserFiles(project Project) returns SourceClaims throws CompileError
+function claimsOfUserFiles(project Project) returns SourceClaims throws CompileError
 	let fold = try foldedUserFilesOf(project, recordingClaims: true)
 	try foldExtensionsOfUserFiles(project, signatures: fold.signatures)
 	let nominals = fold.signatures.userDeclaredNominalNames()
@@ -675,7 +670,7 @@ function newProgramSignatures(project Project) returns ProgramSignatures
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
-	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir)
+	signatures.placeRootUnderStdlibDirectory(rootIsUnder(project, libraryRoot: project.stdlibDir))
 
 	if signatures.rootIsUnderStdlibDirectory 'aProjectInsideTheLibraryCone'
 		signatures.projectRootModuleDirectory = projectRootModuleDirectoryOf(project)
@@ -684,11 +679,20 @@ function newProgramSignatures(project Project) returns ProgramSignatures
 	return signatures
 end 'newProgramSignatures'
 
-module function foldDeclarationsOf(project Project, signatures ProgramSignatures, leadingPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, handedOver DiscoveredTokenFacts) throws CompileError
+function pathsFollowedBy(first MaxonSourcePathArray, second MaxonSourcePathArray) returns MaxonSourcePathArray
+	let joined = MaxonSourcePathArray.create(first.count() + second.count(), zeroed: false)
+	joined.append(first)
+	joined.append(second)
+
+	return joined
+end 'pathsFollowedBy'
+
+function foldDeclarationsOf(project Project, signatures ProgramSignatures, leadingPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, deferred FilePathArray, handedOver DiscoveredTokenFacts, extents BlockExtentsByPath) throws CompileError
 	// Which declarations carry the array-literal marker, ahead of both halves: the fold itself asks,
 	// so the answer cannot come from the fold — the same ordering argument the contest below makes.
-	let extents = BlockExtentsByPath.create()
-	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: leadingPaths, stdlibPaths: stdlibPaths, extents: extents, handedOver: handedOver)
+	let deferredTiers = partitionedByTier(project, paths: deferred)
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: pathsFollowedBy(leadingPaths, second: deferredTiers.runtimePaths), stdlibPaths: pathsFollowedBy(stdlibPaths, second: deferredTiers.stdlibTierPaths()), extents: extents, handedOver: handedOver)
+	_ = signatures.settleLibraryBindingMints()
 	signatures.settleAuthorMints()
 	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 	signatures.settleNominalNameCollisions(project.db.sourcePaths)
@@ -749,7 +753,7 @@ function declarationsFoldedUserFirst(project Project, handedOver DiscoveredToken
 	// being hidden. See `StdlibLoader`'s header for the filesystem-order rule this keeps.
 	//
 	// ⚠ A RUNTIME file is on the `userPaths` side of that partition, and deliberately: the contest is
-	// about the stdlib's parser privileges — the shadow rename, the `module` tier, the `__` doors —
+	// about the stdlib's parser privileges — the shadow rename, the library's directory scope, the `__` doors —
 	// and a `runtime/` file holds none of them. What it does need is its OWN namespace anchor, which
 	// is a fact about the PATH and not about the contest, so `discoveredTokenFactsOf` asks for
 	// it separately rather than reading it off this partition.
@@ -765,23 +769,23 @@ function declarationsFoldedUserFirst(project Project, handedOver DiscoveredToken
 		userPaths.push(path)
 	end 'eachFile'
 
-	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: stdlibPaths, handedOver: handedOver)
+	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: stdlibPaths, deferred: FilePathArray.create(0), handedOver: handedOver, extents: BlockExtentsByPath.create())
 	closeDeclarationFold(signatures)
 
 	return signatures
 end 'declarationsFoldedUserFirst'
 
-module type ProgramPartition
-	module let userPaths as MaxonSourcePathArray
-	module let runtimePaths as MaxonSourcePathArray
-	module let stdlibPaths as MaxonSourcePathArray
-	module let scriptlibPaths as MaxonSourcePathArray
+type ProgramPartition
+	let userPaths as MaxonSourcePathArray
+	let runtimePaths as MaxonSourcePathArray
+	let stdlibPaths as MaxonSourcePathArray
+	let scriptlibPaths as MaxonSourcePathArray
 
-	module static function create(userPaths MaxonSourcePathArray, runtimePaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, scriptlibPaths MaxonSourcePathArray) returns ProgramPartition
+	static function create(userPaths MaxonSourcePathArray, runtimePaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, scriptlibPaths MaxonSourcePathArray) returns ProgramPartition
 		return Self{userPaths: userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths, scriptlibPaths: scriptlibPaths}
 	end 'create'
 
-	module function stdlibTierPaths() returns MaxonSourcePathArray
+	function stdlibTierPaths() returns MaxonSourcePathArray
 		let paths = MaxonSourcePathArray.create(self.stdlibPaths.count() + self.scriptlibPaths.count(), zeroed: false)
 		paths.append(self.stdlibPaths)
 		paths.append(self.scriptlibPaths)
@@ -790,7 +794,7 @@ module type ProgramPartition
 	end 'stdlibTierPaths'
 end 'ProgramPartition'
 
-module function partitionedByTier(project Project, paths FilePathArray) returns ProgramPartition
+function partitionedByTier(project Project, paths FilePathArray) returns ProgramPartition
 	let userPaths = MaxonSourcePathArray.create(0)
 	let runtimePaths = MaxonSourcePathArray.create(0)
 	let stdlibPaths = MaxonSourcePathArray.create(0)
@@ -820,31 +824,59 @@ module function partitionedByTier(project Project, paths FilePathArray) returns 
 	return ProgramPartition.create(userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths, scriptlibPaths: scriptlibPaths)
 end 'partitionedByTier'
 
-module function foldLibraryRemainder(project Project, signatures ProgramSignatures, deferred FilePathArray) throws CompileError
+enum RemainderFold
+	folded
+	contestsTheBaseline
+end 'RemainderFold'
+
+union RemainderDiscovery
+	discoveredByTheCore(extents BlockExtentsByPath)
+	notYetDiscovered
+end 'RemainderDiscovery'
+
+function remainderExtents(project Project, signatures ProgramSignatures, tiers ProgramPartition, discovery RemainderDiscovery) returns BlockExtentsByPath throws CompileError
+	match discovery 'discovery'
+		discoveredByTheCore(held) then return held
+		notYetDiscovered then break
+	end 'discovery'
+
+	let extents = BlockExtentsByPath.create()
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: tiers.runtimePaths, stdlibPaths: tiers.stdlibTierPaths(), extents: extents, handedOver: DiscoveredTokenFacts.none())
+
+	return extents
+end 'remainderExtents'
+
+function foldLibraryRemainder(project Project, signatures ProgramSignatures, deferred FilePathArray, discovery RemainderDiscovery) returns RemainderFold throws CompileError
 	if deferred.isEmpty() 'nothingDeferred'
-		return
+		return RemainderFold.folded
 	end 'nothingDeferred'
 
 	let tiers = partitionedByTier(project, paths: deferred)
 	let stdlibTierPaths = tiers.stdlibTierPaths()
-	let extents = BlockExtentsByPath.create()
-	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: tiers.runtimePaths, stdlibPaths: stdlibTierPaths, extents: extents, handedOver: DiscoveredTokenFacts.none())
+	let extents = try remainderExtents(project, signatures: signatures, tiers: tiers, discovery: discovery)
+
+	if signatures.settleLibraryBindingMints() 'theRemainderContestsAFoldedName'
+		return RemainderFold.contestsTheBaseline
+	end 'theRemainderContestsAFoldedName'
+
 	signatures.noteStdlibDeclaredTypeNames((try stdlibDeclarationsIn(project, stdlibPaths: stdlibTierPaths)).names)
 	try foldFilesInto(project, signatures: signatures, paths: tiers.runtimePaths, isStdlibSource: false, extents: extents)
 	try foldFilesInto(project, signatures: signatures, paths: stdlibTierPaths, isStdlibSource: true, extents: extents)
+
+	return RemainderFold.folded
 end 'foldLibraryRemainder'
 
 function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray, remainder FilePathArray) throws CompileError
 	for path in streamed 'eachStream'
-		// The core baseline holds no module directory for a remainder file, so no job can be built for it
-		// here; `foldLibraryRemainder` keeps its stream when it folds the file.
+		// `foldLibraryRemainder` keeps a remainder file's stream when it folds the file.
 		if remainder.contains(path) 'foldedLater'
 			continue
 		end 'foldedLater'
 
 		let tokens = try queryActiveTokens(project, path: path)
 		let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: true)
-		signatures.restoreDeclTokenStream(path.toString(), stream: DeclTokenStream.create(PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create()), job: job))
+		let spelled = Parser.spelledTokens(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
+		signatures.restoreDeclTokenStream(path.toString(), stream: DeclTokenStream.create(PreparedTokens.create(spelled.tokens, respelledStarts: spelled.respelledStarts), job: job))
 	end 'eachStream'
 end 'restoreDeclTokenStreams'
 
@@ -892,7 +924,11 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 	let deferred = FilePathArray.create(start.remainder.count() + partition.scriptlibPaths.count(), zeroed: false)
 	deferred.append(start.remainder)
 	deferred.append(partition.scriptlibPaths)
-	try foldLibraryRemainder(project, signatures: signatures, deferred: deferred)
+
+	match try foldLibraryRemainder(project, signatures: signatures, deferred: deferred, discovery: RemainderDiscovery.notYetDiscovered) 'remainder'
+		folded then break
+		contestsTheBaseline then return declinedLateLibraryContest(project, diagnosticsBefore: diagnosticsBefore)
+	end 'remainder'
 
 	let extents = BlockExtentsByPath.create()
 	let discovered = DiscoveredTokenFacts.none()
@@ -938,6 +974,12 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 	return BaselineFold.served(signatures)
 end 'declarationsFoldedOntoTheLibraryBaseline'
 
+function declinedLateLibraryContest(project Project, diagnosticsBefore ElementIndex) returns BaselineFold
+	noteLibraryCacheTrouble("no baseline: a library file folded after it declares a binding another library directory declares")
+
+	return declinedBaseline(project, diagnosticsBefore: diagnosticsBefore, discovered: DiscoveredTokenFacts.none())
+end 'declinedLateLibraryContest'
+
 function declinedForASharedName(project Project, diagnosticsBefore ElementIndex, discovered DiscoveredTokenFacts) returns BaselineFold
 	noteLibraryCacheTrouble("no baseline: a name the program declares is a name the library means")
 
@@ -952,7 +994,7 @@ function declinedBaseline(project Project, diagnosticsBefore ElementIndex, disco
 	return BaselineFold.declined(discovered)
 end 'declinedBaseline'
 
-export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
+function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
 
@@ -1202,14 +1244,14 @@ end 'producerMaskFor'
 // ⚠ The predicate is `livesUnderStdlibDirectory` — a PATH fact — and not `isStdlibSource`, which is
 // a VISIBILITY fact: a project rooted under `stdlib/` keeps its own files as the user's (so their
 // typealiases stay private and their `__` names stay reserved), but every file the compile holds is
-// still physically under `stdlib/` and must anchor together. The invariant a `module` tier needs is
+// still physically under `stdlib/` and must anchor together. The invariant directory scope needs is
 // that two files in one physical directory get one module directory, and this predicate is what
 // restores it: it is `isStdlibSource or rootIsUnderStdlibDirectory`, so when the root is NOT under
 // `stdlib/` it is literally `isStdlibSource` and a no-op, and when the root IS under `stdlib/`
 // every file anchors together.
 //
 // It is the same distinction `Project.rootIsUnder` draws for the two
-// `module`-visible `String` methods, arriving at a second door — asked rather than re-spelled, so
+// unexported `String` methods, arriving at a second door — asked rather than re-spelled, so
 // the two doors cannot drift apart on it.
 function moduleDirectoryForFile(project Project, path FilePath, tier SourceTier) returns String
 	let cwd = Directory.currentPath()
@@ -1319,10 +1361,10 @@ enum NoFactsHeld implements Error
 	notDiscovered
 end 'NoFactsHeld'
 
-module type DiscoveredTokenFacts
+type DiscoveredTokenFacts
 	var byPath as TokenFactsByPath
 
-	module static function none() returns DiscoveredTokenFacts
+	static function none() returns DiscoveredTokenFacts
 		return Self{byPath: TokenFactsByPath.create()}
 	end 'none'
 
@@ -1362,6 +1404,13 @@ union FileDeclarationHeaders
 			otherTiers gives false
 		end 'tier'
 	end 'isRuntimeTier'
+
+	function noteExtentsInto(extents BlockExtentsByPath, path FilePath)
+		match self 'tier'
+			runtimeTier then break
+			otherTiers(_, built) then extents.upsert(path.toString(), value: built)
+		end 'tier'
+	end 'noteExtentsInto'
 
 	function noteInto(signatures ProgramSignatures, path FilePath, moduleDirectory String, isStdlibSource bool, extents BlockExtentsByPath)
 		match self 'tier'
@@ -1421,6 +1470,11 @@ type FileTokenFacts
 	end 'create'
 
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath)
+		if signatures.hasRecordedFile(path) 'aFileTheBaselineDiscoveredAhead'
+			self.declarations.noteExtentsInto(extents, path: path)
+			return
+		end 'aFileTheBaselineDiscoveredAhead'
+
 		let isRuntimeSource = self.declarations.isRuntimeTier()
 		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
 		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource, isRuntime: isRuntimeSource, isScriptlib: self.isScriptlibSource)
@@ -1451,7 +1505,7 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 	let livesUnderTheLibrary = fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path)
 
 	// Derived here, once, before any file's declarations are folded, so every later reader (the
-	// type-name admission, the sweep's `module`-tier questions, the real parse, the initializer
+	// type-name admission, the sweep's directory-scope questions, the real parse, the initializer
 	// parses) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
 	// by where the file lives, not by whose it is — see `moduleDirectoryForFile`.
 	let moduleDirectory = moduleDirectoryForFile(project, path: path, tier: namespaceConeOf(project, path: path, livesUnderStdlibDirectory: livesUnderTheLibrary))
@@ -1534,7 +1588,7 @@ function serviceSpawnFollowing(tokens TokenArray, index ElementIndex, gate Spawn
 	return TokenFactEvent.serviceSpawn(target.typeName, member: target.member, gate: gate, line: spawnTok.line, column: spawnTok.column)
 end 'serviceSpawnFollowing'
 
-module enum NoServiceSpawn implements Error
+enum NoServiceSpawn implements Error
 	notOne
 end 'NoServiceSpawn'
 
@@ -1803,7 +1857,7 @@ function namespaceDirectoryFault(namespace String, keywords KeywordTable, reserv
 	return NamespaceDirectoryFault.nameable
 end 'namespaceDirectoryFault'
 
-module function declaresANominalTypeName(kind TokenKind) returns bool
+function declaresANominalTypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
 end 'declaresANominalTypeName'
 
@@ -2010,7 +2064,7 @@ function siteFileReader(project Project, signatures ProgramSignatures, path File
 	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: buildsBodies)
 end 'siteFileReader'
 
-module function structuralFileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray) returns Parser
+function structuralFileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray) returns Parser
 	let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: false)
 	return Parser.structuralReader(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
 end 'structuralFileReader'
@@ -2088,14 +2142,14 @@ end 'foldFixedElementCountNeeds'
 
 // A file's parse as a compile asks for it: the memo's artifact, or everything a parse of the file reads beside
 // the settled index, and the key its artifact is stamped with.
-export union ParseQuery
+union ParseQuery
 	memoized(artifact FileParseArtifact)
 	needed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp)
 end 'ParseQuery'
 
 // ⚠ A miss parses against the index as it stands, so it is legal only while no fold has merged into that index — a
 // reader after the fold of the same sources is a hit. `ProgramSignatures.openParseBand` refuses the other case.
-export function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
+function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
 	return match try parseQueryOf(project, path: path) 'query'
 		memoized(artifact) gives artifact
 		needed(job, tokens, overrides, stamp) gives parsedHere(project, path: path, job: job, tokens: tokens, overrides: overrides, stamp: stamp)
@@ -2104,7 +2158,7 @@ end 'queryParseOps'
 
 // Everything `queryParseOps` does before a parse, and the one door both it and the front-end pool ask: the memo
 // check with its counters, and on a miss the file's resolved tokens and its job.
-module function parseQueryOf(project Project, path FilePath) returns ParseQuery throws CompileError
+function parseQueryOf(project Project, path FilePath) returns ParseQuery throws CompileError
 	// Before the memo check, because half the memo's key is this (see `QueryEngine.parseMemoKey`): a
 	// parse reads this file's tokens AND every other file's declarations, so a memo validated against
 	// the file's bytes alone would serve a stale parse after a return type changed elsewhere.
@@ -2159,7 +2213,7 @@ end 'parsedHere'
 // What a compile keeps of one file's parse, wherever it ran: every completed parse is memoized, a refused one
 // included. What it refused is reported from the artifact (`reportOwnRefusals`), so a memo hit
 // reports exactly what the parse that filed it did.
-module function landParse(project Project, path FilePath, artifact FileParseArtifact, stamp ParseStamp) returns FileParseArtifact
+function landParse(project Project, path FilePath, artifact FileParseArtifact, stamp ParseStamp) returns FileParseArtifact
 	if isLibrarySourceFile(project, path: path) 'aLibraryParse'
 		project.db.libraryTally.parsed = project.db.libraryTally.parsed + 1
 	end 'aLibraryParse'
@@ -2167,7 +2221,7 @@ module function landParse(project Project, path FilePath, artifact FileParseArti
 	return memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
 end 'landParse'
 
-module function reportOwnRefusals(project Project, artifact FileParseArtifact)
+function reportOwnRefusals(project Project, artifact FileParseArtifact)
 	let path = artifact.filePath
 
 	for region in artifact.abandonedRegions 'eachRegion'
@@ -2183,7 +2237,7 @@ module function reportOwnRefusals(project Project, artifact FileParseArtifact)
 	end 'refusal'
 end 'reportOwnRefusals'
 
-module function reportRecordedDiagnostics(project Project, artifact FileParseArtifact)
+function reportRecordedDiagnostics(project Project, artifact FileParseArtifact)
 	for diagnostic in artifact.diagnostics 'eachDiagnostic'
 		reportDiagnostic(project, diagnostic: diagnostic)
 		noteFactsLostTo(project, diagnostic: diagnostic)
@@ -2219,7 +2273,7 @@ function holdAsAConsequence(project Project, path FilePath, consequence Conseque
 	return PoisonBacking.provisional
 end 'holdAsAConsequence'
 
-module function dropExplainedParseConsequences(project Project, signatures ProgramSignatures, stage ConsequenceDropStage)
+function dropExplainedParseConsequences(project Project, signatures ProgramSignatures, stage ConsequenceDropStage)
 	let held = project.poison.releaseHeldConsequences() if stage == ConsequenceDropStage.beforeTypeResolution else project.poison.takeDeferredConsequences()
 	let reports = UnknownTypeReports.create() if stage == ConsequenceDropStage.beforeTypeResolution else project.unknownTypeReports.clone()
 
@@ -2281,7 +2335,7 @@ end 'dropExplainedParseConsequences'
 
 // A held unknown-type refusal is also explained by the E3011 `resolveTypes` reports for the same
 // name in the same file, so what the first stage leaves is judged again once that pass has run.
-module enum ConsequenceDropStage
+enum ConsequenceDropStage
 	beforeTypeResolution
 	afterTypeResolution
 end 'ConsequenceDropStage'
@@ -2415,12 +2469,12 @@ function memoizedArtifact(project Project, path FilePath, artifact FileParseArti
 	return canonical
 end 'memoizedArtifact'
 
-export enum NamespaceDirectoryCheck
+enum NamespaceDirectoryCheck
 	unchecked
 	refuseUnnameable
 end 'NamespaceDirectoryCheck'
 
-module union FrontEndStep
+union FrontEndStep
 	next
 	awaiting
 	finished(merged MaxonModule)
@@ -2444,7 +2498,7 @@ enum FrontEndPlace
 	retired
 end 'FrontEndPlace'
 
-module typealias MaxonModuleSlot = Slot with MaxonModule
+typealias MaxonModuleSlot = Slot with MaxonModule
 typealias FoldLedgerSlot = Slot with FoldLedger
 typealias FoldRoundSlot = Slot with FoldRound
 
@@ -2460,7 +2514,7 @@ typealias FoldRoundSlot = Slot with FoldRound
 // push-append, and its `opRanges`/`valueOrigins` are parallel to the module's op array by offset,
 // so only a suffix can be dropped and merged again (`FoldLedger`). Every parse it asks for is a
 // memo hit except the files whose demand actually moved.
-module type FrontEndRun
+type FrontEndRun
 	let project as Project
 	let pool as FrontEndPool
 	let directories as NamespaceDirectoryCheck
@@ -2469,22 +2523,22 @@ module type FrontEndRun
 	let ledger as FoldLedgerSlot
 	let rounds as FoldRoundSlot
 
-	module static function create(project Project, directories NamespaceDirectoryCheck, generationBase DrainGeneration) returns FrontEndRun
+	static function create(project Project, directories NamespaceDirectoryCheck, generationBase DrainGeneration) returns FrontEndRun
 		return Self{project: project, pool: FrontEndPool.create(generationBase), directories: directories, place: FrontEndPlace.unnameableLex, merged: MaxonModuleSlot.create("FrontEndRun.merged"), ledger: FoldLedgerSlot.create("FrontEndRun.ledger"), rounds: FoldRoundSlot.create("FrontEndRun.rounds")}
 	end 'create'
 
-	module function close()
+	function close()
 		self.pool.close(self.project)
 		finishLibraryCache(self.project)
 	end 'close'
 
-	module function release()
+	function release()
 		self.rounds.clear()
 		self.ledger.clear()
 		self.merged.clear()
 	end 'release'
 
-	module function answered(generation DrainGeneration, job ElementIndex, answer isolated FrontEndJob, receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+	function answered(generation DrainGeneration, job ElementIndex, answer isolated FrontEndJob, receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
 		if not (try self.pool.landAnswered(self.project, generation: generation, job: job, answered: answer, receiver: receiver)) 'notOurs'
 			return FrontEndStep.awaiting
 		end 'notOurs'
@@ -2500,7 +2554,7 @@ module type FrontEndRun
 		return try self.advance(receiver)
 	end 'answered'
 
-	module function advance(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+	function advance(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
 		while true 'advancing'
 			let step = try self.runStage(receiver)
 
@@ -2708,12 +2762,12 @@ end 'FrontEndRun'
 // `merge` is probed around `mergeArtifact`, the replay, the path order and the type-name commit
 // ALONE: the parses run before them, so the fold's cost never absorbs the parse's.
 type FoldRound
-	module let moved as InstantiatedTypeNameSet
-	module let pathOrder as SourceFileInPathOrderArray
-	module let emissionOrder as EmissionSlotArray
-	module var signatures as ProgramSignatures
-	module var folds as FoldCount
-	module var checkpoint as FoldCheckpoint
+	let moved as InstantiatedTypeNameSet
+	let pathOrder as SourceFileInPathOrderArray
+	let emissionOrder as EmissionSlotArray
+	var signatures as ProgramSignatures
+	var folds as FoldCount
+	var checkpoint as FoldCheckpoint
 
 	// ⭐ **A ROUND TERMINATES WITH NO BOUND OF ITS OWN.** A fold that is not the last either files or drops a
 	// generic type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index
@@ -2965,7 +3019,7 @@ function compareSourcePositions(leftLine LineNumber, leftColumn ColumnNumber, ri
 	return leftColumn.compare(rightColumn)
 end 'compareSourcePositions'
 
-module function compareParsedFunctions(left IrFunction, right IrFunction) returns Ordering
+function compareParsedFunctions(left IrFunction, right IrFunction) returns Ordering
 	let leftIsHelper = isParamDefaultHelperName(left.name) or isFieldDefaultHelperName(left.name)
 	let rightIsHelper = isParamDefaultHelperName(right.name) or isFieldDefaultHelperName(right.name)
 
@@ -2976,15 +3030,15 @@ module function compareParsedFunctions(left IrFunction, right IrFunction) return
 	return compareNamedSourcePositions(left.name, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.name, rightLine: right.nameLine, rightColumn: right.nameColumn)
 end 'compareParsedFunctions'
 
-module function compareTypeNameDecls(left TypeNameDecl, right TypeNameDecl) returns Ordering
+function compareTypeNameDecls(left TypeNameDecl, right TypeNameDecl) returns Ordering
 	return compareNamedSourcePositions(left.name, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.name, rightLine: right.nameLine, rightColumn: right.nameColumn)
 end 'compareTypeNameDecls'
 
-module function compareConformanceDecls(left ConformanceDecl, right ConformanceDecl) returns Ordering
+function compareConformanceDecls(left ConformanceDecl, right ConformanceDecl) returns Ordering
 	return compareNamedSourcePositions(left.typeName, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.typeName, rightLine: right.nameLine, rightColumn: right.nameColumn)
 end 'compareConformanceDecls'
 
-module function compareFuncSignatureEntries(left FuncSignatureEntry, right FuncSignatureEntry) returns Ordering
+function compareFuncSignatureEntries(left FuncSignatureEntry, right FuncSignatureEntry) returns Ordering
 	return compareNamedSourcePositions(left.name, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.name, rightLine: right.nameLine, rightColumn: right.nameColumn)
 end 'compareFuncSignatureEntries'
 
@@ -2998,17 +3052,17 @@ function compareNamedSourcePositions(left ByteArray, leftLine LineNumber, leftCo
 	return compareBytesOrdinally(left, right: right)
 end 'compareNamedSourcePositions'
 
-export type DeclarationPosition
+type DeclarationPosition
 	export let rank as ElementIndex
 	export let line as LineNumber
 	export let column as ColumnNumber
 
-	export static function of(ranks FileEmissionRankMap, path FilePath, line LineNumber, column ColumnNumber, kind String, name ByteArray) returns DeclarationPosition
+	static function of(ranks FileEmissionRankMap, path FilePath, line LineNumber, column ColumnNumber, kind String, name ByteArray) returns DeclarationPosition
 		let rank = try ranks.get(path.toString()) otherwise panic("DeclarationPosition.of: the file declaring {kind} `{String.from(name)}` is not one the compile read")
 		return Self{rank: rank, line: line, column: column}
 	end 'of'
 
-	export function compare(other DeclarationPosition) returns Ordering
+	function compare(other DeclarationPosition) returns Ordering
 		let byFile = self.rank.compare(other.rank)
 
 		if byFile != Ordering.equalTo 'filesDiffer'
@@ -3019,11 +3073,11 @@ export type DeclarationPosition
 	end 'compare'
 end 'DeclarationPosition'
 
-export typealias DeclarationPositionArray = Array with DeclarationPosition
+typealias DeclarationPositionArray = Array with DeclarationPosition
 
-export typealias DeclarationOrder = Array with ElementIndex
+typealias DeclarationOrder = Array with ElementIndex
 
-export function declarationsInPositionOrder(positions DeclarationPositionArray) returns DeclarationOrder
+function declarationsInPositionOrder(positions DeclarationPositionArray) returns DeclarationOrder
 	let order = DeclarationOrder.create(positions.count(), zeroed: false)
 	var ascending = true
 
@@ -3071,7 +3125,7 @@ type FoldLedger
 	var marks as MergeMarkArray
 	let tables as OpKeyedTableArray
 	var tablesHeld as TableHeldColumn
-	module var reMerged as ElementIndex
+	var reMerged as ElementIndex
 	var standing as StandingFold
 
 	static function create() returns FoldLedger
@@ -3459,7 +3513,7 @@ end 'fileRowSetAnswersMoved'
 //
 // Called once per compile from `prepareLowering`, deliberately not inside the memoized
 // `FrontEndRun`, so a warm rebuild re-reports.
-export function checkValueMergeSignatures(project Project)
+function checkValueMergeSignatures(project Project)
 	if project.pendingFnMergeChecks.count() == 0 'nothingToCheck'
 		return
 	end 'nothingToCheck'
@@ -3577,8 +3631,8 @@ end 'reportUnverifiableFnMerge'
 // whole-program HIT that returns early and never revisits the per-file caches, so observing them as
 // still hot requires re-querying them directly.
 //
-// `queryTokens`/`queryParseOps` stay file-private; this is the one exported entry the gate needs.
-export function probeRebuildCacheHits(project Project) throws CompileError
+// `queryTokens`/`queryParseOps` stay unexported; this is the one exported entry the gate needs.
+function probeRebuildCacheHits(project Project) throws CompileError
 	for fileIndex in 0 upto project.db.sourcePaths.count() 'each'
 		try probeOnePathCacheHits(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
 	end 'each'
@@ -3598,11 +3652,11 @@ end 'probeOnePathCacheHits'
 //
 // ⚠ The derivation asks the DIRECTORIES and not `project.librarySourcePaths`, whose membership test
 // would be a linear scan over that array, growing with every file added to a library root.
-export function isStdlibSourceFile(project Project, path FilePath) returns bool
+function isStdlibSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isStdlibSource
 end 'isStdlibSourceFile'
 
-export function isRuntimeSourceFile(project Project, path FilePath) returns bool
+function isRuntimeSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isRuntimeSource
 end 'isRuntimeSourceFile'
 
@@ -3616,7 +3670,7 @@ end 'fileProvenanceOf'
 //
 // Never invalidated: the answer is a function of that identity, `project.rootIdentity` and the
 // library roots, and a compile moves none of them.
-export function requireFileProvenanceOf(project Project, path FilePath) returns FileProvenance throws CompileError
+function requireFileProvenanceOf(project Project, path FilePath) returns FileProvenance throws CompileError
 	if let memoized = try project.db.fileProvenance.get(path) 'alreadyDerived'
 		return memoized
 	end 'alreadyDerived'
@@ -3636,11 +3690,11 @@ export function requireFileProvenanceOf(project Project, path FilePath) returns 
 	return derived
 end 'requireFileProvenanceOf'
 
-export function isScriptlibSourceFile(project Project, path FilePath) returns bool
+function isScriptlibSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isScriptlibSource
 end 'isScriptlibSourceFile'
 
-export function libraryBodiesAreEveryBody(project Project, path FilePath) returns bool
+function libraryBodiesAreEveryBody(project Project, path FilePath) returns bool
 	if isScriptlibSourceFile(project, path: path) 'aPackageFile'
 		return project.scriptlib.buildsEveryBody()
 	end 'aPackageFile'
@@ -3658,7 +3712,7 @@ end 'libraryBodiesAreEveryBody'
 // admit this compile's own mints — privileges the RUNTIME tier does not carry. A gate that means "not
 // the author's code" asks `isLibrarySourceFile` below instead. A scriptlib file's doors admit only the
 // tokens the rename wrote (`Parser.everySpellingIsTheCompilers`).
-export function isStdlibTierSourceFile(project Project, path FilePath) returns bool
+function isStdlibTierSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).carriesStdlibPrivileges()
 end 'isStdlibTierSourceFile'
 
@@ -3677,7 +3731,7 @@ end 'isScriptlibRootFile'
 // WHICH of the library tiers a file came from. The gates that DO turn on the tier — the parser's
 // privilege bit, the declaration sweep's shadow contest — ask `isStdlibTierSourceFile` directly and must
 // keep doing so.
-export function isLibrarySourceFile(project Project, path FilePath) returns bool
+function isLibrarySourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isLibrary()
 end 'isLibrarySourceFile'
 
@@ -3720,11 +3774,11 @@ end 'blameOutsideTheLibrary'
 // ⚠ Lives here, beside the query, because it has two tiers of caller: a second copy of "fetch the
 // memo or panic" would be a second place for the sentence explaining why it cannot fail to go
 // stale.
-export function programSignaturesIn(project Project, asker String) returns ProgramSignatures
+function programSignaturesIn(project Project, asker String) returns ProgramSignatures
 	return try queryProgramSignatures(project) otherwise panic("{asker}: queryProgramSignatures failed below the pipeline — it is computed and memoized by FrontEndRun before the pipeline runs, so it cannot fail fresh here")
 end 'programSignaturesIn'
 
-// Read by two location gates guarding a `module`-visible member the compiler synthesizes, which therefore
+// Read by two location gates guarding an unexported member the compiler synthesizes, which therefore
 // has no declaration whose own visibility could answer instead.
 //
 // ⚠ Deliberately not `isStdlibSourceFile`: that function decides VISIBILITY, and its
@@ -3751,7 +3805,7 @@ end 'programSignaturesIn'
 // a declaration under a compiler-owned type name is the corpus's own or a user's contest of it, the
 // same question this answers — asked here rather than re-spelled one file over, where a second
 // spelling would be free to drift from this proof.
-export function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
+function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
 	return isStdlibSource or signatures.rootIsUnderStdlibDirectory
 end 'livesUnderStdlibDirectory'
 
@@ -3819,7 +3873,7 @@ function declaresReservedNamesAs(project Project, path FilePath, relative String
 	return fileProvenanceOf(project, path: path).identity.equals(project.stdlibDir.join("{relative}"))
 end 'declaresReservedNamesAs'
 
-module function isCompilerWrittenDeclaration(project Project, path FilePath, name ByteArray) returns bool
+function isCompilerWrittenDeclaration(project Project, path FilePath, name ByteArray) returns bool
 	if not project.compilerWrittenSources.wrote(path) 'anotherFile'
 		return false
 	end 'anotherFile'
@@ -3914,7 +3968,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.hiddenTypeNameDiagnostics = DiagnosticArray.create(0)
 	project.hiddenTypeNameReports = ReaderNameSet.create()
 
-	project.genericAliasNamesWrittenByAFile = UsedTypeNameSet.create()
+	project.aliasDeclarationsNamed = UsedTypeNameSet.create()
 
 	// The secondary roster is a push target of the same merge, and doubles the same way.
 	resetSecondaryFindings(project)
@@ -3947,7 +4001,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
 	project.typeAliases = RangedAliasRegistry.create(project.target.os)
-	project.typeAliases.provenance.shareFilePartition(signatures.mainThreadSettled().fileModuleDirectories, libraryPaths: signatures.mainThreadSettled().libraryFilePaths)
+	project.typeAliases.provenance.shareFilePartition(signatures.mainThreadSettled().fileModuleDirectories, libraryPaths: signatures.mainThreadSettled().libraryFilePaths, underTheLibraryCone: signatures.rootIsUnderStdlibDirectory)
 
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every name
 	// already claimed by its own declaration and report the whole program as duplicates.
@@ -3992,7 +4046,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.editorReads = noEditorReads
 end 'resetMergeTargets'
 
-module function lexerErrorDiagnostic(error LexerError, path FilePath) returns Diagnostic
+function lexerErrorDiagnostic(error LexerError, path FilePath) returns Diagnostic
 	return match error 'kind'
 		unexpectedEof(line, column) gives Diagnostic.create(ErrorCode.lexerUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		unterminatedString(line, column) gives Diagnostic.create(ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
@@ -4038,7 +4092,7 @@ end 'reportDirectiveError'
 // ⭐ **THE LEAD IS THE POSITION'S AND THE REST IS THIS CLASSIFIER'S**, so the CALL door (E3004) and the
 // VALUE door (E3155) explain one refusal with one text. Both leads say "undefined function" because both
 // state the same thing about the name; only the verb a reader can see on the line differs.
-module function reservedNameReason(name String, reason ReservedCalleeReason) returns String
+function reservedNameReason(name String, reason ReservedCalleeReason) returns String
 	return match reason 'reason'
 		compilerInternalPrefix gives "the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists"
 		synthesizedConformanceImpl gives "that name is the symbol the compiler synthesizes for the builtin's conformance, which a program reaches through a value of the type (`value.method()`) and never by naming the symbol"
@@ -4063,11 +4117,11 @@ end 'unsupportedFeatureDiagnostic'
 // E3102's ONE WIRE FORMAT: the parser refuses a read after a move it made itself
 // (`Parser.requireBindingLive`), and `KeptArguments` one after a call that keeps a unique argument
 // or after the function itself moves a unique parameter.
-module function useOfMovedValueMessage(name String) returns String
+function useOfMovedValueMessage(name String) returns String
 	return "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment"
 end 'useOfMovedValueMessage'
 
-module function useOfValueMovedIntoMessage(name String, into String) returns String
+function useOfValueMovedIntoMessage(name String, into String) returns String
 	return "use of moved value '{name}': its ownership moved to {into}"
 end 'useOfValueMovedIntoMessage'
 
@@ -4075,17 +4129,17 @@ function passedAtTwoArgumentsMessage(name String) returns String
 	return "use of moved value '{name}': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it"
 end 'passedAtTwoArgumentsMessage'
 
-module function movedInAnEarlierIterationMessage(name String) returns String
+function movedInAnEarlierIterationMessage(name String) returns String
 	return "use of moved value '{name}': it was moved in an earlier iteration of this loop"
 end 'movedInAnEarlierIterationMessage'
 
 // E2015's sentence, by its detail.
-module function unsupportedFeatureMessage(feature String) returns String
+function unsupportedFeatureMessage(feature String) returns String
 	return "Unsupported: {feature}"
 end 'unsupportedFeatureMessage'
 
 // E3077's sentence.
-module function varShouldBeLetMessage(name String, boundFromContainerLiteral bool) returns String
+function varShouldBeLetMessage(name String, boundFromContainerLiteral bool) returns String
 	if boundFromContainerLiteral 'aLiteralContainer'
 		return "variable '{name}' is never reassigned; use 'let' instead of 'var', and `let {name} = [..].clone()` where the container is written through"
 	end 'aLiteralContainer'
@@ -4125,7 +4179,7 @@ function reportParseError(project Project, path FilePath, error SourceParseError
 	reportDiagnostic(project, diagnostic: parseErrorDiagnostic(error, path: path, keywords: project.keywords))
 end 'reportParseError'
 
-module function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords KeywordTable) returns Diagnostic
+function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords KeywordTable) returns Diagnostic
 	return match error 'kind'
 		// ⚠ The `expected` half is NOT quoted here — `Lexer.expectationDisplayText` decides that, and it
 		// is the only place that does: a bare lexical CATEGORY (`identifier`) is written bare and
@@ -4201,7 +4255,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		undefinedVariable(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
 		ambiguousBareName(name, candidates, use, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)
 
-		// E3008 / E3088 by tier, through the same producer `SemanticCheck.reportCalleeNotVisible` reports
+		// E3008, through the same producer `SemanticCheck.reportCalleeNotVisible` reports
 		// a BODY's hidden call with, applied to the refusals a parse-time door has to decide for itself:
 		// a top-level initializer's call and a hidden static member.
 		symbolNotVisible(kind, symbol, tier, line, column) gives hiddenSymbolDiagnostic(kind, noun: symbol, tier: tier, line: line, column: column, filePath: path)
@@ -4348,7 +4402,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// The instance-method arms. Pinned byte-for-byte by `export-var-fields.md` for both, and the two
 		// suites run the same spec file.
 		localShadowsSelfField(name, typeName, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
-		unexportedFieldAccess(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
+		unexportedFieldAccess(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.unexportedFieldAccess, message: "field '{typeName}.{fieldName}' is not exported", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by the `maxoncstderr` blocks in `match-statements.md`/`match-simple.md`
 		// and `function-declaration.md`. Its raisers are listed on the union arm and deliberately not
@@ -4383,8 +4437,8 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		heapAnnotationOnNonRecord(name, tag, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "@heap can only annotate a binding whose value is a heap record; '{name}' binds a '{tag}'", line: line, column: column, filePath: path)
 
 		// The SAME code as `strayToken` above — E2001 is "the parser met a token that cannot appear at
-		// this point in the grammar", and a second `module` after an `export` is exactly that. Pinned
-		// byte-for-byte by `module-keyword/error.module-and-export-conflict`.
+		// this point in the grammar", and a `public` after an `export` is exactly that. Pinned
+		// byte-for-byte by `public-keyword/error.export-then-public-combined`.
 		visibilityModifiersCombined(earlier, later, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "{visibilityModifierSpelling(earlier)} and {visibilityModifierSpelling(later)} cannot be combined", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by `typealias-collision/error.exported-typealias-collision`.
@@ -4537,7 +4591,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		managedValueInRuntimeSource(name, typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "'{name}' has managed type '{typeName}': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 		bareGenericSubjectUnbound(message, line, column) gives Diagnostic.create(ErrorCode.bareGenericSubjectUnbound, message: message, line: line, column: column, filePath: path)
 		contradictoryFrameDirectives(line, column) gives Diagnostic.create(ErrorCode.contradictoryFrameDirectives, message: "a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site", line: line, column: column, filePath: path)
-		wideVisibilityInRuntimeSource(keyword, line, column) gives Diagnostic.create(ErrorCode.wideVisibilityInRuntimeSource, message: "{visibilityModifierSpelling(keyword)} is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs", line: line, column: column, filePath: path)
+		wideVisibilityInRuntimeSource(keyword, line, column) gives Diagnostic.create(ErrorCode.wideVisibilityInRuntimeSource, message: "{visibilityModifierSpelling(keyword)} is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; an unmarked declaration is the widest visibility the tier's own file-to-file sharing needs", line: line, column: column, filePath: path)
 		managedTypeInRuntimeSource(typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "managed type '{typeName}' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 		managedValueBuiltInRuntimeSource(typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "a managed value of type '{typeName}' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 

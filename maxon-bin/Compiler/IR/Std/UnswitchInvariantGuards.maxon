@@ -111,12 +111,12 @@ let InLoopTemporaryMargin = 3
 
 // What a loop's live-across set is measured against: the target's allocatable GPRs less the margin, or
 // nothing on a stack machine, where a hoisted value holds no register.
-module union HoistPressureBudget
+union HoistPressureBudget
 	unbounded
 	registers(count RegCount)
 end 'HoistPressureBudget'
 
-module function hoistPressureBudgetFor(target Target) returns HoistPressureBudget
+function hoistPressureBudgetFor(target Target) returns HoistPressureBudget
 	return match target.cpu 'cpu'
 		x64 or
 		arm64 gives HoistPressureBudget.registers(allocatableGprCount(target) - InLoopTemporaryMargin)
@@ -128,7 +128,7 @@ let UnswitchTestLabel = b"__us_test"
 let UnswitchSlowLabel = b"__us_slow"
 
 // Why a loop was left alone. Counted per reason into the pass summary.
-module enum UnswitchRefusal
+enum UnswitchRefusal
 	noPreheader
 	insideAVersionedLoop
 	containsAVersionedLoop
@@ -151,7 +151,7 @@ end 'UnswitchRefusal'
 
 // The pass's summary line, from the tally its runs summed into (`StdPassPool`): over the
 // functions that hold an op in the fan-out, and over the band's functions in the appended band.
-module function unswitchInvariantGuardsSummary(tally StdPassTally, funcCount ElementIndex) returns String
+function unswitchInvariantGuardsSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "unswitchInvariantGuards: rewrote {tally.rewrittenLoops} loop(s) — {tally.versionedLoops} versioned, {tally.hoistedLoops} hoisted in place — in {tally.rewrittenFunctions} of {funcCount} function(s); loops left alone: {tally.unswitchRefusals.summary(UnswitchRefusal.allCaseNames)}; invariant compares of another shape left in place: {tally.genericGuardsLeftAlone}"
 end 'unswitchInvariantGuardsSummary'
 
@@ -162,7 +162,7 @@ end 'unswitchInvariantGuardsSummary'
 // Rewrite every admissible loop of one function — versioned, or hoisted in place — counting the loops
 // into the tally. Answers whether it rewrote anything, which is what decides whether
 // `refineVersionedRanges` visits the function.
-module function unswitchInFunc(module StdModule, func IrFunction, origins DerivedOrigins, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
+function unswitchInFunc(module StdModule, func IrFunction, origins DerivedOrigins, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
 	let blockCount = func.blockRefs.count()
 
 	if blockCount < 2 or not holdsAManagedCallee(module, func: func, call: scratch.call) 'nothingToVersion'
@@ -224,7 +224,7 @@ end 'unswitchInFunc'
 // Whether any live op of `func` calls a runtime entry with a stated effect — the one op read most
 // functions pay, before a tree is built for a function nothing here or in `foldEstablishedGuards` can
 // serve. `call` is the caller's classification record, refilled per call.
-module function holdsAManagedCallee(module StdModule, func IrFunction, call StdCallOperands) returns bool
+function holdsAManagedCallee(module StdModule, func IrFunction, call StdCallOperands) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
 
@@ -1877,7 +1877,7 @@ end 'reloadMembers'
 
 // The mutable state one run of the pass carries, created once per module. Every per-loop set is a
 // stamp set whose reset is O(1) (`LoopValueStamps`); the classification records are refilled per op.
-module type UnswitchScratch
+type UnswitchScratch
 	export var members as LoopMembership
 	export var definedInLoop as LoopValueStamps
 
@@ -1919,7 +1919,7 @@ module type UnswitchScratch
 	export var reusedLoad = 0 as ValueId
 	export var preheaderDef as StdDefinedValues
 
-	module static function create(tally StdPassTally) returns UnswitchScratch
+	static function create(tally StdPassTally) returns UnswitchScratch
 		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(0), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), cloner: StdOpCloner.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), tally: tally}
 	end 'create'
 
@@ -1933,7 +1933,7 @@ module type UnswitchScratch
 	end 'beginLoop'
 end 'UnswitchScratch'
 
-module typealias CanonicalMap = LoopValueMap with ValueId
+typealias CanonicalMap = LoopValueMap with ValueId
 
 // What a hoisted `valueId` is numbered equal to — itself when nothing earlier matches it.
 function canonicalOf(canonical CanonicalMap, valueId ValueId) returns ValueId

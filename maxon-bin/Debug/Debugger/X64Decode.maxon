@@ -25,7 +25,7 @@ export union X64Decode
 	decoded(instruction X64Instruction)
 end 'X64Decode'
 
-export union X64FrameStep
+union X64FrameStep
 	pushesAWord(length DecodedLength)
 	setsTheFramePointer
 	neither
@@ -38,7 +38,7 @@ let PopRegisterHigh = 0x5F
 
 /// What the prologue instruction at `at` does to the frame: `mov rbp, rsp` exactly, a push of a
 /// register, or neither.
-export function x64FrameStepAt(code ByteArray, at DecodedOffset) returns X64FrameStep
+function x64FrameStepAt(code ByteArray, at DecodedOffset) returns X64FrameStep
 	if codeHoldsAt(code, at: at, bytes: SetFramePointerBytes) 'set'
 		return X64FrameStep.setsTheFramePointer
 	end 'set'
@@ -63,15 +63,15 @@ function x64IndirectReturnJumpOffset() returns DecodedOffset
 	return (x64IndirectReturnBytes().count() - jump.count()) as DecodedOffset
 end 'x64IndirectReturnJumpOffset'
 
-module function x64IndirectReturnLength() returns DecodedLength
+function x64IndirectReturnLength() returns DecodedLength
 	return x64IndirectReturnBytes().count() as DecodedLength
 end 'x64IndirectReturnLength'
 
-module function x64IndirectReturnAt(code ByteArray, at DecodedOffset) returns bool
+function x64IndirectReturnAt(code ByteArray, at DecodedOffset) returns bool
 	return codeHoldsAt(code, at: at, bytes: x64IndirectReturnBytes())
 end 'x64IndirectReturnAt'
 
-module function x64IndirectReturnJumpAt(code ByteArray, at DecodedOffset) returns bool
+function x64IndirectReturnJumpAt(code ByteArray, at DecodedOffset) returns bool
 	let jumpOffset = x64IndirectReturnJumpOffset()
 
 	if at < jumpOffset 'beforeTheCode'

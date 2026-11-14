@@ -127,7 +127,7 @@ export function isWordPutCallee(callee ByteArray) returns bool
 	return entry.access == WordAccess.put
 end 'isWordPutCallee'
 
-export function wordGetSourceMethodName(callee ByteArray) returns immutable ByteArray
+function wordGetSourceMethodName(callee ByteArray) returns immutable ByteArray
 	let entry = try wordEntryNamed(callee) otherwise panic("wordGetSourceMethodName: '{String.from(callee)}' is not a word entry — this map is asked only behind `isWordGetCallee`")
 
 	return orderedWordIntrinsicName(OrderedWordIntrinsic.create(entry.access, order: entry.order))
@@ -142,7 +142,7 @@ function emitWordByteShift(module StdModule, block IrBlock, index ValueId, order
 	return emitBin(module, block: block, a: position, b: emitConst(module, block: block, value: WordBitsPerByte, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 end 'emitWordByteShift'
 
-export function installWordEntries(module StdModule)
+function installWordEntries(module StdModule)
 	for width in WordBytes.allCases 'eachWidth'
 		for order in WordByteOrder.allCases 'eachOrder'
 			buildWordGet(module, order: order, width: width)

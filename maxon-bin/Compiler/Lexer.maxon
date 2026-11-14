@@ -9,7 +9,7 @@ export typealias ColumnNumber = int(0 to u64.max)
 export typealias LineNumberArray = Array with LineNumber
 
 // @generated library-cache begin
-module function cacheWriteLineNumberArray(writer LibraryCacheWriter, value LineNumberArray)
+function cacheWriteLineNumberArray(writer LibraryCacheWriter, value LineNumberArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -17,7 +17,7 @@ module function cacheWriteLineNumberArray(writer LibraryCacheWriter, value LineN
 	end 'eachItem'
 end 'cacheWriteLineNumberArray'
 
-module function cacheReadLineNumberArray(reader LibraryCacheReader) returns LineNumberArray throws LibraryCacheDamage
+function cacheReadLineNumberArray(reader LibraryCacheReader) returns LineNumberArray throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = LineNumberArray.create(count, zeroed: false)
 
@@ -34,7 +34,7 @@ end 'cacheReadLineNumberArray'
 export typealias ColumnNumberArray = Array with ColumnNumber
 
 // @generated library-cache begin
-module function cacheWriteColumnNumberArray(writer LibraryCacheWriter, value ColumnNumberArray)
+function cacheWriteColumnNumberArray(writer LibraryCacheWriter, value ColumnNumberArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -42,7 +42,7 @@ module function cacheWriteColumnNumberArray(writer LibraryCacheWriter, value Col
 	end 'eachItem'
 end 'cacheWriteColumnNumberArray'
 
-module function cacheReadColumnNumberArray(reader LibraryCacheReader) returns ColumnNumberArray throws LibraryCacheDamage
+function cacheReadColumnNumberArray(reader LibraryCacheReader) returns ColumnNumberArray throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = ColumnNumberArray.create(count, zeroed: false)
 
@@ -349,7 +349,7 @@ end 'TokenKind'
 // @generated library-cache begin
 let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.modify, TokenKind.acquire, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
 
-module function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
+function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
 
 	return try CacheCasesTokenKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
@@ -374,7 +374,7 @@ function cacheTableAgreesTokenKind() returns bool
 	return true
 end 'cacheTableAgreesTokenKind'
 
-module function cacheEnumTablesAgreeInCompilerLexer() returns bool
+function cacheEnumTablesAgreeInCompilerLexer() returns bool
 	if not cacheTableAgreesTokenKind() 'disagreesCacheTableAgreesTokenKind'
 		return false
 	end 'disagreesCacheTableAgreesTokenKind'
@@ -398,33 +398,31 @@ end 'cacheEnumTablesAgreeInCompilerLexer'
 // re-derives the same skip while walking the raw stream, and `DeclarationPoison` skips it to find
 // the declaration a refused line sits in. A copy that admitted one kind and not the
 // other would have a walk read a statement where the real parse steps over layout.
-//
-// `module` and not `export`: every reader lives under `Compiler/`.
-module function tokenKindIsSkippedLayout(kind TokenKind) returns bool
+function tokenKindIsSkippedLayout(kind TokenKind) returns bool
 	return kind == TokenKind.newline or kind == TokenKind.docComment
 end 'tokenKindIsSkippedLayout'
 
-module function tokenKindEndsALine(kind TokenKind) returns bool
+function tokenKindEndsALine(kind TokenKind) returns bool
 	return tokenKindIsSkippedLayout(kind) or kind == TokenKind.eof
 end 'tokenKindEndsALine'
 
-module function tokenKindOpensABracket(kind TokenKind) returns bool
+function tokenKindOpensABracket(kind TokenKind) returns bool
 	return kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace
 end 'tokenKindOpensABracket'
 
-module function tokenKindClosesABracket(kind TokenKind) returns bool
+function tokenKindClosesABracket(kind TokenKind) returns bool
 	return kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace
 end 'tokenKindClosesABracket'
 
-module function tokenKindOpensAGroup(kind TokenKind) returns bool
+function tokenKindOpensAGroup(kind TokenKind) returns bool
 	return tokenKindOpensABracket(kind) or kind == TokenKind.stringInterpStart
 end 'tokenKindOpensAGroup'
 
-module function tokenKindClosesAGroup(kind TokenKind) returns bool
+function tokenKindClosesAGroup(kind TokenKind) returns bool
 	return tokenKindClosesABracket(kind) or kind == TokenKind.stringInterpEnd
 end 'tokenKindClosesAGroup'
 
-module function groupNestingAfter(kind TokenKind, nesting NestingDepth) returns NestingDepth
+function groupNestingAfter(kind TokenKind, nesting NestingDepth) returns NestingDepth
 	if tokenKindOpensAGroup(kind) 'opens'
 		return nesting + 1
 	end 'opens'
@@ -436,7 +434,7 @@ module function groupNestingAfter(kind TokenKind, nesting NestingDepth) returns 
 	return nesting
 end 'groupNestingAfter'
 
-module function interpolatedLiteralLastFragment(tokens TokenArray, first ElementIndex) returns ElementIndex throws AbsentError
+function interpolatedLiteralLastFragment(tokens TokenArray, first ElementIndex) returns ElementIndex throws AbsentError
 	if tokenKindAt(tokens, index: first) != TokenKind.stringLiteral or tokenKindAt(tokens, index: first + 1) != TokenKind.stringInterpStart 'notAnInterpolatedLiteral'
 		throw AbsentError.absent
 	end 'notAnInterpolatedLiteral'
@@ -475,7 +473,7 @@ module function interpolatedLiteralLastFragment(tokens TokenArray, first Element
 	return last
 end 'interpolatedLiteralLastFragment'
 
-module function tokenKindAt(tokens TokenArray, index ElementIndex) returns TokenKind
+function tokenKindAt(tokens TokenArray, index ElementIndex) returns TokenKind
 	let tok = try tokens.get(index) otherwise return TokenKind.eof
 	return tok.kind
 end 'tokenKindAt'
@@ -488,7 +486,7 @@ function kindBefore(tokens TokenArray, index ElementIndex) returns TokenKind
 	return tokenKindAt(tokens, index: index - 1)
 end 'kindBefore'
 
-module function tokenFollowsAMemberDot(tokens TokenArray, index ElementIndex) returns bool
+function tokenFollowsAMemberDot(tokens TokenArray, index ElementIndex) returns bool
 	return kindBefore(tokens, index: index) == TokenKind.dot
 end 'tokenFollowsAMemberDot'
 
@@ -531,11 +529,11 @@ end 'shiftInnermostBracketDepth'
 
 // Memoized per token stream, and a scan steps over a group it has already filed: the same openers are
 // asked about again and again, and a fresh walk per ask makes the compile superlinear.
-export type ParenGroups
+type ParenGroups
 	var table as ParenGroupFactsTable
 	var openers as GroupOpenerTable
 
-	export static function create() returns ParenGroups
+	static function create() returns ParenGroups
 		return Self{table: noParenGroupFacts, openers: noGroupOpeners}
 	end 'create'
 
@@ -710,7 +708,7 @@ end 'ParenGroups'
 // another construct — and a guard at one call site is the rule the next caller forgets. `parseStatement`
 // is unaffected: it reaches this at a statement's first token, where the predecessor is a newline, and a
 // `let`/`var` there was consumed by its own arm two branches earlier.
-module function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) returns ElementIndex
+function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) returns ElementIndex
 	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notATargetList'
 		return open
 	end 'notATargetList'
@@ -792,7 +790,7 @@ function contextualBlockOpensAt(tokens TokenArray, index ElementIndex, spelling 
 	panic("contextualBlockOpensAt: the scan to the end of the line only exits by returning at the newline or EOF")
 end 'contextualBlockOpensAt'
 
-module function destructStatementAt(tokens TokenArray, index ElementIndex) returns bool
+function destructStatementAt(tokens TokenArray, index ElementIndex) returns bool
 	let word = try tokens.get(index) otherwise return false
 
 	if word.kind != TokenKind.identifier or not word.value.equals(DestructStatementWord) or tokenKindAt(tokens, index: index + 1) != TokenKind.self 'notADestruct'
@@ -802,7 +800,7 @@ module function destructStatementAt(tokens TokenArray, index ElementIndex) retur
 	return kindBefore(tokens, index: index) != TokenKind.dot
 end 'destructStatementAt'
 
-module function typeBodyHoldsADestruct(tokens TokenArray, from ElementIndex) returns bool
+function typeBodyHoldsADestruct(tokens TokenArray, from ElementIndex) returns bool
 	for index in from upto tokens.count() 'eachToken'
 		let word = try tokens.get(index) otherwise return false
 
@@ -871,14 +869,14 @@ end 'Token'
 
 typealias InterpolationDepth = int(0 to u64.max)
 
-export typealias NestingDepth = int(i64.min to i64.max)
+typealias NestingDepth = int(i64.min to i64.max)
 
-export enum CommentSpanKind
+enum CommentSpanKind
 	line
 	block
 end 'CommentSpanKind'
 
-export type CommentSpan
+type CommentSpan
 	export let kind as CommentSpanKind
 	export let startByte as ByteOffset
 	export let endByte as ByteOffset
@@ -887,14 +885,14 @@ export type CommentSpan
 	export let endLine as LineNumber
 	export let followingToken as ElementIndex
 
-	export static function create(kind CommentSpanKind, startByte ByteOffset, endByte ByteOffset, startLine LineNumber, startColumn ColumnNumber, endLine LineNumber, followingToken ElementIndex) returns CommentSpan
+	static function create(kind CommentSpanKind, startByte ByteOffset, endByte ByteOffset, startLine LineNumber, startColumn ColumnNumber, endLine LineNumber, followingToken ElementIndex) returns CommentSpan
 		return Self{kind: kind, startByte: startByte, endByte: endByte, startLine: startLine, startColumn: startColumn, endLine: endLine, followingToken: followingToken}
 	end 'create'
 end 'CommentSpan'
 
-export typealias CommentSpanArray = Array with CommentSpan
+typealias CommentSpanArray = Array with CommentSpan
 
-export union CommentLog
+union CommentLog
 	discarded
 	recorded(spans CommentSpanArray)
 
@@ -906,11 +904,11 @@ export union CommentLog
 	end 'record'
 end 'CommentLog'
 
-export type LexedSource
+type LexedSource
 	export let tokens as TokenArray
 	export let comments as CommentLog
 
-	export static function create(tokens TokenArray, comments CommentLog) returns LexedSource
+	static function create(tokens TokenArray, comments CommentLog) returns LexedSource
 		return Self{tokens: tokens, comments: comments}
 	end 'create'
 end 'LexedSource'
@@ -920,7 +918,7 @@ end 'LexedSource'
 // than a fresh heap String per token — the allocation this type exists to not make.
 // Exported because every name-shaped field downstream wants the same "no source text"
 // value rather than minting its own empty.
-export let EmptySourceText = b""
+let EmptySourceText = b""
 
 // How a DIAGNOSTIC names one token. A word or literal token carries its own source text
 // (`int`, `Integer`, `42`) and that is what the reader has to find in the file; a token whose
@@ -944,7 +942,7 @@ export let EmptySourceText = b""
 // drifts: it quietly names the offending token something the source never wrote. Its readers are
 // `tokenTextFrom`'s span renderer and the E2001 `unexpected token: '<x>'` sites, whose `got` field
 // this fills.
-export function tokenDisplayText(token Token) returns String
+function tokenDisplayText(token Token) returns String
 	if token.value.isEmpty() 'kindImpliesTheText'
 		return token.kind.rawValue
 	end 'kindImpliesTheText'
@@ -963,7 +961,7 @@ end 'tokenDisplayText'
 // ⚠ It is a SECOND function rather than a widening of `tokenDisplayText`, for the reason
 // `expressionOperandDisplayText` is one too: the QUESTION differs, not the answer. That one names a
 // token in PROSE, inside a message that quotes it; this one reconstructs SOURCE.
-export function tokenSourceSpelling(token Token) returns String
+function tokenSourceSpelling(token Token) returns String
 	if token.kind == TokenKind.charLiteral 'singleQuoted'
 		return "'{String.from(token.value)}'"
 	end 'singleQuoted'
@@ -1007,7 +1005,7 @@ let AbsentOperandText = "(empty)"
 // What those kinds should print is a separate question this renderer does not answer: they render
 // as their category NAME rather than the token's TEXT (`'integer literal'`, not `'5'`). Reachable
 // at `resolveEnumArmCase`, and no spec pins it.
-export function expressionOperandDisplayText(token Token) returns String
+function expressionOperandDisplayText(token Token) returns String
 	if token.kind == TokenKind.newline 'lineEndedWithNoOperand'
 		return AbsentOperandText
 	end 'lineEndedWithNoOperand'
@@ -1048,7 +1046,7 @@ end 'expressionOperandDisplayText'
 // for these two. Moving them is 20 pins and its own decision. (E2004 hardcodes the bare
 // `expression` in its own template: a different CODE with a different sentence, which agrees with
 // the rule rather than being decided by it.)
-export function expectationDisplayText(expected String, keywords KeywordTable) returns String
+function expectationDisplayText(expected String, keywords KeywordTable) returns String
 	if expectationNamesATokenClass(expected, keywords: keywords) 'aClassNoSourceSpells'
 		return expected
 	end 'aClassNoSourceSpells'
@@ -1084,7 +1082,7 @@ let BackslashTokenText = b"\\"
 export typealias TokenArray = Array with Token
 
 // @generated library-cache begin
-module function cacheWriteTokenArray(writer LibraryCacheWriter, value TokenArray)
+function cacheWriteTokenArray(writer LibraryCacheWriter, value TokenArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -1092,7 +1090,7 @@ module function cacheWriteTokenArray(writer LibraryCacheWriter, value TokenArray
 	end 'eachItem'
 end 'cacheWriteTokenArray'
 
-module function cacheReadTokenArray(reader LibraryCacheReader) returns TokenArray throws LibraryCacheDamage
+function cacheReadTokenArray(reader LibraryCacheReader) returns TokenArray throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = TokenArray.create(count, zeroed: false)
 
@@ -2551,7 +2549,7 @@ end 'Lexer'
 // (e.g. unterminated string literal) so queryTokens can route them through
 // the project's diagnostic sink and stop the pipeline before parsing runs
 // on partial tokens.
-export function tokenize(source String, keywords KeywordTable) returns TokenArray throws LexerError
+function tokenize(source String, keywords KeywordTable) returns TokenArray throws LexerError
 	let bytes = freeze source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
 		// Empty or whitespace-only source yields an empty token stream.
@@ -2587,7 +2585,7 @@ end 'popLayoutFrame'
 // a `newline` (a new statement) or an `else` (the `if` of an `else if` chain). A ternary `if`
 // follows an operand, so neither holds. Index 0 has nothing before it and cannot be a ternary, so
 // it counts as statement start.
-module function ifBeginsStatementIn(tokens TokenArray, index ElementIndex) returns bool
+function ifBeginsStatementIn(tokens TokenArray, index ElementIndex) returns bool
 	let prev = kindBefore(tokens, index: index)
 	return prev == TokenKind.newline or prev == TokenKind.else
 end 'ifBeginsStatementIn'
@@ -2603,7 +2601,7 @@ end 'ifBeginsStatementIn'
 // followed by the label charLiteral — which a payload case (`( bindings ) then/gives`, or
 // multi-binding `( a , b )`) never matches. `parseOtherwiseHandler` needs no such check because
 // by the time it runs the leading `try` has already disambiguated the context.
-module function otherwiseOpensBlockIn(tokens TokenArray, index ElementIndex) returns bool
+function otherwiseOpensBlockIn(tokens TokenArray, index ElementIndex) returns bool
 	let next = tokenKindAt(tokens, index: index + 1)
 
 	if next == TokenKind.charLiteral 'labelForm'
@@ -2623,11 +2621,11 @@ end 'otherwiseOpensBlockIn'
 // literal used as a `try` TARGET must be a call, so it is always followed by `.`. One token of lookahead
 // past the label separates them, and a character literal that is NOT a receiver (`try 'A' otherwise 0`)
 // is not a call either — it stays the block form, and `parseTry`'s own refusal names it.
-module function charLiteralOpensTryBlockIn(tokens TokenArray, index ElementIndex) returns bool
+function charLiteralOpensTryBlockIn(tokens TokenArray, index ElementIndex) returns bool
 	return tokenKindAt(tokens, index: index) == TokenKind.charLiteral and tokenKindAt(tokens, index: index + 1) != TokenKind.dot
 end 'charLiteralOpensTryBlockIn'
 
-module function keywordSpellsAMatchArmCaseIn(tokens TokenArray, groups ParenGroups, index ElementIndex) returns bool
+function keywordSpellsAMatchArmCaseIn(tokens TokenArray, groups ParenGroups, index ElementIndex) returns bool
 	let next = tokenKindAt(tokens, index: index + 1)
 
 	if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
@@ -2687,11 +2685,11 @@ function opensAKeptBlock(tokens TokenArray, groups ParenGroups, index ElementInd
 	panic("opensAKeptBlock: '{kind.rawValue}' spells block structure but no arm here answers for it")
 end 'opensAKeptBlock'
 
-module function tokenKindDeclaresANominalType(kind TokenKind) returns bool
+function tokenKindDeclaresANominalType(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
 end 'tokenKindDeclaresANominalType'
 
-module function tokenKindDeclaresANamedType(kind TokenKind) returns bool
+function tokenKindDeclaresANamedType(kind TokenKind) returns bool
 	return tokenKindDeclaresANominalType(kind) or kind == TokenKind.extension or kind == TokenKind.typealias
 end 'tokenKindDeclaresANamedType'
 
@@ -2779,7 +2777,7 @@ function dropBracketedLayout(tokens TokenArray) returns TokenArray
 	return kept
 end 'dropBracketedLayout'
 
-export function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
+function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
 	let bytes = freeze source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
 		return LexedSource.create(TokenArray.create(0), comments: CommentLog.recorded(CommentSpanArray.create(0)))
@@ -2794,12 +2792,12 @@ end 'tokenizeWithComments'
 
 // --- Pure helpers ---
 
-export function isDigit(b Byte) returns bool
+function isDigit(b Byte) returns bool
 	return b >= '0' and b <= '9'
 end 'isDigit'
 
 // A non-empty run of decimal digits and nothing else: no sign, no separator, no radix prefix.
-module function isDecimalNumeral(text String) returns bool
+function isDecimalNumeral(text String) returns bool
 	if text.isEmpty() 'empty'
 		return false
 	end 'empty'
@@ -2819,7 +2817,7 @@ function isAlpha(b Byte) returns bool
 end 'isAlpha'
 
 // Valid identifier continuation: letter, digit, or underscore
-module function isAlphaNum(b Byte) returns bool
+function isAlphaNum(b Byte) returns bool
 	return isAlpha(b) or isDigit(b)
 end 'isAlphaNum'
 
@@ -2874,12 +2872,7 @@ export type KeywordTable
 			b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
 			b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
 
-			// ⭐ **A REAL LEXER KEYWORD, UNLIKE `module`, AND THAT IS A MEASUREMENT TOO.** `module` cannot be one
-			// because the word is an ordinary identifier 6,537 times in `maxon-bin/` alone (see
-			// `Parser.atModuleModifier`). `public` is used ZERO times as an identifier anywhere in the tree — 45
-			// occurrences, every one inside a comment or a string — so it costs nothing to reserve program-wide and
-			// needs none of `module`'s contextual machinery.
-			b"public": KeywordInfo.create(TokenKind.public, helpText: "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostics (E3092/E3093). Visibility is identical to `export`; the difference is that `public` states the symbol exists for callers outside this program, so \"nobody here references it\" is not a finding.", canHaveBlockLabel: false),
+			b"public": KeywordInfo.create(TokenKind.public, helpText: "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostic (E3092). Visibility is identical to `export`; the difference is that `public` states the symbol exists for callers outside this program, so \"nobody here references it\" is not a finding.", canHaveBlockLabel: false),
 			b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
 			b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
 			b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
@@ -2915,14 +2908,14 @@ export type KeywordTable
 		return byName
 	end 'entries'
 
-	module static function create() returns immutable KeywordTable
+	static function create() returns immutable KeywordTable
 		return freeze Self{byName: Self.entries()}
 	end 'create'
 
 	// Keyed on the identifier's raw BYTES, so the hot path never materializes a String:
 	// `ByteArray` hashes and compares by content, so the source slice looks the keyword
 	// up directly (see Array's Hashable/Equatable extension).
-	module function classify(name ByteArray) returns TokenKind
+	function classify(name ByteArray) returns TokenKind
 		let info = try self.byName.get(name) otherwise return TokenKind.identifier
 		return info.kind
 	end 'classify'
@@ -2936,7 +2929,7 @@ export type KeywordTable
 	// keyed by SPELLING, and the answer wanted here is keyed by KIND. A reverse index would be a second
 	// copy of the same fact, for a question asked once per token by ONE caller that is already writing
 	// bytes to a file.
-	module function holdsKind(kind TokenKind) returns bool
+	function holdsKind(kind TokenKind) returns bool
 		for (_, info) in self.byName 'eachKeyword'
 			if info.kind == kind 'isTheKind'
 				return true
@@ -2967,7 +2960,7 @@ function classifyDirective(name String) returns TokenKind
 	return TokenKind.identifier
 end 'classifyDirective'
 
-module enum AsciiByte
+enum AsciiByte
 	lf = 10
 	space = 32
 	bang = 33

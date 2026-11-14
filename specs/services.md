@@ -210,23 +210,23 @@ the pre-fold token walk, this case reports `error E3011: Unknown type 'Calc.hand
 to completion — its `spawn` is in the other file — so the unresolved companion is actually reached.
 ```maxon
 // --- file: calc.maxon
-export type Calc
+type Calc
 	var count as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by Integer)
+	function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
 
-export function serve(_ Calc.handle) returns Integer
+function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let h = spawn Calc.create()
@@ -253,23 +253,23 @@ companion unresolved.
 references is E3092. Both would have made this case pass without ever building the spawn it is about.
 ```maxon
 // --- file: calc.maxon
-export type Calc
+type Calc
 	var count as Integer
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{count: 0}
 	end 'create'
 
-	export function bump(by Integer)
+	function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
 end 'Calc'
 
-export function serve(_ Calc.handle) returns Integer
+function serve(_ Calc.handle) returns Integer
 	return 1
 end 'serve'
 
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 // --- file: runner.maxon
 type Runner
 	var started as Integer
@@ -1104,7 +1104,7 @@ error E2015: <fragment>:22:11: Unsupported: `spawn Box.create(…)` fixes `type 
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
-Only `export`/`public` INSTANCE methods are messages. `record` is file-private and `version` is a static,
+Only `export`/`public` INSTANCE methods are messages. `record` is unmarked and `version` is a static,
 so neither is subject to the transferability rule — a `Promise` parameter on either is perfectly legal on
 a type that is spawned, which is what this case pins. Compare
 `error.message-param-promise-not-transferable`, whose only difference is the `export`.
@@ -4735,7 +4735,7 @@ An export method reachable only as a MESSAGE must count as used, or the unused-e
 every service whose handle is the only caller. It is credited by the send op naming `Calc.bump` — the same
 `maxonOpCalleeKind` road an ordinary call is credited by, which is why this needs no arm of its own.
 ```maxon
-// --- file: calc.maxon
+// --- file: calc/calc.maxon
 export type Calc
 	var count as Integer
 
@@ -16770,7 +16770,7 @@ end 'main'
 
 
 <!-- test: error.a-spawn-of-a-hidden-generic-factory-is-not-exported -->
-`Box.create` is private to `box.maxon`, so `main.maxon` cannot spawn through it, as it could not call it.
+`Box.create` is unexported in `box/`, so `main.maxon`, outside it, cannot spawn through it, as it could not call it.
 ```maxon
 // --- file: main.maxon
 function main() returns ExitCode
@@ -16778,7 +16778,7 @@ function main() returns ExitCode
 	return try await h.peek() otherwise 0 as ExitCode
 end 'main'
 
-// --- file: box.maxon
+// --- file: box/box.maxon
 export typealias Whole = int(i64.min to i64.max)
 
 export type Box uses T

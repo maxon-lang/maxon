@@ -41,7 +41,7 @@ let AsciiTilde = 126
 // The inverse of `FilePath.from`'s decode of a `file:` uri, and the two must stay one: an answer's
 // uri that does not re-encode what a request decoded names a document the client cannot match to
 // the one it asked about.
-module function lspFileUri(path FilePath) returns String
+function lspFileUri(path FilePath) returns String
 	let slashed = path.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 	let encoded = percentEncodedUriPath(slashed)
 
@@ -93,19 +93,19 @@ end 'hexDigitByteOf'
 // broken installation — a library tier missing beside the binary, one whose physical path the host
 // refuses, or one that will not load — and each caller says what it does with the absence; there is no
 // half-built project to hand back.
-module union LspDocumentProject
+union LspDocumentProject
 	loaded(project Project, reader LspReaderSearch)
 	unavailable
 end 'LspDocumentProject'
 
-module type LibraryTiers
-	module let stdlibDir as FilePath
-	module let runtimeDir as FilePath
-	module let scriptlib as ScriptlibTier
-	module let stdlibIdentity as FilePath
-	module let runtimeIdentity as FilePath
+type LibraryTiers
+	let stdlibDir as FilePath
+	let runtimeDir as FilePath
+	let scriptlib as ScriptlibTier
+	let stdlibIdentity as FilePath
+	let runtimeIdentity as FilePath
 
-	module static function locate() returns LibraryTiers throws CompileError
+	static function locate() returns LibraryTiers throws CompileError
 		let stdlibDir = try locateStdlibDir()
 		let runtimeDir = try runtimeDirBeside(stdlibDir)
 		let stdlibIdentity = try identityOfTier(stdlibDir)
@@ -125,7 +125,7 @@ end 'identityOfTier'
 // (`tests/lsp/LspClient.maxon`'s header), so a compile that printed them would fill the pipe and leave
 // both processes waiting on each other. What a caller reports is `project.diagnostics`. The project
 // check's session discards for the same reason.
-module function libraryTierProject(root FilePath, tiers LibraryTiers, buffer OpenBuffer, fileMemos SharedFileMemoMap) returns Project throws CompileError
+function libraryTierProject(root FilePath, tiers LibraryTiers, buffer OpenBuffer, fileMemos SharedFileMemoMap) returns Project throws CompileError
 	return try projectOverBuffer(root, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, scriptlib: tiers.scriptlib, buffer: buffer, session: CompileSession.over(DriverSession.discarding(), fileMemos: fileMemos))
 end 'libraryTierProject'
 
@@ -137,18 +137,18 @@ end 'libraryTierProject'
 //
 // The buffer is registered before the library load, so a tier document's buffer is what
 // `setAsideTheUsersOwnLibraryFiles` files as library source, and its copy on disk is never loaded.
-module union LspDocumentReader
+union LspDocumentReader
 	found(reader LspReaderSearch)
 	unavailable
 end 'LspDocumentReader'
 
-module function lspDocumentReader(workspace LspWorkspaceState, document ReaderDocument) returns LspDocumentReader
+function lspDocumentReader(workspace LspWorkspaceState, document ReaderDocument) returns LspDocumentReader
 	let tiers = try lspLibraryTiers(workspace) otherwise return LspDocumentReader.unavailable
 
 	return LspDocumentReader.found(LspReaderSearch.of(document, tiers: tiers, workspace: workspace))
 end 'lspDocumentReader'
 
-module function lspDocumentProject(workspace LspWorkspaceState, document ReaderDocument, content String) returns LspDocumentProject
+function lspDocumentProject(workspace LspWorkspaceState, document ReaderDocument, content String) returns LspDocumentProject
 	match lspDocumentReader(workspace, document: document) 'located'
 		found(reader) then return projectOfReader(reader, content: content)
 		unavailable then return LspDocumentProject.unavailable
@@ -166,7 +166,7 @@ end 'projectOfReader'
 // entry for two spellings, while `ProgramSignatures.moduleDirectoryOfPathText` is keyed by exact
 // path text and panics on a miss: a visibility question asked on behalf of the other spelling would
 // take the server down.
-module function registeredSpellingOf(project Project, path FilePath) returns FilePath
+function registeredSpellingOf(project Project, path FilePath) returns FilePath
 	for registered in project.db.sourcePaths 'eachRegistered'
 		if namesTheSameFile(registered, other: path) 'theSameFile'
 			return registered

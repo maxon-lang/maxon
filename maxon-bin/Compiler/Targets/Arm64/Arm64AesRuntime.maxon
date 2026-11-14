@@ -88,15 +88,15 @@ function buildArm64AesBlockChunk(name ByteArray, round MachineWord, mix MachineW
 	return asm.finishChunk(name)
 end 'buildArm64AesBlockChunk'
 
-export function buildArm64AesEncryptBlockChunk() returns FunctionCodeChunk
+function buildArm64AesEncryptBlockChunk() returns FunctionCodeChunk
 	return buildArm64AesBlockChunk(AesEncryptBlockChunkName, round: Arm64OpAese, mix: Arm64OpAesmc)
 end 'buildArm64AesEncryptBlockChunk'
 
-export function buildArm64AesDecryptBlockChunk() returns FunctionCodeChunk
+function buildArm64AesDecryptBlockChunk() returns FunctionCodeChunk
 	return buildArm64AesBlockChunk(AesDecryptBlockChunkName, round: Arm64OpAesd, mix: Arm64OpAesimc)
 end 'buildArm64AesDecryptBlockChunk'
 
-export function buildArm64AesCtrChunk(blocks AesCtrGroupBlocks) returns FunctionCodeChunk
+function buildArm64AesCtrChunk(blocks AesCtrGroupBlocks) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let blockCount = blocks as FullRangeInt
 	let control = Arm64Register.x0
@@ -198,7 +198,7 @@ function emitArm64ExpandVariant(asm Arm64RuntimeAsm, rounds FullRangeInt)
 end 'emitArm64ExpandVariant'
 
 // Takes the round count, the key, the encryption keys and the decryption keys in x0 to x3.
-export function buildArm64AesExpandKeyChunk() returns FunctionCodeChunk
+function buildArm64AesExpandKeyChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let from192 = asm.newLabel()
 	let from128 = asm.newLabel()
@@ -535,7 +535,7 @@ function emitArm64GcmHashOctet(asm Arm64RuntimeAsm, source Arm64GcmBlockSource, 
 	emitArm64GcmReduce(asm)
 end 'emitArm64GcmHashOctet'
 
-export function buildArm64AesGcmHashChunk() returns FunctionCodeChunk
+function buildArm64AesGcmHashChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let octets = asm.newLabel()
 	let singles = asm.newLabel()
@@ -585,7 +585,7 @@ export function buildArm64AesGcmHashChunk() returns FunctionCodeChunk
 	return asm.finishChunk(cryptoChunkName(CryptoRoutine.aesGcmHash))
 end 'buildArm64AesGcmHashChunk'
 
-export function buildArm64AesGcmFinishChunk() returns FunctionCodeChunk
+function buildArm64AesGcmFinishChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let additionalBytes = Arm64GcmControl
 	let ciphertextBytes = Arm64GcmBuffer
@@ -617,7 +617,7 @@ function emitArm64GcmStorePowerPair(asm Arm64RuntimeAsm, power MachineWord, base
 	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: Arm64GcmT0, base: base, byteOffset: byteOffset + AesBlockBytes)
 end 'emitArm64GcmStorePowerPair'
 
-export function buildArm64AesGcmInitChunk() returns FunctionCodeChunk
+function buildArm64AesGcmInitChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let rounds = Arm64GcmControl
 	let schedule = Arm64GcmMessage
@@ -778,7 +778,7 @@ function emitArm64GcmSingleBlockLoop(asm Arm64RuntimeAsm, decrypting bool, done 
 	end 'hashesTheOutputTail'
 end 'emitArm64GcmSingleBlockLoop'
 
-export function buildArm64AesGcmEncryptChunk() returns FunctionCodeChunk
+function buildArm64AesGcmEncryptChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let octets = asm.newLabel()
 	let singles = asm.newLabel()
@@ -819,7 +819,7 @@ export function buildArm64AesGcmEncryptChunk() returns FunctionCodeChunk
 	return asm.finishChunk(cryptoChunkName(CryptoRoutine.aesGcmEncrypt))
 end 'buildArm64AesGcmEncryptChunk'
 
-export function buildArm64AesGcmDecryptChunk() returns FunctionCodeChunk
+function buildArm64AesGcmDecryptChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let octets = asm.newLabel()
 	let singles = asm.newLabel()

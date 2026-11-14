@@ -370,31 +370,29 @@ A function value or conformer that writes, waits or yields beyond what its bound
 
 ## Visibility
 
-All declarations are file-scoped by default. Maxon has four visibility tiers:
+An unmarked declaration is visible to its directory. Maxon has three visibility tiers:
 
-- **default** (no keyword) — visible only within the declaring file.
-- **`module`** — visible to every file in the same directory and any subdirectory.
+- **default** (no keyword) — visible to every file in the declaring directory and any subdirectory of it. That holds for top-level declarations, methods, static members, nested typealiases and fields.
 - **`export`** — visible everywhere in the compilation.
-- **`public`** — visible everywhere, and declared API surface, so the unused-export checks skip it.
+- **`public`** — visible everywhere, and declared API surface, so the unused-export check skips it.
 
-At most one modifier may be written. `module` is a contextual keyword, so it can still be used as an identifier in other positions.
+At most one modifier may be written.
 
-No surface a declaration exposes — a signature, a `let` or `var`'s type, a marked field, a union payload, a typealias's target, an `implements`, `where` or `extends` clause, an enum's backing record — may name a type less visible than the declaration; the tiers order default < `module` < `export` < `public`, and naming a narrower type is **E3167**.
+No surface a declaration exposes — a signature, a `let` or `var`'s type, a marked field, a union payload, a typealias's target, an `implements`, `where` or `extends` clause, an enum's backing record — may name a type less visible than the declaration; the tiers order default < `export` < `public`, and naming a narrower type is **E3167**. An `export` nothing outside its declaring directory names is **E3092**; an unmarked declaration nothing in its directory subtree names is **E3219** (**E3062** for a typealias).
 
 ```maxon
 export typealias Score = int(i64.min to i64.max)
-export function publicFunc() returns Score     // visible to other files
-module function packageFunc() returns Score    // visible to files in this directory subtree
-function privateFunc() returns Score           // only this file
+export function publicFunc() returns Score     // visible to other directories
+function packageFunc() returns Score           // visible to this directory subtree
 
 export type Point                               // visible everywhere
-module type FeatureState                        // visible to this directory subtree
+type FeatureState                               // visible to this directory subtree
 export enum Color                               // visible everywhere
 export union Result                             // visible everywhere
 export typealias Score = int(0 to 100)          // visible everywhere
-module typealias FeatureScore = int(0 to 100)   // visible to this directory subtree
+typealias FeatureScore = int(0 to 100)          // visible to this directory subtree
 export let sharedLimit = 0                      // visible everywhere
-module let featureLimit = 0                     // visible to this directory subtree
+let featureLimit = 0                            // visible to this directory subtree
 ```
 
 When two directories both expose the same bare name, an unqualified reference is ambiguous: **E3095** for functions and top-level bindings, **E3063** for a type name of any kind (typealias, type, enum, union, interface) — where neither the reading file's directory nor the project root declares the name (a bare name means the reader's own directory's declaration, then the root's). A project declaration of a name the standard library also declares is what the bare name means, and the library's is `stdlib.Score`. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: a file that writes its name gets the one **E3008** at that name, and a value reached without the name being written is refused at its field or method use.
@@ -540,7 +538,7 @@ type Point implements Hashable, Describable   // interface conformance
 		export var x as Coord                 // public mutable field
 		export var y as Coord
 		export let name = "point"             // public immutable with default
-		var internal = 0 as Coord             // private field
+		var internal = 0 as Coord             // visible to this directory subtree
 
 		static let MAX = 100               // static immutable constant
 
@@ -636,7 +634,7 @@ type Pair uses A, B where A is Hashable and Equatable    // multiple interfaces 
 type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with ','
 
 // Per-instance typealiases: ranged aliases inside generics are distinct per instantiation.
-// An inner typealias takes its own modifier; unmarked, it is private to its file.
+// An inner typealias takes its own modifier; unmarked, it is visible to its directory subtree.
 type Pool uses T
 	export typealias Idx = int(0 to u64.max)
 	export function checked(at Idx) returns Idx

@@ -32,7 +32,7 @@ let NarrowestIndentWidth = 1
 let WidestIndentWidth = 64
 
 // A `tabSize` a caller asked for, before it is known to be one this formatter will spend.
-module typealias RequestedIndentWidth = int(i64.min to i64.max)
+typealias RequestedIndentWidth = int(i64.min to i64.max)
 
 // How many `newline` tokens have arrived since the last real one. 1 terminates a line; every further
 // one is a blank line the author wrote, whose fate the forced-blank rule decides.
@@ -547,12 +547,12 @@ end 'tokenMayHoldLineBreaks'
 /// Keywords that open a block DECLARING something — closed by `end '<the declared name>'` and never by a
 /// label. ⚠ `export`, because `Compiler/Lsp/`'s document-structure walk asks the same six-keyword
 /// question of the same token stream, and two lists would be two lists free to disagree.
-module function kindOpensADeclarationBlock(kind TokenKind) returns bool
+function kindOpensADeclarationBlock(kind TokenKind) returns bool
 	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.interface or kind == TokenKind.extension
 end 'kindOpensADeclarationBlock'
 
 // `function` immediately followed by `(` is a closure literal.
-module function functionKeywordOpensAClosureAt(tokens TokenArray, index ElementIndex) returns bool
+function functionKeywordOpensAClosureAt(tokens TokenArray, index ElementIndex) returns bool
 	return tokenKindAt(tokens, index: index + 1) == TokenKind.leftParen
 end 'functionKeywordOpensAClosureAt'
 
@@ -764,11 +764,8 @@ type FormatState
 	// `beginBodyAfterThisLine`.
 	var pendingScopeGrouping as ScopeGrouping
 
-	// The token before this one, ignoring newlines — its kind, and whether it spelled `module`, which is a
-	// CONTEXTUAL keyword with no `TokenKind` of its own, so `module function f()` can only be recognized
-	// by the word.
+	// The token before this one, ignoring newlines.
 	var prevKind as TokenKind
-	var prevIsModuleKeyword as bool
 	var prevWasDot as bool
 
 	// True when the previous `-` or `+` was UNARY, so nothing goes between it and its operand.
@@ -815,7 +812,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(0), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(0), raisedGroups: RaisedGroupArray.create(0), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, qualifiers: TypeQualifierPositions.over(tokens), openGroupDepth: 0, prevQualifiesAType: false, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(0), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(0), raisedGroups: RaisedGroupArray.create(0), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, qualifiers: TypeQualifierPositions.over(tokens), openGroupDepth: 0, prevQualifiesAType: false, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -1066,7 +1063,7 @@ type FormatState
 			// The whole literal is ONE operand. Nothing below this point applies to a string literal, so the
 			// walk resumes past the literal's final fragment.
 			self.noteTokenObserved(TokenKind.stringLiteral, qualifies: false)
-			self.notePrevToken(TokenKind.stringLiteral, value: tok.value, wasAtLineStart: wasAtLineStart)
+			self.notePrevToken(TokenKind.stringLiteral, wasAtLineStart: wasAtLineStart)
 			return last + 1
 		end 'interpolatedString' else 'ordinaryToken'
 			self.out.append(tokenSourceSpelling(tok))
@@ -1115,7 +1112,6 @@ type FormatState
 				self.prevKind = TokenKind.identifier
 				self.prevNamesAFunction = false
 				self.prevDeclaresAFunction = false
-				self.prevIsModuleKeyword = spellsModuleModifier(tok.kind, value: tok.value)
 				self.prevProducedValue = true
 				return afterPattern + 1
 			end 'allDiscarded'
@@ -1149,7 +1145,6 @@ type FormatState
 				self.prevKind = tok.kind
 				self.prevNamesAFunction = false
 				self.prevDeclaresAFunction = false
-				self.prevIsModuleKeyword = spellsModuleModifier(tok.kind, value: tok.value)
 				self.prevProducedValue = true
 				self.labelFollowsACloser = false
 				self.lineHasLabeledOpener = true
@@ -1158,8 +1153,7 @@ type FormatState
 		end 'maybeChainLabel'
 
 		let priorKind = self.prevKind
-		let prevWasModuleKeyword = self.prevIsModuleKeyword
-		self.notePrevToken(tok.kind, value: tok.value, wasAtLineStart: wasAtLineStart)
+		self.notePrevToken(tok.kind, wasAtLineStart: wasAtLineStart)
 
 		// Case names, arguments and raw values never affect block-level indent; only `end 'label'`,
 		// handled above, does.
@@ -1168,9 +1162,8 @@ type FormatState
 		end 'bareCaseName'
 
 		// A labelless opener pushes a block and indents the next line — at line start, or after a
-		// visibility/`static`/`module` modifier. `module` is a contextual keyword lexed as an identifier,
-		// so it is matched by its WORD (`Parser.spellsModuleModifier`).
-		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static or prevWasModuleKeyword
+		// visibility/`static` modifier.
+		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static
 
 		if kindOpensADeclarationBlock(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
 			// Inside an interface body a `function` is a bodyless signature, and `function(` is a closure
@@ -1500,17 +1493,7 @@ type FormatState
 			let isModifier = kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.static
 
 			if not isModifier 'saysWhatItDeclares'
-				// `module` is a contextual keyword lexed as an identifier, so it is matched by its WORD —
-				// and the token is fetched only here, where that word is what decides.
-				if kind != TokenKind.identifier 'notTheModuleWord'
-					return at
-				end 'notTheModuleWord'
-
-				let tok = self.tokenAt(at)
-
-				if not spellsModuleModifier(tok.kind, value: tok.value) 'anOrdinaryName'
-					return at
-				end 'anOrdinaryName'
+				return at
 			end 'saysWhatItDeclares'
 
 			at = at + 1
@@ -1555,7 +1538,7 @@ type FormatState
 	// what makes a match arm's `default then -1` come out unary. A continuation line inside a
 	// multi-line bracket is the exception (`lineContinuesAnExpression`): its leading `+`/`-` is
 	// binary.
-	function notePrevToken(kind TokenKind, value ByteArray, wasAtLineStart bool)
+	function notePrevToken(kind TokenKind, wasAtLineStart bool)
 		self.prevWasDot = self.prevKind == TokenKind.dot
 		let operandBefore = (not wasAtLineStart or self.lineContinuesAnExpression()) and self.prevProducedValue
 		self.prevWasUnary = (kind == TokenKind.minus or kind == TokenKind.plus) and not operandBefore
@@ -1563,7 +1546,6 @@ type FormatState
 		self.prevNamesAFunction = self.prevDeclaresAFunction
 		self.prevDeclaresAFunction = kind == TokenKind.function and self.prevKind != TokenKind.dot
 		self.prevKind = kind
-		self.prevIsModuleKeyword = spellsModuleModifier(kind, value: value)
 		self.prevBeganLine = wasAtLineStart
 	end 'notePrevToken'
 
@@ -2008,10 +1990,10 @@ end 'blockKindOpenedBy'
 /// The two constructors are the only way in, so no caller can hand the emitter an indent unit that is
 /// not whitespace.
 export type FormatOptions
-	module let indentUnit as String
+	let indentUnit as String
 
 	/// One tab per level — the language's own rule, and what `maxon fmt` always wants.
-	module static function tabs() returns FormatOptions
+	static function tabs() returns FormatOptions
 		return Self{indentUnit: "\t"}
 	end 'tabs'
 
@@ -2027,7 +2009,7 @@ export type FormatOptions
 end 'FormatOptions'
 
 // A `tabSize` this formatter will not spend. See `spacesIndent`.
-module enum IndentWidthError implements Error
+enum IndentWidthError implements Error
 	unspendable
 end 'IndentWidthError'
 
@@ -2035,7 +2017,7 @@ end 'IndentWidthError'
 ///
 /// ⭐ **REFUSED, NEVER CLAMPED.** A client asking for an indent no editor offers has a bug, and
 /// formatting to a width it did not ask for would hide that bug inside a file its author then commits.
-module function spacesIndent(width RequestedIndentWidth) returns FormatOptions throws IndentWidthError
+function spacesIndent(width RequestedIndentWidth) returns FormatOptions throws IndentWidthError
 	if width < NarrowestIndentWidth as RequestedIndentWidth or width > WidestIndentWidth as RequestedIndentWidth 'noEditorAsksForThis'
 		throw IndentWidthError.unspendable
 	end 'noEditorAsksForThis'

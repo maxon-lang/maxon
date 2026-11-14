@@ -479,7 +479,7 @@ end 'refuseAddressTakenCandidates'
 //     reason. A plain function's record names its `__fnref_<name>` thunk rather than itself, and
 //     that thunk does not exist yet at this point in the pipeline, so a candidate asks about BOTH
 //     spellings of its own name.
-module function collectAddressTakenFunctions(project Project, module StdModule) returns FnRefThunkSet
+function collectAddressTakenFunctions(project Project, module StdModule) returns FnRefThunkSet
 	let taken = FnRefThunkSet.create()
 
 	// ⚠ HOISTED, because this walk is WHOLE-MODULE: `liveOpIndices` mints a fresh column per call, which
@@ -634,7 +634,7 @@ end 'noteAddressTakenByOp'
 
 // The functions this pass may give a register return. `TableCallProbe.allocatesAPairBox` asks the
 // same question, so `InlineLeaves` admits a pair box only where this pass can later rewrite it.
-module function declaresValueTupleReturn(project Project, func IrFunction) returns bool
+function declaresValueTupleReturn(project Project, func IrFunction) returns bool
 	return returnsATupleRecord(project, func: func) and not throwsClauseIsThrowing(func.throwsTypeName)
 end 'declaresValueTupleReturn'
 
@@ -688,7 +688,7 @@ end 'analyseAffectedFunctions'
 
 // The constants a function's `__mm_alloc` calls read — the size and the destructor — and nothing else:
 // most functions allocate nothing, and those pay one scan and no map.
-module function constantsFeedingAllocations(module StdModule, liveOps OpIndexArray) returns ConstValueMap
+function constantsFeedingAllocations(module StdModule, liveOps OpIndexArray) returns ConstValueMap
 	let consts = ConstValueMap.create()
 	let call = StdCallOperands.create()
 
@@ -742,7 +742,7 @@ end 'allocatesATwoWordTrivialBox'
 // An `__mm_alloc` of exactly two machine words with the trivial destructor — the box a frame-local pair
 // lives in. The destructor matters here because the frame-local rewrite deletes the drop that would have
 // run it.
-module function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
+function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
 	if not callee.equals(MmAllocName) or argCount < MmAllocBaseArgCount 'notAnAllocation'
 		return false
 	end 'notAnAllocation'

@@ -17,15 +17,15 @@ from maxon_source import DECLARATION, ALIAS, REGION_BEGIN, REGION_END, load_tree
 
 NORMALIZED = os.path.normcase
 
-FREE_DECLARATION = re.compile(r"^(?:(?:export|module) )?(?:function (cache[A-Za-z0-9_]+)\(|let (CacheCases[A-Za-z0-9_]+) =)")
+FREE_DECLARATION = re.compile(r"^(?:export )?(?:function (cache[A-Za-z0-9_]+)\(|let (CacheCases[A-Za-z0-9_]+) =)")
 
 CODEC_PARAMETER = re.compile(r"[(,]\s*[A-Za-z_][A-Za-z0-9_]*\s+LibraryCache(?:Writer|Reader)\b")
 
-CODEC_TYPE_DECLARATION = re.compile(r"^\s*(?:(?:export|module|public)\s+)?(?:extension\s+|typealias\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)LibraryCache(?:Writer|Reader)\b")
+CODEC_TYPE_DECLARATION = re.compile(r"^\s*(?:(?:export|public)\s+)?(?:extension\s+|typealias\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)LibraryCache(?:Writer|Reader)\b")
 
 ALIAS_KINDS = ("alias", "frozenAlias")
 
-VISIBILITY_RANK = {"private": 0, "module": 1, "export": 2, "public": 3}
+VISIBILITY_RANK = {"unmarked": 0, "export": 1, "public": 2}
 
 EXIT_CLEAN = 0
 EXIT_DRIFT = 1
@@ -115,22 +115,15 @@ class Plan:
 
         allowed = min(self.named_ranks(item))
         own_directory = NORMALIZED(os.path.dirname(self.item_path(item)))
-        inside_subtree = all(NORMALIZED(f).startswith(own_directory + os.sep) for f in user_files)
-        in_host = self.item_path(item) == config.GENERATED_HOST
+        inside_subtree = all(own_directory == "" or NORMALIZED(f).startswith(own_directory + os.sep) for f in user_files)
 
-        if allowed >= VISIBILITY_RANK["export"] and not inside_subtree:
-            return "export "
-
-        if allowed >= VISIBILITY_RANK["module"] and inside_subtree and not in_host:
-            return "module "
+        if inside_subtree:
+            return ""
 
         if allowed >= VISIBILITY_RANK["export"]:
             return "export "
 
-        if allowed == VISIBILITY_RANK["module"]:
-            return "module "
-
-        raise Unresolved("%s is used from another file but is private to its own" % (item,))
+        raise Unresolved("%s is used from outside its directory subtree but is not exported" % (item,))
 
     def closure(self):
         seen = set()
@@ -360,7 +353,7 @@ def attach_enum_aggregates(by_file, emitted, emitter):
             continue
 
         name = aggregate_name(path)
-        visibility = "module " if os.path.dirname(path) == os.path.dirname(config.GENERATED_HOST) else "export "
+        visibility = "" if os.path.dirname(path) == os.path.dirname(config.GENERATED_HOST) else "export "
         last = enums[-1]
         shape, block = emitted[last]
         emitted[last] = (shape, block + emitter.enum_file_aggregate(name, visibility, [item[1] for item in enums]))
@@ -387,10 +380,8 @@ def size_alias_visibilities(plan, order, emitted):
     visibilities = {}
 
     for size, files in users.items():
-        if files == {host}:
+        if all(f.startswith(os.path.dirname(host) + os.sep) for f in files | {host}):
             visibilities[size] = ""
-        elif all(f.startswith(os.path.dirname(host) + os.sep) for f in files | {host}):
-            visibilities[size] = "module "
         else:
             visibilities[size] = "export "
 
@@ -506,7 +497,7 @@ def schema_fingerprint(plan, order, emitted, leading, trailing):
 
 
 def fingerprint_lines(fingerprint):
-    return ["", "module let CacheSchemaFingerprint = %s as HashDigest" % fingerprint]
+    return ["", "let CacheSchemaFingerprint = %s as HashDigest" % fingerprint]
 
 
 def host_lines(items, emitted, leading, trailing, fingerprint):

@@ -118,11 +118,11 @@ function copied out of a parse copies a column before its first write to it (`Ir
 Across `Project`s, two stores outlive a compile. The one a `CompileSession` carries (`CompileSession.fileMemos`)
 — one per spec worker process, one for the language server's document projects, one per MCP session — holds
 the library's tokens, `#if` views and producer masks, keyed by content hash. Each library file's parse, the
-library baselines and the opened disk packs live in the `SharedLibraryCache`, one frozen store for the process,
+library baselines, the audit verdicts and the opened disk packs live in the `SharedLibraryCache`, one frozen store for the process,
 held as a registry `default`: every compile reads that one store, and a change publishes a whole successor in
 its place, retried until it lands (`publishToSharedLibrary`). It holds at most 512 files (`MostSharedFiles`) with
-at most 6 parse variants of one file (`MostKeysPerLibraryParse`, one of them from a staged tier), 4 baselines of the
-installed tiers and 2 of a staged tier, and 24 packs, and past a bound it drops the entry of that kind or tier
+at most 6 parse variants of one file (`MostKeysPerLibraryParse`, one of them from a staged tier), 4 baselines and 4 audit verdicts of
+the installed tiers and 2 of each of a staged tier, and 24 packs, and past a bound it drops the entry of that kind or tier
 published longest ago. A staged tier is a `stdlib/` and `runtime/` copy other than the compiler's own, which only the
 project staged over it asks for again, so its entries never displace an installed tier's. Only a miss publishes,
 so a hit changes neither the store nor the order of eviction. A parse embeds
@@ -163,24 +163,31 @@ adopting its instances.
 ### The disk tier
 
 The store has a disk tier (`LibraryCacheStore.maxon`) under the run cache's root, so a new process starts
-warm. It holds the library files' `#if` views, the held parses and both baselines, packed one file per kind
-and library state, since per-file I/O dominates on Windows. A token stream is written only as a view, and a
-baseline names the views its token streams come from. A view carries the facts read off the file's raw
-stream, `#if` branches included — its declared type names and its `__` spellings — so a warm compile
-respells a diagnostic exactly as a cold one. Every entry carries a schema fingerprint over the
-codecs that wrote it, and a reader rejects, deletes and rewrites an entry that is damaged, was written
-under another schema or holds a number outside the range it is read into, and the compile goes on as a
-cold one. A compile that writes an entry goes on with the decoded copy, so a warm and a cold compile emit
-the same bytes, and a later fold round of that compile is served the parses an earlier round encoded.
+warm. It holds the library files' `#if` views, the held parses, both baselines and the library's
+unused-declaration verdict, packed one file per kind and library state, since per-file I/O dominates on
+Windows. A token stream is written only as a view, and a baseline names the views its token streams come
+from. A view carries the facts read off the file's raw stream, `#if` branches included — its declared type
+names, its `__` spellings, and each identifier spelled in a conditional block with its count in the raw
+stream — so a warm compile respells a diagnostic exactly as a cold one, and E3219 credits a name spelled
+only in a branch the target excludes. Every entry carries a schema fingerprint over the codecs that wrote
+it, and a reader rejects, deletes and rewrites an entry that is damaged, was written under another schema or
+holds a number outside the range it is read into, and the compile goes on as a cold one. A compile that
+writes an entry goes on with the decoded copy, so a warm and a cold compile emit the same bytes, and a later
+fold round of that compile is served the parses an earlier round encoded.
 
 The codecs are generated into the compiler's sources by `scripts/library-cache/generate-codecs.py`, between
 `// @generated library-cache` markers; the hand-written ones live in `LibraryCacheCodecs.maxon`,
 `LibraryCacheFormat.maxon` and `ContentHash.maxon`. A cached record that gains a field stops compiling until
 the generator runs again.
 
+The verdict entry holds the library half of E3219 for one library state. It is read and written only when
+the program's names do not overlap the library's (`LibraryParseSharing.shareable`); otherwise the
+library's declarations are audited together with the program's, since a program name can then be what a
+library spelling means.
+
 The tier is bounded: each kind keeps its 4 newest entries (16 for parses), a process holds at most 4
-baselines of the installed tiers and 2 of a staged one, and the 16 most recently written compiler lineages (one
-per compiler path and target) are kept.
+baselines and 4 audit verdicts of the installed tiers and 2 of each of a staged one, and the 16 most recently written
+compiler lineages (one per compiler path and target) are kept.
 The sweep that enforces the lineage bound, and removes builds of the same lineage and cache formats a
 newer compiler superseded, runs when a compiler build first creates its own directory in the cache, so a
 compile in steady state does not walk the host's shared cache directories and its allocation counts do not

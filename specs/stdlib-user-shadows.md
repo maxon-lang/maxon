@@ -502,7 +502,7 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.user-enum-coexists-with-a-listed-modules-typealias -->
-The same pair with an `enum` against `stdlib/Builtins.maxon`'s file-private `typealias RepeatCount`, and it
+The same pair with an `enum` against `stdlib/Builtins.maxon`'s unmarked `typealias RepeatCount`, and it
 is the half that shows the two refusals are SEPARATE. An enum resolves to `integer` exactly as a ranged
 alias does, so `stdlib/Builtins.maxon`'s own uses of `RepeatCount` type-check and no `E3009` can arise —
 only the duplicate check could refuse it.
@@ -575,7 +575,7 @@ end 'main'
 <!-- test: stdlib-user-shadows.user-function-alias-coexists-with-a-listed-modules-ranged-typealias -->
 Two `typealias` declarations of one name in two files, in DIFFERENT forms — a user function alias
 against `stdlib/Builtins.maxon`'s ranged `DecimalDigit`. A same-form test would refuse it with `E3061`,
-again blamed on the stdlib line. Both aliases are file-private, and a file-private alias is file-local
+again blamed on the stdlib line. Both aliases are unmarked, and an unmarked alias is directory-local
 whatever its form, so the two coexist and each answers for its own file.
 ```maxon
 typealias DecimalDigit = function(value ExitCode) returns ExitCode
@@ -767,7 +767,7 @@ beef|BEEF|137357|1011111011101111|00beef|48879
 A user EXPORTS `Byte` over `float`; `stdlib/String.maxon`, whose own `Byte` is `int(0 to u8.max)`, still
 compiles and serves `toByteArray`, because a library file never sees an author declaration (105 + 1).
 ```maxon
-// --- file: wide.maxon
+// --- file: wide/wide.maxon
 export typealias Byte = float(0.0 to 1.0)
 
 export function half(b Byte) returns Byte
@@ -816,21 +816,21 @@ when `stdlib/Array.maxon` reads the name is the author's, which a library file n
 and the program compiles and runs.
 ```maxon
 // --- file: arr.maxon
-export type Array
-	export var n as Digit
+type Array
+	var n as Digit
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{n: 0}
 	end 'create'
 end 'Array'
 
-export typealias Digit = int(0 to 9)
+typealias Digit = int(0 to 9)
 
 // --- file: ext.maxon
-export extension Array
-	export typealias SortComparator = function(Digit, Digit) returns Ordering
+extension Array
+	typealias SortComparator = function(Digit, Digit) returns Ordering
 
-	export function ordered(cmp SortComparator) returns bool
+	function ordered(cmp SortComparator) returns bool
 		return cmp(self.n, self.n) == Ordering.equalTo
 	end 'ordered'
 end 'Array'
@@ -1001,7 +1001,7 @@ error E3008: <fragment>:7:22: type 'stdlib.ParentComponentRule' is not exported
 ```
 
 <!-- test: stdlib-user-shadows.another-files-private-function-leaves-the-library-one-visible -->
-A declaration a file cannot see never counts: `a/`'s file-private `round` answers its own call, and `b/`'s bare `round` is the library's.
+A declaration a file cannot see never counts: `a/`'s unmarked `round` answers its own call, and `b/`'s bare `round` is the library's.
 ```maxon
 // --- file: a/a.maxon
 typealias Real = float(f64.min to f64.max)
@@ -1036,7 +1036,7 @@ b 4
 ```
 
 <!-- test: stdlib-user-shadows.two-files-private-functions-each-shadow-the-library-one-for-their-own-file -->
-Each directory's file-private `round` answers its own file's calls, and the root file, which sees neither, calls the library's.
+Each directory's unmarked `round` answers its own file's calls, and the root file, which sees neither, calls the library's.
 ```maxon
 // --- file: a/a.maxon
 typealias Real = float(f64.min to f64.max)

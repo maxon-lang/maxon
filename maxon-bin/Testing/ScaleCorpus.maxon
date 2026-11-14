@@ -83,7 +83,7 @@
 // TOP-LEVEL `let`/`var`, `type` declarations with field reads AND writes, structs across a call,
 // `enum` + `match`, `String`, `Array`, unconstrained generics, interfaces with concrete dispatch,
 // `print`, `or`/`xor`/`not`, `as` casts, bitwise + shifts (`and`/`shl`/`shr`), ranged typealiases,
-// and NAMESPACES — a file's directory, the `module` visibility tier over it, and `dir.Name` /
+// and NAMESPACES — a file's directory, the directory scope over it, and `dir.Name` /
 // `dir.fn()` references at every segment count. No `for`, no closures, no async, no witness-table
 // dispatch. Everything below stays inside it — and `printCorpusManifest` states exactly this
 // boundary on every run, so a construct outside it (and the codegen change to it that would be
@@ -98,7 +98,7 @@
 //   • `type` declarations — `StructTypesBase`.
 //   • `match`, `enum`, `String`, `Array with`, `type ... uses`, `interface`, `implements`, `print`, `or`,
 //     `xor` and struct field writes — `EnumTypesBase` onwards.
-//   • namespaces — the `module` visibility tier, the qualified-alias mirror, the namespace-qualified
+//   • namespaces — the directory scope, the qualified-alias mirror, the namespace-qualified
 //     function set, the dotted-chain recognizer and the multi-segment walk all need a rung that is not
 //     one flat directory, because `deriveModuleDirectory` answers `""` for every file in one. See
 //     `NamespacedModulesBase`.
@@ -123,7 +123,7 @@
 // Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
 // exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
 // thousand times rung 0 that never finishes. Hence a hard, refused-not-clamped upper bound.
-export typealias RungIndex = int(0 to 15)
+typealias RungIndex = int(0 to 15)
 export typealias RungCount = int(1 to 16)
 
 export let MinRungCount = 1 as RungCount
@@ -206,8 +206,8 @@ let DeepBlocksBase = 200
 // spill bracket knob, not merely a call-depth knob.
 let CallChainBase = 8
 
-// N file-private functions declared callee-first, each calling the one before it, with only the top
-// public: the shape where a liveness walk over the file-private declarations has to follow N edges in
+// N unexported functions declared callee-first, each calling the one before it, with only the top
+// public: the shape where a liveness walk over the unexported declarations has to follow N edges in
 // the order that reaches the fewest of them per pass. Its base is large because that walk's cost per
 // edge is a few ops against the whole compile's, so only a long chain separates the phase from noise.
 let FilePrivateChainBase = 256
@@ -834,7 +834,7 @@ end 'asScaleInt'
 // What `main` returns when every driver in the rung witnessed itself. SEVEN, the convention the hand
 // ladders already use (`tests/ladders/README.md`) — a value nothing else in the process returns, so a
 // rung that crashed, leaked or exited on a diagnostic cannot be mistaken for one that passed.
-export let CorpusOkExit = 7
+let CorpusOkExit = 7
 
 // ...and when one did not. Distinct from `CorpusOkExit` and from 0, so silence is never success.
 let CorpusWitnessFailedExit = 1
@@ -1314,7 +1314,7 @@ let NsModuleDirPrefix = "ns"
 //
 // ⚠ It is not a second copy of the compiler's `Project.NamespaceSeparator`, and the distinction matters
 // because this file's whole job is to WRITE MAXON. Every knob here spells `typealias`, `export`,
-// `module`, `and` and `as` as literal source text; a namespace's `.` is the same kind of literal, on the
+// `and` and `as` as literal source text; a namespace's `.` is the same kind of literal, on the
 // user's side of the boundary rather tha compiler's. Named only because it is written at two sites
 // (the reference group and the module's own header comment) and the two must agree.
 let NsQualifierSeparator = "."
@@ -1362,21 +1362,21 @@ let NamespacesDriver = "scaleNamespaces"
 
 // Shared with the runner, which names each rung's metrics + output file after it — in the corpus
 // ROOT, never in the rung.
-export let RungDirPrefix = "rung"
+let RungDirPrefix = "rung"
 
 // One generated rung: where it lives and how big it is. `sourceBytes` is the corpus self-check's
 // denominator — the question "did the compiler's output grow with its input" needs both.
-export type ScaleRung
+type ScaleRung
 	export let index as RungIndex
 	export let dir as FilePath
 	export let sourceBytes as BytePos
 
-	export static function create(index RungIndex, dir FilePath, sourceBytes BytePos) returns ScaleRung
+	static function create(index RungIndex, dir FilePath, sourceBytes BytePos) returns ScaleRung
 		return Self{index: index, dir: dir, sourceBytes: sourceBytes}
 	end 'create'
 end 'ScaleRung'
 
-export typealias ScaleRungArray = Array with ScaleRung
+typealias ScaleRungArray = Array with ScaleRung
 
 // CEILING DIVISION — how many buckets of `perBucket` items it takes to hold `total`, with the last
 // bucket taking the remainder.
@@ -1402,7 +1402,7 @@ function knobAt(base KnobSize, rung RungIndex) returns KnobSize
 end 'knobAt'
 
 // Generate the whole ladder under `root`, returning one ScaleRung per rung.
-export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray throws ScaleError
+function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray throws ScaleError
 	if not Directory.create(root) 'noRoot'
 		throw ScaleError.reason("could not create the corpus root {root.toString()}")
 	end 'noRoot'
@@ -1669,19 +1669,18 @@ let OpaqueCalleeName = "scaleOpaque"
 //
 // This is the same trick `ir-specs/register-pressure.md` uses to hold 17 values live without the
 // folder eating them.
-// ⭐⭐ **THE HEADER OF A FUNCTION `z_main` CALLS — AND `z_main` IS IN ANOTHER FILE.** A cross-file
-// call to a file-private callee is E3008, so every name that lands in `drivers` (plus the seed, which
-// `mainSource` calls directly) has to be `export`ed. Spelled ONCE, beside the array that decides
+// ⭐⭐ **THE HEADER OF A FUNCTION `z_main` CALLS — AND `z_main` IS IN ANOTHER FILE.** Every name that
+// lands in `drivers` (plus the seed, which `mainSource` calls directly) is `public`. Spelled ONCE, beside the array that decides
 // membership, so a knob added later cannot forget it — the failure it prevents is a corpus that does not
 // COMPILE, which is the one failure `scale-test` reports as a broken RUN rather than as a number.
 //
-// ⚠ **EVERY OTHER GENERATED FUNCTION STAYS FILE-PRIVATE ON PURPOSE.** The visibility check's `global` arm
-// is an enum compare and its `file` arm is a path-string compare — the expensive one, and the one real
+// ⚠ **EVERY OTHER GENERATED FUNCTION STAYS UNEXPORTED ON PURPOSE.** The visibility check's `global` arm
+// is an enum compare and its `unexported` arm is a directory compare — the expensive one, and the one real
 // code takes most often. Exporting the whole corpus would make the ladder measure only the cheap arm.
 // ⚠ **`public`, NOT `export`, AND THAT IS FORCED BY `checkUnusedExports` RATHER THAN CHOSEN.** A generated
 // driver is called by the rung's main file, but a generated CHAIN LINK is called only by the link above it
-// in its own file — so under E3092 every `scaleChainN` was "never referenced outside its declaring file"
-// and the whole ladder became a BROKEN RUN. That diagnostic is correct about the generated code; what the
+// in its own file — so under E3092 every `scaleChainN` is "never referenced outside its declaring
+// directory" and the whole ladder becomes a BROKEN RUN. That diagnostic is correct about the generated code; what the
 // generated code means is "this is the corpus's surface, do not ask who calls it", which is what `public`
 // says. Visibility is unchanged (`isVisibleFrom` answers identically for both), so the arm-cost note below
 // still holds exactly.
@@ -1952,7 +1951,7 @@ function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns Str
 	return out.build()
 end 'deepBlocksSource'
 
-// How a chain's links are declared: every link `public`, or every link but the top file-private. Both
+// How a chain's links are declared: every link `public`, or every link but the top unexported. Both
 // chains are one generator because the link bodies must not drift apart; only the visibility differs.
 enum ChainShape
 	surface
@@ -2662,7 +2661,7 @@ end 'globalBoxValue'
 //
 // The fields are plain `int` rather than a ranged typealias. specs/structs.md reaches for an
 // alias, but every generated function in this corpus already takes `a int`, an `int` field lays out
-// the same 8-byte slot the alias would, and going without drops a file-private typealias from each
+// the same 8-byte slot the alias would, and going without drops an unexported typealias from each
 // struct file for no loss of coverage — ranged typealiases are `shiftCoverageSource`'s job.
 //
 // SHARED BY BOTH STRUCT KNOBS, so the two measure the SAME declaration against different dimensions:
@@ -3438,7 +3437,7 @@ function scalarCoverageSource() returns String
 	out.append("end '{CoverageOuterName}'\n")
 	out.append("\n")
 
-	// FILE-PRIVATE, so it spells its own header rather than taking `witnessedDriverHeader`'s exported one
+	// UNEXPORTED, so it spells its own header rather than taking `witnessedDriverHeader`'s exported one
 	// — but it carries the same pair of accumulators and the same tail, because it has TWO expectations
 	// and two is all it takes to cancel. Its caller then expects it to hand back the argument, exactly as
 	// `main` expects of a driver.
@@ -5063,13 +5062,11 @@ end 'tryCoOwnPick'
 //   `ns{m}/mod.maxon` (namespace `ns{m}`)
 //     • `export typealias {NsSharedAliasName}` — M-way CONTESTED, mirrored under `ns{m}.{NsSharedAliasName}`.
 //       This is the whole point: the bare key is ambiguous and the qualified key is not.
-//     • a FILE-PRIVATE typealias, referenced bare in this file — `RangedAliasRegistry`'s file arm, and a
-//       declaration that gets NO mirror (`pushNamespaceQualifiedAlias` gates on `visibility != file`),
-//       so the corpus prices the gate's false arm as well as its true one.
-//     • `module function nsShared{m}` — the `Visibility.module` SUBTREE tier, which this corpus generated
-//       ZERO of without this knob (`grep -c 'module ' ` reads 0). Reached bare from `ns{m}/inner/`, so the
-//       expensive subtree-prefix arm of `isVisibleFrom` runs at every rung.
-//     • `export function nsHelper{m}` and a FILE-PRIVATE `nsHidden{m}` — and BOTH get an entry in
+//     • an UNEXPORTED typealias, referenced bare in this file — `RangedAliasRegistry`'s file arm, and a
+//       declaration that gets a mirror like any other.
+//     • an unexported `function nsShared{m}`, reached bare from `ns{m}/inner/`, so the expensive
+//       subtree-prefix arm of `isVisibleFrom` runs at every rung.
+//     • `export function nsHelper{m}` and an UNEXPORTED `nsHidden{m}` — and BOTH get an entry in
 //       `ProgramSignatures.namespaceQualifiedFunctions`, because the function side deliberately does not
 //       gate on the tier. That is the per-declaration cost this knob is really pricing.
 //     • `export function nsTouch{m}` — VOID, and the only callee a qualified call written as a
@@ -5080,15 +5077,15 @@ end 'tryCoOwnPick'
 //   `ns{m}/inner/deep.maxon` (namespace `ns{m}.inner` — MULTI-SEGMENT)
 //     • a second M-way contested `export typealias {NsDeepAliasName}`, reachable only as
 //       `ns{m}.inner.{NsDeepAliasName}`.
-//     • `export function nsDeep{m}`, which reaches its ENCLOSING directory's `module` declaration BARE
+//     • `export function nsDeep{m}`, which reaches its ENCLOSING directory's unexported declaration BARE
 //       and the PREVIOUS module's export by QUALIFIER — a qualified reference written from INSIDE a
 //       namespaced file, which is not the same parser state as one written from the root.
 //
 // ⚠ **THE FLAT CORPUS'S OWN INTENT IS PRESERVED, NOT REPLACED.** It exports only `driverHeader` and
-// leaves every other generated function file-private ON PURPOSE, so the ladder exercises
-// `isVisibleFrom`'s expensive `file` arm rather than only the cheap `global` one. Every file-private
-// declaration there is untouched, and this knob ADDS a private free function and a private alias per
-// module — so the `file` arm gets MORE traffic here, not less, and the `module` arm gets its first.
+// leaves every other generated function unexported ON PURPOSE, so the ladder exercises
+// `isVisibleFrom`'s expensive `unexported` arm rather than only the cheap `global` one. This knob ADDS
+// unexported free functions and an unexported alias per module, and reaches one of them from a
+// subdirectory, so that arm gets MORE traffic here, not less.
 function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
 	var total = 0 as BytePos
 	let consumer = StringBuilder.create()
@@ -5137,24 +5134,23 @@ function namespacedModuleSource(m KnobIndex) returns String
 	out.append("typealias {privateAlias} = int(0 to {NsAliasMask})\n")
 	out.append("\n")
 
-	// The `module` tier: nameable from this directory's SUBTREE and nowhere else. `ns{m}/inner/deep.maxon`
+	// Nameable from this directory's SUBTREE and nowhere else. `ns{m}/inner/deep.maxon`
 	// is what names it, which is the subtree arm rather than the same-directory one.
-	out.append("module function {NsSharedPrefix}{m}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
+	out.append("function {NsSharedPrefix}{m}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn a + {nsSharedIncrement(m)}\n")
 	out.append("end '{NsSharedPrefix}{m}'\n")
 	out.append("\n")
 	out.append(driverHeader("{NsHelperPrefix}{m}"))
 
-	// The file-private alias, named BARE from the file that declares it — the one door a file-private
-	// declaration has, and the arm `pushNamespaceQualifiedAlias` mints no mirror for.
+	// The unexported alias, named BARE from the file that declares it.
 	out.append("\tlet v = (a and {NsAliasMask}) as {privateAlias}\n")
 	out.append("\treturn {NsHiddenPrefix}{m}(a) + {asScaleInt("v")}\n")
 	out.append("end '{NsHelperPrefix}{m}'\n")
 	out.append("\n")
 
-	// FILE-PRIVATE, and it still earns a `ns{m}.nsHidden{m}` entry in the namespace-qualified function set:
-	// that side does not gate on the tier, so a private helper is exactly as expensive to REGISTER as an
-	// exported one. Half the per-declaration cost this knob prices lives in functions nothing can call.
+	// UNEXPORTED, and it still earns a `ns{m}.nsHidden{m}` entry in the namespace-qualified function set:
+	// that side does not gate on the tier, so an unexported helper is exactly as expensive to REGISTER as an
+	// exported one.
 	out.append("function {NsHiddenPrefix}{m}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn a + {nsHiddenIncrement(m)}\n")
 	out.append("end '{NsHiddenPrefix}{m}'\n")
@@ -5190,15 +5186,15 @@ function nsTouchIncrement(m KnobIndex) returns TrackedValue
 	return m mod 3 + 1
 end 'nsTouchIncrement'
 
-// What `ns{m}.nsHelper{m}(argument)` answers: its file-private helper's increment, plus the masked value
-// it casts through its own file-private alias. The one-dot qualified CALL door, tracked.
+// What `ns{m}.nsHelper{m}(argument)` answers: its unexported helper's increment, plus the masked value
+// it casts through its own unexported alias. The one-dot qualified CALL door, tracked.
 function nsHelperValue(m KnobIndex, argument TrackedValue) returns TrackedValue
 	return (argument + nsHiddenIncrement(m)) + (argument and NsAliasMask)
 end 'nsHelperValue'
 
-// What `ns{m}.inner.nsDeep{m}(argument)` answers: the enclosing directory's `module` function named
+// What `ns{m}.inner.nsDeep{m}(argument)` answers: the enclosing directory's unexported function named
 // BARE from one level down, and — for every module but the first — the PREVIOUS module's export named by
-// qualifier from inside a namespaced file. So this witness spans two namespaces and three visibility
+// qualifier from inside a namespaced file. So this witness spans two namespaces and both visibility
 // tiers, and a resolution that reached the wrong module's declaration moves it.
 function nsDeepValue(m KnobIndex, argument TrackedValue) returns TrackedValue
 	var value = argument + nsSharedIncrement(m)
@@ -5218,7 +5214,7 @@ function namespacedInnerSource(m KnobIndex) returns String
 	out.append("\n")
 	out.append(driverHeader("{NsDeepFuncPrefix}{m}"))
 
-	// The enclosing directory's `module` declaration, named BARE from a file one level DOWN — the subtree
+	// The enclosing directory's unexported declaration, named BARE from a file one level DOWN — the subtree
 	// prefix compare, which is `isVisibleFrom`'s most expensive arm and gets no traffic at all without this knob.
 	// Split for `fillerLocalsDecl`'s reason: module 0 has no predecessor, so its `acc` would be a `var`
 	// nothing reassigns — E3077 — while the rest of the ladder reassigns it one line down.
@@ -5361,7 +5357,7 @@ function interfaceConformancePair(interfaceName String, typeName String, salt Kn
 	// ⚠ DECLARED AND NEVER CONSTRUCTED, WHICH IS THE COST IT IS HERE TO CARRY: `TypeCycleCheck` reads
 	// DECLARATIONS, and a holder that were constructed would put a widening store in the corpus, so it would be
 	// measuring construction instead. It closes no cycle: nothing conforms to `{interfaceName}` but
-	// `{typeName}`, whose only field is an int. It is `public` because a file-private type nothing names
+	// `{typeName}`, whose only field is an int. It is `public` because an unexported type nothing names
 	// is E3219.
 	out.append("\npublic type {typeName}{InterfaceHolderSuffix}\n")
 	out.append("\tlet {InterfaceHolderFieldName} as {interfaceName}\n")
@@ -5488,12 +5484,12 @@ end 'mainSource'
 //
 // It is deliberately not x2.00: real code size grows slightly SUBLINEARLY, because a rung's fixed
 // overhead (the entry stub, the runtime floor) is amortized over more program as the ladder climbs.
-export let MinCodeGrowthRatio = 150 as GrowthRatio
+let MinCodeGrowthRatio = 150 as GrowthRatio
 
 // A growth check needs two rungs. `--rungs=1` is a legal ladder — it measures one program, and its
 // per-rung numbers are as exact as any other run's — but nothing about GROWTH can be said from it,
 // this check included. The runner says so; it does not fail the run for a ladder it was asked for.
-export let MinRungsForGrowth = 2
+let MinRungsForGrowth = 2
 
 // EVERY rung is checked against the one below it, not just the ends of the ladder.
 //
@@ -5501,7 +5497,7 @@ export let MinRungsForGrowth = 2
 // whose exponent had to clear a floor): a single rung that folded while its neighbours grew is a rung
 // that stopped measuring the compiler, and a fit through the other five would absorb it and report a
 // healthy exponent. A ratio per rung cannot absorb anything.
-export function assertCorpusCompiled(results RungResultArray) throws ScaleError
+function assertCorpusCompiled(results RungResultArray) throws ScaleError
 	if results.count() < MinRungsForGrowth 'tooFewRungs'
 		return
 	end 'tooFewRungs'
@@ -5519,7 +5515,7 @@ end 'assertCorpusCompiled'
 // The corpus's own growth, rung over rung — PRINTED, and in `--result-json`, because a reader looking
 // at a set of memory numbers is entitled to see the evidence that they are numbers about a program
 // that was actually compiled rather than one that folded away.
-export function codeGrowthAt(results RungResultArray, rung ElementIndex) returns GrowthReading
+function codeGrowthAt(results RungResultArray, rung ElementIndex) returns GrowthReading
 	if rung == 0 'bottomRung'
 		return GrowthReading.noBaseline
 	end 'bottomRung'
@@ -5582,7 +5578,7 @@ end 'codeGrowthAt'
 //     genuinely quadratic path read FLAT. A delta of zero from an instrument that cannot express
 //     the feature is not evidence of anything, and no amount of measuring can distinguish it from a
 //     delta of zero that means the compiler did not change.
-export function printCorpusManifest()
+function printCorpusManifest()
 	print("\n")
 	print("scale-test: CORPUS MANIFEST — what this ladder exercises, and what it structurally cannot see.\n")
 	print("\n")
@@ -5617,7 +5613,7 @@ export function printCorpusManifest()
 	print("      is DISTINCT from the pressured-loops knob, which makes the SPLITTER work instead\n")
 	print("    if, if/else, while, and NESTED while (to a doubling depth); `break` out of a loop\n")
 	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
-	print("      (a chain of public links, and a chain of file-private links declared callee-first)\n")
+	print("      (a chain of public links, and a chain of unmarked links declared callee-first)\n")
 	print("    short-circuit `and` and `or` (control flow, not operators), `xor` and `not` over bools,\n")
 	print("      bitwise `and` / `or` / `xor` / `not` over ints\n")
 	print("    shl / shr with: a CONSTANT count (folded) AND a DYNAMIC count (runtime-guarded), over a\n")
@@ -5726,11 +5722,11 @@ export function printCorpusManifest()
 	print("      `ns3.{NsInnerDirName}.{NsDeepAliasName}` — the ranged-alias MIRROR), a ONE-DOT qualified call\n")
 	print("      (`parseQualifiedCall`'s door), a TWO-DOT one (`parseDottedPrimary`'s chain WALK), and a\n")
 	print("      qualified call as a STATEMENT — onto the module's VOID export, the one callee a statement\n")
-	print("      position can have. Plus the three VISIBILITY tiers on one declaration set: an\n")
+	print("      position can have. Plus both VISIBILITY tiers on one declaration set: an\n")
 	print("      `export`ed alias CONTESTED by every module (so the bare key is ambiguous and the qualified\n")
-	print("      key is not), a file-private alias and a file-private free function (which still earns a\n")
-	print("      qualified entry — that side does not gate on the tier), and `module function` — the SUBTREE\n")
-	print("      tier, named BARE from one directory down.\n")
+	print("      key is not), an unmarked alias and an unmarked free function (which still earns a\n")
+	print("      qualified entry — that side does not gate on the tier), and an unmarked function named\n")
+	print("      BARE from one directory down.\n")
 	print("\n")
 	print("  COST DIMENSIONS ON THE DOUBLING LADDER (each DOUBLES per rung; the rung-over-rung RATIO is\n")
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
@@ -5785,8 +5781,8 @@ export function printCorpusManifest()
 	print("    empty and that fixpoint early-outs at every rung.\n")
 	print("    ⚠ AND `String.byteAt` IS UNREACHABLE FROM A GENERATED RUNG, and not for any reason a knob\n")
 	print("    could fix: it is one of the five\n")
-	print("    STDLIB-ONLY String members (each a `module function` in `stdlib/`), so a call from a rung\n")
-	print("    directory, which is outside `stdlib/`, is refused with E3088 by `SemanticCheck.calleeVisibleFrom`.\n")
+	print("    STDLIB-ONLY String members (each an unmarked `function` in `stdlib/`), so a call from a rung\n")
+	print("    directory, which is outside `stdlib/`, is refused with E3008 by `SemanticCheck.calleeVisibleFrom`.\n")
 	print("    It is named here rather than left out of\n")
 	print("    the roster silently, because a member missing from a list of what is covered is exactly the\n")
 	print("    defect the four String knobs above exist to end. Its stdlib-only siblings `byteAtOrPanic`,\n")

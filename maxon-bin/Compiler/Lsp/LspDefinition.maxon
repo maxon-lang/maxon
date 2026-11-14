@@ -16,13 +16,13 @@
 // where LSP's own spelling for "nothing here" is a `null` result. `definition on keyword returns nothing`
 // in `tests/lsp/definition-scope.maxtest` is what says so from the client's side.
 
-module function definitionServedMethods() returns LspMethodArray
+function definitionServedMethods() returns LspMethodArray
 	let served = LspMethodArray.create(0)
 	served.push(LspMethod.definition)
 	return served
 end 'definitionServedMethods'
 
-module function definitionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+function definitionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
 	let position = try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey)
 
 	// A buffer that does not LEX has no name under the cursor to resolve — an answer, not a refusal.
@@ -71,19 +71,17 @@ end 'definitionTarget'
 // A bare name inside a type's body binds to the type's own member before any free declaration of that
 // name, as a bare call does in the compiler.
 function definitionBareNameDeclaration(tokens TokenArray, cursor ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
-	let enclosing = lspEnclosingTypeAtToken(tokens, index: cursor)
-
-	match enclosing 'enclosing'
-		inside(typeName) then return try definitionMemberOfOwner(tokens, owner: String.from(typeName), member: name, enclosing: enclosing) otherwise try definitionDeclarationOf(tokens, name: name)
+	match lspEnclosingTypeAtToken(tokens, index: cursor) 'enclosing'
+		inside(typeName) then return try definitionMemberOfOwner(tokens, owner: String.from(typeName), member: name) otherwise try definitionDeclarationOf(tokens, name: name)
 		atFileScope then return try definitionDeclarationOf(tokens, name: name)
 	end 'enclosing'
 end 'definitionBareNameDeclaration'
 
-module function definitionBindsLocally(tokens TokenArray, before ElementIndex, name ByteArray) returns bool
+function definitionBindsLocally(tokens TokenArray, before ElementIndex, name ByteArray) returns bool
 	return (try definitionLocalBinding(tokens, before: before, name: name) otherwise return false).value.equals(name)
 end 'definitionBindsLocally'
 
-module function nameableQualifiedTypeEndingAt(tokens TokenArray, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath) returns ChainType throws AbsentError
+function nameableQualifiedTypeEndingAt(tokens TokenArray, index ElementIndex, signatures ProgramSignatures, readerFilePath FilePath) returns ChainType throws AbsentError
 	let head = chainHeadIndexOf(tokens, index: index)
 
 	if head == index 'noQualifier'
@@ -179,7 +177,7 @@ end 'definitionClosesABlock'
 // `otherwise (e)`. Those are introduced by punctuation rather than by a keyword, and reading a `(` as a
 // declaration would be answering from shape. They resolve to nothing, which is a miss rather than a
 // confident wrong line.
-module function definitionIntroducesNames(kind TokenKind) returns bool
+function definitionIntroducesNames(kind TokenKind) returns bool
 	return bindingKeywordSpells(kind) or kind == TokenKind.for or kind == TokenKind.function
 end 'definitionIntroducesNames'
 
@@ -197,7 +195,7 @@ function definitionBoundName(tokens TokenArray, keyword Token, at ElementIndex, 
 	throw LspDeclarationLookupError.nothingThere
 end 'definitionBoundName'
 
-module function definitionBoundTokensAt(tokens TokenArray, keyword Token, at ElementIndex) returns TokenArray
+function definitionBoundTokensAt(tokens TokenArray, keyword Token, at ElementIndex) returns TokenArray
 	if bindingKeywordSpells(keyword.kind) 'oneBinding'
 		return definitionBindingTokensAt(tokens, at: at + 1)
 	end 'oneBinding'
@@ -346,15 +344,11 @@ end 'definitionDeclarationOf'
 function definitionMemberOfTheReceiver(text String, keywords KeywordTable, tokens TokenArray, cursor ElementIndex) returns Token throws LspDeclarationLookupError
 	let owner = try lspMemberOwnerOfTheCursor(LspCorpus.unavailable, text: text, tokens: tokens, keywords: keywords, cursor: cursor)
 
-	return try definitionMemberOfOwner(tokens, owner: owner, member: lspTokenAt(tokens, index: cursor).value, enclosing: lspEnclosingTypeAtToken(tokens, index: cursor))
+	return try definitionMemberOfOwner(tokens, owner: owner, member: lspTokenAt(tokens, index: cursor).value)
 end 'definitionMemberOfTheReceiver'
 
-function definitionMemberOfOwner(tokens TokenArray, owner String, member ByteArray, enclosing LspEnclosingType) returns Token throws LspDeclarationLookupError
+function definitionMemberOfOwner(tokens TokenArray, owner String, member ByteArray) returns Token throws LspDeclarationLookupError
 	let found = try lspMemberDeclaredBy(tokens, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
-
-	if not lspMemberReachable(found, site: lspReaderSite(enclosing, typeName: found.bodyName, sharesTheTypesFile: true)) 'hiddenHere'
-		throw LspDeclarationLookupError.nothingThere
-	end 'hiddenHere'
 
 	return lspTokenAt(tokens, index: found.nameIndex)
 end 'definitionMemberOfOwner'
@@ -445,7 +439,7 @@ extension Project
 	// ⚠ And an index position is not in the unit an answer is spelled in. `lspSpanRangeNode` converts a
 	// byte span to LSP's UTF-16 coordinates, while the index holds 1-based compiler coordinates; a second
 	// converter here is the defect `tests/lsp/position-characters.maxtest` exists to catch.
-	module function definitionInTheCorpus(corpus LspCorpus, text String, tokens TokenArray, cursor ElementIndex) returns LspAnswer
+	function definitionInTheCorpus(corpus LspCorpus, text String, tokens TokenArray, cursor ElementIndex) returns LspAnswer
 		let site = try lspDeclaringSiteOfTheCursor(corpus, text: text, tokens: tokens, keywords: self.keywords, cursor: cursor) otherwise return LspAnswer.nothing()
 		return self.definitionInAnotherFile(site, name: lspTokenAt(tokens, index: cursor).value)
 	end 'definitionInTheCorpus'

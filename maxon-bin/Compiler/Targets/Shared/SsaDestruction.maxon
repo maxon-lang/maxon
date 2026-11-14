@@ -15,7 +15,7 @@
 // fails — and, where a case carries one, its `TargetIr` pin stops matching.
 
 // Where an edge's parallel copy may be placed without running on a sibling edge.
-export enum EdgePlacement
+enum EdgePlacement
 	// Pred has ONE successor: the moves run at the predecessor's end.
 	predEnd
 
@@ -36,7 +36,7 @@ end 'EdgePlacement'
 // encoder, from `regClassOf` of the register (`emitRegRegMove` / `emitRegRegSwap` in X64Backend).
 // That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
 // has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
-export type EdgeMovePlan
+type EdgeMovePlan
 	export let predLocal as ElementIndex
 	export let succLocal as ElementIndex
 	export let predBlockId as BlockId
@@ -71,7 +71,7 @@ export type EdgeMovePlan
 	end 'moveIsSwapAt'
 end 'EdgeMovePlan'
 
-export typealias EdgeMovePlanArray = Array with EdgeMovePlan
+typealias EdgeMovePlanArray = Array with EdgeMovePlan
 
 // A sequenced parallel copy: `dsts[i]` ← `srcs[i]`, a swap when `isSwap[i]`.
 type MoveSequence implements ParallelCopyEmitter
@@ -100,7 +100,7 @@ end 'MoveSequence'
 
 // Build the per-edge SSA-destruction plan for a function. A fully-coalesced edge
 // (every phi shares its incoming value's register) produces no moves and no plan.
-export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns EdgeMovePlanArray
+function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns EdgeMovePlanArray
 	let topo = liveness.cfg.topo
 	let plans = EdgeMovePlanArray.create(0)
 
@@ -158,7 +158,7 @@ end 'classifyPlacement'
 // Commit: rewrite ops to physical, drop self-moves, splice edge moves, clear phis
 // ==========================================================================
 
-export function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan)
+function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan)
 	colorAndDropSelfMoves(module, func: func, alloc: alloc, reuseCopies: reuseCopies, brackets: brackets)
 
 	for plan in plans 'eachPlan'
@@ -312,7 +312,7 @@ end 'appendBracketReload'
 // True for a `movRegReg` whose DEST is still virtual and whose SRC is a physical register — the shape of
 // a call-result capture (`virtual(result) ← physical(returnReg)`). Read on the UNCOLORED op, before its
 // dest is rewritten to a physical register.
-export function isCaptureMove(op TargetOp) returns bool
+function isCaptureMove(op TargetOp) returns bool
 	return match op 'm'
 		movRegReg(dst, src) gives vregIsVirtual(dst) and vregIsPhysical(src)
 		prologue or
@@ -828,7 +828,7 @@ let CritSplitLabel = b"critsplit"
 //
 // The module is a backend UNIT's — one function — on a pool worker (`BackendWorker`) and on the
 // E5001 re-run alike.
-export function splitCriticalEdges(module TargetModule, target Target)
+function splitCriticalEdges(module TargetModule, target Target)
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
 		splitCriticalEdgesInFunc(module, funcIdx: funcIdx, target: target)
 	end 'eachFunc'
@@ -976,7 +976,7 @@ end 'buildFuncTopologyByIndex'
 // search the CFG builder avoids (see `CondBranch`). The rewrite is in place at
 // the op's existing index, so the recorded index stays valid and there is no cached target
 // to invalidate.
-export function retargetControlOp(module TargetModule, predRef ElementIndex, oldTarget BlockId, newTarget BlockId)
+function retargetControlOp(module TargetModule, predRef ElementIndex, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
 
 	// The conditional half's panic cites the block's id rather than its LABEL, since a label is not a

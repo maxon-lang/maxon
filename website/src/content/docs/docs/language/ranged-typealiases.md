@@ -37,8 +37,8 @@ typealias Offset = int(0 to i64.max)
   range whose lower bound is non-negative and whose upper bound is negative (`int(0 to -1)`).
 - An upper bound above `i64.max` makes the range unsigned (see [Integers](/docs/language/types/#integers)).
 - `typealias X = i64` is **E2003**; the sized names exist only as bounds.
-- A typealias nothing uses is **E3062**; any other file-private top-level declaration nothing uses is
-  **E3219** (see [Visibility](/docs/language/namespaces/#visibility)).
+- An unmarked typealias nothing in its directory subtree uses is **E3062**; any other unmarked top-level
+  declaration nothing uses is **E3219** (see [Visibility](/docs/language/namespaces/#visibility)).
 
 `.min` and `.max` are also integer expressions anywhere a literal is valid: `let limit = u16.max`.
 
@@ -183,7 +183,7 @@ body at a place declared with a file-scope one.
 
 A literal cast in an unannotated `let` (`let p = 8080 as Port`) is **E3010** when every use of the `let`
 takes the plain constant the same way (`unneeded cast: the literal 8080 already fits every use of 'p'`):
-`let p = 8080` already fits each use. A `public`, `export` or `module` `let` keeps its cast, and so does one a closure captures.
+`let p = 8080` already fits each use. A top-level `let` keeps its cast, and so does one a closure captures.
 
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
 `var` (`var p = 8080 as Port`), a `let` some use of which needs the alias, a field default whose type the
@@ -457,8 +457,8 @@ A nested typealias that an `extension` of the program declares under the name of
 the same type also declares (`Array.ElementArray`, `Array.SortComparator`, `Iterable.ElementTransform`) is a
 separate member. The program's extension bodies, in every file, spell it with the bare name, and callers of
 the program's methods see it; the library's bodies and methods keep the library's member. A member without
-a visibility modifier is spelled from its own file only: another file's extension body naming it is
-[E3008](/docs/cli/error-codes/#e3008--symbolnotexported).
+a visibility modifier is spelled from its declaring directory's subtree only: an extension body in another
+directory naming it is [E3008](/docs/cli/error-codes/#e3008--symbolnotexported).
 
 A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
 parameters. `Array.sortBy` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =

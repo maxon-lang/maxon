@@ -23,7 +23,7 @@
 // `foldConstants.dropUnreachableBlocks` also rests on, and the one thing about `blockRefs` order that IS
 // guaranteed.
 
-module typealias FixedBlockPositionColumn = FixedArray with ElementIndex
+typealias FixedBlockPositionColumn = FixedArray with ElementIndex
 
 // A dense column of block POSITIONS — the same `ElementIndex` as `IrModule.blockIndexById` holds
 // and as `CsrGraph`'s own key space, so a column of them is
@@ -338,7 +338,7 @@ end 'DominatorStamps'
 
 // One step of a dominator-tree walk: a block is ENTERED before any block it dominates and LEFT after
 // every one of them.
-export enum StdDominatorStep
+enum StdDominatorStep
 	enter
 	leave
 end 'StdDominatorStep'
@@ -353,7 +353,7 @@ end 'StdDominatorStep'
 //
 // An EXPLICIT STACK rather than recursion, for `buildReversePostorder`'s reason: a dominator chain can
 // be as long as the function has blocks.
-export type StdDominatorWalk
+type StdDominatorWalk
 	var open as BlockPositionColumn
 	var nextChild as CsrColumn
 
@@ -365,7 +365,7 @@ export type StdDominatorWalk
 	export var step as StdDominatorStep
 	export var position as ElementIndex
 
-	export static function create() returns StdDominatorWalk
+	static function create() returns StdDominatorWalk
 		return Self{open: BlockPositionColumn.create(0), nextChild: CsrColumn.create(0), rpoIndex: BlockPositionColumn.create(0), entryPending: false, step: StdDominatorStep.enter, position: StdEntryBlockPosition}
 	end 'create'
 
@@ -506,7 +506,7 @@ end 'RpoOrder'
 // it hands a `match` dispatch test a second predecessor from a block that can only be reached through it,
 // which `NaturalLoops` reads as a back edge, and the member set of that phantom loop is everything from
 // the dispatch to the block before it — one walk of the function per `match`.
-module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount ElementIndex) returns CsrGraph
+function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount ElementIndex) returns CsrGraph
 	let edgeFrom = CsrColumn.create(0)
 	let edgeTo = CsrColumn.create(0)
 	let byId = module.blockIndexById(func)

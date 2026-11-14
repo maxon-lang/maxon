@@ -15,6 +15,30 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `module` is not a visibility modifier: it is an ordinary identifier, and written before a declaration it is
+  a syntax error (`E2001 … Expected function declaration, got 'module'`; in a type body `E2010 … Expected
+  'function' but got 'module'`). An unmarked declaration has the visibility `module` gave.
+  Fix: delete the word `module` before each declaration.
+
+- An unmarked declaration is visible to every file in its declaring directory and that directory's
+  subdirectories: a top-level `function`, `let`, `type`, `enum`, `union`, `interface` or `typealias`, a
+  method, a static member, a nested typealias and a field alike. A file outside the subtree that names one is
+  E3008 (`function 'helper' is not exported`), and E3014 (`field 'Box.v' is not exported`) for a field;
+  another type, a free function or an `extension` in the type's directory reads and writes its unmarked
+  fields. E3219 and E3062 count a use anywhere in the subtree. Two files of one directory that each declare an
+  unmarked declaration of one name collide: E3006. E3167 calls the unmarked tier `unexported`.
+  Fix: nothing for most code. Rename one of two unmarked declarations of one name in one directory, and delete
+  a declaration E3219 or E3062 reports.
+
+- An `export` that nothing outside its declaring directory's subtree names is E3092 (`exported function
+  'lib.helper' is never referenced outside its declaring directory`), the root directory included: an `export`
+  in a program whose files all sit in one directory is reported. `public` stays exempt.
+  Fix: drop `export`, or write `public` for API surface.
+
+- E3088 (a `module` declaration used outside its subtree), E3093 (an `export` that could be `module`) and
+  E3094 (a `module` declaration nothing outside its file uses) are retired.
+  Fix: match E3008, E3092 and E3219 in a tool or script that matched the retired codes.
+
 - A unique parameter (a `unique` type, a type holding a unique field, a `Reply`) is moved by the function that
   keeps it, as a local is: after `parked.answer(1)`, `shelf.push(token)`, `let first = token` or a field or payload
   store of a parameter, any later read of that parameter on a path that follows is E3102, and so is the same move
@@ -114,10 +138,10 @@ release's version as its heading when the release is cut.
   (`b = Box.full(42)`); write `let` for a `var` that is only matched; drop `isolated`, `merge` and `freeze` on
   a union of immutable payloads; read the union before handing its unique payload to a call that keeps it.
 
-- A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its file
-  names is E3219, the way an unused local is E3012 and an unused `typealias` is E3062. A declaration is live when
-  code that is not itself a file-private declaration names it (an `export`, `module` or `public` declaration,
-  `main`, a test, a method), or a live file-private declaration does; declarations that only name each other, or
+- An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
+  directory subtree names is E3219, the way an unused local is E3012 and an unused `typealias` is E3062. A
+  declaration is live when code that is not itself an unmarked declaration names it (an `export` or `public`
+  declaration, `main`, a test, a method), or a live unmarked declaration does; declarations that only name each other, or
   a function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes
   counts as a use.
   Fix: delete the declaration (the compiler lists each one), or use it.
@@ -202,24 +226,24 @@ release's version as its heading when the release is cut.
   type lies inside, or a counted-loop counter between compile-time bounds — cannot throw, so a `try` on it
   is E3055.
   Fix: drop the `try … otherwise` and write the call bare.
-- A `module`, `export` or `public` top-level `let`, or `static let`
+- An `export` or `public` top-level `let`, or `static let`
   member, whose type is less visible than the binding is E3167 (`exported constant 'api.BIG' names
-  file-private enum 'Status' in its type`). The type is the one the initializer gives it, inferred or
+  unexported enum 'Status' in its type`). The type is the one the initializer gives it, inferred or
   not, and includes the typealias the initializer was spelled through (`50 as Small`,
   `Tallies.create()`).
   Fix: widen the type to the binding's tier (`export enum Status`, `export typealias Small`, or
   `public` for a `public` binding), or narrow the binding (`let BIG` without `export`).
-- Every other surface a declaration exposes is held to E3167 too: an instance field marked `module`,
+- Every other surface a declaration exposes is held to E3167 too: an instance field marked
   `export` or `public` (at the narrower of its own and its type's tier), a union case's payloads, a
   typealias's target, an `implements` clause and its `with` arguments, a type's or generic function's
   `where` clause, an interface's `extends` clause, and a struct-backed enum's backing record
-  (`exported field 'api.Holder.mode' names file-private enum 'Mode' in its type`).
+  (`exported field 'api.Holder.mode' names unexported enum 'Mode' in its type`).
   Fix: widen the named type to the surface's tier (`export enum Mode`), or narrow the surface (drop the
   `export` from `export var mode as Mode`).
 - A declaration whose name contains `unionCases`, such as a method `Holder.unionCasesFor` or an extension
   method `int.unionCasesFor`, is held to E3167 and to the unused-export check E3092 like any other.
   Fix: widen the type its signature names to the declaration's tier, or narrow the declaration; drop the
-  `export` from one nothing outside its file uses.
+  `export` from one nothing outside its directory uses.
 - A constant `FixedArray` index at or past the size is E3005 at compile time.
   Fix: correct the index, or pass a deliberate out-of-range index through a value computed at run time.
 - A divide or `mod` whose divisor is proven non-zero by a counted loop's bounds or a range computed from
@@ -341,8 +365,8 @@ release's version as its heading when the release is cut.
   the same type declares (`ElementArray`, `SortComparator` or `NodePower` on `Array`, `ElementTransform` on
   `Iterable`) is the program's own member: the program's extension bodies and the callers of its methods read
   the program's declaration, where an extension body that wrote the name read the library's and the library's
-  bodies could read the program's. A second file's extension naming a member the first file leaves without a
-  visibility modifier is E3008.
+  bodies could read the program's. An extension in another directory naming a member the declaring directory
+  leaves without a visibility modifier is E3008.
   Fix: write the extension bodies for the member the program declares, or rename it to keep the library's.
 - `TlsListener.accept()` returns once the TCP connection is accepted, and the stream runs its handshake on its
   first `send`, `readSome` or `shutdownWrite`, or on the new `handshake()`, as Go's `Conn.Handshake` does. A failed
@@ -476,10 +500,10 @@ release's version as its heading when the release is cut.
 - A top-level name is declared once per directory, whatever its kind and visibility: a `type`, `enum`,
   `union`, `interface`, `typealias`, top-level `let`, and `function` share one namespace, private or
   exported and generic or not. A second declaration in a directory is E3006 (`duplicate definition of
-  'Point' — already declared as `type Point``), including two files of one directory that each declare a
-  file-private `helper` and a `type Point` beside a `function Point`. Directories are separate scopes, and
+  'Point' — already declared as `type Point``), including two files of one directory that each declare an
+  unmarked `helper` and a `type Point` beside a `function Point`. Directories are separate scopes, and
   locals and parameters may shadow a top-level name.
-  Fix: rename one declaration, or declare the name once at `module` scope and use it from both files.
+  Fix: rename one declaration, or declare the name once and use it from both files.
 - A bare name resolves the same way for every kind of declaration: the reading file's own directory's
   declaration, else the project root's, else the one declaration the file may name, else it is ambiguous
   (E3063 for a type name, E3095 for a function or a binding). A bare name that the project root declares and the
@@ -625,7 +649,7 @@ release's version as its heading when the release is cut.
   `listFailed` for any other failure, where it threw `notFound` for both.
   Fix: handle `accessDenied` and `listFailed` beside `notFound` where a `notFound` arm stood for every
   failure to list.
-- A module-level or `static` `var` is removed: `var` at file scope, in a `module` or `export` declaration, or
+- A module-level or `static` `var` is removed: `var` at file scope, in an `export` declaration, or
   after `static` is a syntax error, where it declared one word shared by every function. `let` stays, at file
   scope and after `static`.
   Fix: keep a counter or flag a function updates in a local `var` and pass it to the function as a `mutable`

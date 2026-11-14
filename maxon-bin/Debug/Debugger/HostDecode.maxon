@@ -1,9 +1,9 @@
-export union HostInstructionWidth
+union HostInstructionWidth
 	fixed(bytes DecodedFixedWidth)
 	variable
 end 'HostInstructionWidth'
 
-module function hostInstructionWidth() returns HostInstructionWidth
+function hostInstructionWidth() returns HostInstructionWidth
 	#if arch(arm64)
 		return HostInstructionWidth.fixed(Arm64InstructionBytes as DecodedFixedWidth)
 	#endif
@@ -13,7 +13,7 @@ module function hostInstructionWidth() returns HostInstructionWidth
 	#endif
 end 'hostInstructionWidth'
 
-module function hostDecodedAt(code ByteArray, at DecodedOffset, address DecodedAddress) returns DecodedLookup
+function hostDecodedAt(code ByteArray, at DecodedOffset, address DecodedAddress) returns DecodedLookup
 	if hostIndirectReturnStartsAt(code, at: at) 'aReturnByIndirectJump'
 		return DecodedLookup.decoded(DecodedInstruction.create(x64IndirectReturnLength(), instructionClass: DbgClassReturn as DecodedClass, target: DecodedTarget.none, callOperand: DecodedCallOperand.none))
 	end 'aReturnByIndirectJump'
@@ -47,7 +47,7 @@ function hostIndirectReturnStartsAt(code ByteArray, at DecodedOffset) returns bo
 	return hostReturnsByPopAndJump() and x64IndirectReturnAt(code, at: at)
 end 'hostIndirectReturnStartsAt'
 
-module function hostInstructionIsTheJumpOfAReturn(code ByteArray, at DecodedOffset) returns bool
+function hostInstructionIsTheJumpOfAReturn(code ByteArray, at DecodedOffset) returns bool
 	return hostReturnsByPopAndJump() and x64IndirectReturnJumpAt(code, at: at)
 end 'hostInstructionIsTheJumpOfAReturn'
 
@@ -60,7 +60,7 @@ end 'hostInstructionIsTheJumpOfAReturn'
 	end 'arm64CallOperandOf'
 #endif
 
-module function hostInstructionIsAReturn(code ByteArray, at DecodedOffset) returns bool
+function hostInstructionIsAReturn(code ByteArray, at DecodedOffset) returns bool
 	return match hostDecodedAt(code, at: at, address: at as DecodedAddress) 'decoded'
 		unclassified gives false
 		decoded(instruction) gives instruction.instructionClass == DbgClassReturn

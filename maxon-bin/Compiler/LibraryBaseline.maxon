@@ -1,13 +1,13 @@
-export type LibraryManifest
-	export let deferred as FilePathArray
-	export let streamed as FilePathArray
-	export let templates as NameRoster
+type LibraryManifest
+	let deferred as FilePathArray
+	let streamed as FilePathArray
+	let templates as NameRoster
 
-	export static function create(deferred FilePathArray, streamed FilePathArray, templates NameRoster) returns LibraryManifest
+	static function create(deferred FilePathArray, streamed FilePathArray, templates NameRoster) returns LibraryManifest
 		return Self{deferred: deferred, streamed: streamed, templates: templates}
 	end 'create'
 
-	export function requestsATemplate(instances RequestedGenericInstances) returns bool
+	function requestsATemplate(instances RequestedGenericInstances) returns bool
 		for (_, instance) in instances.byName 'eachRequested'
 			if self.templates.contains(instance.templateKey) 'aTemplateOfTheLibrary'
 				return true
@@ -18,21 +18,21 @@ export type LibraryManifest
 	end 'requestsATemplate'
 end 'LibraryManifest'
 
-export type LibraryDeclarations
-	export var signatures as ProgramSignatures
-	export let manifest as LibraryManifest
+type LibraryDeclarations
+	var signatures as ProgramSignatures
+	let manifest as LibraryManifest
 
-	export static function create(signatures ProgramSignatures, manifest LibraryManifest) returns LibraryDeclarations
+	static function create(signatures ProgramSignatures, manifest LibraryManifest) returns LibraryDeclarations
 		return Self{signatures: signatures, manifest: manifest}
 	end 'create'
 end 'LibraryDeclarations'
 
-module type LibraryStart
-	module var signatures as ProgramSignatures
-	module let remainder as FilePathArray
-	module let streamed as FilePathArray
+type LibraryStart
+	var signatures as ProgramSignatures
+	let remainder as FilePathArray
+	let streamed as FilePathArray
 
-	module static function create(signatures ProgramSignatures, remainder FilePathArray, streamed FilePathArray) returns LibraryStart
+	static function create(signatures ProgramSignatures, remainder FilePathArray, streamed FilePathArray) returns LibraryStart
 		return Self{signatures: signatures, remainder: remainder, streamed: streamed}
 	end 'create'
 end 'LibraryStart'
@@ -56,7 +56,7 @@ function keyWithLibraryPaths(project Project, key HashDigest, paths MaxonSourceP
 	return folded
 end 'keyWithLibraryPaths'
 
-module function libraryStateKeyOf(project Project) returns HashDigest throws CompileError
+function libraryStateKeyOf(project Project) returns HashDigest throws CompileError
 	let sources = compositeSourceHash(project)
 
 	if project.db.libraryStateKeyComputed and project.db.libraryStateKeySources == sources 'memoized'
@@ -150,7 +150,7 @@ function startFrom(project Project, key HashDigest, kind LibraryEntryKind, loade
 	return LibraryStart.create(loaded.signatures, remainder: remainder, streamed: loaded.manifest.streamed)
 end 'startFrom'
 
-module function libraryBaselineFor(project Project, partition ProgramPartition) returns LibraryStart throws CompileError
+function libraryBaselineFor(project Project, partition ProgramPartition) returns LibraryStart throws CompileError
 	let key = try libraryStateKeyOf(project)
 
 	if let held = try heldStart(project, key: key) 'heldInMemory'
@@ -234,10 +234,15 @@ function builtStart(project Project, partition ProgramPartition, key HashDigest)
 	let diagnosticsBefore = project.diagnostics.count()
 	let deferred = try deferredLibraryPaths(project, partition: partition)
 	let core = ProgramSignatures.create(project.target.os)
-	try foldDeclarationsOf(project, signatures: core, leadingPaths: withoutPaths(partition.runtimePaths, excluded: deferred), stdlibPaths: withoutPaths(partition.stdlibPaths, excluded: deferred), handedOver: DiscoveredTokenFacts.none())
+	let coreExtents = BlockExtentsByPath.create()
+	try foldDeclarationsOf(project, signatures: core, leadingPaths: withoutPaths(partition.runtimePaths, excluded: deferred), stdlibPaths: withoutPaths(partition.stdlibPaths, excluded: deferred), deferred: deferred, handedOver: DiscoveredTokenFacts.none(), extents: coreExtents)
 
 	let complete = copiedBaseline(core)
-	try foldLibraryRemainder(project, signatures: complete, deferred: deferred)
+
+	match try foldLibraryRemainder(project, signatures: complete, deferred: deferred, discovery: RemainderDiscovery.discoveredByTheCore(coreExtents)) 'remainder'
+		folded then break
+		contestsTheBaseline then panic("builtStart: a deferred library file contests a binding the core settled — the core state discovers every deferred file before it settles the library's mints")
+	end 'remainder'
 
 	let manifest = LibraryManifest.create(deferred, streamed: complete.declTokenStreamPaths(), templates: complete.genericTemplateKeys())
 	noteLibraryCacheTrouble("built the library state: {deferred.count()} file(s) deferred, {manifest.templates.count()} generic function template(s)")

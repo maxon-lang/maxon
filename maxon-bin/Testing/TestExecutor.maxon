@@ -43,17 +43,17 @@ let CouldNotLaunchPrefix = "the test binary could not be launched: "
 // than a list of the chosen ones: membership is asked once per test per shard build and once more per
 // test by `--list`, and a scan would make that Θ(tests²) in a project's own size for a question that
 // never changes during a run.
-export typealias TestSelection = FixedArray with bool
+typealias TestSelection = FixedArray with bool
 
 // Whether this run selected the test at `index`. Out of range answers FALSE, which is the honest
 // answer and not a swallowed error: the selection is built with one entry per DISCOVERED test, so an
 // index outside it names no test at all.
-export function testIsSelected(selected TestSelection, index ElementIndex) returns bool
+function testIsSelected(selected TestSelection, index ElementIndex) returns bool
 	return try selected.get(index) otherwise false
 end 'testIsSelected'
 
 // Everything a launch needs that does not change between launches.
-export type TestLaunchPlan
+type TestLaunchPlan
 	// The compiled test binary. Spawned many times; compiled once.
 	export let binary as FilePath
 
@@ -63,11 +63,11 @@ export type TestLaunchPlan
 	export let timeoutMs as WaitDeadlineMs
 	export let tracksDescendants as bool
 
-	export static function create(binary FilePath, timeoutMs WaitDeadlineMs, tracksDescendants bool) returns TestLaunchPlan
+	static function create(binary FilePath, timeoutMs WaitDeadlineMs, tracksDescendants bool) returns TestLaunchPlan
 		return Self{binary: binary, timeoutMs: timeoutMs, tracksDescendants: tracksDescendants}
 	end 'create'
 
-	module function buildDirectory() returns FilePath
+	function buildDirectory() returns FilePath
 		return try self.binary.parent() otherwise panic("TestLaunchPlan: the test binary {self.binary.toString()} has no directory, and it is built inside one")
 	end 'buildDirectory'
 end 'TestLaunchPlan'
@@ -116,11 +116,11 @@ end 'parsePositiveFlagValue'
 
 // The run's running totals, carried ACROSS files because `--bail` is a fact about the whole run rather
 // than about any one file.
-export type TestRunProgress
+type TestRunProgress
 	export var failures as ReportedTestCount
 	export var bailed as bool
 
-	export static function create() returns TestRunProgress
+	static function create() returns TestRunProgress
 		return Self{failures: 0, bailed: false}
 	end 'create'
 end 'TestRunProgress'
@@ -755,7 +755,7 @@ end 'appendResults'
 // answer for a PREFIX of what remains, and the deadline path re-runs its indices in order — so every
 // append is in index order already. The reference has to sort here because its shards finish on
 // whichever thread wins; with no pool there is no race to undo.
-export function runFileTests(plan TestLaunchPlan, group TestFileGroup, selected TestSelection, isolate bool, bail BailPolicy, progress TestRunProgress) returns UnitTestResultArray
+function runFileTests(plan TestLaunchPlan, group TestFileGroup, selected TestSelection, isolate bool, bail BailPolicy, progress TestRunProgress) returns UnitTestResultArray
 	let results = UnitTestResultArray.create(0)
 
 	for shard in shardsOf(group, selected: selected, isolate: isolate) 'eachShard'

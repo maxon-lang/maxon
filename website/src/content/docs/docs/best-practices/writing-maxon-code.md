@@ -48,7 +48,7 @@ cond ? a : b                   a if cond else b
 param (T) returns U            typealias F = function(T) returns U; param F
 import / include               (does not exist — a project compiles every .maxon under its directory)
 defer / lazy                   (do not exist)
-module var / static var        (do not exist — a local `var` passed to a `mutable` parameter, a field, a `SharedValue`, or a service's fields)
+global var / static var        (do not exist — a local `var` passed to a `mutable` parameter, a field, a `SharedValue`, or a service's fields)
 ```
 
 ## Mandatory Rules
@@ -383,10 +383,10 @@ function f(x Coord) returns Coord
 ### 19. Nothing may be declared and left unused
 
 - A variable **or parameter** that is never read is **E3012**. Bind a value you do not need to `_`.
-- A typealias never named in a type position of its own file is **E3062**, unless it is visible outside the
-  file (`module`, `export` or `public`). A bare `[...]` literal inferring the type is not a use.
-- A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
-  file names is **E3219**: delete it. Declarations that only name each other, or a function that only calls
+- An unmarked typealias never named in a type position anywhere in its directory subtree is **E3062**. A bare
+  `[...]` literal inferring the type is not a use.
+- An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
+  directory subtree names is **E3219**: delete it. Declarations that only name each other, or a function that only calls
   itself, are dead together.
 - A `var` that is never reassigned is **E3077** — use `let`, whatever the `var` was bound from and even when it
   is written through (`push`, a field write, a callee that writes the parameter). What keeps a `var` is
@@ -470,7 +470,7 @@ typealias VisitCount = int(0 to u64.max)
 type Point
 	export var x as Coord           // readable and writable outside the type
 	export var y as Coord
-	var visits = 0 as VisitCount    // private to the type, declaration default
+	var visits = 0 as VisitCount    // visible to this directory subtree, declaration default
 
 	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
@@ -501,11 +501,12 @@ let o = Point.origin()
 
 Instance methods can call sibling instance methods by bare name — the compiler implicitly prepends `self` as the receiver.
 
-**Member visibility differs for fields and methods.** An unmarked field is private to the type — `p.visits`
-outside `Point` is **E3014**. An unmarked method or static member is private to the *file*, like a top-level
-declaration, so `main` above may call `Point.create` — but another file may not (**E3008**). Mark a member
-`export` (or `public`) when another file uses it; an `export` nothing outside its file uses is **E3092**, and an
-exported signature or field may not name a less visible type (**E3167**) — see [Visibility](#visibility).
+**Members follow the directory rule.** An unmarked field, method or static member is visible to every file in
+its type's declaring directory and that directory's subdirectories, like a top-level declaration: `p.visits`
+from another directory is **E3014**, and `Point.create` from another directory is **E3008**. Mark a member
+`export` (or `public`) when another directory uses it; an `export` nothing outside its directory uses is
+**E3092**, and an exported signature or field may not name a less visible type (**E3167**) — see
+[Visibility](#visibility).
 
 **A struct literal is legal only inside the type's own methods (E3076).** `Point{x: 1.5, y: 2.5}` written
 anywhere else is an error, however public the fields are — external callers go through a static factory, so
@@ -1026,7 +1027,7 @@ a struct, enum, union or `String` to itself) is **E3010 "unneeded cast"**: it co
 a call argument, a `return`, a struct-literal field or a field store (`open(8080 as Port)` for a `Port`
 parameter, `return 0 as ExitCode` from `main`): write the bare literal there. So is a literal cast in an
 unannotated `let` every use of which takes the plain constant the same way (`let limit = 10 as Count`, read
-only where a `Count` is declared): write `let limit = 10`. A `public`, `export` or `module` `let` keeps its
+only where a `Count` is declared): write `let limit = 10`. A top-level `let` keeps its
 cast, and so does one a closure captures.
 
 A cast whose operand is a cast (`x as A as B`, `(x as A) as B`) is **E2079**: cast directly to `B`. When
@@ -1164,17 +1165,18 @@ it, calling `close()` on it or passing it before then is **E3102**.
 
 ### Visibility
 
-All declarations are file-private by default. Four tiers exist:
+An unmarked declaration is visible to its directory. Three tiers exist:
 
-- **default** — visible only within the declaring file.
-- **`module`** — visible to every file in the same directory and any subdirectory of that directory.
-- **`export`** — visible everywhere in the compilation.
-- **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export checks.
+- **default** — visible to every file in the declaring directory and any subdirectory of it: top-level
+  declarations, methods, static members, nested typealiases and fields alike.
+- **`export`** — visible everywhere in the compilation. An `export` nothing outside its declaring directory
+  names is **E3092**, the root directory included: there the default already reaches every reader.
+- **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export check.
 
 No surface a declaration exposes may name a type less visible than the declaration: a function's signature
 and `where` clause, a top-level or `static` `let`'s type, a marked field's type, a union case's
 payloads, a typealias's target, an `implements`, `where` or `extends` clause, and an enum's backing record.
-For that rule the tiers are ordered default < `module` < `export` < `public`, and naming a narrower type is
+For that rule the tiers are ordered default < `export` < `public`, and naming a narrower type is
 E3167.
 
 A top-level name is declared once per directory, whatever its visibility and kind: a `type`, `enum`,
@@ -1184,17 +1186,17 @@ reader's own directory's declaration, else the root's, else the one visible decl
 **E3063**/**E3095** ask for `dir.name` where several are equally near. A function name is declared once per
 directory and a method name once per type: Maxon has no overloading.
 
-At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
+At most one modifier may be written.
 
 ```maxon
 export function publicFunc() returns Tally ...
-module function packageFunc() returns Tally ...   // visible to this directory subtree
+function packageFunc() returns Tally ...          // visible to this directory subtree
 export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...
 export union PublicUnion ...
 export let sharedLimit = 0
-module let featureLimit = 0                       // visible to this directory subtree
+let featureLimit = 0                              // visible to this directory subtree
 ```
 
 ### Conditional Compilation

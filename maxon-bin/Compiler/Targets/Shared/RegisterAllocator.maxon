@@ -66,7 +66,7 @@
 
 // A per-function coloring: value id → physical register number, absent until the value is
 // colored. A value holds ONE register for its whole range.
-export type Allocation
+type Allocation
 	export var color as RegisterColumn
 	export var valueCount as ValueId
 
@@ -83,7 +83,7 @@ export type Allocation
 	// Hall verdict a live set the point does not have.
 	var holderOfReg as FixedValueIdArray
 
-	export static function create(valueCount ValueId) returns Allocation
+	static function create(valueCount ValueId) returns Allocation
 		// Each column is BUILT as its own declared instance: `RegNum` strides ONE byte and `DenseInt` EIGHT
 		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
 		// read a stride it was not written at.
@@ -142,17 +142,17 @@ end 'Allocation'
 // ops at the end of the table), so a column keyed by them would be the size of the whole module,
 // per function. A list scanned per op was O(ops × copies) — the same quadratic shape the splitter
 // had.
-export type ReuseCopyPlan
+type ReuseCopyPlan
 	var destRegs as RegisterColumn
 	var srcRegs as RegisterColumn
 
-	export static function create() returns ReuseCopyPlan
+	static function create() returns ReuseCopyPlan
 		return Self{destRegs: RegisterColumn.create(), srcRegs: RegisterColumn.create()}
 	end 'create'
 
 	// Record the copy for the op at layout sequence `seq`. The columns grow to fit rather than
 	// being sized up front: a function with no reuse copy at all then allocates nothing.
-	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
+	function record(seq OpSeq, destReg RegNum, srcReg RegNum)
 		self.destRegs.growAbsent((seq + 1) as ElementIndex)
 		self.srcRegs.growAbsent((seq + 1) as ElementIndex)
 		self.destRegs.set(seq, value: destReg)
@@ -163,7 +163,7 @@ export type ReuseCopyPlan
 	// recorded copy carries none by construction (the columns only grow to the last one). A bool and
 	// two register reads rather than one union answer: a payload-bearing union heap-boxes every case
 	// including the payload-free one (`CseLookup`), and this is asked at every body op of every function.
-	export function hasCopyAt(seq OpSeq) returns bool
+	function hasCopyAt(seq OpSeq) returns bool
 		if seq >= self.destRegs.count() as OpSeq 'pastLastCopy'
 			return false
 		end 'pastLastCopy'
@@ -172,11 +172,11 @@ export type ReuseCopyPlan
 	end 'hasCopyAt'
 
 	// The two registers of the copy at `seq`; meaningful only where `hasCopyAt` holds.
-	export function destRegAt(seq OpSeq) returns RegNum
+	function destRegAt(seq OpSeq) returns RegNum
 		return try self.destRegs.get(seq) otherwise panic("ReuseCopyPlan.destRegAt: no copy recorded at sequence {seq} — ask `hasCopyAt` first")
 	end 'destRegAt'
 
-	export function srcRegAt(seq OpSeq) returns RegNum
+	function srcRegAt(seq OpSeq) returns RegNum
 		return try self.srcRegs.get(seq) otherwise panic("ReuseCopyPlan.srcRegAt: no copy recorded at sequence {seq} — ask `hasCopyAt` first")
 	end 'srcRegAt'
 
@@ -193,7 +193,7 @@ end 'ReuseCopyPlan'
 
 typealias BracketPayloadArray = Array with MachineWord
 
-export enum BracketEntryKind
+enum BracketEntryKind
 	slot
 	immediate
 end 'BracketEntryKind'
@@ -242,7 +242,7 @@ typealias BracketEntryKindArray = Array with BracketEntryKind
 // `openRegAt` / `openKindAt` / `openSlotAt` / `openImmediateOpAt` / `openReloadSeq` rather than
 // returning a union: a payload-bearing union heap-boxes every case including the payload-free one
 // (`CseLookup`), and `takeAt` is asked at every body op of every function.
-export type ColdCallBracketPlan
+type ColdCallBracketPlan
 	var saveSeqs as OpSeqArray
 	var reloadSeqs as OpSeqArray
 
@@ -266,7 +266,7 @@ export type ColdCallBracketPlan
 	// The rewrite's position in `saveSeqs`: the bracket at `cursor - 1` is the one last taken.
 	var cursor as ElementIndex
 
-	export static function create(isArm64 bool) returns ColdCallBracketPlan
+	static function create(isArm64 bool) returns ColdCallBracketPlan
 		return Self{saveSeqs: OpSeqArray.create(0), reloadSeqs: OpSeqArray.create(0), ends: ColumnLengthColumn.create(0), regs: RegNumColumn.create(0), kinds: BracketEntryKindArray.create(0), payloads: BracketPayloadArray.create(0), isArm64: isArm64, slotOfReg: SpillSlotArray.create(0), regHasSlot: BoolArray.create(0), nextSlot: 0, cursor: 0}
 	end 'create'
 
@@ -292,7 +292,7 @@ export type ColdCallBracketPlan
 	//
 	// This is the only writer of `regs`, `kinds` and `payloads`; it appends one entry to each per
 	// register, in ascending register order, so the three share the one CSR `ends`.
-	export function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask, module TargetModule, alloc Allocation, liveness LivenessResult)
+	function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask, module TargetModule, alloc Allocation, liveness LivenessResult)
 		if self.saveSeqs.count() > 0 and saveSeq <= (try self.reloadSeqs.get(self.reloadSeqs.count() - 1) otherwise panic("ColdCallBracketPlan.record: reloadSeqs.get OOB on the entry just counted")) 'outOfOrder'
 			panic("ColdCallBracketPlan.record: a run starting at sequence {saveSeq} inside or before the run last recorded — the colorer records runs in layout order and they never overlap")
 		end 'outOfOrder'
@@ -362,7 +362,7 @@ export type ColdCallBracketPlan
 
 	// The rewrite's read: does the next run start at layout sequence `seq`? When it does, it becomes
 	// the open bracket and the cursor moves past it.
-	export function takeAt(seq OpSeq) returns bool
+	function takeAt(seq OpSeq) returns bool
 		if self.cursor >= (self.saveSeqs.count()) 'pastTheLastBracket'
 			return false
 		end 'pastTheLastBracket'
@@ -386,7 +386,7 @@ export type ColdCallBracketPlan
 	end 'requireAllTaken'
 
 	// The layout sequence of the open run's last op — the op its reloads land after.
-	export function openReloadSeq() returns OpSeq
+	function openReloadSeq() returns OpSeq
 		return try self.reloadSeqs.get(self.openIndex()) otherwise panic("ColdCallBracketPlan.openReloadSeq: reloadSeqs.get OOB at the open bracket")
 	end 'openReloadSeq'
 
@@ -399,7 +399,7 @@ export type ColdCallBracketPlan
 		return try self.regs.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openRegAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
 	end 'openRegAt'
 
-	export function openKindAt(entry ElementIndex) returns BracketEntryKind
+	function openKindAt(entry ElementIndex) returns BracketEntryKind
 		return try self.kinds.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openKindAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
 	end 'openKindAt'
 
@@ -704,7 +704,7 @@ end 'RegAllocStats'
 // instead of no home at all. The XMM half needs no `push` — there is no `push xmm` — so the prologue
 // preserves it in ordinary 8-byte frame SLOTS, exactly as arm64 preserves d8–d15.
 // The pool is a property of the target — arm64 declares its own when its backend lands.
-module function allocatablePool(target Target) returns RegMask
+function allocatablePool(target Target) returns RegMask
 	match target.cpu 'cpu'
 		x64 then return x64AllocatablePool()
 		arm64 then return arm64AllocatablePool()
@@ -774,7 +774,7 @@ end 'arm64AllocatableGprMask'
 // as `file` beside `pool` (both are per-ISA and travel together, sourced once from
 // `registerFileFor(target)` and carried on `LivenessResult.registerFile`). Passing the wrong file
 // files a register in the wrong class: an arm64 GPR x19..x28 would read as vector against x64's 16.
-export function poolOfClass(pool RegMask, class RegClass, file RegisterFile) returns RegMask
+function poolOfClass(pool RegMask, class RegClass, file RegisterFile) returns RegMask
 	return pool and classRegisterMask(class, file: file)
 end 'poolOfClass'
 
@@ -980,7 +980,7 @@ end 'assertOneCallClobber'
 // `chooseRegister`); a `match` on `target.cpu` there would be a per-value cost, and
 // `arm64CallerSavedMask`'s 40-iteration derivation would be a far larger one. Threaded as a plain
 // `RegMask` beside `pool`, the per-value path does no work at all for it.
-module function callerSavedMaskFor(target Target) returns RegMask
+function callerSavedMaskFor(target Target) returns RegMask
 	match target.cpu 'cpu'
 		x64 then return callerSavedMask()
 		arm64 then return arm64CallerSavedMask()
@@ -1009,7 +1009,7 @@ end 'callerSavedMaskFor'
 // It is the target-general half of what `assertCalleeSavedListsMatchMasks` does for x64. The OTHER
 // half — that `pool ∖ caller-saved` is exactly the set the prologue preserves, so no register is
 // coloured into and never saved — cannot be written here for arm64: `Arm64PrologueEpilogue`'s
-// callee-saved bounds are file-private, and respelling them would be the fourth copy of a register
+// callee-saved bounds are unexported in `Compiler/Targets/Arm64/`, and respelling them would be the fourth copy of a register
 // file this family exists to prevent.
 //
 // Once per module, beside the other four asserts, so it costs nothing.
@@ -1068,7 +1068,7 @@ end 'arm64CallerSavedMask'
 //
 // ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO.** Ask
 // `callerSavedMaskFor(target)`; this is one of its two arms, the twin of `x64AllocatablePool`. It is
-// file-private for that reason: a target-neutral NAME on a target-specific FACT is what the colorer
+// unexported for that reason: a target-neutral NAME on a target-specific FACT is what the colorer
 // would read as "the caller-saved mask", and nothing outside this file has any business asking the
 // question without naming a target.
 //
@@ -1133,7 +1133,7 @@ end 'callerSavedMask'
 // `assertCalleeSavedListsMatchMasks` holds those lists and these two masks to one another.
 //
 // ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO EITHER** — the exact hazard its caller-saved twin
-// avoids by being file-private. This one cannot be: `Testing/ScaleCorpus`'s
+// avoids by being unexported. This one cannot be: `Testing/ScaleCorpus`'s
 // `floatsLivePerSpillLoop` reads it to size the float-spill knob, and that reader is x64-specific IN ITS
 // OWN TEXT (`classRegisterMask(RegClass.xmm, file: x64RegisterFile())` on the same line), so it names the
 // ISA it means. That is the bar for reaching this from outside, and the only caller that clears it.
@@ -1213,7 +1213,7 @@ end 'assertCalleeSavedListsMatchMasks'
 // set to 31, the clobber check reported "callDirect ... drifted apart" and named neither the
 // constant nor the enum. Checking the file's own width before anything derived from it is read
 // means each panic accuses the thing that actually moved.
-module function assertRegisterFacts(target Target, pool RegMask, callerSaved RegMask, file RegisterFile)
+function assertRegisterFacts(target Target, pool RegMask, callerSaved RegMask, file RegisterFile)
 	assertRegisterFileMatchesEnum()
 	assertCallClobberConsistent(target, callerSaved: callerSaved)
 	assertRegClassCountMatches()
@@ -1232,7 +1232,7 @@ end 'assertRegisterFacts'
 // function is re-extracted from the untouched Std module and taken through the same isel, the same edge
 // split and the same core, so it refuses at the same peak. A compile that reaches here is failing, so the
 // second run (and the fresh variant memo it builds) costs nothing anybody will see.
-module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi immutable CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
+function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi immutable CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
 	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 	let costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	let iselCost = PhaseDelta.zero()
@@ -1275,7 +1275,7 @@ end 'renderRegisterPressureRefusal'
 // The trace event goes last because `arg1` is the CUMULATIVE `valuesSplit`, so the merge must already
 // have happened - and this runs in FUNCTION-INDEX order, so the event stream is the same one a serial
 // allocation produces whatever order a pool finished in.
-module function foldFunctionAllocation(project Project, stats RegAllocStats, func IrFunction, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts)
+function foldFunctionAllocation(project Project, stats RegAllocStats, func IrFunction, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts)
 	for phase in RegAllocPhase.allCases 'eachSubPhase'
 		addRegAllocDelta(project, phase: phase, delta: costs.accumulated(phase.ordinal))
 	end 'eachSubPhase'
@@ -1308,7 +1308,7 @@ end 'foldFunctionAllocation'
 // The whole per-function allocation, touching nothing the compile owns: a pool worker runs it.
 // Everything it measures goes into values its caller hands it. A hot-loop overflow leaves through
 // `refusal` and a `throw`, because E5001 can only be built from tables a `Project` holds.
-module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValues DebugValueRoster, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray, debugSpans DebugSpanRows) throws RegAllocRefusal
+function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValues DebugValueRoster, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray, debugSpans DebugSpanRows) throws RegAllocRefusal
 	// Reverse-postorder first, so layout order matches execution order: the cold-spill splitter's
 	// before/after-peak classification and the colorer's dominance walk rest on it, and the parser
 	// emits a nested loop's exit before its inner blocks, which would otherwise misclassify an idle
@@ -4605,7 +4605,7 @@ function colorVRegWith(vreg TargetVReg, alloc Allocation) returns TargetVReg
 	end 'v'
 end 'colorVRegWith'
 
-export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
+function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 	match op 'rewrite'
 		// Returned verbatim because none carries a virtual register: the OS-call forms and
 		// `x64Syscall` take their arguments pre-moved into fixed registers, a fill ladder's operands
@@ -4790,7 +4790,7 @@ end 'colorTargetOp'
 // Stats logging
 // ==========================================================================
 
-module function regAllocStatsMessage(stats RegAllocStats) returns String
+function regAllocStatsMessage(stats RegAllocStats) returns String
 	let msg = StringBuilder.create()
 	msg.append("regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n")
 

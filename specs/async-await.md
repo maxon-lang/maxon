@@ -1828,7 +1828,7 @@ error E3102: <fragment>:20:19: use of moved value 'p': it is passed at two argum
 ```
 
 <!-- test: async-await.error.a-function-that-awaits-its-promise-does-not-convert-to-an-unqualified-type -->
-A function that awaits its promise is judged against the shape it converts to even when a second file of the directory declares a private function of its own, so the conversion door reads `take`'s own declaration.
+A function that awaits its promise is judged against the shape it converts to even when a second file of the directory declares an unmarked function of its own, so the conversion door reads `take`'s own declaration.
 ```maxon
 // --- file: awaiting.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2076,13 +2076,13 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: callee.maxon
-export typealias Integer = int(i64.min to i64.max)
-export typealias IntPromise = Promise with Integer
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
 
-export type Cell
-	export var p as IntPromise
+type Cell
+	var p as IntPromise
 
-	export static function of(p IntPromise) returns Self
+	static function of(p IntPromise) returns Self
 		return Self{p: p}
 	end 'of'
 end 'Cell'
@@ -2098,13 +2098,13 @@ end 'Cell'
 The same two files, read in the other order.
 ```maxon
 // --- file: callee.maxon
-export typealias Integer = int(i64.min to i64.max)
-export typealias IntPromise = Promise with Integer
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
 
-export type Cell
-	export var p as IntPromise
+type Cell
+	var p as IntPromise
 
-	export static function of(p IntPromise) returns Self
+	static function of(p IntPromise) returns Self
 		return Self{p: p}
 	end 'of'
 end 'Cell'
@@ -3749,7 +3749,7 @@ end 'main'
 ```
 
 <!-- test: two-directories-each-spawn-their-own-file-private-function-of-one-name -->
-Each directory spawns its own file-private `slowTally`, and each spawn binds the declaration its own file holds.
+Each directory spawns its own unmarked `slowTally`, and each spawn binds the declaration its own file holds.
 ```maxon
 // --- file: a/a.maxon
 typealias Tally = int(0 to 100)

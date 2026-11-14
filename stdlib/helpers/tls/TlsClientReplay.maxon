@@ -1,40 +1,40 @@
-module type TlsUnauthenticatedPeer implements TlsPeerAuthenticator
-	module static function create() returns TlsUnauthenticatedPeer
+type TlsUnauthenticatedPeer implements TlsPeerAuthenticator
+	static function create() returns TlsUnauthenticatedPeer
 		return Self{}
 	end 'create'
 
-	module function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
+	function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
 		return
 	end 'verifyChain'
 
-	module function verifySignature(scheme TlsSignatureScheme, key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
+	function verifySignature(scheme TlsSignatureScheme, key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
 		return
 	end 'verifySignature'
 
-	module function authenticates() returns bool
+	function authenticates() returns bool
 		return false
 	end 'authenticates'
 end 'TlsUnauthenticatedPeer'
 
-module type TlsReplacedClientHello implements TlsClientHelloSource
+type TlsReplacedClientHello implements TlsClientHelloSource
 	var firstReplacement as ByteArray
 	var retryReplacements as ByteArrays
 
-	module static function create(first ByteArray, retry ByteArrays) returns TlsReplacedClientHello
+	static function create(first ByteArray, retry ByteArrays) returns TlsReplacedClientHello
 		return Self{firstReplacement: first, retryReplacements: retry}
 	end 'create'
 
-	module function first(built ByteArray) returns ByteArray
+	function first(built ByteArray) returns ByteArray
 		return firstReplacement
 	end 'first'
 
-	module function second(built ByteArray) returns ByteArray
+	function second(built ByteArray) returns ByteArray
 		return try retryReplacements.first() otherwise built
 	end 'second'
 end 'TlsReplacedClientHello'
 
-module type TlsClientReplay
-	module static function run(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool) returns TlsReplayTrace throws TlsHandshakeError
+type TlsClientReplay
+	static function run(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool) returns TlsReplayTrace throws TlsHandshakeError
 		let client = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: helloSource)
 
 		return try TlsReplay.run(client, inbound: inbound, writes: writes, closeNotify: closeNotify)

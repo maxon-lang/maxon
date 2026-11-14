@@ -232,7 +232,7 @@ end 'RawIntrinsic'
 // @generated library-cache begin
 let CacheCasesRawIntrinsic = [RawIntrinsic.osTickCountMs, RawIntrinsic.osReadWallClock, RawIntrinsic.osThreadCpuTicks, RawIntrinsic.osCpuCount, RawIntrinsic.osGetPid, RawIntrinsic.osEnterBackgroundPriority, RawIntrinsic.osProcessProbe, RawIntrinsic.osDescendants, RawIntrinsic.osWaitHandle, RawIntrinsic.osCloseHandle, RawIntrinsic.osExit, RawIntrinsic.scratch, RawIntrinsic.schedNumProcsAddr, RawIntrinsic.schedMaxActiveWorkersAddr, RawIntrinsic.cpuAesUsableAddr, RawIntrinsic.slabArenaListAddr, RawIntrinsic.slabArenaMapL1Addr, RawIntrinsic.slabStateAddr, RawIntrinsic.slabSizeToClass8Addr, RawIntrinsic.slabSizeToClass128Addr, RawIntrinsic.slabClassGeomAddr, RawIntrinsic.dsBaseAddr, RawIntrinsic.dsAllocIdAddr, RawIntrinsic.tlsSlotLoad, RawIntrinsic.loadWord, RawIntrinsic.storeWord, RawIntrinsic.loadByte, RawIntrinsic.storeByte, RawIntrinsic.atomicAddWord, RawIntrinsic.atomicCas, RawIntrinsic.memFill, RawIntrinsic.osAllocPages, RawIntrinsic.osReservePages, RawIntrinsic.osCommitPages, RawIntrinsic.osDecommitPages, RawIntrinsic.osFreePages, RawIntrinsic.osLockInit, RawIntrinsic.osLockEnter, RawIntrinsic.osLockLeave, RawIntrinsic.osThreadCreate, RawIntrinsic.schedTlsTebOffsetAddr, RawIntrinsic.schedAllMachinesAddr, RawIntrinsic.schedPreemptExtLockAddr, RawIntrinsic.schedLockAddr, RawIntrinsic.ownFrame, RawIntrinsic.splicedAtEverySite]
 
-module function cacheReadRawIntrinsic(reader LibraryCacheReader) returns RawIntrinsic throws LibraryCacheDamage
+function cacheReadRawIntrinsic(reader LibraryCacheReader) returns RawIntrinsic throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
 
 	return try CacheCasesRawIntrinsic.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
@@ -257,7 +257,7 @@ function cacheTableAgreesRawIntrinsic() returns bool
 	return true
 end 'cacheTableAgreesRawIntrinsic'
 
-module function cacheEnumTablesAgreeInCompilerRawIntrinsics() returns bool
+function cacheEnumTablesAgreeInCompilerRawIntrinsics() returns bool
 	if not cacheTableAgreesRawIntrinsic() 'disagreesCacheTableAgreesRawIntrinsic'
 		return false
 	end 'disagreesCacheTableAgreesRawIntrinsic'
@@ -275,7 +275,7 @@ end 'cacheEnumTablesAgreeInCompilerRawIntrinsics'
 // position is a compile-time integer the emitted instruction CARRIES in place of an operand: a scratch
 // record's size fixes a frame slot, a field offset is encoded in the addressing mode, and a fill byte is
 // broadcast into an immediate, so none of the three can be a value computed at run time.
-export enum RawArgShape
+enum RawArgShape
 	nothing
 	oneWord
 	twoWords
@@ -289,7 +289,7 @@ end 'RawArgShape'
 
 // What a row ANSWERS. `nothing` is a void intrinsic — legal as a statement and refused in value position,
 // which is `emitVoidZeroArgIntrinsic`'s rule one family over.
-export enum RawResultKind
+enum RawResultKind
 	machineWord
 	nothing
 end 'RawResultKind'
@@ -306,7 +306,7 @@ end 'RawIntrinsicLookup'
 // must never disagree about it: the dispatch table in `Parser.parseCallNamed`, the STATEMENT door
 // `Parser.qualifiedStaticCallsAt` — without which a `__Raw.storeWord(a, 0, v)` on a line of its own is not
 // a statement at all — and the E3152 refusal.
-export function isRawIntrinsicCallee(callee ByteArray) returns bool
+function isRawIntrinsicCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: RawQualifierPrefix)
 end 'isRawIntrinsicCallee'
 
@@ -502,7 +502,7 @@ end 'rawIntrinsicLookupOf'
 // ⭐ Does the table carry this `__Raw.` member? The parser's dispatch gate: a member that is NOT listed is
 // left to fall through to `emitCall`'s reserved-callee door, which answers the positioned E3004 that names
 // it. The predicate and the accessor below read ONE roster, the `constIsKnown` / `constOf` discipline.
-export function rawIntrinsicIsListed(callee ByteArray) returns bool
+function rawIntrinsicIsListed(callee ByteArray) returns bool
 	match rawIntrinsicLookupOf(callee) 'row'
 		found then return true
 		absent then return false
@@ -511,20 +511,20 @@ end 'rawIntrinsicIsListed'
 
 // The row for a mangled callee. Only meaningful when `rawIntrinsicIsListed(callee)` — asking otherwise is
 // a caller bug, and there is no row to answer with, so it panics rather than inventing one.
-export function rawIntrinsicNamed(callee ByteArray) returns RawIntrinsic
+function rawIntrinsicNamed(callee ByteArray) returns RawIntrinsic
 	match rawIntrinsicLookupOf(callee) 'row'
 		found(intrinsic) then return intrinsic
 		absent then panic("rawIntrinsicNamed: '{String.from(callee)}' is not a listed __Raw intrinsic — guard the call with rawIntrinsicIsListed")
 	end 'row'
 end 'rawIntrinsicNamed'
 
-export function rawArgumentIsTheBuffer(shape RawArgShape, position ParamCount) returns bool
+function rawArgumentIsTheBuffer(shape RawArgShape, position ParamCount) returns bool
 	return shape == RawArgShape.wordBufferWord and position == 1
 end 'rawArgumentIsTheBuffer'
 
 // The mangled spelling of a row, for a diagnostic that must quote the intrinsic rather than the bytes at
 // a call site the compiler itself may have minted.
-export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns immutable ByteArray
+function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns immutable ByteArray
 	return match intrinsic 'name'
 		osTickCountMs gives RawOsTickCountMsName
 		osReadWallClock gives RawOsReadWallClockName
@@ -575,7 +575,7 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns immutable
 	end 'name'
 end 'rawIntrinsicCalleeName'
 
-export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
+function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 	return match intrinsic 'shape'
 		osTickCountMs or
 		osCpuCount or
@@ -626,7 +626,7 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 	end 'shape'
 end 'rawArgShapeOf'
 
-export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
+function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 	return match intrinsic 'result'
 		osTickCountMs or
 		osCpuCount or
@@ -680,7 +680,7 @@ end 'rawResultKindOf'
 // How many arguments a shape is written with, and which position (if any) carries the compile-time
 // constant. Both are derived from the shape rather than stated per row, so a row cannot declare an arity
 // that contradicts the shape its arguments are read under.
-export function rawArgCountOf(shape RawArgShape) returns ParamCount
+function rawArgCountOf(shape RawArgShape) returns ParamCount
 	return match shape 'count'
 		nothing gives 0 as ParamCount
 		oneWord or
@@ -697,7 +697,7 @@ end 'rawArgCountOf'
 // Is argument `position` of this shape the COMPILE-TIME CONSTANT one? Asked per argument by the parser's
 // one reader, which is why it is a predicate over the pair rather than a position to compare against: a
 // shape with no constant has no position for a caller to accidentally match.
-export function rawArgumentIsTheConstant(shape RawArgShape, position ParamCount) returns bool
+function rawArgumentIsTheConstant(shape RawArgShape, position ParamCount) returns bool
 	return match shape 'position'
 		nothing or
 		oneWord or
@@ -745,12 +745,12 @@ end 'rawArgumentIsTheConstant'
 // at all. `__Raw.scratch` therefore answers `none` while a REACHED tier body spelling it would die in that
 // backend — a MISSING FACILITY ROW (no `HostFacility` case names an addressable frame) rather than a wrong
 // answer here.
-export union RawHostFacility
+union RawHostFacility
 	none
 	required(facility HostFacility)
 end 'RawHostFacility'
 
-export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacility
+function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacility
 	return match intrinsic 'facility'
 		osTickCountMs gives RawHostFacility.required(HostFacility.uptimeClock)
 		osReadWallClock gives RawHostFacility.required(HostFacility.wallClock)

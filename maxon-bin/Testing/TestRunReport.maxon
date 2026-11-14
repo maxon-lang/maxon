@@ -17,7 +17,7 @@ export typealias ReportedTestCount = int(0 to u64.max)
 // are found by different evidence and a reader has to act on them differently: an assertion is the
 // test's own report, a crash is the ABSENCE of one, a deadline is the harness's own verdict, and a
 // leak is a fact about the process that had to be attributed by re-running.
-export enum UnitTestOutcome
+enum UnitTestOutcome
 	// The body returned. Reported by the binary itself.
 	passed
 
@@ -49,7 +49,7 @@ end 'UnitTestOutcome'
 // compiled clean and was discovered at RUNTIME, in whichever face somebody happened not to extend.
 // Here a new `UnitTestOutcome` case fails to compile at exactly one site, and both faces gain their
 // spelling together or neither does.
-export type UnitTestOutcomeSpelling
+type UnitTestOutcomeSpelling
 	// What the text report prints for an outcome that did not finish under its own power, and what
 	// heads a failure's detail block.
 	export let label as String
@@ -57,14 +57,14 @@ export type UnitTestOutcomeSpelling
 	// What `--json` writes as the result's `state`.
 	export let jsonState as String
 
-	export static function create(label String, jsonState String) returns UnitTestOutcomeSpelling
+	static function create(label String, jsonState String) returns UnitTestOutcomeSpelling
 		return Self{label: label, jsonState: jsonState}
 	end 'create'
 end 'UnitTestOutcomeSpelling'
 
 // An outcome's two spellings. The `match` is EXHAUSTIVE, which is the whole mechanism: there is no
 // default arm to absorb a case nobody taught this.
-export function outcomeSpelling(outcome UnitTestOutcome) returns UnitTestOutcomeSpelling
+function outcomeSpelling(outcome UnitTestOutcome) returns UnitTestOutcomeSpelling
 	return match outcome 'spelling'
 		passed gives UnitTestOutcomeSpelling.create("PASS", jsonState: "passed")
 		failed gives UnitTestOutcomeSpelling.create("FAIL", jsonState: "failed")
@@ -81,12 +81,12 @@ end 'outcomeSpelling'
 // not this compiler's to vouch for; a reader that refused to render a line outside `stdlib`'s range
 // would drop the one fact needed to open the file, and would do it silently — the line would simply
 // stop parsing as protocol and reappear as ordinary test output.
-export typealias ReportedSourceLine = int(0 to u64.max)
+typealias ReportedSourceLine = int(0 to u64.max)
 
 // ⭐ **THE ERROR A TEST REPORTED THROUGH `__TestReport.threw`** — one that reached the end of a test
 // body unhandled. Absent when a test failed its own assertion, which throws `TestFailure` and is not
 // foreign.
-export type ThrownTestError
+type ThrownTestError
 	// The callee's declared `throws` TYPE name.
 	export let errorType as String
 
@@ -98,7 +98,7 @@ export type ThrownTestError
 	export let file as String
 	export let line as ReportedSourceLine
 
-	export static function create(errorType String, errorCase String, file String, line ReportedSourceLine) returns ThrownTestError
+	static function create(errorType String, errorCase String, file String, line ReportedSourceLine) returns ThrownTestError
 		return Self{errorType: errorType, errorCase: errorCase, file: file, line: line}
 	end 'create'
 end 'ThrownTestError'
@@ -107,13 +107,13 @@ end 'ThrownTestError'
 // "this test reported no unhandled error" and "it reported one with empty fields" are different facts
 // and a reader acts on them differently — the failure block prints a `threw` section for the first
 // and its no-assertion sentence for the second.
-export union ThrownReport
+union ThrownReport
 	reported(error ThrownTestError)
 	absent
 end 'ThrownReport'
 
 // ⭐ ONE TEST'S RESULT.
-export type UnitTestResult
+type UnitTestResult
 	// Position in DISCOVERY order — the number that crossed the wire, and what a selection names.
 	export let index as ElementIndex
 
@@ -131,7 +131,7 @@ export type UnitTestResult
 	// crash it is the process's dying output, which is where the panic message is.
 	export let output as String
 
-	export static function create(index ElementIndex, test DiscoveredTest, outcome UnitTestOutcome, nanos DurationNanos, thrown ThrownReport, output String) returns UnitTestResult
+	static function create(index ElementIndex, test DiscoveredTest, outcome UnitTestOutcome, nanos DurationNanos, thrown ThrownReport, output String) returns UnitTestResult
 		return Self{index: index, test: test, outcome: outcome, nanos: nanos, thrown: thrown, output: output}
 	end 'create'
 
@@ -142,29 +142,29 @@ export type UnitTestResult
 	end 'isFailure'
 end 'UnitTestResult'
 
-export typealias UnitTestResultArray = Array with UnitTestResult
+typealias UnitTestResultArray = Array with UnitTestResult
 
 // One test file's results, in the order the file DECLARES them.
-export type TestFileResults
+type TestFileResults
 	// The `.maxtest` file as the COMPILER recorded it — the user's own path, never the staged
 	// copy's. `reportPathDisplay` is what turns it into the bytes a report prints.
 	export let file as FilePath
 	export let results as UnitTestResultArray
 
-	export static function create(file FilePath, results UnitTestResultArray) returns TestFileResults
+	static function create(file FilePath, results UnitTestResultArray) returns TestFileResults
 		return Self{file: file, results: results}
 	end 'create'
 end 'TestFileResults'
 
-export typealias TestFileResultsArray = Array with TestFileResults
+typealias TestFileResultsArray = Array with TestFileResults
 
 // The three numbers every face of a report ends with, produced by ONE walk.
-export type TestRunTally
+type TestRunTally
 	export let total as ReportedTestCount
 	export let passed as ReportedTestCount
 	export let failed as ReportedTestCount
 
-	export static function create(total ReportedTestCount, passed ReportedTestCount, failed ReportedTestCount) returns TestRunTally
+	static function create(total ReportedTestCount, passed ReportedTestCount, failed ReportedTestCount) returns TestRunTally
 		return Self{total: total, passed: passed, failed: failed}
 	end 'create'
 end 'TestRunTally'
@@ -172,7 +172,7 @@ end 'TestRunTally'
 // ⭐⭐ **THE ONE PLACE A RUN'S TOTALS COME FROM.** Three numbers off one walk rather than three walks:
 // a report whose "N pass" and "N tests" disagree is worse than one that reports neither, and three
 // separate loops is exactly how they come to.
-export function tallyTestRun(files TestFileResultsArray) returns TestRunTally
+function tallyTestRun(files TestFileResultsArray) returns TestRunTally
 	var total = 0 as ReportedTestCount
 	var passed = 0 as ReportedTestCount
 	var failed = 0 as ReportedTestCount
@@ -193,7 +193,7 @@ export function tallyTestRun(files TestFileResultsArray) returns TestRunTally
 end 'tallyTestRun'
 
 // Everything one `maxon test` run produced.
-export type TestRunReport
+type TestRunReport
 	// Results grouped by file, in the order `reportFileOrder` defines.
 	export let files as TestFileResultsArray
 
@@ -208,23 +208,23 @@ export type TestRunReport
 	// know that would read a short green list as a complete one.
 	export let bailed as bool
 
-	export static function create(files TestFileResultsArray, compileMs DurationMs, runMs DurationMs, bailed bool) returns TestRunReport
+	static function create(files TestFileResultsArray, compileMs DurationMs, runMs DurationMs, bailed bool) returns TestRunReport
 		return Self{files: files, compileMs: compileMs, runMs: runMs, bailed: bailed}
 	end 'create'
 end 'TestRunReport'
 
 // One file's place in a report: the path its section is headed with, and where the walk found it.
-export type ReportFile
+type ReportFile
 	export let displayPath as String
 	export let index as ElementIndex
 	export let group as TestFileGroup
 
-	export static function create(displayPath String, index ElementIndex, group TestFileGroup) returns ReportFile
+	static function create(displayPath String, index ElementIndex, group TestFileGroup) returns ReportFile
 		return Self{displayPath: displayPath, index: index, group: group}
 	end 'create'
 end 'ReportFile'
 
-export typealias ReportFileArray = Array with ReportFile
+typealias ReportFileArray = Array with ReportFile
 
 // ⭐⭐ **THE ORDER EVERY FACE OF A REPORT EMITS ITS PER-FILE SECTIONS IN**: ascending by the display
 // path that heads each section.
@@ -234,7 +234,7 @@ export typealias ReportFileArray = Array with ReportFile
 // and can never be a committed expectation. Ordering here rather than at the walk is what leaves the
 // RUN in the filesystem's order: an order dependence that changes a RESULT must still be free to
 // surface.
-export function reportFileOrder(groups TestFileGroupArray) returns ReportFileArray
+function reportFileOrder(groups TestFileGroupArray) returns ReportFileArray
 	let ordered = ReportFileArray.create(groups.count(), zeroed: false)
 
 	for (iter, group) in groups.withIterator() 'eachGroup'

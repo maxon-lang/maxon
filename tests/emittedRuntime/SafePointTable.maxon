@@ -1,7 +1,7 @@
-export typealias SymtabWord = int(0 to u32.max)
-export typealias SafePointByte = int(0 to 255)
+typealias SymtabWord = int(0 to u32.max)
+typealias SafePointByte = int(0 to 255)
 
-export let NeverPreemptibleByte = 0 as SafePointByte
+let NeverPreemptibleByte = 0 as SafePointByte
 
 let SymtabHeaderBytes = 8 as ElementIndex
 let SymtabEntryBytes = 8
@@ -15,13 +15,13 @@ let ByteShift = 8
 let SymtabSafeFromMask = 0x7F
 let NameTerminator = 0
 
-export type SafePointTable
+type SafePointTable
 	let image as ByteArray
 	let start as ElementIndex
 	let count as SymtabWord
 	let flagsAt as ElementIndex
 
-	export static function locate(image ByteArray, target String) returns SafePointTable
+	static function locate(image ByteArray, target String) returns SafePointTable
 		let last = image.count() - SymtabHeaderBytes - SymtabEntryBytes
 
 		for at in 0 upto last 'eachOffset'
@@ -33,7 +33,7 @@ export type SafePointTable
 		panic("emitted-runtime tests: the gate could not run — the {target} executable holds no `__symtable`: no offset starts a header whose entry count, first name offset and flags run agree. The table's layout (`BacktraceFormat.buildSymbolTableBytes`) has moved, and this reader no longer finds it.")
 	end 'locate'
 
-	export function safePointByteOf(symbol String, target String) returns SafePointByte
+	function safePointByteOf(symbol String, target String) returns SafePointByte
 		for index in 0 upto self.count 'eachEntry'
 			let entryAt = self.start + SymtabHeaderBytes + (index as ElementIndex) * SymtabEntryBytes
 			let nameAt = self.start + (wordAt(self.image, at: entryAt + SymtabNameOffsetColumn) as ElementIndex)

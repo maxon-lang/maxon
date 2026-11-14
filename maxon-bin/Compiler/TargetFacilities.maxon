@@ -39,7 +39,7 @@
 // ⚠ Deliberately NOT a case per runtime ENTRY POINT. `__gt_now_ns` and `__Builtins.currentTimeMs` are one
 // facility asked twice, and a target that lowers the monotonic clock lowers both or neither — so splitting
 // them would invite a table with two answers to one question.
-// ⚠ EXPORTED, and a `module`/file-private narrowing will be REVERSED by the build: `SemanticCheck`
+// ⚠ EXPORTED, and a narrowing to unexported will be REVERSED by the build: `SemanticCheck`
 // reads this enum for the services gate (`requireTargetSupportsServiceEntry`), which asks this table
 // rather than refusing blind. An unused-export sweep narrowed it once, after which that gate stopped
 // compiling.
@@ -640,26 +640,26 @@ end 'isServiceOpEntry'
 // ⚠ It is a COMPOSITION and not a third fact: both halves come from the two functions above, so a family
 // that lands is recorded once, in the table, and this answer follows. A predicate shaped like this on the
 // outside but undecomposable on the inside is what makes a partial landing inexpressible.
-export function calleeNeedsFacilityTargetLacks(target Target, callee ByteArray) returns bool
+function calleeNeedsFacilityTargetLacks(target Target, callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'
 		needs(facility) gives not targetProvidesFacility(target, facility: facility)
 		none gives false
 	end 'f'
 end 'calleeNeedsFacilityTargetLacks'
 
-module function targetParksOnIo(target Target) returns bool
+function targetParksOnIo(target Target) returns bool
 	return targetProvidesFacility(target, facility: HostFacility.greenThreads)
 end 'targetParksOnIo'
 
-module function strandGuardCallIsElided(parksOnIo bool, callee ByteArray) returns bool
+function strandGuardCallIsElided(parksOnIo bool, callee ByteArray) returns bool
 	return isStrandGuardCallee(callee) and not parksOnIo
 end 'strandGuardCallIsElided'
 
-module function pinDestructIsInert(parksOnIo bool, callee ByteArray) returns bool
+function pinDestructIsInert(parksOnIo bool, callee ByteArray) returns bool
 	return callee.equals(GtPinDestructName) and not parksOnIo
 end 'pinDestructIsInert'
 
-export function calleeHasHostFacility(callee ByteArray) returns bool
+function calleeHasHostFacility(callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'
 		needs gives true
 		none gives false
@@ -1013,14 +1013,14 @@ end 'targetCanMeasureCoverage'
 // How many OS threads a target can run inside one process, which is what the allocator's sharding
 // reads: on `singleMachine` there is no thread-local slot to read and no second thread to serialise
 // against, so the "which processor am I" walk is a constant and every lock and atomic guards nothing.
-module enum MachineModel
+enum MachineModel
 	singleMachine
 	multiMachine
 end 'MachineModel'
 
 // ⚠ Keyed on the whole target and enumerated, so a lane that gains threads must say so here before
 // its allocator reads a TLS slot the backend refuses (`StdToWasm` panics on `tlsSlotLoad`).
-module function machineModel(target Target) returns MachineModel
+function machineModel(target Target) returns MachineModel
 	if target.cpu == CpuArch.wasm32 and target.os == Os.wasi 'wasi'
 		return MachineModel.singleMachine
 	end 'wasi'
@@ -1035,7 +1035,7 @@ end 'machineModel'
 // The per-function short-circuit `SemanticCheck.checkCalls` settles once and hands to every call
 // op. A walk over `allCases` rather than `x64 and windows`, so a lane that completes the table
 // becomes true here without anyone widening a hard-coded pair.
-export function targetProvidesEveryFacility(target Target) returns bool
+function targetProvidesEveryFacility(target Target) returns bool
 	for facility in HostFacility.allCases 'each'
 		if not targetProvidesFacility(target, facility: facility) 'missing'
 			return false

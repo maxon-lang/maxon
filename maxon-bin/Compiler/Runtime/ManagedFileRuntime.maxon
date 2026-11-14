@@ -63,7 +63,7 @@ let HandleSlotBias = 1
 
 // Store an OS handle into a handle slot — `emitLiveHandleOrClosedThrow`'s inverse, and the only writer of
 // the biased encoding above.
-export function emitStoreHandleSlot(module StdModule, block IrBlock, record ValueId, handleOffset ByteOffset, handle ValueId, ids ValueMinter)
+function emitStoreHandleSlot(module StdModule, block IrBlock, record ValueId, handleOffset ByteOffset, handle ValueId, ids ValueMinter)
 	let bias = emitConst(module, block: block, value: HandleSlotBias, ids: ids)
 	let slot = emitBin(module, block: block, a: handle, b: bias, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: block, record: record, offset: handleOffset, value: slot)
@@ -71,14 +71,14 @@ end 'emitStoreHandleSlot'
 
 // The OS handle a handle slot carries. The caller must already have established that the slot is not the
 // closed sentinel — on that path the answer is `-1`, which is a handle no call may be made with.
-export function emitHandleFromSlot(module StdModule, block IrBlock, slot ValueId, ids ValueMinter) returns ValueId
+function emitHandleFromSlot(module StdModule, block IrBlock, slot ValueId, ids ValueMinter) returns ValueId
 	let bias = emitConst(module, block: block, value: HandleSlotBias, ids: ids)
 	return emitBin(module, block: block, a: slot, b: bias, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitHandleFromSlot'
 
 // `CreateFileW` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
 // carries. Two distinct sentinels for two distinct facts: "the OS refused" vs "this box holds no handle".
-export let InvalidHandleValue = -1 as FullRangeInt
+let InvalidHandleValue = -1 as FullRangeInt
 
 // The Win32 last-error codes the corpus discriminates. `specs/managed-file.md`'s own note records that
 // Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
@@ -159,7 +159,7 @@ let ManagedFileBusyFlag = ManagedFileBusyOrdinal + ErrorFlagOrdinalBias
 // the two size DWORDs as ONE unaligned 64-bit store at `FindDataSizeHighOffset`, so the low half
 // has no separate writer.
 // The size is the wide record's on every lane, because the Std tier owns one record size.
-export let FindDataBytes = 592 as FullRangeInt
+let FindDataBytes = 592 as FullRangeInt
 export let FindDataAttributesOffset = 0 as ByteOffset
 export let FindDataCreationTimeOffset = 4 as ByteOffset
 export let FindDataLastAccessTimeOffset = 12 as ByteOffset
@@ -210,7 +210,7 @@ let FileSizeHighShift = 32
 // ⚠ A DWORD is read as a word and masked. The mask is right only for an unsigned DWORD, and the
 // full-word load must stay inside the record it reads; this file's four extra bytes always fall inside
 // the 592-byte find record.
-export let DwordMask = 0xFFFFFFFF as FullRangeInt
+let DwordMask = 0xFFFFFFFF as FullRangeInt
 
 // The `__mf_` prefix that identifies EVERY file-IO runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesManagedFile` (and `usesHeap`), and the one `SemanticCheck` reads for E3104.
@@ -241,7 +241,7 @@ let Win32OutWordBytes = 8
 // ⭐ Named rather than spelled `0 as ByteOffset` at each read — three files reach `emitWin32OutWord`'s block
 // (here, `ConsoleRuntime`, `ManagedSocketRuntime`) and a bare literal at each of them is the SAME fact about
 // this allocation's layout, transcribed three times, in three files, none of which declares it.
-export let Win32OutWordAnswerOffset = 0 as ByteOffset
+let Win32OutWordAnswerOffset = 0 as ByteOffset
 
 // ⭐ **THE SIXTEEN ENTRY POINTS.** Fifteen name a `__ManagedFile` method; `__mf_destruct` is the
 // compiler-INSERTED one — the drop a `__ManagedFile` box takes when its last owner goes away
@@ -275,7 +275,7 @@ export let ManagedFileStatFreeName = b"__mf_stat_free"
 // bidirectional drift guard in `installManagedFileRuntime`, which is copied from `installManagedMemoryRuntime`
 // deliberately: a predicate and a `throws` stamp are one fact in two places, and this project keeps
 // finding that pair drifted.
-export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns bool
+function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns bool
 	// ⚠ **THE FIVE ABSENTEES ARE EACH ABSENT FOR A STATED REASON, not by oversight.**
 	//   • `__mf_close` — the spec documents `close()` as "Does not throw"; naming it here would make a `try`
 	//     required on a call that cannot fail (E3055), which the drift guard below caught on first write.
@@ -317,7 +317,7 @@ end 'isThrowingManagedFileRuntimeCallee'
 // which was typed — and the three `RuntimeCalleeSourceMethod` maps are all one union away from needing it
 // again. Deleting it would touch five files and change a second diagnostic's wording to remove a case that
 // costs nothing to keep.
-export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
+function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
 	if callee.equals(ManagedFileOpenReadName) 'openRead'
 		return RuntimeCalleeSourceMethod.found(ManagedFileOpenReadMethod)
 	end 'openRead'
@@ -376,7 +376,7 @@ end 'managedFileSourceMethod'
 // optional over a type that ALREADY has a `none` arm costs one extra 16-byte union box per `try` in the
 // program. The composer (`GtRuntime.runtimeThrowsClause`) asks the two PREDICATES and returns a
 // `ThrowsClause` directly, so exactly one clause value is built per ask.
-export function managedFileThrows() returns ThrowsClause
+function managedFileThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedFileErrorTypeName))
 end 'managedFileThrows'
 
@@ -394,7 +394,7 @@ end 'managedFileThrows'
 // Emits into `cur`, routes the copy loop's exit into `join`, and writes the terminator in `join` — so the
 // caller carries on from `join` with the pointer this returns. `cur` dominates `join`, which is what lets
 // `len` be read in one and used in the other with no block argument.
-export function emitBytesToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, buf ValueId, len ValueId, ids ValueMinter) returns ValueId
+function emitBytesToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, buf ValueId, len ValueId, ids ValueMinter) returns ValueId
 	let one = emitConst(module, block: cur, value: 1, ids: ids)
 	let size = emitBin(module, block: cur, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let scratch = emitRawAlloc(module, block: cur, byteCount: size, ids: ids)
@@ -415,19 +415,19 @@ end 'emitBytesToCString'
 // ARGUMENT REGISTER**, and `__mm_decref` calls a non-trivial `destructor@0` through `callIndirect`
 // at the last owner, so a box released through it would call through a garbage pointer. Stated once
 // here so the arity cannot be got wrong per call site.
-export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
+function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
 	let ptr = ids.mint()
 	emitRawAllocInto(module, block: block, result: ptr, byteCount: byteCount, ids: ids)
 	return ptr
 end 'emitRawAlloc'
 
-export function emitHandleBoxAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
+function emitHandleBoxAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
 	let box = emitRawAlloc(module, block: block, byteCount: byteCount, ids: ids)
 	emitMarkBoxShared(module, block: block, box: box, ids: ids)
 	return box
 end 'emitHandleBoxAlloc'
 
-export function emitRawAllocInto(module StdModule, block IrBlock, result ValueId, byteCount ValueId, ids ValueMinter)
+function emitRawAllocInto(module StdModule, block IrBlock, result ValueId, byteCount ValueId, ids ValueMinter)
 	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	emitMmAllocCall(module, block: block, result: result, size: byteCount, destructor: dtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 end 'emitRawAllocInto'
@@ -439,16 +439,15 @@ end 'emitRawAllocInto'
 //
 // ⚠ **IT LIVES HERE, WITH `emitBytesToCString`, BECAUSE THIS FILE ALREADY OWNS THE CSTRING QUESTION** —
 // that one terminates a RUNTIME value in a scratch buffer, this one terminates a CONSTANT the compiler
-// embeds in `.rdata`, and both exist for the same OS contract. ⚠ **TWO FILE-PRIVATE COPIES OF IT COMPILE**
-// — the flat-namespace check governs cross-file top-level names and a private declaration is not one — so a
-// second spelling in a caller sits there unnoticed.
-export function cStringBytes(text String) returns ByteArray
+// embeds in `.rdata`, and both exist for the same OS contract. ⚠ **A SECOND COPY IN ANOTHER DIRECTORY
+// COMPILES** — directories are separate scopes — so a second spelling in a caller there sits unnoticed.
+function cStringBytes(text String) returns ByteArray
 	let bytes = text.toByteArray()
 	bytes.push(0)
 	return bytes
 end 'cStringBytes'
 
-export function emitRawFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
+function emitRawFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(ptr)))
 end 'emitRawFree'
 
@@ -460,7 +459,7 @@ end 'emitRawFree'
 // rather than on a `__ManagedFile` box. Exported rather than re-implemented for the reason the constant
 // itself is named: the width AND the "the allocator zeroed it, so the four bytes the OS does not write read
 // back as 0" guarantee are one fact, and a second copy would be free to drift from either half.
-export function emitWin32OutWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitWin32OutWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let wordSize = emitConst(module, block: block, value: Win32OutWordBytes, ids: ids)
 	return emitRawAlloc(module, block: block, byteCount: wordSize, ids: ids)
 end 'emitWin32OutWord'
@@ -515,7 +514,7 @@ end 'emitWin32BoolVerdict'
 // ⚠ It is builder-built Std rather than backend code because the arithmetic is the same on every platform
 // even though the READ is not: `specs/managed-file.md`'s own note records that Win32 `ERROR_FILE_NOT_FOUND`
 // and POSIX `ENOENT` are BOTH 2, so a POSIX lane reuses this unchanged and supplies only the calls.
-export function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, notFoundFlag FullRangeInt, deniedFlag FullRangeInt, fallbackFlag FullRangeInt, ids ValueMinter)
+function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, notFoundFlag FullRangeInt, deniedFlag FullRangeInt, fallbackFlag FullRangeInt, ids ValueMinter)
 	let checkPath = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileNotFound, flag: notFoundFlag, ids: ids)
 	let checkDenied = emitThrowOnCode(module, func: func, block: checkPath, err: err, code: ErrorPathNotFound, flag: notFoundFlag, ids: ids)
 	let other = emitThrowOnCode(module, func: func, block: checkDenied, err: err, code: ErrorAccessDenied, flag: deniedFlag, ids: ids)
@@ -562,7 +561,7 @@ end 'emitThrowOnCode'
 // ⚠ The `closed` block's LABEL is deliberately family-neutral and NOT a parameter: labels are diagnostic
 // strings only (identity is `block.id`), and `emitErrnoClassifiedThrow` — shared by both families —
 // already emits `mf`-prefixed labels inside directory functions.
-export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel FullRangeInt, closedFlag FullRangeInt, ids ValueMinter) returns ValueId
+function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel FullRangeInt, closedFlag FullRangeInt, ids ValueMinter) returns ValueId
 	let slot = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
 	let isClosed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: closedSentinel, ids: ids)
 	let closedBlock = module.addBlock(func, label: b"closedthrow", heat: BlockHeat.normal)
@@ -603,7 +602,7 @@ end 'emitOpenHandleOrThrow'
 // stride. That is a real guarantee — and it lives in two OTHER files, where nothing points at this
 // arithmetic. Asking the shared formula costs one call, is byte-identical for every positive stride, and
 // does not depend on a front-end predicate staying exactly as strict as it is now.
-export function emitArrayByteExtent(module StdModule, block IrBlock, arrRec ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+function emitArrayByteExtent(module StdModule, block IrBlock, arrRec ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let count = emitLoadField(module, block: block, record: arrRec, offset: offset, ids: ids)
 	let es = emitLoadElementStride(module, block: block, record: arrRec, ids: ids)
 	return emitElementByteLen(module, block: block, count: count, es: es, ids: ids)
@@ -1139,7 +1138,7 @@ end 'buildManagedFileStat'
 // One unsigned DWORD out of a record — see `DwordMask` for why it is a word load and a mask rather than a
 // 4-byte access. Every family that loads a DWORD FIELD asks this one pair; a value an OS call answered in a
 // REGISTER (`__md_exists`'s attributes) needs only the mask.
-export function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let word = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
 	let mask = emitConst(module, block: block, value: DwordMask, ids: ids)
 	return emitBin(module, block: block, a: word, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)

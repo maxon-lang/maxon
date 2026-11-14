@@ -212,8 +212,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- `let` declares a constant any function in the file can read. A file-scope `var`, with or without `module`
-  or `export` before it, is a syntax error: state a function updates is a local `var` passed to a `mutable`
+- `let` declares a constant any function in its directory's subtree can read. A file-scope `var`, with or
+  without `export` before it, is a syntax error: state a function updates is a local `var` passed to a `mutable`
   parameter, a field of a record, a [`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time), or the
   fields of a [service](/docs/language/async/#services--spawn).
 - A binding shares its directory's one namespace with every other top-level name (see
@@ -235,7 +235,7 @@ end 'main'
   `2 * WIDTH` or `sqrt(4.0)`. A derived constant keeps its operands' typealias, as in a
   body: with `let a = 5 as Small`, `let s = a + a` is a `Small`.
 - A name in an initializer resolves as it does in a function body: a name nothing declares is
-  **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
+  **E3004**, one the file cannot see is **E3008**, and one several directories
   declare is **E3095**. That one diagnostic covers every read and assignment of the binding. A tuple
   assignment naming a module-level binding is **E2015**; assign the element to a local and store that.
 - Nothing runs before `main` on behalf of a top-level `let`. Initializers that depend on each other in a
@@ -261,4 +261,5 @@ end 'main'
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   in a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the
   defaults are built after every global initializer has run.
-- A top-level declaration is private to its file unless marked `export`, `module` or `public`.
+- An unmarked top-level declaration is visible to its directory's subtree; `export` and `public` widen it
+  to every file (see [Visibility](/docs/language/namespaces/#visibility)).

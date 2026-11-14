@@ -364,7 +364,7 @@ end 'main'
 
 ### A conditional extension's verdict reads the binding's type, not the alias name two files share
 
-Two files each declare a private `Bag`, one over `Byte` and one over a type that is not `Equatable`. `Packed`
+Two files each declare an unmarked `Bag`, one over `Byte` and one over a type that is not `Equatable`. `Packed`
 binds `Item` to the first file's `Bag`, a byte array, which is `Equatable`, so the conditional extension
 reaches `Packed` and `witnessed()` returns 7. The name `Bag` alone denotes no one type, so a verdict decided
 from the name withholds the method from `Packed`.
@@ -439,7 +439,7 @@ end 'main'
 
 ### An extension body's associated type is the conformer's binding, not a name read again in the extension's file
 
-`Packed` and `Loose` each bind `Item` to the private `Bag` of their own file, one over `Byte` and one over a
+`Packed` and `Loose` each bind `Item` to the unmarked `Bag` of their own file, one over `Byte` and one over a
 type that is not `Equatable`; the extension's file declares a third `Bag`, over `String`, and uses it for its
 own local. `weigh(other Item)` takes the conformer's binding, so on `Packed` it takes the byte array and
 `weigh` of a three-byte array returns 3. Reading the binding's name again in the extension's file would

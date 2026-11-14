@@ -988,7 +988,7 @@ error E2028: <fragment>:14:19: ternary expression type mismatch: true branch is 
 ```
 
 <!-- test: a-private-alias-of-one-name-implements-a-parent-per-file -->
-Two files each declare a private `Id` implementing a different parent; each file's `Id` widens to its own
+Two files each declare an unmarked `Id` implementing a different parent; each file's `Id` widens to its own
 parent.
 ```maxon
 // --- file: a/a.maxon
@@ -2521,10 +2521,10 @@ end 'main'
 ```
 
 <!-- test: error.an-implements-parent-another-file-keeps-private-is-refused -->
-A file-private parent is nameable from its own file alone, so another file's `implements` clause naming it is
-refused at the parent's name, exactly as a cast to it is.
+An unmarked parent is nameable from its own directory and its subdirectories alone, so an `implements` clause in
+another directory naming it is refused at the parent's name, exactly as a cast to it is.
 ```maxon
-// --- file: base.maxon
+// --- file: base/base.maxon
 typealias Base = int(0 to 100)
 
 export function widest() returns ExitCode
@@ -2568,11 +2568,11 @@ error E3063: <fragment>:9:41: Ambiguous type name 'Base': more than one visible 
 ```
 
 <!-- test: error.a-qualified-implements-parent-the-reader-cannot-see-is-refused -->
-A qualified parent is held to the declaration's tier like every other qualified type name: a `module` alias is
+A qualified parent is held to the declaration's tier like every other qualified type name: an unmarked alias is
 not nameable from outside its directory.
 ```maxon
 // --- file: feature/types.maxon
-module typealias Base = int(0 to 100)
+typealias Base = int(0 to 100)
 
 // --- file: other/main.maxon
 typealias Kid = int(0 to 10) implements feature.Base
@@ -2583,5 +2583,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: other/<fragment>:6:41: typealias 'feature.Base' is module-scoped and not visible from this directory
+error E3062: feature/<fragment>:3:11: unused typealias: 'Base'
+error E3008: other/<fragment>:6:41: typealias 'feature.Base' is not exported
 ```

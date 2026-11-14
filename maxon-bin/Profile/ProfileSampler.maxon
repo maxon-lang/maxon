@@ -30,7 +30,7 @@
 //
 // The gate and its reason are `ProfileModel`'s.
 #if not os(Wasi)
-	module typealias ProfileWordArray = Array with RegisterWord
+	typealias ProfileWordArray = Array with RegisterWord
 
 	// How many frames a walk produced. A byte extent inside the copied window is an ordinary `RegisterWord`,
 	// because that is what it is compared and added to on every step — a second alias of the same range
@@ -63,7 +63,7 @@
 
 	// Where the target's `.text` was mapped and what names the code inside it. Everything a sampled
 	// instruction pointer is resolved through.
-	export type ProfileImage
+	type ProfileImage
 		export var textBase as RegisterWord
 		export var textSize as RegisterWord
 		export var sidecar as MxdbgReader
@@ -83,7 +83,7 @@
 	// It is a SNAPSHOT taken when sampling starts. A module loaded later is not in it and its addresses fall
 	// back to the unattributed name — honest, and the alternative would put a process-wide query on the
 	// sampling path to catch a case a Maxon program, which loads nothing at run time, does not produce.
-	export type ProfileModuleMap
+	type ProfileModuleMap
 		var starts as ProfileWordArray
 		var ends as ProfileWordArray
 		var names as ProfileStringArray
@@ -378,7 +378,7 @@
 	let ProfileCalibrationWindowNanos = 2000000
 
 	// One tick's worth of cycles — never zero, or no amount of CPU would ever be charged a sample.
-	export typealias ProfileCyclesPerTick = int(1 to u64.max)
+	typealias ProfileCyclesPerTick = int(1 to u64.max)
 
 	// A calibration window's two measured spans — its cycles and its nanoseconds — as the division reads them,
 	// and their quotient: cycle-counter units per nanosecond, a fraction near the reference clock in gigahertz
@@ -388,12 +388,12 @@
 
 	// What calibration found: a tick's worth of cycles, or a counter that did not move — a host (a VM or an
 	// emulator) whose threads cannot be charged by CPU at all.
-	module union ProfileCalibration
+	union ProfileCalibration
 		measured(cyclesPerTick ProfileCyclesPerTick)
 		counterStood
 	end 'ProfileCalibration'
 
-	module function measureProfileCyclesPerTick(rateHz ProfileRate) returns ProfileCalibration
+	function measureProfileCyclesPerTick(rateHz ProfileRate) returns ProfileCalibration
 		var fastest = 0.0 as ProfileCyclesPerNano
 
 		for _ in 0 upto ProfileCalibrationWindows 'eachWindow'
@@ -427,9 +427,9 @@
 	// The sampled process and thread table one profiling run holds. The thread table is three PARALLEL
 	// arrays — the threads, their cycle baselines and their uncharged credit — rather than one array of
 	// records, so the baseline and the credit written on every tick are plain word columns.
-	export type ProfileSession
+	type ProfileSession
 		#if os(Windows) and arch(x64)
-			module var process as SampledProcess
+			var process as SampledProcess
 		#else
 			var process as SampledProcess
 		#endif
@@ -440,7 +440,7 @@
 		var threadCredit as ProfileWordArray
 		export var ticks as ProfileTally
 
-		export static function create(process SampledProcess, cyclesPerTick ProfileCyclesPerTick) returns ProfileSession
+		static function create(process SampledProcess, cyclesPerTick ProfileCyclesPerTick) returns ProfileSession
 			return Self{process: process, cyclesPerTick: cyclesPerTick, threads: SampledThreadArray.create(0), threadCycles: ProfileWordArray.create(0), threadCredit: ProfileWordArray.create(0), ticks: 0}
 		end 'create'
 
@@ -520,7 +520,7 @@
 		// charging it a whole sample for any tick it merely woke in overcounts it by orders of magnitude. WHERE the
 		// stack is captured is not Go's: SIGPROF interrupts the thread the instant its period expires, while this
 		// captures once, at the tick the charge falls due, and that one capture carries every sample charged there.
-		export function sampleOnce(accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray)
+		function sampleOnce(accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray)
 			let tickOfCpu = self.cyclesPerTick as RegisterWord
 			var index = self.threads.count()
 
@@ -650,7 +650,7 @@
 	let ProfileModuleListUnreadableReason = "the program's loaded images could not be listed, so its code cannot be placed"
 	let ProfileSignalTrampolineUnplacedReason = "the system's signal trampoline could not be located in the program's loaded images, so a thread stopped while a signal was being delivered to it could not be told apart from the program"
 
-	module function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
+	function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
 		let modules = try session.loadedModules() otherwise (e) 'unplaced'
 			return ProfileImageLoad.refused(profileModuleRefusalReason(e))
 		end 'unplaced'
@@ -711,25 +711,25 @@
 		end 'profileImageAt'
 	#endif
 
-	module union ProfileImageLoad
+	union ProfileImageLoad
 		loaded(image ProfileImage)
 		refused(reason String)
 	end 'ProfileImageLoad'
 
 	// One tick's period, in nanoseconds: the unit `SampleTimer` is created in. Floored at one so a rate past the
 	// timer's own granularity still steps the schedule forward rather than re-arming the same instant.
-	module function profileIntervalNanos(rateHz ProfileRate) returns SampleIntervalNanos
+	function profileIntervalNanos(rateHz ProfileRate) returns SampleIntervalNanos
 		let nanos = trunc(try (ProfileNanosPerSecond / rateHz) otherwise panic("profileIntervalNanos: `--rate=` refuses a non-positive rate, so the divisor here cannot be zero"))
 
 		return (nanos if nanos > 0 else 1) as SampleIntervalNanos
 	end 'profileIntervalNanos'
 
 	// How long the thread table has gone unrefreshed, in the units `Clock.nowNanos()` answers.
-	module function profileThreadRefreshDue(sinceNanos DurationNanos) returns bool
+	function profileThreadRefreshDue(sinceNanos DurationNanos) returns bool
 		return sinceNanos >= ProfileThreadRefreshNanos
 	end 'profileThreadRefreshDue'
 
-	module function profileSecondsOf(nanos DurationNanos) returns ProfileSeconds
+	function profileSecondsOf(nanos DurationNanos) returns ProfileSeconds
 		return (nanos as ProfileSeconds) / ProfileNanosPerSecond
 	end 'profileSecondsOf'
 #endif

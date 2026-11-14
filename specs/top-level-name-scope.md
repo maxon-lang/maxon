@@ -10,8 +10,8 @@ category: diagnostics
 ## Documentation
 
 A top-level name is scoped by its **directory**, in one namespace, as a package block is in Go. Every
-top-level declaration claims its name once per directory, whatever its kind and whether it is file-private,
-`module` or `export`: a `type`, `enum`, `union`, `interface`, `typealias`, top-level `let` or `var`, and
+top-level declaration claims its name once per directory, whatever its kind and whether it is unmarked,
+`export` or `public`: a `type`, `enum`, `union`, `interface`, `typealias`, top-level `let` or `var`, and
 `function` all share it. A second declaration of the name in the same directory is refused at that
 declaration, in one file or across the files of the directory, and the declaration kept is the one in the
 file whose path sorts first.
@@ -84,7 +84,7 @@ end 'main'
 error E3006: <fragment>:8:13: duplicate definition of 'Point' — already declared as `function Point`
 ```
 
-<!-- test: error.a-typealias-and-a-module-let-of-one-name-in-one-file -->
+<!-- test: error.a-typealias-and-a-let-of-one-name-in-one-file -->
 One file declares `typealias Count` and then `let Count`. Two kinds of declaration of one name collide
 inside a single file too.
 ```maxon
@@ -125,14 +125,14 @@ end 'main'
 error E3006: <fragment>:7:10: duplicate definition of 'Mode' — already declared as `enum Mode`
 ```
 
-<!-- test: error.a-module-let-and-a-function-of-one-name-in-two-files-of-one-directory -->
+<!-- test: error.a-let-and-a-function-of-one-name-in-two-files-of-one-directory -->
 A `let` and a `function` of one name in two files of one directory collide.
 ```maxon
 // --- file: a.maxon
-module let limit = 5
+let limit = 5
 
 // --- file: b.maxon
-module function limit() returns ExitCode
+function limit() returns ExitCode
 	return 1
 end 'limit'
 
@@ -142,12 +142,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:6:17: duplicate definition of 'limit' — already declared as `let limit`
+error E3006: <fragment>:6:10: duplicate definition of 'limit' — already declared as `let limit`
 ```
 
-<!-- test: error.two-private-types-of-one-name-in-two-files-of-one-directory -->
-Two file-private `type Box` declarations in two files of one directory collide: a private declaration still
-claims its name in the directory.
+<!-- test: error.two-unmarked-types-of-one-name-in-two-files-of-one-directory -->
+Two unmarked `type Box` declarations in two files of one directory collide.
 ```maxon
 // --- file: a.maxon
 type Box
@@ -184,8 +183,8 @@ end 'main'
 error E3006: <fragment>:16:6: duplicate definition of 'Box' — already declared as `type Box`
 ```
 
-<!-- test: two-directories-each-declare-a-private-typealias-let-and-function-of-one-name -->
-Directories are separate scopes: `a/` and `b/` each declare a file-private `typealias Total`, `let step` and
+<!-- test: two-directories-each-declare-an-unmarked-typealias-let-and-function-of-one-name -->
+Directories are separate scopes: `a/` and `b/` each declare an unmarked `typealias Total`, `let step` and
 `function bump`, each file means its own, and the program compiles and runs.
 ```maxon
 // --- file: a/a.maxon
@@ -374,15 +373,15 @@ end 'main'
 ```
 
 <!-- test: a-root-declaration-is-what-the-bare-name-means-beside-a-subdirectorys -->
-The root declares a `module type Box` and `sub/` exports another. `other/o.maxon` sees both and declares neither, so its bare
+The root declares an unmarked `type Box` and `sub/` exports another. `other/o.maxon` sees both and declares neither, so its bare
 `Box` is the root's; `sub/box.maxon` means its own directory's, which is nearer than the root's. `main.maxon`
 reaches `sub/`'s through its directory.
 ```maxon
 // --- file: main.maxon
-module type Box
+type Box
 	export let v as ExitCode
 
-	module static function make() returns Box
+	static function make() returns Box
 		return Box{v: 38}
 	end 'make'
 end 'Box'

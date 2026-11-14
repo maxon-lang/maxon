@@ -51,10 +51,10 @@ let EscapedBackslash = "\\\\"
 let Backslash = "\\"
 
 // What a built program exits with, as the runner reports it.
-export typealias ExampleExitCode = int(i64.min to i64.max)
+typealias ExampleExitCode = int(i64.min to i64.max)
 
 // One run of a built program, stdout folded so a Windows console's line endings do not decide what it says.
-export type ExampleRun
+type ExampleRun
 	export let commandLine as String
 	export let exitCode as ExampleExitCode
 	export let stdout as String
@@ -68,7 +68,7 @@ end 'ExampleRun'
 // Build `<directory>/<example>` — a file or a project directory — with the compiler under test. The
 // previous run's files go first, so an executable a failed build left behind cannot answer for this
 // one.
-export function requireExampleBuild(example String, directory String = ExamplesDirName) throws TestFailure
+function requireExampleBuild(example String, directory String = ExamplesDirName) throws TestFailure
 	let source = examplePath(example, directory: directory)
 	let staging = exampleStagingDir(example, directory: directory)
 	clearStagedTree(staging)
@@ -77,11 +77,11 @@ export function requireExampleBuild(example String, directory String = ExamplesD
 end 'requireExampleBuild'
 
 // Run what `requireExampleBuild` produced, with `arguments` as its command line.
-export function runBuiltExample(example String, arguments StringArray = StringArray.create(0), directory String = ExamplesDirName, environment EnvMap = EnvMap.create()) returns ExampleRun
+function runBuiltExample(example String, arguments StringArray = StringArray.create(0), directory String = ExamplesDirName, environment EnvMap = EnvMap.create()) returns ExampleRun
 	return runBuilt(exampleStagingDir(example, directory: directory), stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory), arguments: arguments, environment: environment)
 end 'runBuiltExample'
 
-export function requireConcurrencyBenchmarkAnswer(workload String, arguments StringArray, stdout String) throws TestFailure
+function requireConcurrencyBenchmarkAnswer(workload String, arguments StringArray, stdout String) throws TestFailure
 	let program = "{workload}{MaxonSourceSuffix}"
 	try requireExampleBuild(program, directory: ConcurrencyBenchmarkDirName)
 
@@ -96,7 +96,7 @@ end 'requireConcurrencyBenchmarkAnswer'
 // Write `content` at `relativePath` inside `example`'s staging directory, which is the working directory
 // `runBuiltExample` gives the program — so a case hands its fixture to the program by relative path.
 // Called after `requireExampleBuild`, which clears what a previous run staged.
-export function stageExampleFile(example String, relativePath String, content String, directory String = ExamplesDirName) returns FilePath
+function stageExampleFile(example String, relativePath String, content String, directory String = ExamplesDirName) returns FilePath
 	let staged = exampleStagingDir(example, directory: directory).join(relativePath)
 	let parent = try staged.parent() otherwise panic("examples tests: the gate could not run — '{relativePath}' names no file under a staging directory.")
 
@@ -110,7 +110,7 @@ export function stageExampleFile(example String, relativePath String, content St
 end 'stageExampleFile'
 
 // Build an example and run it once.
-export function runExample(example String, arguments StringArray = StringArray.create(0)) returns ExampleRun throws TestFailure
+function runExample(example String, arguments StringArray = StringArray.create(0)) returns ExampleRun throws TestFailure
 	try requireExampleBuild(example)
 
 	let run = runBuiltExample(example, arguments: arguments)
@@ -121,7 +121,7 @@ end 'runExample'
 
 // Build the one program in `document` that contains `marker`, staged as `<name>.maxon` in its own directory
 // in the test scratch directory, and run it once.
-export function runDocumentProgram(document String, marker String, name String) returns ExampleRun throws TestFailure
+function runDocumentProgram(document String, marker String, name String) returns ExampleRun throws TestFailure
 	let program = documentProgram(document, marker: marker)
 
 	let staged = stagingDirFor("{document}{PortablePathSeparator}{name}")
@@ -273,7 +273,7 @@ function templateLiteralFirstLine(line String) returns String
 end 'templateLiteralFirstLine'
 
 // Hold a run to the answer a case cites.
-export function requireAnswer(run ExampleRun, stdout String, exitCode ExampleExitCode) throws TestFailure
+function requireAnswer(run ExampleRun, stdout String, exitCode ExampleExitCode) throws TestFailure
 	try Expect.equal(run.stdout, expected: stdout, message: "`{run.commandLine}` did not print its known answer. It exited {run.exitCode} and wrote to stderr: {run.stderr}")
 	try Expect.equal(run.exitCode, expected: exitCode, message: "`{run.commandLine}` printed its known answer and exited {run.exitCode}. It wrote to stderr: {run.stderr}")
 end 'requireAnswer'
@@ -300,7 +300,7 @@ function exampleStem(example String) returns String
 	return example.replace(MaxonSourceSuffix, with: "")
 end 'exampleStem'
 
-export function exampleStagingDir(example String, directory String = ExamplesDirName) returns FilePath
+function exampleStagingDir(example String, directory String = ExamplesDirName) returns FilePath
 	return stagingDirFor(exampleSpelling(example, directory: directory))
 end 'exampleStagingDir'
 

@@ -27,58 +27,82 @@ A scriptlib package's namespace is `scriptlib.<package>`: `scriptlib/text/Lines.
 
 ## Visibility
 
-Top-level declarations — functions, types, enums, unions, typealiases, variables — are **private to their
-file** unless marked: only that file may name them. A top-level name is declared once per directory,
-whatever its visibility: a second declaration of it in one directory is **E3006** (see
-[Bare Names and Ambiguity](#bare-names-and-ambiguity)). Three modifiers widen visibility:
+A top-level declaration — a function, type, enum, union, interface, typealias, `let` or `var` — written with no
+modifier is visible to every file in its declaring **directory** and in that directory's subdirectories, and to
+no other file. The root directory contains every file, so an unmarked declaration there is visible to the whole
+program. A top-level name is declared once per directory, whatever its visibility: a second declaration of it in
+one directory is **E3006** (see [Bare Names and Ambiguity](#bare-names-and-ambiguity)). Two modifiers widen
+visibility:
 
-| Modifier | Visible to | Checked for unused exports |
-|----------|------------|----------------------------|
-| *(none)* | the declaring file | — |
-| `module` | files in the declaring directory and its subdirectories | yes (**E3094**) |
-| `export` | every file | yes (**E3092**, **E3093**) |
+| Modifier | Visible to | Checked for unused declarations |
+|----------|------------|---------------------------------|
+| *(none)* | files in the declaring directory and its subdirectories | yes (**E3219**, **E3062**) |
+| `export` | every file | yes (**E3092**) |
 | `public` | every file | no |
 
-The same modifiers apply to members inside a type. An unmarked field is private to the type: reading or
-writing it anywhere else is **E3014**. An unmarked method or static member is private to the file, like a
-top-level declaration: calling it from another file is **E3008**. A typealias declared inside a type body
-carries its own modifier the same way: unmarked, it is private to the file, and naming it from another file —
-bare or as `Holder.Inner` — is **E3008**. A typealias inside an `interface` has the interface's visibility.
-At most one modifier may be written; combining two is **E2001** (`'export' and 'public' cannot be combined`).
+```text
+project/
+├── main.maxon                 # cannot call helper()
+└── feature/
+    ├── api.maxon              # function helper() — declared here
+    ├── routes.maxon           # can call helper()
+    └── internal/
+        └── cache.maxon        # can call helper()
+```
 
-**A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**
-(**E3088** for a `module` type). A file that writes the type's name, or a hidden alias of it, gets that one
-refusal at the written name. A value reached without its name being written, such as one an exported
-function returns, is refused at its member use. The members are its fields, methods, extension methods,
-accessors and statics, and the calls the language makes on the author's behalf: `toString` in an
-interpolation, `==` and `<`, the iteration a `for` performs, and a `match` over an enum or union value. Inside a
-[generic function](/docs/language/composite-types/#generic-functions)'s copy, the interpolation, `==`, `<` and `for` over a value of a type
-parameter are judged for the caller that instantiated it instead. A value held at an interface type that
-is visible answers that interface's requirements. The standard library follows the same rule: a library type
-or interface without `public` is hidden from a program.
+The subtree is decided by directory, segment by segment: `feature2/` is not inside `feature/`, and
+`feature.extra/` is a directory of its own. A file outside the subtree that names an unmarked declaration is
+refused where it writes the name: **E3008** (`function 'helper' is not exported`). Program code and the standard
+library never see each other's unmarked declarations, whatever directories they sit in.
+
+The same modifiers apply to members inside a type, with the same directory rule. An unmarked field is visible
+to every file in its type's declaring directory subtree: a method of another type, a free function and an
+`extension` written there all read and write it, and reading or writing it from any other directory is **E3014**
+(`field 'Box.v' is not exported`). An unmarked method or static member is visible the same way, and calling it
+from outside the subtree is **E3008**. A typealias declared inside a type body carries its own modifier the same
+way: unmarked, naming it from outside the subtree — bare or as `Holder.Inner` — is **E3008**. A typealias inside
+an `interface` has the interface's visibility. At most one modifier may be written; combining two is **E2001**
+(`'export' and 'public' cannot be combined`).
+
+**A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**. A file that
+writes the type's name, or a hidden alias of it, gets that one refusal at the written name. A value reached
+without its name being written, such as one an exported function returns, is refused at its member use. The
+members are its fields, methods, extension methods, accessors and statics, and the calls the language makes on
+the author's behalf: `toString` in an interpolation, `==` and `<`, the iteration a `for` performs, and a `match`
+over an enum or union value. Inside a [generic function](/docs/language/composite-types/#generic-functions)'s copy, the interpolation, `==`,
+`<` and `for` over a value of a type parameter are judged for the caller that instantiated it instead. A value
+held at an interface type that is visible answers that interface's requirements. The standard library follows
+the same rule: a library type or interface without `public` is hidden from a program.
 
 **A signature may not name a type less visible than the function itself.** Whoever may call a function has to
 be able to name what the call takes and gives back, so every type its parameters, its return type and its
-`throws` clause name must carry at least the function's own modifier. For this rule the four tiers are ordered
-*(none)* < `module` < `export` < `public`: `public` outranks `export`, so a `public` function may not name an
-`export` type. The check is structural — a generic instance's base type and each of its type arguments, a
-tuple's elements, and a function typealias's parameter and return types are all asked; a type parameter and a
-primitive name no declaration and are asked nothing. A typealias the signature names is walked through, each
-name on its right-hand side read as the alias's own file means it, and a type body's inner typealias is held
-to its own modifier before its right-hand side is walked. A member is held to its own modifier, whatever its
-type's, and an interface's members — its requirements' types included — are held to the interface's. A [service](/docs/language/async/#services--spawn)'s message is
-held to the narrower of its own modifier and its service type's. A `module`, `export` or `public`
-binding — a top-level `let` or a `static let` member — is held to the same rule
-for its type, which is the type its initializer gives it, written or inferred, together with any alias the
-initializer was spelled through (`50 as Small`, `Tallies.create()`). Every other surface a declaration exposes
-is held to the same rule: an instance field at the narrower of its own modifier and its type's (an unmarked
-field is private to its type and asked nothing), a union case's payloads at the union's tier, a typealias's
-target, an `implements` clause and its `with` arguments, a type's, generic function's or extension's `where`
-clause, an interface's `extends` clause, and a [struct-backed](/docs/language/enums-unions/#struct-backed-enums) enum's backing record. A
-service's `handle` is its service's tier. Naming a narrower type is
-[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration) (`exported field 'api.Holder.mode' names
-file-private enum 'Mode' in its type`); the fix is to raise the type to the surface's tier, or to narrow the
-surface.
+`throws` clause name must carry at least the function's own modifier. For this rule the three tiers are ordered
+*(none)* < `export` < `public`: `public` outranks `export`, so a `public` function may not name an `export` type.
+The check is structural — a generic instance's base type and each of its type arguments, a tuple's elements, and
+a function typealias's parameter and return types are all asked; a type parameter and a primitive name no
+declaration and are asked nothing. A typealias the signature names is walked through, each name on its
+right-hand side read as the alias's own file means it, and a type body's inner typealias is held to its own
+modifier before its right-hand side is walked. A member is held to its own modifier, whatever its type's, and an
+interface's members — its requirements' types included — are held to the interface's. A
+[service](/docs/language/async/#services--spawn)'s message is held to the narrower of its own modifier and its service type's. An
+`export` or `public` binding — a top-level `let` or a `static let` member — is held to the same rule for its
+type, which is the type its initializer gives it, written or inferred, together with any alias the initializer
+was spelled through (`50 as Small`, `Tallies.create()`). Every other surface a declaration exposes is held to
+the same rule: an instance field at the narrower of its own modifier and its type's (an unmarked field is asked
+nothing), a union case's payloads at the union's tier, a typealias's target, an `implements` clause and its
+`with` arguments, a type's, generic function's or extension's `where` clause, an interface's `extends` clause,
+and a [struct-backed](/docs/language/enums-unions/#struct-backed-enums) enum's backing record. A service's `handle` is its service's tier.
+Naming a narrower type is [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration) (`exported field
+'feature.Shelf.box' names unexported type 'Box' in its type`); the fix is to raise the type to the surface's
+tier, or to narrow the surface.
+
+An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
+directory subtree names is **E3219** (`unused function: 'helper' is not exported and nothing live in its
+directory names it; delete it`). A declaration is live when code that is not itself an unmarked top-level
+declaration names it (an `export` or `public` declaration, `main`, a test, a method), or a live unmarked
+declaration does, so declarations that only name each other, or a function that only calls itself, are all
+reported. A name spelled in a branch of `#if` the target excludes counts as a use. An unmarked typealias
+nothing in its subtree names is **E3062**. E3219 is reported once the program has no other error.
 
 ## `export`
 
@@ -89,34 +113,27 @@ export function publicAdd(a Score, b Score) returns Score
 	return a + b
 end 'publicAdd'
 
-function privateHelper(x Score) returns Score     // file-private
+function privateHelper(x Score) returns Score     // visible to this directory's subtree
 	return x * 2
 end 'privateHelper'
 ```
 
-Calling a non-exported function from another file is **E3008** (`function 'privateHelper' is not
-exported`).
+Calling `privateHelper` from a file outside the declaring directory's subtree is **E3008** (`function
+'privateHelper' is not exported`).
 
-`export` also states an expectation: **this program uses the declaration from another file.** When
-nothing outside the declaring file refers to it, the compiler reports **E3092** (`exported function
-'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
-declaring directory it suggests `module` (**E3093**). These checks run on every program that otherwise
-compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every
-task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or
-`module` surface names — a signature, a binding, a field, a payload, a typealias's target or a clause — is
-exempt while that declaration is itself referenced from another file, or while the type owning the surface is
-itself exempt at that tier: the surface requires the wider tier, so dropping the modifier would only trade
-E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration). Every typealias form —
-ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
-means, a use reached only through a called function's signature included.
-
-An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` is checked the other way: when
-nothing live in its own file names it, the compiler reports **E3219** (`unused function: 'helper' is
-file-private and nothing live in this file names it; delete it`). A declaration is live when code that is not
-itself an unmarked top-level declaration names it (an `export`, `module` or `public` declaration, `main`, a
-test, a method), or a live unmarked declaration does, so declarations that only name each other, or a
-function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes
-counts as a use. Like the unused-export checks, it runs once the program has no other error.
+`export` also states an expectation: **this program uses the declaration from outside its directory.** When
+nothing outside the declaring directory's subtree refers to it, the compiler reports **E3092** (`exported
+function 'geometry.perimeter' is never referenced outside its declaring directory`): an unmarked declaration
+already serves every reader it has. The rule includes the root directory, so in a program whose files all sit
+in one directory every `export` is reported. These checks run on every program that otherwise compiles, a
+one-file program included. The entry point, every target a `.maxproj` file declares and every task a
+`.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported surface names —
+a signature, a binding, a field, a payload, a typealias's target or a clause — is exempt while that declaration
+is itself referenced from outside its directory, or while the type owning the surface is itself exempt at that
+tier: the surface requires the wider tier, so dropping the modifier would only trade E3092 for
+[E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration). Every typealias form — ranged, function,
+generic-instance and tuple — is audited, and a use credits exactly the declaration it means, a use reached only
+through a called function's signature included.
 
 ## `public`
 
@@ -132,28 +149,7 @@ public function area(width Length, height Length) returns Length
 end 'area'
 ```
 
-`export` and `public` are reserved words. `module` is contextual: it is a modifier only directly before a
-declaration and remains usable as an ordinary name.
-
-## `module`
-
-A `module` declaration is visible to every file in the declaring file's directory and in its subdirectories,
-and to nothing outside that subtree — for helpers shared across a feature folder:
-
-```text
-project/
-├── main.maxon                 # cannot call helper()
-└── feature/
-    ├── api.maxon              # module function helper() — declared here
-    ├── routes.maxon           # can call helper()
-    └── internal/
-        └── cache.maxon        # can call helper()
-```
-
-Using a `module` declaration from outside its subtree is **E3088** (`function 'helper' is module-scoped
-and not visible from this directory`). A `module` declaration that nothing outside its file uses is
-**E3094**; a name spelled in a generic function nothing instantiates, or in a branch of `#if` the target
-excludes, counts as a use.
+`export` and `public` are reserved words.
 
 ## Qualified Names
 
@@ -209,8 +205,8 @@ keyword.
 ## Bare Names and Ambiguity
 
 A directory declares each top-level name once, in one namespace for every kind — a `type`, `enum`, `union`,
-`interface`, `typealias`, top-level `let` or `var`, and `function` — whether the declaration is file-private,
-`module` or `export`. A second declaration of the name in the same directory is
+`interface`, `typealias`, top-level `let` or `var`, and `function` — whether the declaration is unmarked,
+`export` or `public`. A second declaration of the name in the same directory is
 [E3006](/docs/cli/error-codes/#e3006--duplicatedefinition), in one file or across the files of the
 directory (`duplicate definition of 'Point' — already declared as `type Point``), and a typealias against a
 typealias is **E3061**. The declaration kept is the earlier one in a file, and across files the one in the
@@ -227,8 +223,8 @@ decides:
 4. else it is ambiguous: **E3063** for a type name and **E3095** for a binding or a function, each listing the
    spellings that resolve it (`export.Name` for a declaration at the project root).
 
-Only a declaration the referring file may name is a candidate: a file-private declaration counts only in its
-own file and a `module` one only inside its subtree, and the candidate list an error prints names only
+Only a declaration the referring file may name is a candidate: an unmarked declaration counts only inside its
+directory's subtree, and the candidate list an error prints names only
 visible ones. A bare call or a bare function value takes the type of the declaration it resolves to, and a
 function-backed enum case's function is resolved from the file that declares the enum, whichever file reads
 the case; a case that resolves to no single declaration is reported in that file.
@@ -272,8 +268,7 @@ parameters and return type, whatever other files declare under the name.
 Every typealias a `public` standard-library signature names is itself `public` — an inner one such as
 `Array.ElementIterator` included — so a value can always be cast to the alias a library signature asks for
 (`x as ElementIndex`). A standard-library typealias with no modifier
-is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
-naming it from another file is **E3008**.
+is hidden from every program — `Math.maxon`'s `SeriesTermLimit` is one — and naming it is **E3008**.
 
 ## Multi-Project Workspaces
 

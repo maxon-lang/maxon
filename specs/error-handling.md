@@ -1085,15 +1085,15 @@ through the union-payload adopt door, so `(e)` recovers `LibErr` and
 with the declaration already in the index.
 ```maxon
 // --- file: liberr.maxon
-export typealias Code = int(i64.min to i64.max)
+typealias Code = int(i64.min to i64.max)
 
 // The catch site in another file learns this type through `risky`'s `throws`
 // clause, which is what the union-payload adopt door re-interns by name.
-export union LibErr implements Error
+union LibErr implements Error
 	bad(code Code)
 end 'LibErr'
 
-export function risky(n Code) returns Code throws LibErr
+function risky(n Code) returns Code throws LibErr
 	if n > 5 'big'
 		throw LibErr.bad(42)
 	end 'big'
@@ -1146,14 +1146,14 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-export typealias Code = int(i64.min to i64.max)
+typealias Code = int(i64.min to i64.max)
 
-export union Woe implements Error
+union Woe implements Error
 	tooBig(by Code)
 	negative
 end 'Woe'
 
-export function risky(n Code) returns Code throws Woe
+function risky(n Code) returns Code throws Woe
 	if n > 5 'big'
 		throw Woe.tooBig(7)
 	end 'big'
@@ -1186,14 +1186,14 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-export typealias Code = int(i64.min to i64.max)
+typealias Code = int(i64.min to i64.max)
 
-export union Woe implements Error
+union Woe implements Error
 	bad(msg String)
 	ok
 end 'Woe'
 
-export function risky(n Code) returns Code throws Woe
+function risky(n Code) returns Code throws Woe
 	if n > 5 'big'
 		throw Woe.bad("hello")
 	end 'big'
@@ -1225,22 +1225,22 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-export typealias Code = int(i64.min to i64.max)
+typealias Code = int(i64.min to i64.max)
 
-export type Payload
-	export var mass as Code
+type Payload
+	var mass as Code
 
-	export static function create(m Code) returns Self
+	static function create(m Code) returns Self
 		return Self{mass: m}
 	end 'create'
 end 'Payload'
 
-export union Woe implements Error
+union Woe implements Error
 	bad(p Payload)
 	ok
 end 'Woe'
 
-export function risky(n Code) returns Code throws Woe
+function risky(n Code) returns Code throws Woe
 	if n > 5 'big'
 		throw Woe.bad(Payload.create(7))
 	end 'big'
@@ -1284,17 +1284,17 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: zzz.maxon
-export typealias Code = int(i64.min to i64.max)
+typealias Code = int(i64.min to i64.max)
 
-export type Payload
-	export var mass as Code
+type Payload
+	var mass as Code
 
-	export static function create(m Code) returns Self
+	static function create(m Code) returns Self
 		return Self{mass: m}
 	end 'create'
 end 'Payload'
 
-export union Woe implements Error
+union Woe implements Error
 	bad(p Payload)
 	ok
 end 'Woe'

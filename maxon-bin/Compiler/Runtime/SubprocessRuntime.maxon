@@ -60,7 +60,7 @@ export let SubpWriteBytesName = b"__gt_subp_write_bytes"
 export let SubpQueueStdinName = b"__gt_subp_queue_stdin"
 export let SubpPushStdinName = b"__gt_subp_push_stdin"
 export let SubpAwaitStdinWritableName = b"__gt_subp_await_stdin_writable"
-export let SubpQueueDropName = b"__gt_subp_queue_drop"
+let SubpQueueDropName = b"__gt_subp_queue_drop"
 export let SubpReadAvailableOutBytesName = b"__gt_subp_read_available_out_bytes"
 let SubpReadAvailableParamCount = 3
 
@@ -88,8 +88,8 @@ let SubpEnvVectorName = b"__gt_subp_env_vector"
 
 // The failure answer every one of these entries shares — `stdlib/Subprocess.maxon` tests `handle == -1`,
 // `result == -1` and `rc == -1` against exactly this.
-export let SubpFailure = -1
-export let SubpDetachRefusedRc = -2
+let SubpFailure = -1
+let SubpDetachRefusedRc = -2
 
 // The streaming spawn contract's arity: `argv_mm, argc, cwd_cstr, flags, env_mm, envInherit`. The
 // environment pair sits PAST the flags rather than before them, because the streaming contract carries no
@@ -119,9 +119,9 @@ export let SubpNoExitSignal = 0 as FullRangeInt
 let SubpReapedElsewhereAnswer = -4
 let SubpStillRunningAnswer = -1
 let SubpNoSuchChildAnswer = -5
-export let SubpStdinAcceptedAnswer = 0
-export let SubpStdinBrokenAnswer = 1
-export let SubpStdinQueuePendingAnswer = 2
+let SubpStdinAcceptedAnswer = 0
+let SubpStdinBrokenAnswer = 1
+let SubpStdinQueuePendingAnswer = 2
 let SubpUnreadExitCode = 0
 
 let SubprocessStdlibFileName = "Subprocess.maxon"
@@ -142,7 +142,7 @@ let WaitObjectSignalled = 0
 let CreateNoWindow = 0x08000000
 let CreateNewProcessGroup = 0x00000200
 export let DetachedProcess = 0x00000008 as FullRangeInt
-export let DetachToBreakawayShift = 21
+let DetachToBreakawayShift = 21
 
 // `DEBUG_ONLY_THIS_PROCESS` — the child reports its debug events to this process and its own children are
 // left alone, which is the debugger's launch.
@@ -362,7 +362,7 @@ end 'emitSubpScratch'
 // apart on the way to the child, with no diagnostic anywhere.
 //
 // ⇒ a target whose primitive takes a VECTOR gets a vector, built from the same blob and quoting nothing.
-export enum SubprocessCommandShape
+enum SubprocessCommandShape
 	// Windows: `CreateProcessW` takes ONE command line and splits it itself, by the CRT's rules.
 	commandLine
 
@@ -377,7 +377,7 @@ end 'SubprocessCommandShape'
 // process-spawn primitive at all; `targetProvidesFacility` is where that refusal lives, and
 // `SemanticCheck.targetCanHostSubprocess` is where its PERMANENCE is recorded. A shape function that lied
 // about the shape in order to express a capability would put the same fact in two places.
-export function subprocessCommandShape(target Target) returns SubprocessCommandShape
+function subprocessCommandShape(target Target) returns SubprocessCommandShape
 	return match target.os 'os'
 		windows gives SubprocessCommandShape.commandLine
 		linux or
@@ -459,7 +459,7 @@ end 'pathDirSeparator'
 //
 // Under `commandLine` the line already IS the command, so this only widens it, and only when
 // `encoding` is UTF-16.
-export function emitSubpCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, linePtr ValueId, encoding HostTextEncoding) returns ValueId
+function emitSubpCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, linePtr ValueId, encoding HostTextEncoding) returns ValueId
 	return match shape 'shape'
 		commandLine gives emitHostCString(module, block: block, cstr: linePtr, encoding: encoding, ids: ids)
 		argumentVector gives emitSubpShellVectorCall(module, block: block, ids: ids, linePtr: linePtr)
@@ -476,7 +476,7 @@ end 'emitSubpShellVectorCall'
 // The command a `emitSubpCommandFromLine` call built is the caller's once the spawn has read it: the
 // wide copy, if any, under the command-line shape, and the one `__gt_subp_shell_command` region under
 // the vector shape. The line itself stays the caller's either way.
-export function emitSubpReleaseCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, command ValueId, encoding HostTextEncoding)
+function emitSubpReleaseCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, command ValueId, encoding HostTextEncoding)
 	match shape 'shape'
 		commandLine then emitReleaseHostCopy(module, block: block, copy: command, encoding: encoding, ids: ids)
 		argumentVector then emitSlabFree(module, block: block, ptr: command, kind: SlabBufferKind.subprocessState, ids: ids)
@@ -1318,7 +1318,7 @@ function buildSubpQueueDrop(module StdModule)
 	module.functions.push(func)
 end 'buildSubpQueueDrop'
 
-export function emitSubpArmStdinEnd(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, shape NetpollShape, stdinEnd ValueId, cont IrBlock)
+function emitSubpArmStdinEnd(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, shape NetpollShape, stdinEnd ValueId, cont IrBlock)
 	let nonBlocking = emitNetpoll(module, block: cur, verb: NetpollVerb.armPipeSource, operands: argsOf(stdinEnd), ids: ids)
 	emitNetpollRequire(module, func: func, cur: cur, shape: shape, verb: NetpollVerb.armPipeSource, subject: stdinEnd, answer: nonBlocking, cont: cont, ids: ids)
 end 'emitSubpArmStdinEnd'
@@ -1485,7 +1485,7 @@ function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, 
 	return emitSubpTerminateTree(module, func: func, cur: cur, ids: ids, tree: tree, hProcess: hProcess, unconfirmed: unconfirmed, treeUnended: treeUnended)
 end 'emitSubpTerminateChild'
 
-export function emitSubpTerminateTree(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, tree ValueId, hProcess ValueId, unconfirmed IrBlock, treeUnended IrBlock) returns IrBlock
+function emitSubpTerminateTree(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, tree ValueId, hProcess ValueId, unconfirmed IrBlock, treeUnended IrBlock) returns IrBlock
 	let awaitTheEnd = module.addBlock(func, label: b"subpkillwait", heat: BlockHeat.normal)
 	let endedAlready = module.addBlock(func, label: b"subpkillgone", heat: BlockHeat.normal)
 	let gone = module.addBlock(func, label: b"subpkilled", heat: BlockHeat.normal)
@@ -1794,12 +1794,12 @@ end 'emitSubpLookSaysLeft'
 // The one look every exit-status read decides on. Read the code only on `whenTaken`: a reap that
 // fails because another process took the status leaves the cached code 0, and a second look can
 // disagree with this one.
-module function emitSubpBranchOnTakenStatus(module StdModule, block IrBlock, hProcess ValueId, whenLost IrBlock, whenTaken IrBlock, ids ValueMinter)
+function emitSubpBranchOnTakenStatus(module StdModule, block IrBlock, hProcess ValueId, whenLost IrBlock, whenTaken IrBlock, ids ValueMinter)
 	let look = emitSubpAwaitChild(module, block: block, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ids: ids)
 	emitBranchOnCompare(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, whenTrue: whenLost, whenFalse: whenTaken, ids: ids)
 end 'emitSubpBranchOnTakenStatus'
 
-module function emitSubpReturnExitAnswer(module StdModule, func IrFunction, block IrBlock, hProcess ValueId, ids ValueMinter)
+function emitSubpReturnExitAnswer(module StdModule, func IrFunction, block IrBlock, hProcess ValueId, ids ValueMinter)
 	let statusLost = module.addBlock(func, label: b"subpstatuslost", heat: BlockHeat.normal)
 	let statusTaken = module.addBlock(func, label: b"subpstatustaken", heat: BlockHeat.normal)
 	emitSubpBranchOnTakenStatus(module, block: block, hProcess: hProcess, whenLost: statusLost, whenTaken: statusTaken, ids: ids)
@@ -2159,7 +2159,7 @@ end 'emitSubpGroupDeadline'
 
 // `cond ? whenSet : whenClear` without a branch — a comparison's value lives in the 0/1 domain on every lane
 // (`emitTimerEntryBefore`'s reason), so a mask built from it selects one of two words.
-export function emitSelectWord(module StdModule, block IrBlock, cond ValueId, whenSet ValueId, whenClear ValueId, ids ValueMinter) returns ValueId
+function emitSelectWord(module StdModule, block IrBlock, cond ValueId, whenSet ValueId, whenClear ValueId, ids ValueMinter) returns ValueId
 	let mask = emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: cond, opcode: StdBinOpcode.sub, ids: ids)
 	let difference = emitBin(module, block: block, a: whenSet, b: whenClear, opcode: StdBinOpcode.bitXor, ids: ids)
 	let picked = emitBin(module, block: block, a: difference, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -3441,7 +3441,7 @@ end 'emitSubpBuildCandidate'
 
 // Install the attached-subprocess runtime. Called from `installSubpRuntime` — the streaming half's installer —
 // because the two halves share one handle table, one spawn core and one release.
-export function installSubprocessRuntime(module StdModule, target Target)
+function installSubprocessRuntime(module StdModule, target Target)
 	// ⭐ **THE ONE PLACE THE SHAPE IS ASKED.** Each arm builds a complete body under the SAME entry-point
 	// name, so every caller below is written once and none of them knows there are two.
 	match subprocessCommandShape(target) 'shape'
@@ -3511,7 +3511,7 @@ end 'subprocessStdlibFileName'
 // The shell wrapper, built by `installGtRuntime` beside its callers — `__gt_process_run` and the one-shot
 // read probe — rather than with the attached family above, so the image lays it out next to the code that
 // calls it.
-export function installSubpShellCommandBuilder(module StdModule, target Target)
+function installSubpShellCommandBuilder(module StdModule, target Target)
 	match subprocessCommandShape(target) 'shape'
 		commandLine then break
 		argumentVector then buildSubpShellCommand(module)

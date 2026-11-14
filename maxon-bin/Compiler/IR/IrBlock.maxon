@@ -306,7 +306,7 @@ export function blockFallsThrough(terminator Terminator) returns bool
 	end 'check'
 end 'blockFallsThrough'
 
-module function terminatorNamesAnOp(terminator Terminator) returns bool
+function terminatorNamesAnOp(terminator Terminator) returns bool
 	return match terminator 'check'
 		unset or
 		dead or
@@ -317,7 +317,7 @@ end 'terminatorNamesAnOp'
 
 // The op index a terminator slot names. Panics for a slot that names none — guard with
 // `terminatorNamesAnOp`, exactly as `IrBlock.terminatorIndex` asks its callers to.
-module function terminatorOpIndexOf(terminator Terminator) returns ElementIndex
+function terminatorOpIndexOf(terminator Terminator) returns ElementIndex
 	match terminator 'unwrap'
 		opIndex(index) then return index
 		default panic("terminatorOpIndexOf: this terminator slot names no op")
@@ -496,7 +496,7 @@ export union InlineSiteRef
 end 'InlineSiteRef'
 
 // @generated library-cache begin
-module function cacheWriteInlineSiteRef(writer LibraryCacheWriter, value InlineSiteRef)
+function cacheWriteInlineSiteRef(writer LibraryCacheWriter, value InlineSiteRef)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
@@ -509,7 +509,7 @@ function cacheWriteInlineSiteRefSite(writer LibraryCacheWriter, a0 ElementIndex)
 	writer.unsigned(a0 as CacheUnsigned)
 end 'cacheWriteInlineSiteRefSite'
 
-module function cacheReadInlineSiteRef(reader LibraryCacheReader) returns InlineSiteRef throws LibraryCacheDamage
+function cacheReadInlineSiteRef(reader LibraryCacheReader) returns InlineSiteRef throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
@@ -604,7 +604,7 @@ end 'InlineSite'
 export typealias InlineSiteArray = Array with InlineSite
 
 // @generated library-cache begin
-module function cacheWriteInlineSiteArray(writer LibraryCacheWriter, value InlineSiteArray)
+function cacheWriteInlineSiteArray(writer LibraryCacheWriter, value InlineSiteArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -612,7 +612,7 @@ module function cacheWriteInlineSiteArray(writer LibraryCacheWriter, value Inlin
 	end 'eachItem'
 end 'cacheWriteInlineSiteArray'
 
-module function cacheReadInlineSiteArray(reader LibraryCacheReader) returns InlineSiteArray throws LibraryCacheDamage
+function cacheReadInlineSiteArray(reader LibraryCacheReader) returns InlineSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = InlineSiteArray.create(count, zeroed: false)
 
@@ -1106,7 +1106,7 @@ end 'spliceOpArray'
 
 // Collect the IrBlocks referenced by a function's blockRefs list.
 // Used by IR printers across all phases to iterate a function's blocks.
-module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) returns IrBlockArray
+function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) returns IrBlockArray
 	let result = IrBlockArray.create(blockRefs.count(), zeroed: false)
 
 	for blockRef in blockRefs 'each'
@@ -1152,15 +1152,15 @@ end 'ExitChain'
 
 export typealias ExitChainsByReturn = Map with (ValueId, ExitChain)
 
-module type ExitIncoming
+type ExitIncoming
 	export var source as IrBlock
 	export var args as ValueIdArray
 
-	module static function create(source IrBlock, args ValueIdArray) returns Self
+	static function create(source IrBlock, args ValueIdArray) returns Self
 		return Self{source: source, args: args}
 	end 'create'
 end 'ExitIncoming'
 
-module typealias ExitIncomingArray = Array with ExitIncoming
-module typealias ExitIncomingByTarget = Map with (BlockId, ExitIncomingArray)
-module typealias ExitWebByPhi = Map with (ValueId, ExitWebBlock)
+typealias ExitIncomingArray = Array with ExitIncoming
+typealias ExitIncomingByTarget = Map with (BlockId, ExitIncomingArray)
+typealias ExitWebByPhi = Map with (ValueId, ExitWebBlock)

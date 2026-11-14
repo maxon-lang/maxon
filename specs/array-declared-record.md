@@ -90,9 +90,9 @@ there — a layout to NAME a member is not a layout to ENUMERATE fields.
 `stdlib/Array.maxon` is listed, so declaring a `type Array` does not replace the corpus's: it
 CONTESTS it. `SignatureIndex.contestStdlibTypeName` moves the library's declaration into the reserved
 space, and the compile then holds **two** `Array`s at once — the program's under the bare name, the
-library's under a name this compile minted and no author may write. ⚖ **The rule is module-scoped
+library's under a name this compile minted and no author may write. ⚖ **The rule is directory-scoped
 resolution: a stdlib body resolves `Array` to the STDLIB declaration, and the program's `Array` wins in
-the file that declares it.** Any other author file that can see both must qualify one (E3063).
+the directory that declares it.** Any other author file that can see both must qualify one (E3063).
 
 The two consequences point in opposite directions, and neither is an accident:
 

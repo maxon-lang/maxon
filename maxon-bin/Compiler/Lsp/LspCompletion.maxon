@@ -42,7 +42,7 @@ let EnumMemberCompletionKind = 20
 // `<Type>.<member>` — how every method is registered, and the only shape this file reads a roster by.
 let CompletionMemberSeparator = "."
 
-module function completionServedMethods() returns LspMethodArray
+function completionServedMethods() returns LspMethodArray
 	let served = LspMethodArray.create(0)
 	served.push(LspMethod.completion)
 	return served
@@ -50,7 +50,7 @@ end 'completionServedMethods'
 
 // This server's `CompletionOptions`. Declaring the trigger character is what makes an editor ask the
 // moment a `.` is typed rather than only when the user asks for the list by hand.
-module function completionCapabilityOptions(doc JsonDoc) returns JsonNodeId
+function completionCapabilityOptions(doc JsonDoc) returns JsonNodeId
 	let triggers = JsonNodeIdArray.create(0)
 	triggers.push(doc.add(JsonNode.stringNode(MemberAccessTrigger)))
 
@@ -59,7 +59,7 @@ module function completionCapabilityOptions(doc JsonDoc) returns JsonNodeId
 	return options.finish()
 end 'completionCapabilityOptions'
 
-module function completionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+function completionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
 	if request.method != LspMethod.completion 'notThisArea'
 		panic("completionAnswer: {lspMethodSpelling(request.method).wireName} is not this area's — `completionServedMethods` names the one method it answers")
 	end 'notThisArea'
@@ -107,23 +107,22 @@ function offersAt(text String, tokens TokenArray, keywords KeywordTable, scopes 
 		return CompletionOfferArray.create(0)
 	end 'nothingToComplete'
 
-	let enclosing = lspEnclosingTypeAtCursor(tokens, scopes: scopes, offset: offset)
 	let inTheBuffer = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: LspCorpus.unavailable)
 
 	if let bufferTypeName = try lspSubjectTypeName(inTheBuffer) 'aNamedSubject'
 		if lspBlocksDeclareTheType(lspBlocksDeclaring(scopes.blocks, typeName: bufferTypeName)) 'aTypeThisBufferDeclares'
-			return offersFor(inTheBuffer, tokens: tokens, scopes: scopes, corpus: LspCorpus.unavailable, enclosing: enclosing)
+			return offersFor(inTheBuffer, tokens: tokens, scopes: scopes, corpus: LspCorpus.unavailable)
 		end 'aTypeThisBufferDeclares'
 	end 'aNamedSubject'
 
 	let corpus = lspDocumentCorpus(workspace, uri: uri)
 
-	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, scopes: scopes, corpus: corpus, enclosing: enclosing)
+	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, scopes: scopes, corpus: corpus)
 end 'offersAt'
 
 // A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
 // type of the same name: the author is looking at the declaration in front of them.
-function offersFor(subject LspSubject, tokens TokenArray, scopes LspLineScopes, corpus LspCorpus, enclosing LspEnclosingType) returns CompletionOfferArray
+function offersFor(subject LspSubject, tokens TokenArray, scopes LspLineScopes, corpus LspCorpus) returns CompletionOfferArray
 	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create(0)
 
 	let declaring = lspBlocksDeclaring(scopes.blocks, typeName: typeName)
@@ -131,14 +130,14 @@ function offersFor(subject LspSubject, tokens TokenArray, scopes LspLineScopes, 
 	let offered = OfferedLabelSet.create()
 
 	for block in declaring 'eachDeclaringBody'
-		addBufferMembers(offers, offered: offered, tokens: tokens, scopes: scopes, block: block, subject: subject, site: lspReaderSite(enclosing, typeName: block.name, sharesTheTypesFile: true))
+		addBufferMembers(offers, offered: offered, tokens: tokens, scopes: scopes, block: block, subject: subject)
 	end 'eachDeclaringBody'
 
 	if lspBlocksDeclareTheType(declaring) 'theBufferHoldsTheType'
 		return offers
 	end 'theBufferHoldsTheType'
 
-	addCorpusMembers(offers, offered: offered, typeName: typeName, corpus: corpus, subject: subject, enclosing: enclosing)
+	addCorpusMembers(offers, offered: offered, typeName: typeName, corpus: corpus, subject: subject)
 
 	return offers
 end 'offersFor'
@@ -148,19 +147,19 @@ end 'offersFor'
 // ⚠ **ONLY THE BLOCK'S OWN LINES, NOT EVERY LINE BETWEEN ITS ENDS.** A `var` written inside a method body
 // is a local and not a field, and `LspLineScopes.directlyHolds` is what tells the two apart — without it a
 // type's completion list would carry every temporary its methods declare.
-function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, scopes LspLineScopes, block LspDocumentBlock, subject LspSubject, site MemberReaderSite)
+function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, scopes LspLineScopes, block LspDocumentBlock, subject LspSubject)
 	let wantsStatics = lspSubjectIsStatic(subject)
 
 	for member in lspBodyMembers(tokens, scopes: scopes, body: block, tokenLines: lspTokenLines(tokens)) 'eachMember'
-		addBodyMember(offers, offered: offered, tokens: tokens, member: member, wantsStatics: wantsStatics, site: site)
+		addBodyMember(offers, offered: offered, tokens: tokens, member: member, wantsStatics: wantsStatics)
 	end 'eachMember'
 end 'addBufferMembers'
 
 // A STATIC member is reached through the type and an instance one through a value, which decides
 // whether a member belongs in this list; a field also needs its spelled tier to reach `site`. A case
 // is static, so it is reached through the TYPE (`Color.red`), never through a value of it.
-function addBodyMember(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, member LspMember, wantsStatics bool, site MemberReaderSite)
-	if member.isStatic != wantsStatics or not lspMemberReachable(member, site: site) 'notOffered'
+function addBodyMember(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, member LspMember, wantsStatics bool)
+	if member.isStatic != wantsStatics 'notOffered'
 		return
 	end 'notOffered'
 
@@ -179,9 +178,9 @@ end 'addBodyMember'
 // `ProgramSignatures.calleeVisibilityFrom` and a field through `LspLayoutReach`, which are the
 // compiler's own tier decisions, so a member the open document may not name is a member it is not
 // offered.
-function addCorpusMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, corpus LspCorpus, subject LspSubject, enclosing LspEnclosingType)
+function addCorpusMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, corpus LspCorpus, subject LspSubject)
 	match corpus 'held'
-		loaded(_, signatures, corpusReaderPath) then addDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: corpusReaderPath, subject: subject, enclosing: enclosing)
+		loaded(_, signatures, corpusReaderPath) then addDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: corpusReaderPath, subject: subject)
 		unavailable then return
 	end 'held'
 end 'addCorpusMembers'
@@ -189,10 +188,10 @@ end 'addCorpusMembers'
 // A handle forks rather than filters. Its surface has nothing to do with the synthesized companion's
 // declarations — none of the messages are declared on it, and its one field is refused — so it is a
 // different roster and not a narrowing of one.
-function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject, enclosing LspEnclosingType)
+function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject)
 	match lspHandleSurfaceOf(signatures, typeName: typeName.toByteArray()) 'aHandle'
 		messages(_, request) then addHandleMessages(offers, offered: offered, request: request, subject: subject)
-		notAHandle then addOwnDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: readerPath, subject: subject, enclosing: enclosing)
+		notAHandle then addOwnDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: readerPath, subject: subject)
 	end 'aHandle'
 end 'addDeclaredMembers'
 
@@ -206,12 +205,12 @@ function addHandleMessages(offers CompletionOfferArray, offered OfferedLabelSet,
 	end 'eachAccepted'
 end 'addHandleMessages'
 
-function addOwnDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject, enclosing LspEnclosingType)
+function addOwnDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject)
 	let wantsStatics = lspSubjectIsStatic(subject)
 	let owner = typeName.toByteArray()
 	let prefix = "{typeName}{CompletionMemberSeparator}"
 
-	if not lspTypeMembersReachable(signatures, owner: owner, readerPath: readerPath, enclosing: enclosing) 'typeHiddenHere'
+	if not lspTypeMembersReachable(signatures, owner: owner, readerPath: readerPath) 'typeHiddenHere'
 		return
 	end 'typeHiddenHere'
 
@@ -234,7 +233,7 @@ function addOwnDeclaredMembers(offers CompletionOfferArray, offered OfferedLabel
 		return
 	end 'casesAndStaticsOnly'
 
-	addDeclaredFields(offers, offered: offered, signatures: signatures, owner: owner, readerPath: readerPath, enclosing: enclosing)
+	addDeclaredFields(offers, offered: offered, signatures: signatures, owner: owner, readerPath: readerPath)
 end 'addOwnDeclaredMembers'
 
 // ⭐ **THE ONE VISIBILITY DECISION, ASKED OF THE COMPILER.** `calleeVisibilityFrom` reads the tier and
@@ -248,15 +247,15 @@ function nameableFrom(signatures ProgramSignatures, registered ByteArray, reader
 	end 'tier'
 end 'nameableFrom'
 
-function addDeclaredFields(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, owner ByteArray, readerPath FilePath, enclosing LspEnclosingType)
+function addDeclaredFields(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, owner ByteArray, readerPath FilePath)
 	match signatures.structFor(owner, readerFilePath: readerPath) 'aStruct'
-		declared(layout) then addVisibleFields(offers, offered: offered, signatures: signatures, layout: layout, readerPath: readerPath, enclosing: enclosing)
+		declared(layout) then addVisibleFields(offers, offered: offered, signatures: signatures, layout: layout, readerPath: readerPath)
 		undeclared then return
 	end 'aStruct'
 end 'addDeclaredFields'
 
-function addVisibleFields(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, layout StructLayout, readerPath FilePath, enclosing LspEnclosingType)
-	let reach = LspLayoutReach.of(signatures, layout: layout, readerPath: readerPath, enclosing: enclosing)
+function addVisibleFields(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, layout StructLayout, readerPath FilePath)
+	let reach = LspLayoutReach.of(signatures, layout: layout, readerPath: readerPath)
 
 	for index in 0 upto layout.fieldCount() 'eachField'
 		if not reach.reaches(signatures, layout: layout, index: index) 'hiddenHere'

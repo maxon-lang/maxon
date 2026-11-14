@@ -1,0 +1,23 @@
+let UnmarkedLetCallDirName = "diagnostics-project-unmarked-let-call"
+let UnmarkedLetCallFileName = "main.maxon"
+let UnmarkedLetCallSource = "typealias Num = int(0 to 1000)\n\ntype Counter\n\texport var n as Num\n\n\tstatic function create(n Num) returns Counter\n\t\treturn Self\{n: n\}\n\tend 'create'\nend 'Counter'\n\nlet Start = Counter.create(4)\n\nfunction main() returns ExitCode\n\treturn Start.n as ExitCode\nend 'main'\n"
+let UnmarkedLetCallCode = "E3220"
+let UnmarkedLetCallMessage = "the initializer of 'Start' calls 'Counter.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used"
+let UnmarkedLetCallLine = 10
+let UnmarkedLetCallCharacter = 12
+
+test 'an unmarked let initializer that calls a function is reported in the file that wrote it'
+	let root = stagedProjectDiagnosticsRoot(UnmarkedLetCallDirName)
+	writeCorpusFile(root, fileName: UnmarkedLetCallFileName, content: UnmarkedLetCallSource)
+
+	let session = probeProjectCheckSession(root, fileName: UnmarkedLetCallFileName, content: UnmarkedLetCallSource, edits: StringArray.create(0))
+
+	discardStagedDir(root)
+
+	let reported = try onlyProjectDiagnostic(session.diagnostics, note: "`let Start = Counter.create(4)` calls a function in the initializer of an unmarked `let`. A `maxon build` reports exactly one `{UnmarkedLetCallCode}` at the call, in this file.")
+
+	try Expect.equal(reported.code.describe(), expected: UnmarkedLetCallCode, message: "the one error a build of this project reports is {UnmarkedLetCallCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: UnmarkedLetCallMessage, message: "the server must quote the refusal the build quotes.")
+	try Expect.equal(reported.range.startLine, expected: UnmarkedLetCallLine, message: "the build anchors the error on line 11, the `let Start` declaration.")
+	try Expect.equal(reported.range.startCharacter, expected: UnmarkedLetCallCharacter, message: "the build anchors the error at column 13, the `Counter.create` the declaration calls.")
+end 'an unmarked let initializer that calls a function is reported in the file that wrote it'

@@ -11,14 +11,14 @@ category: type-system
 
 ### Field Visibility
 
-Type fields can be marked with `export` to make them accessible from outside the type. By default, fields are private and can only be accessed within the type's methods.
+Type fields can be marked with `export` to make them accessible from every file. By default a field is visible to the files of its type's declaring directory and that directory's subdirectories, and refused (E3014) everywhere else.
 
 ```text
 typealias Score = int(i64.min to i64.max)
 
 type Value
-	export var n as Score      // accessible from outside
-	var private as Score       // only accessible within methods
+	export var n as Score      // accessible from every file
+	var private as Score       // accessible from the type's directory
 end 'Value'
 ```
 
@@ -34,16 +34,16 @@ function demo()
 end 'demo'
 ```
 
-### Private Fields
+### Unexported Fields
 
-Non-exported fields are only accessible within methods of the same type:
+An unexported field is reachable from the type's own methods and from any other code in the type's directory:
 
 ```text
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-	var count as Score              // private
-	export var name as Score     // public
+	var count as Score              // the type's directory
+	export var name as Score     // every file
 
 	function increment()
 		count = count + 1      // OK - accessing within method
@@ -62,7 +62,6 @@ function main() returns ExitCode
 	var c = Counter.create(0, name: 5)
 	c.increment()
 	return c.getCount()
-	// c.count would be an error - not exported
 end 'main'
 ```
 ```exitcode
@@ -202,7 +201,8 @@ end 'main'
 42
 ```
 
-<!-- test: error.unexported-field-read -->
+<!-- test: unexported-field-read-in-its-directory -->
+A free function in the type's own file reads the unexported field.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -220,23 +220,25 @@ function main() returns ExitCode
 	return v.private
 end 'main'
 ```
-```maxoncstderr
-error E3014: specs/export-var-fields/error.unexported-field-read.maxon:15:11: cannot access unexported field: 'private' outside of type 'Value'
+```exitcode
+42
 ```
 
-<!-- test: error.unexported-field-write -->
+<!-- test: error.unexported-field-write-from-another-directory -->
+A write from a file outside the type's directory is refused at the field token.
 ```maxon
-
+// --- file: lib/value.maxon
 typealias Integer = int(i64.min to i64.max)
 
-type Value
+export type Value
 	var private as Integer
 
-	static function create() returns Self
+	export static function create() returns Self
 		return Value{private: 0}
 	end 'create'
 end 'Value'
 
+// --- file: main.maxon
 function main() returns ExitCode
 	var v = Value.create()
 	v.private = 42
@@ -244,7 +246,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/export-var-fields/error.unexported-field-write.maxon:15:4: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: <fragment>:16:4: field 'Value.private' is not exported
 ```
 
 <!-- test: all-fields-private-by-default -->

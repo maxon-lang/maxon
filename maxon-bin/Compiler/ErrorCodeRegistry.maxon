@@ -40,7 +40,7 @@ export enum ErrorCode
 
 	// A type was required here and the token stream had something else.
 	// The compiler emits it where a name IS present but is not a usable type: a bare sized type as a
-	// typealias RHS (`typealias I = i64`). A type name the reading file cannot see is E3008 or E3088
+	// typealias RHS (`typealias I = i64`). A type name the reading file cannot see is E3008
 	// at every position it is written in.
 	// It also covers the shape where NO name is present and none can be
 	// inferred: an untyped closure parameter past the arity of the function
@@ -193,8 +193,8 @@ export enum ErrorCode
 	// `2 * WIDTH` or `sqrt(4.0)` does in a function body. A call whose result is not known there is
 	// reported here, naming it: a free function or sibling `static` returning a scalar, an instance method
 	// called bare, a generic function, or a function-typed binding. A call to a function that does not
-	// exist, that the file cannot see, or that several directories declare is E3004, E3008 or E3088, or
-	// E3095, as in a function body. Make the call inside a function.
+	// exist, that the file cannot see, or that several directories declare is E3004, E3008 or E3095, as
+	// in a function body. Make the call inside a function.
 	parserNonConstantInitializer = "E2045"
 
 	// A match over an enum may only carry a 'default' arm if that arm throws.
@@ -574,7 +574,7 @@ export enum ErrorCode
 	// A name is declared twice where exactly one declaration is legal: a top-level name twice in one directory, a method, field or requirement twice in one type, a local shadowing a 'self' field, or two generic instantiations compiling to one name.
 	// Four shapes share the code: (a) a top-level name declared twice in one DIRECTORY. A `type`, `enum`,
 	// `union`, `interface`, `typealias`, top-level `let` or `var`, and `function` all claim their name in
-	// one namespace per directory, whether file-private, `module` or `export` and generic or not, so
+	// one namespace per directory, whether unmarked, `export` or `public` and generic or not, so
 	// `type Point` and `function Point` collide, in one file or across the files of a directory
 	// (`duplicate definition of 'Point' -- already declared as `type Point``). A pair of typealiases that
 	// collides is E3061 rather than this code. Another directory's declaration of the name is a separate
@@ -596,9 +596,11 @@ export enum ErrorCode
 	// reported at its name. Rename one declaration.
 	duplicateDefinition = "E3006"
 
-	// A symbol is referenced from another file but is not declared 'export'.
+	// A symbol is referenced from outside its declaring directory's subtree but is not declared 'export'.
+	// An unmarked declaration is visible to every file in its declaring directory and that directory's
+	// subdirectories, and to no other file; program code and the standard library never see each other's.
 	// It covers a function, a static member, a type and a typealias -- a type body's inner `typealias` too,
-	// which is file-private unless it carries its own modifier, and is refused written bare or qualified
+	// which is unexported unless it carries its own modifier, and is refused written bare or qualified
 	// (`Holder.Inner`) -- at every position a name can be written in: a type annotation, a cast target, a construction or static call head, an `implements`,
 	// `extends`, `where` or `throws` clause, a `from` head, a `spawn`'s factory, and a top-level or `static`
 	// initializer. A type the reading
@@ -630,8 +632,8 @@ export enum ErrorCode
 	// declares -- a call argument, a `return`, a struct-literal field or a store to a declared field
 	// (`open(8080 as Port)` where `open` takes a `Port`). Remove the cast. So is a literal cast in an
 	// unannotated `let` when every use of the `let` takes the plain constant the same way: `let limit =
-	// 10 as Count` read only where a `Count` is declared. A `public`, `export` or `module` `let` keeps its
-	// cast, and so does one a closure captures. A literal cast stays legal where it is what fixes the
+	// 10 as Count` read only where a `Count` is declared. A top-level `let` keeps its cast, and so does
+	// one a closure captures. A literal cast stays legal where it is what fixes the
 	// type: an unannotated `var`, a `let` some use of which needs the alias, a field default whose cast
 	// gives the field its type (`var count = 0 as Tally`), an array-literal element, a generic
 	// parameter, an operator operand. A field default that already names its type takes no cast to it: `var gauge =
@@ -653,10 +655,10 @@ export enum ErrorCode
 	// function.
 	missingReturn = "E3013"
 
-	// A field not declared 'export' is read or written from outside its own type.
-	// The gate is the TYPE, not the FILE, and it covers WRITES as well as reads:
-	// `type B` touching `type A`'s unexported field is E3014 in the same file, and
-	// `v.private = 42` reports it exactly as `return v.private` does.
+	// A field not declared 'export' is read or written from outside its type's declaring directory subtree.
+	// The gate is the type's DIRECTORY, and it covers WRITES as well as reads: another type, a free
+	// function or an `extension` in that directory or below it reads and writes the field, and a reader
+	// anywhere else is refused, `v.secret = 42` exactly as `return v.secret`.
 	// Initialization is exempt: every field, exported or not, may be named in a
 	// struct literal, because the type itself determines what fields exist and
 	// visibility only governs access AFTER construction (specs/export-var-fields.md).
@@ -751,7 +753,7 @@ export enum ErrorCode
 
 	// Two typealiases in scope declare the same name.
 	// A directory declares each top-level name once, so two `typealias` declarations of one name collide
-	// in one file or across the files of one DIRECTORY, whatever their tier: a file-private alias claims
+	// in one file or across the files of one DIRECTORY, whatever their tier: an unmarked alias claims
 	// its name in its directory too. Two library aliases of one name that a single reader could name both
 	// collide as well. Aliases in different directories are legal whatever their forms; an ambiguity
 	// between two an author could both name is a property of the USE -- E3063 at the reference. A
@@ -771,14 +773,10 @@ export enum ErrorCode
 	semanticDuplicateTypeAlias = "E3061"
 
 	// A typealias is declared and never used.
-	// "Used" means the NAME appears in a type position. For a GENERIC-INSTANCE
-	// alias (`typealias Small = Array with Byte`) a spelling in another file
-	// counts, but only while one declaration in the whole program holds that
-	// name and both the file spelling it and the file declaring it mean the
-	// generic-instance form by it; every other alias form is answered from its
-	// OWN declaring file alone. An exported alias is exempt (one file cannot see
-	// another's uses), and being implicitly inferable from a bare `[...]` literal
-	// is not a use.
+	// "Used" means the NAME appears in a type position in a file of the alias's declaring directory or
+	// one of its subdirectories, and a spelling credits only the declaration it resolves to there, so a
+	// parent directory's alias that a nested directory's alias of the same name hides is unused. An
+	// exported alias is exempt, and being implicitly inferable from a bare `[...]` literal is not a use.
 	semanticUnusedTypeAlias = "E3062"
 
 	// A bare type name reaches more than one author declaration this file may name -- typealiases, types,
@@ -1011,19 +1009,15 @@ export enum ErrorCode
 	// the membership test and the value bind.
 	redundantContainsGet = "E3087"
 
-	// A 'module'-visible symbol is accessed from outside its declaring directory subtree.
-	// Symbol declared with the `module` keyword (visible to the declaring directory
-	// subtree only) but accessed from outside that subtree. It is refused at the same positions, and hides
-	// the same members, as E3008. Make the declaration `export`, or reach it from inside its subtree.
-	symbolNotInModuleScope = "E3088"
-
 	// A typealias refers back to itself, through a chain of aliases or of `implements` clauses.
 	semanticTypeResolutionCycle = "E3091"
 
-	// An 'export' symbol is never referenced outside its declaring file. Drop the modifier, make it 'module', or say 'public' if it is API surface.
+	// An 'export' symbol is never referenced outside its declaring directory. Drop the modifier, or say 'public' if it is API surface.
 	// an `export` (global) decl is never referenced from any file
-	// outside its declaring file. The decl could be file-private (drop the
-	// modifier) or `module`-visible. Applies to functions, types, enums,
+	// outside its declaring directory's subtree, where an unmarked
+	// declaration already reaches every reader it has. The root directory
+	// is no exception: an `export` in a root file that only root files and
+	// their subdirectories read is reported. Applies to functions, types, enums,
 	// typealiases, top-level constants, and exported struct
 	// fields. Emitted by `checkUnusedExports` after all files have been
 	// parsed and type-resolved.
@@ -1039,36 +1033,18 @@ export enum ErrorCode
 	// A type an E3167 surface names -- a signature, a binding, a field, a
 	// payload, a typealias's target or a clause -- is credited at that
 	// surface's tier while its declaration is itself referenced from outside
-	// the type's declaring file, or while the type owning the surface is
+	// the type's declaring directory, or while the type owning the surface is
 	// credited at that tier, because dropping the modifier would then earn
-	// E3167. So "drop the modifier" is not the remedy for such a type: narrow
-	// the demanding surface to file-private, or raise the type. Narrowing that
-	// surface to `module` keeps a demand, which excuses this and E3094 but not
-	// E3093.
+	// E3167. So "drop the modifier" is not the remedy for such a type: drop
+	// the demanding surface's modifier, or raise the type.
 	// Every typealias form is audited -- ranged, function, generic-instance
 	// and tuple -- and a use credits exactly the declaration it means, so a
 	// name two files declare is two audits. A use reached only through a
 	// called function's signature counts. So does a name spelled in a body the
-	// compiler did not build, as for E3094.
+	// compiler did not build: a generic function nothing instantiates, the
+	// branch of a `#if` the target excludes, a standard library body no
+	// program path reaches.
 	semanticUnusedExportedSymbol = "E3092"
-
-	// An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module', or 'public' if it is API surface.
-	// an `export` (global) decl is referenced only from files inside
-	// its declaring directory subtree. The decl could be downgraded to
-	// `module`-visible. Emitted by `checkUnusedExports`. A typealias of
-	// every form is audited and credited as for E3092.
-	semanticExportableAsModule = "E3093"
-
-	// A 'module' symbol is never referenced outside its declaring file. It could be file-private.
-	// a `module` decl is never referenced from any file other than
-	// the one it was declared in. The decl could be file-private (drop the
-	// `module` modifier). Emitted by `checkUnusedExports`. A typealias of
-	// every form is audited and credited as for E3092.
-	// A name spelled in a body the compiler did not build counts as a
-	// reference: a generic function nothing instantiates, the branch of a
-	// `#if` the target excludes, a standard library body no program path
-	// reaches.
-	semanticUnusedModuleSymbol = "E3094"
 
 	// A bare function or top-level binding name has more than one reachable definition; qualify it as 'dir.name'.
 	// A bare name means the nearest declaration: the reading file's own directory's, else the project
@@ -1881,9 +1857,9 @@ export enum ErrorCode
 	// the build it produces looks exactly like the build it was meant to replace.
 	defineNoSuchConstant = "E3149"
 
-	// A `--define` name matched more than one declaration. A namespace is a DIRECTORY, so even a
-	// qualified name is not self-evidently unique — two file-private constants of one name may share
-	// one. Both claimants are named, because the fix is to pick one and there is no picking without
+	// A `--define` name matched more than one declaration. Two directories may each declare a constant
+	// of one name, and a namespace is a rendering of a DIRECTORY (`my.dir/` and `my/dir/` both spell
+	// `my.dir`), so even a qualified name is not self-evidently unique. Both claimants are named, because the fix is to pick one and there is no picking without
 	// seeing them.
 	defineAmbiguous = "E3150"
 
@@ -1912,10 +1888,10 @@ export enum ErrorCode
 	// at all three, the legality of a runtime file never turns on which optimizations elided its retains.
 	managedValueInRuntimeSource = "E3153"
 
-	// A `runtime/` declaration reaches for a visibility wider than `module` — `export` (global) or `public`.
+	// A `runtime/` declaration is marked `export` (global) or `public`.
 	// `runtime/` is loaded into every program, so such a declaration contests names with the programs the
-	// tier is linked into, the compiler compiling itself among them. `module` is the widest tier that still
-	// gives the runtime the
+	// tier is linked into, the compiler compiling itself among them. An unmarked declaration is the widest
+	// visibility that still gives the runtime the
 	// file-to-file sharing a runtime split across several files needs.
 	wideVisibilityInRuntimeSource = "E3154"
 
@@ -1995,17 +1971,17 @@ export enum ErrorCode
 
 	// A declaration exposes a type less visible than the declaration. Whoever may reach a declaration must
 	// be able to name every type it exposes, so each type an exported surface names must carry a written
-	// visibility at least the surface's own. The tiers, narrowest first: no modifier (file-private),
-	// `module`, `export`, `public`. The surfaces, with the noun and the position the message gives each:
+	// visibility at least the surface's own. The tiers, narrowest first: no modifier (`unexported` in the
+	// message), `export`, `public`. The surfaces, with the noun and the position the message gives each:
 	// - a function: each parameter type ("in the type of parameter 'p'"), the return type ("in its return
 	//   type"), the throws type ("in its throws clause"), and the `where` clause of a generic function or
 	//   an extension ("in its where clause");
-	// - a `module`, `export` or `public` binding -- a top-level `let` or `var`, or a `static let` or
+	// - an `export` or `public` binding -- a top-level `let` or `var`, or a `static let` or
 	//   `static let` member -- ("in its type"): the type its initializer gives it, written or inferred, and
 	//   the typealias the initializer was spelled through (`50 as Small`, `Tallies.create()`); the subject is
 	//   a "constant";
 	// - an instance "field" ("in its type"), at the narrower of the field's own modifier and its type's; an
-	//   unmarked field is private to its type and is asked nothing;
+	//   unmarked field is asked nothing;
 	// - a "union case", at the union's tier ("in the type of payload 'v'");
 	// - a "typealias" ("in its target");
 	// - a type, enum or union's `implements` clause and its `with` arguments ("in its implements clause");
@@ -2023,7 +1999,7 @@ export enum ErrorCode
 	// service's message is held to the narrower of its own modifier and its service type's, because it can
 	// be sent only through a handle to that service. Reported once per offending type and position: a field
 	// or payload at the type it writes, any other surface at the declaration's name. Example:
-	// `exported field 'api.Holder.mode' names file-private enum 'Mode' in its type`. Raise the type to the
+	// `exported field 'api.Holder.mode' names unexported enum 'Mode' in its type`. Raise the type to the
 	// surface's tier, or narrow the surface to the type's.
 	semanticSignatureTypeLessVisibleThanDeclaration = "E3167"
 
@@ -2449,13 +2425,13 @@ export enum ErrorCode
 	// the value to a signed typealias first with `as`.
 	semanticUnsignedNegation = "E3218"
 
-	// A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in
-	// its file names. A declaration is live when code that is not itself a file-private declaration names it
-	// (an `export`, `module` or `public` declaration, `main`, a test, a method) or a live file-private
+	// An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in
+	// its directory's subtree names. A declaration is live when code that is not itself an unmarked
+	// declaration names it (an `export` or `public` declaration, `main`, a test, a method) or a live unmarked
 	// declaration does, so declarations that only name each other, or a function that only calls itself, are all
 	// reported. A name spelled in a branch of `#if` the target excludes counts as a use. Delete the declaration,
 	// or use it. An unused `typealias` is E3062. Reported once the program has no other error.
-	semanticUnusedFilePrivateDeclaration = "E3219"
+	semanticUnusedUnexportedDeclaration = "E3219"
 
 	// The initializer of a module-level `let` or a `static let` calls a function. Such a `let` is image
 	// data: its value is decided by the program text, laid down before `main` runs, and read as one copy by

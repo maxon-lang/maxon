@@ -41,7 +41,7 @@ export typealias StructRosterEntryArray = Array with StructRosterEntry
 // ids index (`StructRosterEntry`), so a driver never re-fetches it: a layout read against the wrong
 // interner misresolves its field-type ids (the mismatch `managedStructFieldDropCallee` exists to
 // prevent). Registered from one table, expanded from the same object.
-export union CascadeNode
+union CascadeNode
 	structLayout(entry StructRosterEntry)
 	declaredUnion(layout immutable EnumLayout)
 
@@ -66,18 +66,18 @@ export union CascadeNode
 	genericInstanceDictionary(id GenericInstanceId)
 end 'CascadeNode'
 
-export typealias CascadeNodeArray = Array with CascadeNode
+typealias CascadeNodeArray = Array with CascadeNode
 
-export typealias CascadeNodeIndexArray = Array with ElementIndex
+typealias CascadeNodeIndexArray = Array with ElementIndex
 typealias CascadeNodeIndexBucketMap = Map with (ByteArray, CascadeNodeIndexArray)
 
 // The needed-symbol set a closure is closing — `RuntimeUsage.neededDestructors` or its
 // `neededCloners` dual, which are the same `Set with ByteArray` seen from the two sides.
-export typealias CascadeSymbolSet = Set with ByteArray
+typealias CascadeSymbolSet = Set with ByteArray
 
 // ⭐ **THE SHARED NEEDS-CLOSURE WORKLIST.** Registration is the whole node space; the queue is only what
 // the program actually references. See the file header for why the two are separate.
-export type CascadeWorklist
+type CascadeWorklist
 	// Every registered node, in registration order — the order a closure's own scan of the declarations
 	// would take, so the expansion order is the declaration order.
 	var nodes as CascadeNodeArray
@@ -101,13 +101,13 @@ export type CascadeWorklist
 	// matter what a caller discovers, and each node's fields are classified exactly once.
 	var pushed as BoolArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{nodes: CascadeNodeArray.create(0), bySymbol: CascadeNodeIndexBucketMap.create(), pending: CascadeNodeIndexArray.create(0), head: 0, pushed: BoolArray.create(0)}
 	end 'create'
 
 	// Add `node` to the node space under the cascade `symbol` its synthesized body will be installed as.
 	// Registration alone enqueues NOTHING — see the header.
-	export function register(symbol ByteArray, node CascadeNode)
+	function register(symbol ByteArray, node CascadeNode)
 		let at = self.nodes.count()
 		self.nodes.push(node)
 		self.pushed.push(false)
@@ -130,7 +130,7 @@ export type CascadeWorklist
 	// definition a symbol already in the set, so asking
 	// each of THOSE what it names is the same answer for O(referenced) work — and it is the same question
 	// `discovered` answers, so it is asked in one place rather than two.
-	export function seed(needed CascadeSymbolSet)
+	function seed(needed CascadeSymbolSet)
 		for symbol in needed 'eachReferenced'
 			self.discovered(symbol)
 		end 'eachReferenced'
@@ -154,7 +154,7 @@ export type CascadeWorklist
 	end 'hasPending'
 
 	// Take the next node to expand. Precondition: `hasPending` — the drain loop's own condition.
-	export function take() returns CascadeNode
+	function take() returns CascadeNode
 		let at = try self.pending.get(self.head) otherwise panic("CascadeWorklist.take: pending.get({self.head}) OOB — take() called without hasPending()")
 		self.head = self.head + 1
 		return try self.nodes.get(at) otherwise panic("CascadeWorklist.take: nodes.get({at}) OOB — pending holds only registered positions")

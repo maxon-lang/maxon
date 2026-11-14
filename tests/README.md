@@ -805,7 +805,7 @@ them. Four facts shape it:
 - **A corpus directory's name is its namespace**, because the project root is the common ancestor of the
   listed directories (`tests/`). A name that is not an identifier is E3182, which is why every corpus
   is named as an identifier: `buildManifest`, `emittedRuntime` and so on.
-- **A helper has one name and one home.** A corpus file-private function of the same name still compiles
+- **A helper has one name and one home.** A corpus's unmarked function of the same name still compiles
   and shadows the shared one, so `docs/each-shared-harness-helper-is-defined-once.maxtest` is what refuses
   a copy: it fails when any `public function` of `support/` is declared by another `.maxon` or `.maxtest`
   under `tests/`.
@@ -929,7 +929,7 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   one and that a run with `--update-required` mints while lanes are still owed, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
   kept in separate programs, a case keeping a function in a module `var` and a case holding closures in a
-  record kept in separate programs, a case declaring a conformer with a file-private cursor and a case
+  record kept in separate programs, a case declaring a conformer with an unexported cursor and a case
   calling a library `Iterable` extension method kept in separate programs, the cases that stay out of it, `--batch=off` running every case
   alone, a crash mid-batch attributed to its own case (on `--target=wasm32-wasi` too, where no case of a
   batch can be selected again, so the siblings are recompiled and run alone), a batched case's services finishing before its end
@@ -1036,13 +1036,12 @@ lives in `DebugHarness.maxon`, which the runner compiles beside the cases and ru
 compiler's path, the staging, the spawning and the stream folds live in `support/`, which every corpus's
 `.maxproj` lists. `coverage/` and `profile/` below are shaped the same way.
 
-⚠ **THE COMPILER ENFORCES HALF OF THAT AND NO MORE.** Every free FUNCTION in a directory shares one
-namespace whatever its visibility (E3006, measured here), so a second copy of a helper beside it in the
-same directory will not compile. A function in another directory does not collide: a file-private copy of
-a `support/` helper shadows it, which is why `each-shared-harness-helper-is-defined-once.maxtest` exists.
-A file-private `let` does NOT collide either — two case files may each declare `TypesSectionName` and both
-are accepted — so duplicated CONSTANTS are the half nothing catches for you, and a name renamed to dodge a
-collision is the shape that duplication takes here.
+⚠ **THE COMPILER ENFORCES HALF OF THAT AND NO MORE.** Every top-level name in a directory shares one
+namespace whatever its visibility (E3006), so a second copy of a helper or a constant beside it in the
+same directory will not compile. A declaration in another directory does not collide: a corpus's unmarked
+copy of a `support/` helper shadows it, which is why `each-shared-harness-helper-is-defined-once.maxtest`
+exists, and two corpora may each declare a constant of one name — so duplication ACROSS corpora is the half
+nothing catches for you, and a name renamed to dodge a collision is the shape that duplication takes here.
 
 **A FAULT FIXTURE IS BUILT AS LIBRARY TIER.** `crash` and `faultcallee` reach a hardware fault through
 `__Builtins.forceSegfault()`, which only a source under `stdlib/` or `runtime/` may call (E3185).

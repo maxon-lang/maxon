@@ -188,7 +188,7 @@ let DsMmEntryBytes = 24
 // `mm_incref`/`mm_decref`/`mm_free` know only a POINTER — there is no tag and no id to be had at those
 // call sites — so both facts are stamped into the box by `__mm_alloc` and read back out here. The mask is
 // what bounds a tag index to the 16 bits the wire gives it.
-export let DsMmPackedIdShift = 16
+let DsMmPackedIdShift = 16
 export let DsMmTagIndexMask = 65535
 
 // ============================================================================
@@ -676,14 +676,14 @@ export let DsAllocIdLabel = b"__mm_alloc_id"
 // word per bucket, because the allocator indexes it with a computed stride and only a single run can
 // promise the buckets are contiguous at it. Every traced binary carries the 32 KiB whether or not it holds
 // a reader. The two checks in `dsAllocTallyImage` pin the stride against the shift the emitter indexes by.
-export let DsAllocTallyLabel = b"__mm_alloc_tally"
+let DsAllocTallyLabel = b"__mm_alloc_tally"
 
 let DsAllocTallyWordBytes = 8
 let DsAllocTallyBucketWords = 2
 let DsAllocTallyBucketBytes = DsAllocTallyBucketWords * DsAllocTallyWordBytes
-export let DsAllocTallyBucketShift = 4
-export let DsAllocTallyCountOffset = 0 as ByteOffset
-export let DsAllocTallyBytesOffset = DsAllocTallyWordBytes as ByteOffset
+let DsAllocTallyBucketShift = 4
+let DsAllocTallyCountOffset = 0 as ByteOffset
+let DsAllocTallyBytesOffset = DsAllocTallyWordBytes as ByteOffset
 let DsAllocTallyTableBytes = SlabCensusTagBuckets * DsAllocTallyBucketBytes
 let DsAllocTallyZeroByte = 0 as Byte
 
@@ -1515,11 +1515,11 @@ end 'buildDsEmitLogText'
 //
 // Each SPLITS `block` — the caller continues in the block it returns, exactly as `emitPackedElementZero`
 // (`ManagedMemoryRuntime`) does.
-export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
+function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
 	return emitEventCallIfAttached(module, func: func, block: block, callee: DsEmitMmName, eventType: eventType, payload: twoArgs(packedId, second: value), ids: ids)
 end 'emitMmEvent'
 
-export function emitSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, traceId ValueId, ids ValueMinter) returns IrBlock
+function emitSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, traceId ValueId, ids ValueMinter) returns IrBlock
 	return emitEventCallIfAttached(module, func: func, block: block, callee: DsEmitSchedName, eventType: eventType, payload: argsOf(traceId), ids: ids)
 end 'emitSchedEvent'
 

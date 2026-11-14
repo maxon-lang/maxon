@@ -1359,9 +1359,9 @@ union payload. The alias file declares nothing but aliases, so the two cases emi
 their emitted code must read alike. Returns 2 + 4 + 6 + 8 + 10 + 12 + 14 + 16 = 72.
 ```maxon
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias Pair = (Int, Int)
-export typealias PairArray = Array with Pair
+typealias Int = int(i64.min to i64.max)
+typealias Pair = (Int, Int)
+typealias PairArray = Array with Pair
 
 // --- file: main.maxon
 type Holder
@@ -1453,9 +1453,9 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias Pair = (Int, Int)
-export typealias PairArray = Array with Pair
+typealias Int = int(i64.min to i64.max)
+typealias Pair = (Int, Int)
+typealias PairArray = Array with Pair
 ```
 ```exitcode
 72
@@ -1615,9 +1615,9 @@ error E3005: <fragment>:14:2: Cannot return '((int, Int), Int)' from function de
 ```
 
 <!-- test: error.a-tuple-over-a-contested-alias-is-named-in-source-form -->
-`pkg/lib.maxon` and `app/main.maxon` each declare a file-private `Bytes` over a `Byte` of their own, and
+`pkg/lib.maxon` and `app/main.maxon` each declare an unmarked `Bytes` over a `Byte` of their own, and
 `Holder.pair` is a `(Bytes, String)` of `pkg/lib.maxon`'s. An exported field cannot be typed by a
-file-private alias, even as a tuple's element, so the field is refused; the tuple it hands to
+unmarked alias, even as a tuple's element, so the field is refused; the tuple it hands to
 `app/main.maxon`'s `takesNarrow` is a different `Bytes` and is refused beside it, each named by the file it
 comes from.
 ```maxon
@@ -1649,7 +1649,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: app/<fragment>:25:9: argument type mismatch for 'p': expected '(Bytes, String)', got '(pkg.Bytes, String)'
-error E3167: pkg/<fragment>:6:13: exported field 'pkg.Holder.pair' names file-private typealias 'Bytes' in its type
+error E3167: pkg/<fragment>:6:13: exported field 'pkg.Holder.pair' names unexported typealias 'Bytes' in its type
 ```
 
 ### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors
@@ -3118,7 +3118,7 @@ end 'main'
 ```
 
 <!-- test: error.two-tuples-differing-only-by-the-file-an-alias-brand-comes-from-name-each-one -->
-`pkg/lib.maxon` and `app/main.maxon` each declare a file-private `Xs` over one and the same instance, and `Holder.pair` is a `(Xs, Item)` of `pkg/lib.maxon`'s. An exported field cannot be typed by a file-private alias, even as a tuple's element, so the field is refused; the tuple it hands to `app/main.maxon`'s `takes` is a different `Xs` and is refused beside it, each named by the file it comes from.
+`pkg/lib.maxon` and `app/main.maxon` each declare an unmarked `Xs` over one and the same instance, and `Holder.pair` is a `(Xs, Item)` of `pkg/lib.maxon`'s. An exported field cannot be typed by an unmarked alias, even as a tuple's element, so the field is refused; the tuple it hands to `app/main.maxon`'s `takes` is a different `Xs` and is refused beside it, each named by the file it comes from.
 ```maxon
 // --- file: item/item.maxon
 export typealias Item = int(0 to 100)
@@ -3147,7 +3147,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: app/<fragment>:24:9: argument type mismatch for 'p': expected '(Xs, Item)', got '(pkg.Xs, Item)'
-error E3167: pkg/<fragment>:8:13: exported field 'pkg.Holder.pair' names file-private typealias 'Xs' in its type
+error E3167: pkg/<fragment>:8:13: exported field 'pkg.Holder.pair' names unexported typealias 'Xs' in its type
 ```
 
 <!-- test: error.two-tuples-differing-only-by-brand-name-the-brands -->

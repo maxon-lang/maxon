@@ -27,7 +27,7 @@ ordinal in the runtime range check).
 <!-- test: cross-file-keyword-case-and-range -->
 ```maxon
 // --- file: kind.maxon
-export enum Kind
+enum Kind
 	boolean
 	integer
 	float
@@ -94,15 +94,15 @@ compiler's own `returnTypeInterfaceName` / `matchLayoutLoad`:
 `let raw = match ref { ... gives Enum.case }; match raw { ... }`.
 ```maxon
 // --- file: types.maxon
-export typealias Dim = int(0 to 100)
+typealias Dim = int(0 to 100)
 
-export union MyType
+union MyType
 	unresolved
 	named(id Dim)
 	other(x Dim)
 end 'MyType'
 
-export union Wrapper
+union Wrapper
 	void
 	value(inner MyType)
 end 'Wrapper'

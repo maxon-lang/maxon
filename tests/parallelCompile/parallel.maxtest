@@ -1,4 +1,4 @@
-export typealias ReportedPoolCount = int(i64.min to i64.max)
+typealias ReportedPoolCount = int(i64.min to i64.max)
 
 // parallel.maxtest — the shared half of the compiler's PARALLEL-POOL gate: how the compiler is
 // spawned at a staged fixture program with the processor count pinned or left to the machine, and
@@ -34,15 +34,15 @@ export typealias ReportedPoolCount = int(i64.min to i64.max)
 // Where the corpus lives, relative to the checkout root. Staging goes to this process's test scratch
 // directory outside the checkout (`testScratchDir`): a live `.maxon` under `tests/` is one `maxon fmt`
 // over the checkout rewrites.
-export let FixturesDirName = "tests/parallelCompile/fixtures"
+let FixturesDirName = "tests/parallelCompile/fixtures"
 let ProjectDirName = "tests/parallelCompile"
 
 // Where `retainedAside` parks a build's image: a name no build writes, inside the case's own staging tree.
 let RetainedImageFileName = "retained-image"
 
 // The flags that raise each pool line's category to DEBUG — see the header for why they are two.
-export let CodegenDebugLogFlag = "--log=codegen:debug"
-export let CompilerDebugLogFlag = "--log=compiler:debug"
+let CodegenDebugLogFlag = "--log=codegen:debug"
+let CompilerDebugLogFlag = "--log=compiler:debug"
 
 // Each pool line as the sink renders it, then the words every pool report shares. Each report ends
 // with a count no needle pins: the allocator's functions and the front end's files both include what
@@ -50,7 +50,7 @@ export let CompilerDebugLogFlag = "--log=compiler:debug"
 let RegallocPoolLinePrefix = "[GEN] DEBUG: regalloc: "
 let FrontEndPoolLinePrefix = "[CMP] DEBUG: front end: "
 let PoolLineWorkersWord = "worker(s) over"
-export let PoolLineProcessorsWord = "processor(s), "
+let PoolLineProcessorsWord = "processor(s), "
 
 // Where the four counts sit among a front-end pool line's space-separated words:
 // `<workers> worker(s) over <processors> processor(s), <files> file(s), <adopted> adopted`.
@@ -65,13 +65,13 @@ let PoolLineAdoptedWord = "adopted"
 // The scheduler's processor-count marker. Spelled here rather than read from `SchedRuntime.MaxProcsEnvName`
 // because a test project cannot import the compiler. It cannot rot silently: a marker the scheduler stops
 // reading leaves the pinned case reporting the machine's count, which is red.
-export let SingleProcessor = 1
+let SingleProcessor = 1
 
 let PrivateRunCacheDirName = "run-cache"
 
 // The phrase every register-pressure refusal carries. A phrase rather than the error number, because a
 // code spelled outside the registry is a copy of the number space; this rots red, not silently.
-export let RegisterPressureRefusalPhrase = "more register(s) than are available"
+let RegisterPressureRefusalPhrase = "more register(s) than are available"
 
 // A declaration line of a staged program. Counting them bounds from below the functions the allocator
 // sees, which is what decides whether the default pool's worker count is knowable.
@@ -88,9 +88,9 @@ let CompileTimeToken = "<TIME>"
 
 // A processor count as the scheduler resolves one. Its floor is carried in by a guard rather than by the
 // runtime's clamp, which nothing here proves.
-export typealias ProcessorCount = int(1 to u32.max)
+typealias ProcessorCount = int(1 to u32.max)
 
-export union ProcessorPin
+union ProcessorPin
 	machine
 	pinned(count ProcessorCount)
 end 'ProcessorPin'
@@ -102,18 +102,18 @@ let MetricsOptionPrefix = "--metrics="
 let MetricsFileName = "metrics.tsv"
 let MetricsFieldSeparator = "\t"
 let MetricsCommentPrefix = "#"
-export let MetricsKindColumn = "kind"
-export let NameColumn = "name"
-export let AllocsColumn = "allocs"
-export let PhaseRowKind = "phase"
-export let TotalRowKind = "total"
-export let UnattributedRowKind = "unattributed"
-export let WholeCompileRowName = "-"
-export let UpkeepRowKind = "upkeep"
+let MetricsKindColumn = "kind"
+let NameColumn = "name"
+let AllocsColumn = "allocs"
+let PhaseRowKind = "phase"
+let TotalRowKind = "total"
+let UnattributedRowKind = "unattributed"
+let WholeCompileRowName = "-"
+let UpkeepRowKind = "upkeep"
 let MetricsHeaderOpener = "# kind"
 let MetricsKindColumnPosition = 0
 
-export typealias MetricsRowArray = Array with MetricsRow
+typealias MetricsRowArray = Array with MetricsRow
 
 // ============================================================================================
 // THE CORPUS ITSELF
@@ -155,7 +155,7 @@ end 'no fixture is stored as a source maxon fmt would rewrite'
 // load commands, so two builds written to two names differ within the first kilobyte for a reason that
 // is not the worker count. The output path is therefore a confound this corpus CONTROLS: a case that
 // compares two builds gives both the same path and keeps the first with `retainedAside`.
-export function spawnPinnedBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
+function spawnPinnedBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
 	let source = staged if wholeDirectory else staged.join("{StagedProgramFileName}")
 	let environment = pinnedEnvironment(staged, processors: processors, privateRunCache: privateRunCache, runCacheDirName: runCacheDirName)
 
@@ -185,7 +185,7 @@ end 'pinnedEnvironment'
 
 	// Both builds of a comparison come through here, the unpaused one with a 0 s pause: a compile's
 	// counted allocations follow its environment block, and `sh` changes it.
-	export function pausedBuildMetricsTable(staged FilePath, label String, pauseSeconds String) returns MetricsTable throws TestFailure
+	function pausedBuildMetricsTable(staged FilePath, label String, pauseSeconds String) returns MetricsTable throws TestFailure
 		let shell = try FilePath.from(PosixShellPath) otherwise panic("parallel-compile.test: {PosixShellPath} is a spellable path")
 		let build = buildArguments(staged.join(StagedProgramFileName), output: executableIn(staged, stem: OutputFileStem), extraArguments: metricsArguments(staged, extraArguments: StringArray.create(0)))
 
@@ -212,7 +212,7 @@ end 'pinnedEnvironment'
 // however many runtime functions it allocates — a number this file cannot know. So the needle stops at
 // the count, and W = P is asserted only where the DECLARED count alone guarantees it; a host with more
 // processors than the fixture declares functions is refused loudly rather than pinned to a guess.
-export function defaultPoolNeedle(staged FilePath) returns String
+function defaultPoolNeedle(staged FilePath) returns String
 	let reported = defaultProcessorCount()
 	let declared = declaredFunctionCount(staged)
 
@@ -224,19 +224,19 @@ export function defaultPoolNeedle(staged FilePath) returns String
 end 'defaultPoolNeedle'
 
 // The pool line with the scheduler pinned to one processor: a pool of one worker.
-export function singleProcessorPoolNeedle() returns String
+function singleProcessorPoolNeedle() returns String
 	return poolNeedle(RegallocPoolLinePrefix, workers: SingleProcessor, processors: SingleProcessor)
 end 'singleProcessorPoolNeedle'
 
 // The front end's pool line with the scheduler pinned to one processor: one worker, whatever it parses.
-export function frontEndPoolNeedleSingleProcessor() returns String
+function frontEndPoolNeedleSingleProcessor() returns String
 	return poolNeedle(FrontEndPoolLinePrefix, workers: SingleProcessor, processors: SingleProcessor)
 end 'frontEndPoolNeedleSingleProcessor'
 
 // ⭐ **THE DEFAULT POOL IS min(P, F) WORKERS, WHERE F IS THE MOST FILES ONE DRAIN DISPATCHED — AND THE LINE SAYS
 // WHAT F WAS.** F includes the stdlib files this file cannot count, so it is read off the report rather than
 // derived here; P is read off the report too and must be the machine's.
-export function requireFrontEndPoolAtDefault(run CollectedOutput) throws TestFailure
+function requireFrontEndPoolAtDefault(run CollectedOutput) throws TestFailure
 	let line = frontEndPoolLine(run)
 	let words = line.split(PoolLineWordSeparator)
 	let workers = reportedCount(words, position: PoolLineWorkersPosition, line: line)
@@ -254,7 +254,7 @@ function frontEndPoolLine(run CollectedOutput) returns String
 	return (try afterPrefix.split(LineFeed).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")).trim()
 end 'frontEndPoolLine'
 
-export function frontEndAdoptions(run CollectedOutput) returns ReportedPoolCount
+function frontEndAdoptions(run CollectedOutput) returns ReportedPoolCount
 	let line = frontEndPoolLine(run)
 	let words = line.split(PoolLineWordSeparator)
 	let word = try words.get(PoolLineAdoptedWordPosition) otherwise panic("parallel-compile.test: the front end's pool line ends before its `{PoolLineAdoptedWord}` count. It wrote: {line}")
@@ -272,7 +272,7 @@ function reportedCount(words StringArray, position ElementIndex, line String) re
 end 'reportedCount'
 
 // The front end reports its pool once per build, never once per file or per batch.
-export function requireOneFrontEndPoolLine(run CollectedOutput) throws TestFailure
+function requireOneFrontEndPoolLine(run CollectedOutput) throws TestFailure
 	let lines = occurrences(run.stderr, needle: FrontEndPoolLinePrefix)
 	try Expect.equal(lines, expected: 1, message: "`{CompilerDebugLogFlag}` printed {lines} lines starting `{FrontEndPoolLinePrefix}`. The front end builds ONE pool per build and reports it once. It wrote to stderr: {run.stderr}")
 end 'requireOneFrontEndPoolLine'
@@ -309,7 +309,7 @@ end 'declaredFunctionCount'
 // A run's stderr as two runs are compared: CR folded, separators folded, the staging path replaced by
 // `<TREE>` so a message that names the source stays readable in a failure report, and the wall time a
 // build reports replaced by `<TIME>` — a pool of one and a pool of sixteen do not take the same time.
-export function normalizedStderr(run CollectedOutput, staged FilePath) returns String
+function normalizedStderr(run CollectedOutput, staged FilePath) returns String
 	let folded = withoutCarriageReturns(run.stderr).replace(FilePath.separator(), with: PortablePathSeparator)
 	let tree = staged.toString().replace(FilePath.separator(), with: PortablePathSeparator)
 
@@ -342,7 +342,7 @@ end 'withoutCompileTime'
 // why the basename may not vary — and the pinned image is kept aside between them, so the processor
 // count is the only difference between the two builds compared. `programName` names the program in
 // failure reports.
-export function requireIdenticalImagesAcrossProcessorCounts(staged FilePath, programName String, wholeDirectory bool = false) throws TestFailure
+function requireIdenticalImagesAcrossProcessorCounts(staged FilePath, programName String, wholeDirectory bool = false) throws TestFailure
 	let noArguments = StringArray.create(0)
 
 	let pinnedRun = spawnPinnedBuild(staged, label: "single-processor", extraArguments: noArguments, processors: ProcessorPin.pinned(SingleProcessor), wholeDirectory: wholeDirectory)
@@ -377,12 +377,12 @@ function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailu
 	end 'compared'
 end 'requireIdenticalBytes'
 
-export function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName) returns MetricsTable throws TestFailure
+function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName) returns MetricsTable throws TestFailure
 	_ = try meteredBuild(staged, label: label, extraArguments: StringArray.create(0), processors: ProcessorPin.machine, wholeDirectory: false, runCacheDirName: runCacheDirName)
 	return metricsTableOf(staged, label: label)
 end 'builtMetricsTable'
 
-export function meteredBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput throws TestFailure
+function meteredBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput throws TestFailure
 	let run = spawnPinnedBuild(staged, label: label, extraArguments: metricsArguments(staged, extraArguments: extraArguments), processors: processors, wholeDirectory: wholeDirectory, privateRunCache: true, runCacheDirName: runCacheDirName)
 	try requireCompiled(run, label: label)
 
@@ -405,7 +405,7 @@ function requireCompiled(run CollectedOutput, label String) throws TestFailure
 	try Expect.equal(observedExit, expected: 0, message: "the '{label}' build did not compile. It wrote to stderr: {run.stderr}")
 end 'requireCompiled'
 
-export function metricsTableOf(staged FilePath, label String) returns MetricsTable
+function metricsTableOf(staged FilePath, label String) returns MetricsTable
 	let metricsPath = staged.join(MetricsFileName)
 	let text = fileText(metricsPath)
 	try File.delete(metricsPath) otherwise panic("parallel-compile.test: the gate could not run — could not clear {metricsPath.toString()}, so the next build's table could not be told from this one's.")
@@ -465,7 +465,7 @@ function metricsColumnsFrom(headerFields StringArray) returns StringArray
 	return columns
 end 'metricsColumnsFrom'
 
-export type MetricsRow
+type MetricsRow
 	var line as String
 	var fields as StringArray
 
@@ -478,7 +478,7 @@ export type MetricsRow
 	end 'cell'
 end 'MetricsRow'
 
-export type MetricsTable
+type MetricsTable
 	var columns as StringArray
 	export var rows as MetricsRowArray
 

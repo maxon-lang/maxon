@@ -56,7 +56,7 @@ export union ColumnBounds
 end 'ColumnBounds'
 
 // @generated library-cache begin
-module function cacheWriteColumnBounds(writer LibraryCacheWriter, value ColumnBounds)
+function cacheWriteColumnBounds(writer LibraryCacheWriter, value ColumnBounds)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
@@ -82,7 +82,7 @@ function cacheWriteColumnBoundsFloats(writer LibraryCacheWriter, a0 FullRangeInt
 	writer.signed(a1 as CacheSigned)
 end 'cacheWriteColumnBoundsFloats'
 
-module function cacheReadColumnBounds(reader LibraryCacheReader) returns ColumnBounds throws LibraryCacheDamage
+function cacheReadColumnBounds(reader LibraryCacheReader) returns ColumnBounds throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
@@ -146,7 +146,7 @@ function unsignedHull(low FullRangeInt, high FullRangeInt, otherLow FullRangeInt
 	return ColumnBounds.unsignedIntegers(hullLow, high: hullHigh)
 end 'unsignedHull'
 
-export function columnBoundsOfWords(low FullRangeInt, high FullRangeInt, isFloat bool) returns ColumnBounds
+function columnBoundsOfWords(low FullRangeInt, high FullRangeInt, isFloat bool) returns ColumnBounds
 	if not isFloat 'integerWords'
 		return ColumnBounds.integers(low, high: high)
 	end 'integerWords'
@@ -158,7 +158,7 @@ export function columnBoundsOfWords(low FullRangeInt, high FullRangeInt, isFloat
 	return ColumnBounds.floats(low, high: high)
 end 'columnBoundsOfWords'
 
-export function columnBoundsOfPoint(word FullRangeInt, unsignedPattern bool, isFloat bool) returns ColumnBounds
+function columnBoundsOfPoint(word FullRangeInt, unsignedPattern bool, isFloat bool) returns ColumnBounds
 	if unsignedPattern and word < 0 'anUnsignedPoint'
 		return ColumnBounds.unsignedIntegers(word, high: word)
 	end 'anUnsignedPoint'
@@ -190,13 +190,13 @@ export type ColumnPair
 	end 'joinedWith'
 end 'ColumnPair'
 
-export union ColumnSigns
+union ColumnSigns
 	unseen
 	negative(value FullRangeInt)
 	unsigned(pattern FullRangeInt)
 	mixed(negativeValue FullRangeInt, unsignedPattern FullRangeInt)
 
-	export function withNegative(value FullRangeInt) returns ColumnSigns
+	function withNegative(value FullRangeInt) returns ColumnSigns
 		return match self 'mine'
 			unseen gives ColumnSigns.negative(value)
 			negative or
@@ -205,7 +205,7 @@ export union ColumnSigns
 		end 'mine'
 	end 'withNegative'
 
-	export function withUnsigned(pattern FullRangeInt) returns ColumnSigns
+	function withUnsigned(pattern FullRangeInt) returns ColumnSigns
 		return match self 'mine'
 			unseen gives ColumnSigns.unsigned(pattern)
 			negative(value) gives ColumnSigns.mixed(value, unsignedPattern: pattern)

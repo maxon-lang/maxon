@@ -110,12 +110,12 @@ export function claimsOnDriver(driver CompileDriver.handle, request immutable Co
 	end 'outcome'
 end 'claimsOnDriver'
 
-module union CheckAnswer
+union CheckAnswer
 	checked(compiled bool, diagnostics DiagnosticArray, irText String)
 	failed(error CompileError)
 end 'CheckAnswer'
 
-module function checkOnDriver(driver CompileDriver.handle, origin ProjectOrigin, inputPaths MaxonSourcePathArray, target Target, rendersTargetIr bool, reading CheckedDiagnostics, session DriverSession) returns CheckAnswer
+function checkOnDriver(driver CompileDriver.handle, origin ProjectOrigin, inputPaths MaxonSourcePathArray, target Target, rendersTargetIr bool, reading CheckedDiagnostics, session DriverSession) returns CheckAnswer
 	let request = freeze CompileRequest.create(DriverWork.check(rendersTargetIr, reading: reading), origin: origin, target: target, session: session, inputPaths: inputPaths).clone()
 
 	return match driverOutcomeOf(driver, request: request, session: session) 'outcome'
@@ -152,14 +152,14 @@ enum JobPlace
 end 'JobPlace'
 
 type BuildTail
-	module let outputPath as FilePath
-	module let writerTools as ExecutableWriterTools
-	module let staging as StagingDirectory
-	module let rebuildsItself as bool
-	module var irText as TargetIrText
-	module var sidecar as SidecarOutcome
-	module var codeBytes as CodeByteCount
-	module var drivesOtherProcesses as bool
+	let outputPath as FilePath
+	let writerTools as ExecutableWriterTools
+	let staging as StagingDirectory
+	let rebuildsItself as bool
+	var irText as TargetIrText
+	var sidecar as SidecarOutcome
+	var codeBytes as CodeByteCount
+	var drivesOtherProcesses as bool
 
 	static function prepared(outputPath FilePath, writerTools ExecutableWriterTools, staging StagingDirectory, rebuildsItself bool) returns BuildTail
 		return Self{outputPath: outputPath, writerTools: writerTools, staging: staging, rebuildsItself: rebuildsItself, irText: TargetIrText.notRendered, sidecar: SidecarOutcome.notOwed, codeBytes: 0, drivesOtherProcesses: false}
@@ -168,7 +168,7 @@ end 'BuildTail'
 
 typealias LexSweepRunSlot = Slot with LexSweepRun
 
-module type JobRun
+type JobRun
 	let spec as immutable CompileRequest
 	let session as CompileSession
 	let bench as WarmBench
@@ -184,13 +184,13 @@ module type JobRun
 	let tails as BuildTailSlot
 	let outcomes as DriverOutcomeSlot
 
-	module static function create(request immutable CompileRequest, memos SharedFileMemoMap, bench WarmBench, bases GenerationBases) returns JobRun
+	static function create(request immutable CompileRequest, memos SharedFileMemoMap, bench WarmBench, bases GenerationBases) returns JobRun
 		let session = CompileSession.create(DiagnosticSink.to(request.sink), fileMemos: memos, treeLock: LockHold.resuming(request.lock.clone()))
 
 		return Self{spec: request, session: session, bench: bench, bases: bases, spans: TraceNameArray.create(0), unit: 0, place: JobPlace.attributing, projects: ProjectSlot.create("JobRun.projects"), machines: CompileRunSlot.create("JobRun.machines"), sweeps: LexSweepRunSlot.create("JobRun.sweeps"), wholeProbes: PhaseProbeSlot.create("JobRun.wholeProbes"), brackets: PhaseProbeSlot.create("JobRun.brackets"), tails: BuildTailSlot.create("JobRun.tails"), outcomes: DriverOutcomeSlot.create("JobRun.outcomes")}
 	end 'create'
 
-	module function begin(receiver CompileReceiver.handle) returns CompileStep
+	function begin(receiver CompileReceiver.handle) returns CompileStep
 		match self.spec.work 'work'
 			build then return self.beginBuild(receiver)
 			check then return self.beginCheck(receiver)
@@ -200,7 +200,7 @@ module type JobRun
 		end 'work'
 	end 'begin'
 
-	module function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep
+	function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep
 		if self.sweeps.isFull() 'aSweepIsDraining'
 			return self.sweepAnswered(generation, job: job, answered: answered, receiver: receiver)
 		end 'aSweepIsDraining'
@@ -214,7 +214,7 @@ module type JobRun
 		return self.compiled(step, receiver: receiver)
 	end 'frontEndAnswered'
 
-	module function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep
+	function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep
 		self.resumeWhole()
 
 		let step = try self.machines.held().stdPassAnswered(job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
@@ -224,7 +224,7 @@ module type JobRun
 		return self.compiled(step, receiver: receiver)
 	end 'stdPassAnswered'
 
-	module function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep
+	function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep
 		self.resumeWhole()
 
 		let step = try self.machines.held().backendAnswered(job, answered: answered, refused: refused, receiver: receiver) otherwise (failure) 'failed'
@@ -234,7 +234,7 @@ module type JobRun
 		return self.compiled(step, receiver: receiver)
 	end 'backendAnswered'
 
-	module function logFlushed(receiver CompileReceiver.handle) returns CompileStep
+	function logFlushed(receiver CompileReceiver.handle) returns CompileStep
 		self.resumeWhole()
 		self.resumeBracket()
 
@@ -249,7 +249,7 @@ module type JobRun
 		end 'place'
 	end 'logFlushed'
 
-	module function answer() returns isolated DriverAnswer
+	function answer() returns isolated DriverAnswer
 		return DriverAnswer.of(self.outcomes.held().clone(), lines: self.session.diagnostics.capturedLines.clone(), lock: self.session.treeLock.holdings().clone())
 	end 'answer'
 
@@ -1018,7 +1018,7 @@ typealias LeftoverReportMap = Map with (FilePath, LeftoverReport)
 // A `type`, so every sweep of one build shares `reported` and names a refused leftover once. It lives
 // per build, never on `Project`, so a later build names the leftover again.
 type StagingDirectory
-	module let image as FilePath
+	let image as FilePath
 
 	// Holds the kind of report, not only the path: a leftover first noted in use at debug level still
 	// gets its warning when a later sweep finds its removal denied.
@@ -1326,7 +1326,7 @@ function requireOutputWritten(project Project, staged FilePath, outputPath FileP
 	try refuseCompile(project)
 end 'requireOutputWritten'
 
-module function refuseCompile(project Project) throws CompileError
+function refuseCompile(project Project) throws CompileError
 	printDiagnostics(project)
 	throw CompileError.compileError
 end 'refuseCompile'
@@ -1413,12 +1413,12 @@ function libraryVerdictOf(compiled bool, diagnostics DiagnosticArray) returns Li
 	return LibraryCheck.targetLacksFacilities(diagnostics)
 end 'libraryVerdictOf'
 
-module union OpenBuffer
+union OpenBuffer
 	held(path FilePath, content String)
 	none
 end 'OpenBuffer'
 
-module function projectOverBuffer(root FilePath, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, buffer OpenBuffer, session CompileSession) returns Project throws CompileError
+function projectOverBuffer(root FilePath, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, buffer OpenBuffer, session CompileSession) returns Project throws CompileError
 	let project = try createProject(root, target: detectHostTarget(), stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, debugStream: false, session: session)
 
 	match buffer 'buffer'
@@ -1470,7 +1470,7 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
+function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
 	let project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
 
@@ -1520,7 +1520,7 @@ function armAllocTally(project Project, phases TagCensusPhases)
 	project.memory.enableAllocTally(phases, within: CompilePhase.load)
 end 'armAllocTally'
 
-export enum LibraryLoad
+enum LibraryLoad
 	included
 	omitted
 end 'LibraryLoad'
@@ -1538,8 +1538,8 @@ end 'LibraryLoad'
 // PHYSICAL — `Project.stdlibDir` IS A PHYSICAL ABSOLUTE PATH BY CONTRACT, AND ITS READERS DO NOT
 // RESOLVE IT.** `Queries.isStdlibRootFile` asks `identity.isInside(project.stdlibDir)`: it compares
 // the file's physical identity with the root's SPELLING, so a root held in any other spelling
-// matches nothing and every staged stdlib file reads as USER code — promoting `module`-private
-// declarations to global visibility and dropping the diagnostics they are owed.
+// matches nothing and every staged stdlib file reads as USER code — moving its unexported declarations
+// into the program's layer and dropping the diagnostics they are owed.
 //
 // ⚠ An unspellable override PANICS rather than falling back to the walk-up. The path comes from a
 // directory the caller just created, so a bad one is a caller bug — and a silent fall-back would
@@ -2102,13 +2102,13 @@ function lowerTheMergedProgramToStd(project Project, module MaxonModule) returns
 end 'lowerTheMergedProgramToStd'
 
 type LoweredProgram
-	module var pipeline as PassPipeline
-	module var usage as RuntimeUsage
-	module var signatures as ProgramSignatures
-	module let asyncSpawnTargets as AsyncSpawnTargetArray
-	module let serviceReplyTargets as NameRoster
-	module let userGlobals as DataSectionEntryArray
-	module let parksOnIo as bool
+	var pipeline as PassPipeline
+	var usage as RuntimeUsage
+	var signatures as ProgramSignatures
+	let asyncSpawnTargets as AsyncSpawnTargetArray
+	let serviceReplyTargets as NameRoster
+	let userGlobals as DataSectionEntryArray
+	let parksOnIo as bool
 
 	static function create(pipeline PassPipeline, usage RuntimeUsage, signatures ProgramSignatures, asyncSpawnTargets AsyncSpawnTargetArray, serviceReplyTargets NameRoster, userGlobals DataSectionEntryArray, parksOnIo bool) returns LoweredProgram
 		return Self{pipeline: pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo}
@@ -2122,13 +2122,13 @@ export interface CompileReceiver
 	function logFlushed(mutable self, receiver CompileReceiver.handle)
 end 'CompileReceiver'
 
-module let AnswerMailboxCapacity = InstrumentationMailboxCapacity
+let AnswerMailboxCapacity = InstrumentationMailboxCapacity
 
-module function panicOnRefusedAnswer(site String)
+function panicOnRefusedAnswer(site String)
 	panic("{site}: the compile receiver's mailbox refused a worker's answer. A receiver is spawned with room for every answer a pool can have in flight, so a full mailbox is a receiver that broke that bound, and dropping the answer would leave its drain waiting forever.")
 end 'panicOnRefusedAnswer'
 
-module union CompileGoal
+union CompileGoal
 	frontEnd(directories NamespaceDirectoryCheck)
 	checked
 	codeResult
@@ -2142,7 +2142,7 @@ module union CompileGoal
 	end 'isChecked'
 end 'CompileGoal'
 
-module union CompileStep
+union CompileStep
 	awaiting
 	finished
 end 'CompileStep'
@@ -2156,9 +2156,9 @@ end 'CompilePlace'
 
 typealias LoweredProgramSlot = Slot with LoweredProgram
 typealias BackendBuildSlot = Slot with BackendBuild
-module typealias CodeResultSlot = Slot with CodeResult
+typealias CodeResultSlot = Slot with CodeResult
 
-module type CompileRun
+type CompileRun
 	let project as Project
 	let goal as CompileGoal
 	let frontEnd as FrontEndRun
@@ -2167,9 +2167,9 @@ module type CompileRun
 	let lowered as LoweredProgramSlot
 	let merged as MaxonModuleSlot
 	let backend as BackendBuildSlot
-	module let result as CodeResultSlot
+	let result as CodeResultSlot
 
-	module static function create(project Project, goal CompileGoal, generationBase DrainGeneration) returns CompileRun
+	static function create(project Project, goal CompileGoal, generationBase DrainGeneration) returns CompileRun
 		var directories = NamespaceDirectoryCheck.refuseUnnameable
 
 		match goal 'goal'
@@ -2183,7 +2183,7 @@ module type CompileRun
 		return Self{project: project, goal: goal, frontEnd: FrontEndRun.create(project, directories: directories, generationBase: generationBase), passes: passes, place: CompilePlace.frontEnd, lowered: LoweredProgramSlot.create("CompileRun.lowered"), merged: MaxonModuleSlot.create("CompileRun.merged"), backend: BackendBuildSlot.create("CompileRun.backend"), result: CodeResultSlot.create("CompileRun.result")}
 	end 'create'
 
-	module function begin(receiver CompileReceiver.handle) returns CompileStep throws CompileError
+	function begin(receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		let step = try self.frontEndBegun(receiver) otherwise (failure) 'failed'
 			return try self.ended(failure)
 		end 'failed'
@@ -2191,7 +2191,7 @@ module type CompileRun
 		return step
 	end 'begin'
 
-	module function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+	function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		let step = try self.frontEndLanded(generation, job: job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
 			return try self.ended(failure)
 		end 'failed'
@@ -2199,7 +2199,7 @@ module type CompileRun
 		return step
 	end 'frontEndAnswered'
 
-	module function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+	function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		let step = try self.stdPassLanded(job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
 			return try self.ended(failure)
 		end 'failed'
@@ -2207,7 +2207,7 @@ module type CompileRun
 		return step
 	end 'stdPassAnswered'
 
-	module function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+	function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		let step = try self.backendLanded(job, answered: answered, refused: refused, receiver: receiver) otherwise (failure) 'failed'
 			return try self.ended(failure)
 		end 'failed'
@@ -2215,7 +2215,7 @@ module type CompileRun
 		return step
 	end 'backendAnswered'
 
-	module function abandon()
+	function abandon()
 		if self.place == CompilePlace.frontEnd 'theFrontEndIsOpen'
 			self.frontEnd.close()
 		end 'theFrontEndIsOpen'
@@ -2920,7 +2920,7 @@ function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection 
 	end 'noFiles'
 end 'loadSourceFiles'
 
-export function inSourceOrder(paths MaxonSourcePathArray, order SourceOrder) returns MaxonSourcePathArray
+function inSourceOrder(paths MaxonSourcePathArray, order SourceOrder) returns MaxonSourcePathArray
 	if not order.reversesTheWalk() 'asTheWalkFoundThem'
 		return paths
 	end 'asTheWalkFoundThem'
@@ -2960,7 +2960,7 @@ export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSel
 	return files
 end 'namedSourceFiles'
 
-export function unidentifiablePathFailure(cause RunCacheError) returns CompileError
+function unidentifiablePathFailure(cause RunCacheError) returns CompileError
 	return CompileError.unidentifiablePath(cause.sentence())
 end 'unidentifiablePathFailure'
 
@@ -3176,7 +3176,7 @@ export function requireNoProjectEncloses(projectFile FilePath) throws CompileErr
 	end 'enclosing'
 end 'requireNoProjectEncloses'
 
-module function projectFileEnclosing(projectFile FilePath) returns DriverFileSearch
+function projectFileEnclosing(projectFile FilePath) returns DriverFileSearch
 	let absolute = projectFile.resolve(Directory.currentPath())
 	let holding = try absolute.parent() otherwise panic("projectFileEnclosing: '{absolute.toString()}' names a file, so a directory holds it")
 	let above = try holding.parent() otherwise return DriverFileSearch.none
@@ -3184,12 +3184,12 @@ module function projectFileEnclosing(projectFile FilePath) returns DriverFileSea
 	return nearestProjectFile(above, ceiling: ProjectClimbCeiling.none)
 end 'projectFileEnclosing'
 
-module union ProjectClimbCeiling
+union ProjectClimbCeiling
 	at(dir FilePath)
 	none
 end 'ProjectClimbCeiling'
 
-module function nearestProjectFile(directory FilePath, ceiling ProjectClimbCeiling) returns DriverFileSearch
+function nearestProjectFile(directory FilePath, ceiling ProjectClimbCeiling) returns DriverFileSearch
 	var current = directory.clone()
 
 	while true 'upwards'
@@ -3293,7 +3293,7 @@ end 'holdsIgnoreMarker'
 
 // Read one source file and register its content with the query system. Exported so stdlib modules
 // are loaded through the identical read+register path a user file takes.
-export function loadOneSourceFile(project Project, path FilePath) throws CompileError
+function loadOneSourceFile(project Project, path FilePath) throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	fileChanged(project, path: path, content: content)
 
@@ -3310,7 +3310,7 @@ end 'loadOneSourceFile'
 // file was modified at or after it. A write landing while the read is in flight would otherwise be
 // stamped as already seen, and the corpus would answer from the superseded text for as long as the
 // file then sat still.
-module function loadOneSourceFileIfChanged(project Project, path FilePath) throws CompileError
+function loadOneSourceFileIfChanged(project Project, path FilePath) throws CompileError
 	if registeredSourceMatchesDisk(project, path: path) 'nothingToReRead'
 		return
 	end 'nothingToReRead'
@@ -3333,7 +3333,7 @@ end 'registeredSourceMatchesDisk'
 
 // The stamp is dropped with the disk text: kept, it would still describe the file on disk, and the next
 // `loadOneSourceFileIfChanged` would keep this text in its place.
-module function overlayUnsavedText(project Project, path FilePath, content String)
+function overlayUnsavedText(project Project, path FilePath, content String)
 	fileChanged(project, path: path, content: content)
 	_ = project.db.sourceStamps.remove(path)
 end 'overlayUnsavedText'
@@ -3374,7 +3374,7 @@ export function isTaskFileName(name String) returns bool
 	return name.endsWith(TaskFileExtension)
 end 'isTaskFileName'
 
-export function isDriverFileName(name String) returns bool
+function isDriverFileName(name String) returns bool
 	return isProjectFileName(name) or isTaskFileName(name)
 end 'isDriverFileName'
 
@@ -3393,7 +3393,7 @@ export enum SourceSelection
 	productionAndTests
 end 'SourceSelection'
 
-module function selectionAdmits(selection SourceSelection, name String) returns bool
+function selectionAdmits(selection SourceSelection, name String) returns bool
 	return match selection 'selection'
 		productionOnly gives name.endsWith(MaxonSourceExtension)
 		productionAndTests gives name.endsWith(MaxonSourceExtension) or isTestSourceName(name)
@@ -3406,7 +3406,7 @@ export function isTestSourceName(name String) returns bool
 	return name.endsWith(TestSourceExtension)
 end 'isTestSourceName'
 
-export function testSourceNameFor(name String) returns String
+function testSourceNameFor(name String) returns String
 	if name.endsWith(MaxonSourceExtension) 'aSourceExtension'
 		return "{nameWithoutSuffix(name, suffix: MaxonSourceExtension)}{TestSourceExtension}"
 	end 'aSourceExtension'
@@ -3564,7 +3564,7 @@ export type CompilerWrittenIndex
 	end 'minted'
 end 'CompilerWrittenIndex'
 
-export function mintedNamesInclude(names NameRoster, name ByteArray) returns bool
+function mintedNamesInclude(names NameRoster, name ByteArray) returns bool
 	for minted in names 'eachMintedName'
 		if minted.equals(name) 'thisName'
 			return true

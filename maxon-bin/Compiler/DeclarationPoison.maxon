@@ -9,7 +9,7 @@ export typealias PendingConsequenceArray = Array with PendingConsequence
 
 // A file-scope declaration is found only where its head starts a line at this column; one written
 // indented is attributed to the declaration above it.
-module let DeclarationHeadColumn = 1
+let DeclarationHeadColumn = 1
 
 // `provisional` poison comes from a refusal still held as a possible consequence
 // (`Queries.holdAsAConsequence`), which may yet be dropped. Only `backed` poison explains a held
@@ -272,6 +272,16 @@ export type DeclarationPoison
 		return self.filesWithLostText.contains(path)
 	end 'lostTextIn'
 
+	function lostTextWithin(declaration DirectoryScope, signatures ProgramSignatures) returns bool
+		for path in self.filesWithLostText 'eachFile'
+			if declaration.contains(signatures.scopeOf(path)) 'aFileOfTheSubtree'
+				return true
+			end 'aFileOfTheSubtree'
+		end 'eachFile'
+
+		return false
+	end 'lostTextWithin'
+
 	export function holdsLostText() returns bool
 		return self.filesWithLostText.count() > 0
 	end 'holdsLostText'
@@ -455,7 +465,7 @@ export type DeclarationPoison
 		end 'aNameNowExplainsMore'
 	end 'noteBacked'
 
-	module function takeBackedNames() returns BackedNameArray
+	function takeBackedNames() returns BackedNameArray
 		let taken = self.backedNames
 		self.backedNames = BackedNameArray.create(0)
 
@@ -564,7 +574,7 @@ export type DeclarationPoison
 	end 'refusesANamedFrom'
 end 'DeclarationPoison'
 
-module type BackedName
+type BackedName
 	let name as immutable ByteArray
 	let extendsAType as bool
 
@@ -581,7 +591,7 @@ module type BackedName
 	end 'isAnExtension'
 end 'BackedName'
 
-module typealias BackedNameArray = Array with BackedName
+typealias BackedNameArray = Array with BackedName
 typealias ConsequencePositionArray = Array with ElementIndex
 typealias ConsequencePositionsByName = Map with (ByteArray, ConsequencePositionArray)
 
@@ -589,14 +599,14 @@ typealias ConsequencePositionsByName = Map with (ByteArray, ConsequencePositionA
 // `refusalKeysOf`, `extensionQualifierOf` and `extensionKeysReaching` rules. A name a predicate reads
 // that is not a key here never wakes its consequence, which then stays held though a backed refusal
 // explains it.
-module type ConsequenceWorklist
+type ConsequenceWorklist
 	var byName as ConsequencePositionsByName
 	var byQualifier as ConsequencePositionsByName
 	var queue as ConsequencePositionArray
 	var queued as FixedBoolArray
 	var next as ElementIndex
 
-	module static function over(held PendingConsequenceArray) returns ConsequenceWorklist
+	static function over(held PendingConsequenceArray) returns ConsequenceWorklist
 		let byName = ConsequencePositionsByName.create()
 		let byQualifier = ConsequencePositionsByName.create()
 		let queue = ConsequencePositionArray.create(held.count(), zeroed: false)
@@ -620,11 +630,11 @@ module type ConsequenceWorklist
 		return Self{byName: byName, byQualifier: byQualifier, queue: queue, queued: queued, next: 0}
 	end 'over'
 
-	module function hasNext() returns bool
+	function hasNext() returns bool
 		return self.next < self.queue.count()
 	end 'hasNext'
 
-	module function takeNext() returns ElementIndex
+	function takeNext() returns ElementIndex
 		let position = try self.queue.get(self.next) otherwise panic("ConsequenceWorklist.takeNext: queue.get OOB at {self.next} below count {self.queue.count()}")
 		self.next = self.next + 1
 		try self.queued.set(position, value: false) otherwise panic("ConsequenceWorklist.takeNext: queued.set OOB at {position} below count {self.queued.count()}")
@@ -632,7 +642,7 @@ module type ConsequenceWorklist
 		return position
 	end 'takeNext'
 
-	module function wake(backed BackedNameArray, signatures ProgramSignatures, explained FixedBoolArray)
+	function wake(backed BackedNameArray, signatures ProgramSignatures, explained FixedBoolArray)
 		for name in backed 'eachBackedName'
 			if let positions = try self.byName.get(name.spelling()) 'someReadsTheName'
 				self.enqueueUnexplained(positions, explained: explained)
@@ -979,7 +989,7 @@ function declarationIsWithin(declaration PoisonedDeclaration, within DeclaredWit
 	end 'within'
 end 'declarationIsWithin'
 
-module function singleName(name ByteArray) returns NameRoster
+function singleName(name ByteArray) returns NameRoster
 	let names = NameRoster.create(0)
 	names.push(name)
 
@@ -1089,7 +1099,7 @@ function declarationHeadAt(tokens TokenArray, position ElementIndex) returns Dec
 		return DeclarationHead.create(name.value, reach: Visibility.public, nominal: false, extendsAType: true)
 	end 'anExtensionReachesEveryReader'
 
-	var reach = Visibility.file
+	var reach = Visibility.unexported
 
 	if keywordAt > position 'aModifierPrecedes'
 		reach = reachOfModifier(tokens, position: keywordAt - 1)
@@ -1100,18 +1110,11 @@ end 'declarationHeadAt'
 
 function reachOfModifier(tokens TokenArray, position ElementIndex) returns Visibility
 	let token = try tokens.get(position) otherwise panic("reachOfModifier: tokens.get OOB at {position}")
+	let reach = visibilitySpelledBy(token.kind)
 
-	if token.kind == TokenKind.export 'exported'
-		return Visibility.global
-	end 'exported'
-
-	if token.kind == TokenKind.public 'publicApi'
-		return Visibility.public
-	end 'publicApi'
-
-	if not spellsModuleModifier(token.kind, value: token.value) 'notAModifier'
+	if reach == Visibility.unexported 'notAModifier'
 		panic("reachOfModifier: the token at {position} is not a visibility modifier")
 	end 'notAModifier'
 
-	return Visibility.module
+	return reach
 end 'reachOfModifier'

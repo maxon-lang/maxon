@@ -458,7 +458,7 @@ export type IrModule uses Op
 	// 0. One pass over the block list rather than a scan of it per lookup, which would make a
 	// per-block splice quadratic in a function's block count. The id space is dense per
 	// function but not gap-free, so the holes are real.
-	module function prepareSplice(func IrFunction, scratch SpliceScratch)
+	function prepareSplice(func IrFunction, scratch SpliceScratch)
 		self.collectLiveOpIndices(func, into: scratch.slots.recycled)
 		scratch.slots.taken = 0
 		scratch.absent = self.blocks.count()
@@ -683,7 +683,7 @@ export type IrModule uses Op
 	// (an `ops.set`, which the column mirrors with a `set` of its own) or APPENDED (a push past the tail,
 	// which it mirrors with a push) — and a caller that had to mirror that choice itself would be the one
 	// place the two halves could disagree.
-	module function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns ElementIndex
+	function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns ElementIndex
 		if slots.taken < slots.recycled.count() 'reuseThisFunctionsOwnSlot'
 			let recycledIdx = try slots.recycled.get(slots.taken) otherwise panic("IrModule.placeOp: recycled.get OOB at {slots.taken} below count {slots.recycled.count()}")
 			slots.taken = slots.taken + 1
@@ -793,11 +793,11 @@ end 'IrModule'
 // op indices, taken in order, and then the tail of `ops`. The recycled list is the function's live op
 // indices, not every index in the function's range: the array is append-only and earlier passes leave
 // orphans in it, and an orphan is not this splice's to reuse.
-module type OpSlotSupply
+type OpSlotSupply
 	export var recycled as OpIndexArray
 	export var taken as ElementIndex
 
-	module static function create() returns OpSlotSupply
+	static function create() returns OpSlotSupply
 		return Self{recycled: OpIndexArray.create(0), taken: 0}
 	end 'create'
 end 'OpSlotSupply'
@@ -806,7 +806,7 @@ end 'OpSlotSupply'
 // `IrModule.prepareSplice`: the function's live op slots and its `BlockId -> block ref` column. A
 // drain over the module then allocates neither once per function, and `Array.clear`/`refill` keep
 // the capacity the largest function reached.
-module type SpliceScratch
+type SpliceScratch
 	export var slots as OpSlotSupply
 	export var blockRefById as BlockRefArray
 
@@ -814,12 +814,12 @@ module type SpliceScratch
 	// which no block of the function has.
 	export var absent as ElementIndex
 
-	module static function create() returns SpliceScratch
+	static function create() returns SpliceScratch
 		return Self{slots: OpSlotSupply.create(), blockRefById: BlockRefArray.create(0), absent: 0}
 	end 'create'
 
 	// The function's ref for block `id`, or `absent`.
-	module function blockRefOf(id BlockId) returns ElementIndex
+	function blockRefOf(id BlockId) returns ElementIndex
 		return try self.blockRefById.get(id) otherwise self.absent
 	end 'blockRefOf'
 end 'SpliceScratch'

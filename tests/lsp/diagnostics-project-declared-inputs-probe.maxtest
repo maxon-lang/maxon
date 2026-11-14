@@ -1,6 +1,6 @@
-export let DeclaredInputsPlanFileName = "sources.txt"
-export let DeclaredInputsSharedListing = "../shared\n"
-export let DeclaredInputsNoListing = ""
+let DeclaredInputsPlanFileName = "sources.txt"
+let DeclaredInputsSharedListing = "../shared\n"
+let DeclaredInputsNoListing = ""
 let DeclaredInputsUndefinedCode = "E3004"
 let DeclaredInputsBlankListing = "\n"
 let DeclaredInputsHoldFileName = "hold.txt"
@@ -26,7 +26,7 @@ let DeclaredInputsDeclaration = ", inputs: [\"sources.txt\"]"
 let DeclaredInputsMainSource = "function main() returns ExitCode\n\treturn sharedAnswer()\nend 'main'\n"
 let DeclaredInputsSharedSource = "export function sharedAnswer() returns ExitCode\n\treturn 0\nend 'sharedAnswer'\n"
 
-export enum InputDeclaration
+enum InputDeclaration
 	declared
 	undeclared
 	declaredAndGated
@@ -34,18 +34,18 @@ export enum InputDeclaration
 	declaredByTheLastOfTwoTargets
 end 'InputDeclaration'
 
-export enum MidRunEdit
+enum MidRunEdit
 	onTheFirstResolution
 	restoringAnOldModifiedTime
 	afterAnUnsettledRun
 end 'MidRunEdit'
 
-export union PlanFile
+union PlanFile
 	absent
 	listing(text String)
 end 'PlanFile'
 
-export type DeclaredInputsProject
+type DeclaredInputsProject
 	export let root as FilePath
 	export let project as FilePath
 
@@ -87,7 +87,7 @@ function createdDirectory(directory FilePath)
 	end 'couldNotCreate'
 end 'createdDirectory'
 
-export function stagedDeclaredInputsProject(declaration InputDeclaration, plan PlanFile) returns DeclaredInputsProject
+function stagedDeclaredInputsProject(declaration InputDeclaration, plan PlanFile) returns DeclaredInputsProject
 	let root = freshOutsideCheckoutDir(DeclaredInputsRootDirName)
 	let project = root.join(DeclaredInputsProjectDirName)
 	let shared = root.join(DeclaredInputsSharedDirName)
@@ -107,10 +107,10 @@ export function stagedDeclaredInputsProject(declaration InputDeclaration, plan P
 	return DeclaredInputsProject.create(root, project: project)
 end 'stagedDeclaredInputsProject'
 
-export let DeclaredInputsLonelyDirectory = "../inner-lonely\n"
-export let DeclaredInputsSharingDirectory = "../inner-sharing\n"
+let DeclaredInputsLonelyDirectory = "../inner-lonely\n"
+let DeclaredInputsSharingDirectory = "../inner-sharing\n"
 let DeclaredInputsProjectOnlyListing = "../proj\n"
-export let DeclaredInputsProjectAndSharedListing = "../proj\n../shared\n"
+let DeclaredInputsProjectAndSharedListing = "../proj\n../shared\n"
 
 let DeclaredInputsChoosingManifest = "export function build() returns ExitCode\n\tlet plan = try FilePath.from(\"sources.txt\") otherwise return 1\n\tlet directory = try File.readText(plan) otherwise return 1\n\n\tBuild.delegate(directory.trim(), inputs: [\"sources.txt\"])\n\treturn 0\nend 'build'\n"
 let DeclaredInputsDelegatingManifest = "export function build() returns ExitCode\n\tBuild.delegate(\"../inner-reading\")\n\treturn 0\nend 'build'\n"
@@ -120,12 +120,12 @@ let DeclaredInputsLonelyDirName = "inner-lonely"
 let DeclaredInputsSharingDirName = "inner-sharing"
 let DeclaredInputsReadingDirName = "inner-reading"
 
-export enum OuterDelegation
+enum OuterDelegation
 	choosingTheInnerProjectByAnInput
 	toAProjectThatReadsItsOwnInput
 end 'OuterDelegation'
 
-export function stagedDelegatingInputsProject(outer OuterDelegation, plan String) returns DeclaredInputsProject
+function stagedDelegatingInputsProject(outer OuterDelegation, plan String) returns DeclaredInputsProject
 	let staged = stagedDeclaredInputsProject(InputDeclaration.declared, plan: PlanFile.listing(plan))
 
 	let outerManifest = match outer 'outer'
@@ -147,35 +147,35 @@ export function stagedDelegatingInputsProject(outer OuterDelegation, plan String
 	return staged
 end 'stagedDelegatingInputsProject'
 
-export function planWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
+function planWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
 	let edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(staged.project, fileName: DeclaredInputsPlanFileName, content: text))
 
 	return edits
 end 'planWrittenAs'
 
-export function planDeleted(staged DeclaredInputsProject) returns CorpusDiskEditArray
+function planDeleted(staged DeclaredInputsProject) returns CorpusDiskEditArray
 	let edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.deleted(staged.project, fileName: DeclaredInputsPlanFileName))
 
 	return edits
 end 'planDeleted'
 
-export function readingProjectPlanWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
+function readingProjectPlanWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
 	let edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(staged.root.join(DeclaredInputsReadingDirName), fileName: DeclaredInputsPlanFileName, content: text))
 
 	return edits
 end 'readingProjectPlanWrittenAs'
 
-export function lonelyProjectFileWidened(staged DeclaredInputsProject) returns CorpusDiskEditArray
+function lonelyProjectFileWidened(staged DeclaredInputsProject) returns CorpusDiskEditArray
 	let edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(staged.root.join(DeclaredInputsLonelyDirName), fileName: DeclaredInputsManifestFileName, content: DeclaredInputsSharingManifest))
 
 	return edits
 end 'lonelyProjectFileWidened'
 
-export function probeAcrossAnInputEdit(staged DeclaredInputsProject, edits CorpusDiskEditArray) returns ProjectDiagnosticsProbeArray
+function probeAcrossAnInputEdit(staged DeclaredInputsProject, edits CorpusDiskEditArray) returns ProjectDiagnosticsProbeArray
 	let probes = probeProjectCheckAcrossAnEdit(staged.project, fileName: DeclaredInputsMainFileName, content: DeclaredInputsMainSource, diskEdits: edits, editedContent: DeclaredInputsMainSource)
 
 	discardStagedDir(staged.root)
@@ -183,7 +183,7 @@ export function probeAcrossAnInputEdit(staged DeclaredInputsProject, edits Corpu
 	return probes
 end 'probeAcrossAnInputEdit'
 
-export function gatedRunsAfterAnInputEditedMidRun(staged DeclaredInputsProject, edit MidRunEdit) returns ElementIndex throws TestFailure
+function gatedRunsAfterAnInputEditedMidRun(staged DeclaredInputsProject, edit MidRunEdit) returns ElementIndex throws TestFailure
 	let client = LspClient.start()
 
 	if let runs = try editInputMidRun(client, staged: staged, edit: edit) 'finished'
@@ -247,7 +247,7 @@ function releasedRun(project FilePath, number ElementIndex)
 	writeCorpusFile(project, fileName: "{DeclaredInputsReleasePrefix}{number}{DeclaredInputsReleaseSuffix}", content: "release")
 end 'releasedRun'
 
-export function runsAfterAnIdenticalRewrite(staged DeclaredInputsProject) returns ElementIndex throws TestFailure
+function runsAfterAnIdenticalRewrite(staged DeclaredInputsProject) returns ElementIndex throws TestFailure
 	let client = LspClient.start()
 
 	if let runs = try rewriteInputIdentically(client, staged: staged) 'finished'
@@ -315,7 +315,7 @@ function runsOf(project FilePath) returns ElementIndex
 	return runs
 end 'runsOf'
 
-export function expectSharedUndefined(probe ProjectDiagnosticsProbe, note String) throws TestFailure
+function expectSharedUndefined(probe ProjectDiagnosticsProbe, note String) throws TestFailure
 	let only = try onlyProjectDiagnostic(probe, note: note)
 
 	try Expect.equal(only.code.describe(), expected: DeclaredInputsUndefinedCode, message: "{note} {only.message}")

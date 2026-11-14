@@ -147,7 +147,8 @@ compile, in any process, starts from what that one wrote:
 ├── views-<key>.mxlc            # every library file's tokens with `#if` resolved
 ├── baseline-<key>.mxlc         # the library's declarations
 ├── core-<key>.mxlc             # the same, less the files that declare generic functions
-└── parses-<key>-<key>.mxlc     # library parses
+├── parses-<key>-<key>.mxlc     # library parses
+└── audit-<key>.mxlc            # the library's unused-declaration verdict
 ```
 
 - **It is always on**, under the same `<cache>` as the run cache: the first usable row of the table
@@ -232,12 +233,12 @@ install or [`maxon upgrade`](#maxon-upgrade) leaves it as it is.
   server or an MCP tool checks. A directory program is compiled from its own files.
 - **A package's `public` and `export` declarations are what a script calls**, bare like a
   standard-library name, or qualified by the package's namespace, `scriptlib.<package>`
-  ([Namespaces](LANGUAGE_REFERENCE.md#namespaces)). A `module` declaration stays inside its package.
+  ([Namespaces](LANGUAGE_REFERENCE.md#namespaces)). An unmarked declaration stays inside its package.
 - **A package compiles as the standard library does.** A script builds only the package files whose
   functions it reaches, and a diagnostic raised inside a package names the package file. A script may
   declare a type named like one the library or a package declares, and inside the package the name
   keeps its library or package meaning; a package that also spells that name as a member is
-  [E3112](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3112). The unused-export checks (E3092, E3094)
+  [E3112](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3112). The unused-declaration checks (E3092, E3219)
   cover the program's own files.
 - **The compiler's reserved surface stays closed to a package**: a `__` name is
   [E2051](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2051) or
@@ -2521,8 +2522,8 @@ it as gone.
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
 `source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
-above have severity Information. "No `main` function" (E3001) and the unused-export diagnostics
-(E3092, E3093, E3094) appear in `maxon build`'s output alone. When they are the only errors, a document
+above have severity Information. "No `main` function" (E3001) and the unused-declaration diagnostics
+(E3092, E3219, E3062) appear in `maxon build`'s output alone. When they are the only errors, a document
 is published with its unneeded casts (E3010) and target refusals (E3074, E3104).
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
@@ -3428,7 +3429,7 @@ Stages a private copy of this compiler's library tiers and its executable under 
 can be compiled as library-tier source: one placed under the staged `stdlib/` and built by the staged
 compiler may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`,
 `__ManagedMemory`, `cstring`; [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) elsewhere) and sees the
-`module` declarations of `stdlib/`. The spec
+unmarked declarations of `stdlib/`. The spec
 harness's `<!-- tier: stdlib -->` cases and the debugger's fault fixtures are staged this way.
 
 ```bash

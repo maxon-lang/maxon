@@ -150,7 +150,8 @@ compile, in any process, starts from what that one wrote:
 ├── views-<key>.mxlc            # every library file's tokens with `#if` resolved
 ├── baseline-<key>.mxlc         # the library's declarations
 ├── core-<key>.mxlc             # the same, less the files that declare generic functions
-└── parses-<key>-<key>.mxlc     # library parses
+├── parses-<key>-<key>.mxlc     # library parses
+└── audit-<key>.mxlc            # the library's unused-declaration verdict
 ```
 
 - **It is always on**, under the same `<cache>` as the run cache: the first usable row of the table
@@ -235,12 +236,12 @@ install or [`maxon upgrade`](#maxon-upgrade) leaves it as it is.
   server or an MCP tool checks. A directory program is compiled from its own files.
 - **A package's `public` and `export` declarations are what a script calls**, bare like a
   standard-library name, or qualified by the package's namespace, `scriptlib.<package>`
-  ([Namespaces](/docs/language/namespaces/)). A `module` declaration stays inside its package.
+  ([Namespaces](/docs/language/namespaces/)). An unmarked declaration stays inside its package.
 - **A package compiles as the standard library does.** A script builds only the package files whose
   functions it reaches, and a diagnostic raised inside a package names the package file. A script may
   declare a type named like one the library or a package declares, and inside the package the name
   keeps its library or package meaning; a package that also spells that name as a member is
-  [E3112](/docs/cli/error-codes/#e3112--stdlibshadowednameisalsoamember). The unused-export checks (E3092, E3094)
+  [E3112](/docs/cli/error-codes/#e3112--stdlibshadowednameisalsoamember). The unused-declaration checks (E3092, E3219)
   cover the program's own files.
 - **The compiler's reserved surface stays closed to a package**: a `__` name is
   [E2051](/docs/cli/error-codes/#e2051--reservedidentifier) or

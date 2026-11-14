@@ -420,12 +420,12 @@ end 'uniformPipelineSize'
 typealias LongestFirstKey = int(0 to u64.max)
 typealias LongestFirstKeyArray = Array with LongestFirstKey
 
-module union UnitLowering
+union UnitLowering
 	x64(lowering StdToX64Lowering)
 	arm64(lowering StdToArm64Lowering)
 end 'UnitLowering'
 
-module function unitLoweringFor(target Target, abi immutable CalleeAbiTable, usesGt bool) returns UnitLowering
+function unitLoweringFor(target Target, abi immutable CalleeAbiTable, usesGt bool) returns UnitLowering
 	return match target.cpu 'cpu'
 		x64 gives UnitLowering.x64(StdToX64Lowering.create(target, abi: abi, usesGt: usesGt))
 		arm64 gives UnitLowering.arm64(StdToArm64Lowering.create(target, abi: abi, usesGt: usesGt))
@@ -446,7 +446,7 @@ end 'lowerUnitWith'
 // would make the two runs disagree, which the re-run can only report as a nondeterminism in the allocator.
 // The isel's bracket is closed into the caller's `iselCost`; the split's goes into `costs` under its own
 // sub-phase.
-module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, permitsTailCalls bool, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
+function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, permitsTailCalls bool, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
 	let iselProbe = PhaseProbe.beginCounters()
 	let lowered = lowerUnitWith(lowering, unitModule: unitModule, permitsTailCalls: permitsTailCalls)
 	iselProbe.elapsedInto(iselCost)
@@ -533,7 +533,7 @@ export type BackendWorker
 	// The orphans are compacted away before the reply: the allocator's rewrite leaves the uncoloured
 	// op in the flat array beside the coloured one that replaced it, sharing its managed payloads, and
 	// a reply moves, so every record reachable from it must have one owner.
-	module function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
+	function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
 		let costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 		let iselCost = PhaseDelta.zero()
 
@@ -618,12 +618,12 @@ end 'UnitFrame'
 typealias BackendPoolStateSlot = Slot with BackendPoolState
 
 type BackendPoolState
-	module let workers as BackendWorkerHandleArray
-	module let landed as BackendUnitLandingArray
-	module let dispatch as PoolDispatch
-	module let arrivedUnits as BackendArrivedUnits
-	module let stealsBefore as SchedulerEventCount
-	module var refused as ElementIndex
+	let workers as BackendWorkerHandleArray
+	let landed as BackendUnitLandingArray
+	let dispatch as PoolDispatch
+	let arrivedUnits as BackendArrivedUnits
+	let stealsBefore as SchedulerEventCount
+	var refused as ElementIndex
 
 	static function of(workers BackendWorkerHandleArray, landed BackendUnitLandingArray, dispatch PoolDispatch, arrivedUnits BackendArrivedUnits, stealsBefore SchedulerEventCount, refused ElementIndex) returns BackendPoolState
 		return Self{workers: workers, landed: landed, dispatch: dispatch, arrivedUnits: arrivedUnits, stealsBefore: stealsBefore, refused: refused}

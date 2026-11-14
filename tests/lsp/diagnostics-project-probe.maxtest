@@ -10,7 +10,7 @@
 // The staging, the client, and the release discipline — why a session is driven into a VALUE before
 // anything is asserted — are `definition-corpus-probe.maxtest`'s and `LspClient.maxon`'s.
 
-export union ProjectDiagnosticsProbe
+union ProjectDiagnosticsProbe
 	published(items PublishedDiagnosticArray)
 	broke(detail String)
 end 'ProjectDiagnosticsProbe'
@@ -19,18 +19,18 @@ let ProjectDiagnosticsBuildFileName = "app.maxproj"
 let ProjectDiagnosticsBuildFileContent = ""
 let ProjectDiagnosticsNothingRendering = "nothing at all"
 
-export let GatedManifestFileName = "app.maxproj"
-export let GatedReleaseFileName = "release.txt"
+let GatedManifestFileName = "app.maxproj"
+let GatedReleaseFileName = "release.txt"
 let GatedStartedFileName = "started.txt"
-export let GatedFinishedFileName = "finished.txt"
-export let GatedManifestSource = "export function build() returns ExitCode\n\tlet gate = try FilePath.from(\"release.txt\") otherwise return 1\n\tlet started = try FilePath.from(\"started.txt\") otherwise return 1\n\tlet marker = try FilePath.from(\"finished.txt\") otherwise return 1\n\tvar polls = 0 as Count\n\n\ttry File.writeText(started, content: \"running\") otherwise return 1\n\n\twhile not File.exists(gate) and polls < 2400 'untilReleased'\n\t\tsleep(50)\n\t\tpolls = polls + 1\n\tend 'untilReleased'\n\n\ttry File.writeText(marker, content: \"done\") otherwise return 1\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
-export let UngatedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
+let GatedFinishedFileName = "finished.txt"
+let GatedManifestSource = "export function build() returns ExitCode\n\tlet gate = try FilePath.from(\"release.txt\") otherwise return 1\n\tlet started = try FilePath.from(\"started.txt\") otherwise return 1\n\tlet marker = try FilePath.from(\"finished.txt\") otherwise return 1\n\tvar polls = 0 as Count\n\n\ttry File.writeText(started, content: \"running\") otherwise return 1\n\n\twhile not File.exists(gate) and polls < 2400 'untilReleased'\n\t\tsleep(50)\n\t\tpolls = polls + 1\n\tend 'untilReleased'\n\n\ttry File.writeText(marker, content: \"done\") otherwise return 1\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
+let UngatedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'build'\n"
 
 let GatedFinishBoundMs = 30000
 let GatedFinishPollMs = 200
 let GatedStartPollMs = 25
 
-export function awaitGatedManifestRunning(project FilePath) throws LspClientError
+function awaitGatedManifestRunning(project FilePath) throws LspClientError
 	let started = project.join(GatedStartedFileName)
 	let begun = Clock.nowMs()
 
@@ -43,7 +43,7 @@ export function awaitGatedManifestRunning(project FilePath) throws LspClientErro
 	end 'neverRan'
 end 'awaitGatedManifestRunning'
 
-export function releaseGatedManifest(project FilePath)
+function releaseGatedManifest(project FilePath)
 	writeCorpusFile(project, fileName: GatedReleaseFileName, content: "go")
 
 	if not File.exists(project.join(GatedStartedFileName)) 'neverRan'
@@ -60,12 +60,12 @@ export function releaseGatedManifest(project FilePath)
 	sleep(GatedFinishPollMs)
 end 'releaseGatedManifest'
 
-export function markedAsAProject(directory FilePath)
+function markedAsAProject(directory FilePath)
 	writeCorpusFile(directory, fileName: ProjectDiagnosticsBuildFileName, content: ProjectDiagnosticsBuildFileContent)
 end 'markedAsAProject'
 
 // A staged project root with its own `.maxproj` marker, which is what stops the project-file climb there.
-export function stagedProjectDiagnosticsRoot(dirName String) returns FilePath
+function stagedProjectDiagnosticsRoot(dirName String) returns FilePath
 	let directory = freshOutsideCheckoutDir(dirName)
 	markedAsAProject(directory)
 
@@ -74,7 +74,7 @@ end 'stagedProjectDiagnosticsRoot'
 
 // Open `content` at `root`/`fileName` in a session rooted at `root`, and hand back the one publish that
 // arrives. The buffer text is what the server is told the document holds, whatever the file on disk says.
-export function probeProjectDiagnostics(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
+function probeProjectDiagnostics(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
 	let client = LspClient.start()
 	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.clientRootUri(fileUriOf(root)), uri: fileUriOf(root.join(fileName)), content: content)
 	client.release()
@@ -82,7 +82,7 @@ export function probeProjectDiagnostics(root FilePath, fileName String, content 
 	return probe
 end 'probeProjectDiagnostics'
 
-export function probeProjectDiagnosticsUnrooted(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
+function probeProjectDiagnosticsUnrooted(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
 	let client = LspClient.start()
 	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.unrooted, uri: fileUriOf(root.join(fileName)), content: content)
 	client.release()
@@ -90,7 +90,7 @@ export function probeProjectDiagnosticsUnrooted(root FilePath, fileName String, 
 	return probe
 end 'probeProjectDiagnosticsUnrooted'
 
-export function probeProjectDiagnosticsThroughEditorUris(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
+function probeProjectDiagnosticsThroughEditorUris(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
 	let client = LspClient.start()
 	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.clientRootUri(editorUriOf(root)), uri: editorUriOf(root.join(fileName)), content: content)
 	client.release()
@@ -98,17 +98,17 @@ export function probeProjectDiagnosticsThroughEditorUris(root FilePath, fileName
 	return probe
 end 'probeProjectDiagnosticsThroughEditorUris'
 
-export function runtimeTierDocumentName(fileName String) returns String
+function runtimeTierDocumentName(fileName String) returns String
 	return "{RuntimeTierDirName}/{fileName}"
 end 'runtimeTierDocumentName'
 
-export function runtimeTierFileText(fileName String) returns String
+function runtimeTierFileText(fileName String) returns String
 	let file = Directory.currentPath().join(runtimeTierDocumentName(fileName))
 
 	return try File.readText(file) otherwise panic("runtime tier diagnostics: could not read {file.toString()}, which an editor opening it would have sent as the buffer's text")
 end 'runtimeTierFileText'
 
-export function probeRuntimeTierDiagnostics(fileName String, content String) returns ProjectDiagnosticsProbe
+function probeRuntimeTierDiagnostics(fileName String, content String) returns ProjectDiagnosticsProbe
 	return probeProjectDiagnostics(Directory.currentPath(), fileName: runtimeTierDocumentName(fileName), content: content)
 end 'probeRuntimeTierDiagnostics'
 
@@ -130,16 +130,16 @@ function openedDocumentDiagnostics(client LspClient, session CorpusSessionRoot, 
 	return published.items
 end 'openedDocumentDiagnostics'
 
-export typealias ProjectDiagnosticsProbeArray = Array with ProjectDiagnosticsProbe
+typealias ProjectDiagnosticsProbeArray = Array with ProjectDiagnosticsProbe
 
-export typealias ProjectPublishIndex = int(0 to 1)
+typealias ProjectPublishIndex = int(0 to 1)
 
-export let ProjectDiagnosticsAtOpen = 0 as ProjectPublishIndex
-export let ProjectDiagnosticsAfterTheEdit = 1 as ProjectPublishIndex
+let ProjectDiagnosticsAtOpen = 0 as ProjectPublishIndex
+let ProjectDiagnosticsAfterTheEdit = 1 as ProjectPublishIndex
 
 let ProjectDiagnosticsEditedVersion = 2
 
-export function probeProjectDiagnosticsAcrossAnEdit(root FilePath, fileName String, content String, editedContent String) returns ProjectDiagnosticsProbeArray
+function probeProjectDiagnosticsAcrossAnEdit(root FilePath, fileName String, content String, editedContent String) returns ProjectDiagnosticsProbeArray
 	let client = LspClient.start()
 	let probes = collectProjectDiagnosticsAcrossAnEdit(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, editedContent: editedContent)
 	client.release()
@@ -182,7 +182,7 @@ function brokenProjectDiagnosticsPair(detail String) returns ProjectDiagnosticsP
 	return probes
 end 'brokenProjectDiagnosticsPair'
 
-export function probeProjectCheckAcrossAnEdit(root FilePath, fileName String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray
+function probeProjectCheckAcrossAnEdit(root FilePath, fileName String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray
 	let client = LspClient.start()
 	let probes = collectProjectCheckAcrossAnEdit(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, diskEdits: diskEdits, editedContent: editedContent)
 	client.release()
@@ -218,14 +218,14 @@ function projectCheckAcrossAnEdit(client LspClient, root FilePath, uri String, c
 	return probes
 end 'projectCheckAcrossAnEdit'
 
-export function projectDiagnosticsPublish(probes ProjectDiagnosticsProbeArray, index ProjectPublishIndex) returns ProjectDiagnosticsProbe throws TestFailure
+function projectDiagnosticsPublish(probes ProjectDiagnosticsProbeArray, index ProjectPublishIndex) returns ProjectDiagnosticsProbe throws TestFailure
 	return try probes.get(index as ElementIndex) otherwise 'missing'
 		try Expect.fail("the session was driven open → publish → didChange → publish, and this assertion needs publish {index}, of which only {probes.count()} arrived. ⛔ A SERVER THAT PANICS ENDS THE PROCESS, so a missing publish here is a DEAD SESSION rather than a wrong count.")
 		panic("projectDiagnosticsPublish: `Expect.fail` always throws")
 	end 'missing'
 end 'projectDiagnosticsPublish'
 
-export function expectNoProjectDiagnostics(probe ProjectDiagnosticsProbe, note String) throws TestFailure
+function expectNoProjectDiagnostics(probe ProjectDiagnosticsProbe, note String) throws TestFailure
 	let items = try projectDiagnosticItems(probe, note: note)
 
 	try Expect.equal(items.count(), expected: 0, message: "{note} The server published {items.count()}: {projectDiagnosticsRendering(items)}")
@@ -234,7 +234,7 @@ end 'expectNoProjectDiagnostics'
 // The single diagnostic a fixture must publish. ⭐ The COUNT is asserted rather than the presence: a
 // second diagnostic is one a `maxon build` of the same project does not report, and reading element 0
 // alone would hide it.
-export function onlyProjectDiagnostic(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnostic throws TestFailure
+function onlyProjectDiagnostic(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnostic throws TestFailure
 	let items = try projectDiagnosticItems(probe, note: note)
 
 	try Expect.equal(items.count(), expected: 1, message: "{note} The server published {items.count()}: {projectDiagnosticsRendering(items)}")
@@ -245,7 +245,7 @@ export function onlyProjectDiagnostic(probe ProjectDiagnosticsProbe, note String
 	end 'noItem'
 end 'onlyProjectDiagnostic'
 
-export function expectProjectDiagnosticCodesAndLines(probe ProjectDiagnosticsProbe, expected String, note String) throws TestFailure
+function expectProjectDiagnosticCodesAndLines(probe ProjectDiagnosticsProbe, expected String, note String) throws TestFailure
 	let items = try projectDiagnosticItems(probe, note: note)
 	var published = ""
 
@@ -256,7 +256,7 @@ export function expectProjectDiagnosticCodesAndLines(probe ProjectDiagnosticsPro
 	try Expect.equal(published.trim(), expected: expected, message: "{note} The server published: {projectDiagnosticsRendering(items)}")
 end 'expectProjectDiagnosticCodesAndLines'
 
-export type ProjectCheckSession
+type ProjectCheckSession
 	export let diagnostics as ProjectDiagnosticsProbe
 	export let reports as ProjectCheckReportArray
 
@@ -265,15 +265,15 @@ export type ProjectCheckSession
 	end 'create'
 end 'ProjectCheckSession'
 
-export function probeProjectCheckDiagnostics(root FilePath, fileName String, content String, edits StringArray) returns ProjectDiagnosticsProbe
+function probeProjectCheckDiagnostics(root FilePath, fileName String, content String, edits StringArray) returns ProjectDiagnosticsProbe
 	return probeProjectCheckSession(root, fileName: fileName, content: content, edits: edits).diagnostics
 end 'probeProjectCheckDiagnostics'
 
-export function probeProjectCheckSession(root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
+function probeProjectCheckSession(root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
 	return probeProjectCheckSessionRooted(CorpusSessionRoot.clientRoot(root), root: root, fileName: fileName, content: content, edits: edits)
 end 'probeProjectCheckSession'
 
-export function probeProjectCheckSessionRooted(rooting CorpusSessionRoot, root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
+function probeProjectCheckSessionRooted(rooting CorpusSessionRoot, root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
 	let client = LspClient.start()
 	let session = collectProjectCheckSession(client, rooting: rooting, uri: fileUriOf(root.join(fileName)), content: content, edits: edits)
 	client.release()
@@ -311,11 +311,11 @@ end 'projectCheckSession'
 
 let OneOutcomePerVersion = 1
 
-export let ProjectCheckPublished = "published"
-export let ProjectCheckAbandoned = "abandoned"
-export let ProjectCheckUnloadable = "unloadable"
+let ProjectCheckPublished = "published"
+let ProjectCheckAbandoned = "abandoned"
+let ProjectCheckUnloadable = "unloadable"
 
-export function expectOneProjectCheckOutcome(reports ProjectCheckReportArray, version DocumentVersion, outcome String, note String) throws TestFailure
+function expectOneProjectCheckOutcome(reports ProjectCheckReportArray, version DocumentVersion, outcome String, note String) throws TestFailure
 	let outcomes = StringArray.create(0)
 
 	for report in reports 'eachReport'
@@ -328,7 +328,7 @@ export function expectOneProjectCheckOutcome(reports ProjectCheckReportArray, ve
 	try Expect.equal(try outcomes.get(0) otherwise panic("the count above is one"), expected: outcome, message: "{note} Version {version}'s project check outcome.")
 end 'expectOneProjectCheckOutcome'
 
-export function projectDiagnosticItems(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnosticArray throws TestFailure
+function projectDiagnosticItems(probe ProjectDiagnosticsProbe, note String) returns PublishedDiagnosticArray throws TestFailure
 	match probe 'probe'
 		published(items) then return items
 		broke(detail) then try Expect.fail("{note} The session broke before a publish arrived: {detail}. An editor learns about an error ONLY from this notification — there is no request it can send to ask.")

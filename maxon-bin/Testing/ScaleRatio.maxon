@@ -43,7 +43,7 @@
 
 // A growth ratio in HUNDREDTHS: 200 is x2.00. Integer arithmetic end to end — the inputs are exact
 // counters and there is no reason to launder them through a float on the way to a division.
-export typealias GrowthRatio = int(0 to u64.max)
+typealias GrowthRatio = int(0 to u64.max)
 
 let RatioScale = 100 as GrowthRatio
 
@@ -55,19 +55,19 @@ let RatioScale = 100 as GrowthRatio
 // ⚠ THE NAME IS NARROWER THAN WHAT IT HOLDS — a tick reading is not a memory count — and it is said
 // here so a reader is not misled by it. What the type actually means is "a quantity a growth ratio may
 // be taken of", which is the set `ScaleMeasure` (ScaleTestRunner) enumerates.
-export typealias MeasuredQuantity = int(0 to u64.max)
+typealias MeasuredQuantity = int(0 to u64.max)
 
 // The growth of one rung over the rung below it.
 //
 // A union, not a ratio of zero, and not a "0" that a reader could mistake for "it shrank to nothing".
 // A phase that allocated NOTHING at the lower rung has no baseline to have grown from — that is a
 // different statement from any number, and it is said differently.
-export union GrowthReading
+union GrowthReading
 	measured(ratio GrowthRatio)
 	noBaseline
 end 'GrowthReading'
 
-export function growthOf(now MeasuredQuantity, previous MeasuredQuantity) returns GrowthReading
+function growthOf(now MeasuredQuantity, previous MeasuredQuantity) returns GrowthReading
 	if previous == 0 'nothingToGrowFrom'
 		return GrowthReading.noBaseline
 	end 'nothingToGrowFrom'
@@ -78,7 +78,7 @@ end 'growthOf'
 
 // `x2.00`, or `-` when there is no rung below to compare against (rung 0), or when the rung below
 // allocated nothing.
-export function growthText(reading GrowthReading) returns String
+function growthText(reading GrowthReading) returns String
 	return match reading 'r'
 		noBaseline gives NoBaselineText
 		measured(ratio) gives "x{ratio / RatioScale}.{zeroPad2(ratio mod RatioScale)}"
@@ -88,7 +88,7 @@ end 'growthText'
 // It is `-` and not `0.00`, for the reason the union exists: an absent reading must not look like a
 // value. Nothing parses this — the trend log records absolute counts, never ratios — so it is chosen
 // to be read by a human and by nobody else.
-export let NoBaselineText = "-"
+let NoBaselineText = "-"
 
 // Two digits always: `x2.5` would read as two and a half when the value is two-point-oh-five.
 function zeroPad2(fraction GrowthRatio) returns String
@@ -103,6 +103,6 @@ end 'zeroPad2'
 // than by taking the ratio and comparing that, so nothing is lost to integer truncation at the one
 // place in this suite where a comparison decides whether the run is BROKEN (ScaleCorpus's degeneracy
 // check).
-export function grewBy(now MeasuredQuantity, previous MeasuredQuantity, minimum GrowthRatio) returns bool
+function grewBy(now MeasuredQuantity, previous MeasuredQuantity, minimum GrowthRatio) returns bool
 	return now * (RatioScale as MeasuredQuantity) >= previous * (minimum as MeasuredQuantity)
 end 'grewBy'

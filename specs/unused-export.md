@@ -1,7 +1,7 @@
 ---
 feature: unused-export
 status: stable
-keywords: [export, module, public, visibility, semantic, unused]
+keywords: [export, public, visibility, semantic, unused]
 category: diagnostics
 ---
 
@@ -9,20 +9,16 @@ category: diagnostics
 
 ## Documentation
 
-The compiler reports diagnostics when a declaration is more widely visible
-than its uses require. Three diagnostics make up the family:
+The compiler reports a diagnostic when a declaration is more widely visible
+than its uses require:
 
 - **E3092 `semanticUnusedExportedSymbol`** — an `export` decl is never
-  referenced from any file outside the one that declared it. Drop the
-  modifier to make the symbol file-private, use `module` if you want to
-  expose it inside the directory subtree, or say `public` if it is API
-  surface.
-- **E3093 `semanticExportableAsModule`** — an `export` decl is referenced,
-  but only from files inside the declaring directory subtree. The decl
-  could be downgraded to `module` visibility.
-- **E3094 `semanticUnusedModuleSymbol`** — a `module` decl is never
-  referenced from any file other than its declaring one. The `module`
-  modifier could be dropped (the decl can be file-private).
+  referenced from any file outside its declaring directory and that
+  directory's subdirectories. Drop the modifier, so the declaration serves its
+  directory's subtree, or say `public` if it is API surface.
+
+An unmarked declaration that nothing live in its directory's subtree names is
+**E3219** (`specs/unused-unmarked-declaration.md`).
 
 ### `public` is the exemption, and it is what makes the family answerable
 
@@ -31,15 +27,11 @@ nameable from every file — and they differ in exactly one thing, which is
 the claim they make about USE:
 
 - `export` — other files may see this, **and I expect this program to use
-  it**. Audited by the family above.
-- `public` — this is **API surface**. Exempt from E3092 and E3093, because
+  it**. Audited by E3092.
+- `public` — this is **API surface**. Exempt from E3092, because
   "no caller in this compilation" is not the same fact as "dead": a shared
-  module may legitimately export a symbol this particular program never
+  library may legitimately export a symbol this particular program never
   reaches.
-
-There is deliberately no `module public`: E3094 keeps its full force, and a
-`module` declaration that wants exemption is promoted to `public`, which
-changes its visibility and says so.
 
 The check covers functions (including methods), types (structs, unions,
 enums), typealiases, top-level constants, and top-level variables. The
@@ -71,7 +63,7 @@ findings.
 
 Each test below places the declaring file and the calling `main.maxon` in
 different subdirectories (`api/` vs `app/`) so the call is genuinely
-"outside the declaring module subtree". The fixture's interior symbol
+outside the declaring directory's subtree. The fixture's interior symbol
 (`unusedHelper`, `LocalPoint`, etc.) is the one the diagnostic targets.
 
 <!-- test: error.unused-exported-function -->
@@ -93,7 +85,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:17: exported function 'api.unusedHelper' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:17: exported function 'api.unusedHelper' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.an-unused-export-whose-name-contains-union-cases-is-reported -->
@@ -118,36 +110,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:4:18: exported function 'api.int.unionCasesFor' is never referenced outside its declaring file
-```
-
-<!-- test: error.unused-module-function -->
-```maxon
-// --- file: api/lib.maxon
-export typealias Integer = int(i64.min to i64.max)
-
-module function localHelper() returns Integer
-	return 7
-end 'localHelper'
-
-export function publicEntry() returns Integer
-	return localHelper()
-end 'publicEntry'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return publicEntry()
-end 'main'
-```
-```maxoncstderr
-error E3094: api/<fragment>:5:17: module function 'api.localHelper' is never referenced outside its declaring file
+error E3092: api/<fragment>:4:18: exported function 'api.int.unionCasesFor' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.unused-exported-type -->
 ⭐ **ONE diagnostic, about the TYPE, though `LocalPoint` declares two exported METHODS.** A method takes
 its visibility from its declaring type by convention, so auditing methods separately would report an
-internal helper of a public type as dead — and an un-`export`ed method of a `module` type would report as
-E3093, advising a narrowing that cannot be written. The type owns the finding.
+internal helper of a public type as dead. The type owns the finding.
 ```maxon
 // --- file: api/shapes.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -176,12 +145,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:13: exported type 'LocalPoint' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:13: exported type 'LocalPoint' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.unused-exported-typealias -->
 The alias IS named in its declaring file — `consumeAlias`'s parameter is typed by it — and is still
-E3092, because the question is whether anything OUTSIDE that file names it.
+E3092, because the question is whether anything OUTSIDE its directory names it.
 ```maxon
 // --- file: api/lib.maxon
 export typealias UnusedAlias = int(0 to 100)
@@ -202,7 +171,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:3:18: exported typealias 'UnusedAlias' is never referenced outside its declaring file
+error E3092: api/<fragment>:3:18: exported typealias 'UnusedAlias' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.unused-exported-var -->
@@ -222,7 +191,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:12: exported constant 'unusedCounter' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:12: exported constant 'unusedCounter' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.unused-exported-const -->
@@ -242,7 +211,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:12: exported constant 'MAX_UNUSED' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:12: exported constant 'MAX_UNUSED' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.unused-exported-enum -->
@@ -270,7 +239,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:13: exported type 'LocalStatus' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:13: exported type 'LocalStatus' is never referenced outside its declaring directory
 ```
 
 <!-- test: exported-main-not-flagged -->
@@ -409,9 +378,9 @@ end 'main'
 99
 ```
 
-<!-- test: public-module-function-not-flagged -->
-A `module` declaration nothing outside its file reaches is E3094; promoted to `public` it is exempt,
-which is the only way to silence that one — `module public` does not exist.
+<!-- test: a-public-function-read-only-in-its-directory-is-not-flagged -->
+A `public` declaration nothing outside its declaring directory reaches is exempt; written `export`, the same
+declaration is E3092.
 ```maxon
 // --- file: api/lib.maxon
 public typealias Integer = int(i64.min to i64.max)
@@ -470,7 +439,7 @@ end 'main'
 // --- file: api/middle.maxon
 export let MIDDLE = ROOT * 4
 
-// --- file: api/root.maxon
+// --- file: root/root.maxon
 export let ROOT = 10
 ```
 ```exitcode
@@ -775,7 +744,7 @@ visible, and the finding is correct. Crediting every type merely REACHABLE from 
 delete this diagnostic and the three families beside it (a user generic's argument, a function alias's
 signature, a tuple alias's elements).
 
-⚠ **`items`, `ItemArray` AND BOTH FACTORIES ARE FILE-PRIVATE, AND THAT IS LOAD-BEARING.** An exported field
+⚠ **`items`, `ItemArray` AND BOTH FACTORIES ARE UNMARKED, AND THAT IS LOAD-BEARING.** An exported field
 or signature naming `ItemArray` would demand it, and `Item` through it, at `export` (E3167), so the finding
 would disappear into the demand the signature rule makes. Nothing exported names an `Item`.
 ```maxon
@@ -820,18 +789,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:3:13: exported type 'Item' is never referenced outside its declaring file
+error E3092: api/<fragment>:3:13: exported type 'Item' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.unused-exported-union-nothing-outside-reaches -->
 ⭐⭐ **THE DISCRIMINATING CONTROL FOR THE THREE `match` / ACCESSOR CASES ABOVE.** An `Answer` is produced,
 held and matched entirely inside `api/answer.maxon`; `app/main.maxon` gets a number. Nothing outside the
-declaring file names the union or reaches into one, so the finding is correct — and it is the credit taken
+declaring directory names the union or reaches into one, so the finding is correct — and it is the credit taken
 where a value's TAG is read that the three cases above are about.
 
-⚠ `classify` and `score` are file-private, which is what leaves `Answer`'s name undemanded: a signature
+⚠ `classify` and `score` are unmarked, which is what leaves `Answer`'s name undemanded: a signature
 is asked for its types and the answer counts as a reference to each, so an `export` on either one would
-credit `Answer` from inside the file the audit is asking about.
+credit `Answer` from inside the directory the audit is asking about.
 ```maxon
 // --- file: api/answer.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -866,21 +835,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:14: exported type 'Answer' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:14: exported type 'Answer' is never referenced outside its declaring directory
 ```
 
-## E3093 — referenced, but only from inside the declaring subtree
+## Referenced, but only from inside the declaring subtree
 
-<!-- test: error.exportable-as-module -->
-`pkg/sub/user.maxon` is STRICTLY NESTED under `pkg/`, so `subtreeOnly` is reachable at `module`
-visibility and never needed `export`.
-
-⚠ **A SIBLING IN THE SAME DIRECTORY DOES NOT COUNT AS INSIDE THE SUBTREE**, deliberately: without that
-rule every flat two-file program would be advised to downgrade its exports, which is advice about
-directory layout rather than about visibility.
+<!-- test: error.an-export-read-only-from-a-subdirectory-is-reported -->
+`pkg/sub/user.maxon` is nested under `pkg/`, so an unmarked `subtreeOnly` would reach it, and `export` was
+never needed. `Integer` is `public`, so the signature that names it owes nothing.
 ```maxon
 // --- file: pkg/lib.maxon
-export typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 export function subtreeOnly() returns Integer
 	return 3
@@ -899,14 +864,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3093: pkg/<fragment>:5:17: exported function 'pkg.subtreeOnly' is only referenced inside its declaring module subtree; consider 'module' visibility
+error E3092: pkg/<fragment>:5:17: exported function 'pkg.subtreeOnly' is never referenced outside its declaring directory
 ```
 
 <!-- test: subtree-only-is-not-a-finding-when-an-outside-file-reaches-a-member -->
-⭐⭐ **E3093 HAS ITS SIBLING'S HOLE, AND IT IS CLOSED BY THE SAME REFERENCE.** `pkg/sub/user.maxon` is the
+⭐⭐ **THE SUBTREE RULE HAS THE SAME HOLE, AND IT IS CLOSED BY THE SAME REFERENCE.** `pkg/sub/user.maxon` is the
 only file that NAMES `Item` and it is strictly nested, so a subtree rule counting names would fire — while
 `main.maxon`, which is outside the subtree entirely, reaches INTO an `Item` through `h.items`. Narrowing
-`Item` to `module` on that advice makes E4006 refuse the access, so the advice would be wrong in exactly
+`Item` to unmarked on that advice makes E4006 refuse the access, so the advice would be wrong in exactly
 the way E3092's would.
 ```maxon
 // --- file: pkg/store.maxon
@@ -1018,7 +983,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: records/<fragment>:20:13: exported type 'Victim' is never referenced outside its declaring file
+error E3092: records/<fragment>:20:13: exported type 'Victim' is never referenced outside its declaring directory
 ```
 
 ## A one-file program is audited like any other
@@ -1038,22 +1003,21 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: <fragment>:2:17: exported function 'neverCalled' is never referenced outside its declaring file
+error E3092: <fragment>:2:17: exported function 'neverCalled' is never referenced outside its declaring directory
 ```
 
-## A library `module` declaration is judged by the source that names it, not by which bodies the program builds
+## An unmarked library declaration is judged by the source that names it, not by which bodies the program builds
 
 A library file's bodies are built only when a path from `main` reaches the file, so in each program below
 `overlayCaller` is never built, and no op of it exists for the audit to read. The declaration it names is
-still named from outside the file that declares it: that is a fact of the source, and E3094 is about the
-source.
+still named by a file of its directory: that is a fact of the source, and E3219 is about the source.
 
-<!-- test: a-library-module-function-named-by-a-sibling-file-the-program-never-reaches -->
+<!-- test: an-unmarked-library-function-named-by-a-sibling-file-the-program-never-reaches -->
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module function overlayShared() returns OverlayCount
+function overlayShared() returns OverlayCount
 	return 7
 end 'overlayShared'
 
@@ -1071,12 +1035,12 @@ end 'main'
 0
 ```
 
-<!-- test: a-library-module-constant-named-by-a-sibling-file-the-program-never-reaches -->
+<!-- test: an-unmarked-library-constant-named-by-a-sibling-file-the-program-never-reaches -->
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module let overlayShared = 5 as OverlayCount
+let overlayShared = 5 as OverlayCount
 
 // --- stdlib-overlay: Math.maxon
 public function overlayCaller() returns OverlayCount
@@ -1092,35 +1056,14 @@ end 'main'
 0
 ```
 
-<!-- test: a-library-module-variable-named-by-a-sibling-file-the-program-never-reaches -->
-```maxon
-// --- stdlib-overlay: Builtins.maxon
-public typealias OverlayCount = int(0 to 1000)
-
-module let overlayShared = 5 as OverlayCount
-
-// --- stdlib-overlay: Math.maxon
-public function overlayCaller() returns OverlayCount
-	return overlayShared
-end 'overlayCaller'
-
-// --- file: main.maxon
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: error.a-library-module-function-no-sibling-file-names -->
+<!-- test: error.an-unmarked-library-function-no-sibling-file-names -->
 The negative control: the declaration is the same, and no other library file spells its name, so the
-audit still says what it says of any `module` declaration nothing outside its file names.
+audit says what it says of any unmarked declaration nothing in its directory names.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module function overlayShared() returns OverlayCount
+function overlayShared() returns OverlayCount
 	return 7
 end 'overlayShared'
 
@@ -1135,17 +1078,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3094: <fragment>:5:17: module function 'stdlib.overlayShared' is never referenced outside its declaring file
+error E3219: <fragment>:5:10: unused function: 'overlayShared' is not exported and nothing live in its directory names it; delete it
 ```
 
-<!-- test: a-library-module-function-named-by-a-never-instantiated-template-in-a-built-file -->
+<!-- test: an-unmarked-library-function-named-by-a-never-instantiated-template-in-a-built-file -->
 The reader's file is built here (`main` calls into it), so it is the template, not the file, whose body
 no op exists for: `overlayTemplate` is never instantiated.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module function overlayShared() returns OverlayCount
+function overlayShared() returns OverlayCount
 	return 7
 end 'overlayShared'
 
@@ -1169,14 +1112,14 @@ end 'main'
 1
 ```
 
-<!-- test: a-library-module-function-named-only-in-an-excluded-branch-of-a-sibling -->
+<!-- test: an-unmarked-library-function-named-only-in-an-excluded-branch-of-a-sibling -->
 The sibling's only mention sits in a `#if` branch no target takes, so no op and no token of the active
 stream holds it.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module function overlayShared() returns OverlayCount
+function overlayShared() returns OverlayCount
 	return 7
 end 'overlayShared'
 
@@ -1196,13 +1139,13 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-library-module-function-no-excluded-branch-names -->
+<!-- test: error.an-unmarked-library-function-no-excluded-branch-names -->
 The negative control: the excluded branch exists and does not spell the name.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module function overlayShared() returns OverlayCount
+function overlayShared() returns OverlayCount
 	return 7
 end 'overlayShared'
 
@@ -1219,7 +1162,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3094: <fragment>:5:17: module function 'stdlib.overlayShared' is never referenced outside its declaring file
+error E3219: <fragment>:5:10: unused function: 'overlayShared' is not exported and nothing live in its directory names it; delete it
 ```
 
 ## A declaration is judged by the source that names it, not by which bodies were built
@@ -1228,10 +1171,10 @@ Two kinds of author code have a body no op exists for: a generic function nothin
 is read once per instantiation, and the branch of a `#if` the target excludes. A name spelled there is
 still a reference.
 
-<!-- test: a-module-function-named-only-by-a-generic-function-nothing-instantiates -->
+<!-- test: an-unmarked-function-named-only-by-a-generic-function-nothing-instantiates -->
 ```maxon
 // --- file: lib.maxon
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return 7
 end 'helper'
 
@@ -1274,10 +1217,10 @@ end 'main'
 0
 ```
 
-<!-- test: a-module-function-named-only-in-an-inactive-branch -->
+<!-- test: an-unmarked-function-named-only-in-an-inactive-branch -->
 ```maxon
 // --- file: lib.maxon
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return 7
 end 'helper'
 
@@ -1294,17 +1237,17 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-module-function-spelled-only-in-a-string-of-a-generic-function-nothing-instantiates -->
+<!-- test: error.an-unmarked-function-spelled-only-in-a-string-of-a-generic-function-nothing-instantiates -->
 The negative control: only an identifier is a reference, so a template that holds the name in a string
 literal leaves the declaration unreferenced.
 ```maxon
 // --- file: lib.maxon
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return 7
 end 'helper'
 
 // --- file: generic.maxon
-function viaGeneric(a T) uses T returns T where T is Comparable
+public function viaGeneric(a T) uses T returns T where T is Comparable
 	print("helper")
 
 	return a
@@ -1316,13 +1259,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3094: <fragment>:3:17: module function 'helper' is never referenced outside its declaring file
+error E3219: <fragment>:3:10: unused function: 'helper' is not exported and nothing live in its directory names it; delete it
 ```
 
-<!-- test: error.a-module-function-no-inactive-branch-names -->
+<!-- test: error.an-unmarked-function-no-inactive-branch-names -->
 ```maxon
 // --- file: lib.maxon
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return 7
 end 'helper'
 
@@ -1336,5 +1279,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3094: <fragment>:3:17: module function 'helper' is never referenced outside its declaring file
+error E3219: <fragment>:3:10: unused function: 'helper' is not exported and nothing live in its directory names it; delete it
 ```

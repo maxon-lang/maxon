@@ -7,17 +7,17 @@ export typealias EngineRegisterNumber = int(0 to 79)
 let MaxEngineReadLength = 512
 let MaxEngineRegisterNumber = 79
 
-export let DbgStopReasonEntry = 1
-export let DbgStopReasonBreakpoint = 2
-export let DbgStopReasonStep = 3
-export let DbgStopReasonPause = 4
-export let DbgStopReasonTrap = 5
-export let DbgStopReasonFault = 6
+let DbgStopReasonEntry = 1
+let DbgStopReasonBreakpoint = 2
+let DbgStopReasonStep = 3
+let DbgStopReasonPause = 4
+let DbgStopReasonTrap = 5
+let DbgStopReasonFault = 6
 
-export let DbgGtStatusRunning = 1
-export let DbgGtStatusReady = 2
-export let DbgGtStatusWaiting = 3
-export let DbgGtStatusHeld = 5
+let DbgGtStatusRunning = 1
+let DbgGtStatusReady = 2
+let DbgGtStatusWaiting = 3
+let DbgGtStatusHeld = 5
 
 let MaxBacktraceFrames = 64
 let MaxMachinesWalked = 4096
@@ -118,10 +118,10 @@ export union EngineStart
 end 'EngineStart'
 
 export let DebugUnclassifiedReason = "unclassified"
-export let DebugOutOfTextReason = "out-of-text"
-export let DebugInsideRuntimeSymbolReason = "inside-runtime-symbol"
-export let DebugNotRunningReason = "not-running"
-export let DebugFaultIsTerminalReason = "fault-is-terminal"
+let DebugOutOfTextReason = "out-of-text"
+let DebugInsideRuntimeSymbolReason = "inside-runtime-symbol"
+let DebugNotRunningReason = "not-running"
+let DebugFaultIsTerminalReason = "fault-is-terminal"
 let DebugThreadIsRunningReason = "thread-is-running"
 let DebugNotPausableReason = "not-pausable"
 let DebugUnwritableReason = "unwritable"
@@ -187,28 +187,28 @@ union EngineGlobalRead
 	read(value DebuggeeWord)
 end 'EngineGlobalRead'
 
-module union DebugReturnPointLookup
+union DebugReturnPointLookup
 	none
 	at(point DebugReturnPoint)
 end 'DebugReturnPointLookup'
 
-module enum DebugReturnKind
+enum DebugReturnKind
 	callReturn
 	frameReturn
 	indirectCall
 end 'DebugReturnKind'
 
-module type DebugReturnPoint
+type DebugReturnPoint
 	export let address as DebugAddress
 	export let framePointer as DebugAddress
 	export let greenThread as DebugAddress
 	export let kind as DebugReturnKind
 
-	module static function create(address DebugAddress, framePointer DebugAddress, greenThread DebugAddress, kind DebugReturnKind) returns DebugReturnPoint
+	static function create(address DebugAddress, framePointer DebugAddress, greenThread DebugAddress, kind DebugReturnKind) returns DebugReturnPoint
 		return Self{address: address, framePointer: framePointer, greenThread: greenThread, kind: kind}
 	end 'create'
 
-	module function reachedBy(landed EngineStop) returns bool
+	function reachedBy(landed EngineStop) returns bool
 		if landed.pc != self.address or landed.greenThread != self.greenThread 'anotherPlaceOrThread'
 			return false
 		end 'anotherPlaceOrThread'
@@ -228,7 +228,7 @@ module type DebugReturnPoint
 	end 'movedWith'
 end 'DebugReturnPoint'
 
-module typealias DebugReturnPointArray = Array with DebugReturnPoint
+typealias DebugReturnPointArray = Array with DebugReturnPoint
 
 union EngineExecutedTrap
 	none
@@ -844,7 +844,7 @@ export type DebugEngine implements DebugMemory
 
 	// --- return points ---
 
-	module function plantReturnPoint(point DebugReturnPoint) returns CommandOutcome
+	function plantReturnPoint(point DebugReturnPoint) returns CommandOutcome
 		if self.returnPointAt(point.address) 'plantedAlready'
 			panic("DebugEngine.plantReturnPoint: a walk plants each of its return points once, and the one at {hexWord(point.address)} already stands")
 		end 'plantedAlready'
@@ -864,7 +864,7 @@ export type DebugEngine implements DebugMemory
 		return outcome
 	end 'plantReturnPoint'
 
-	module function rebaseReturnPoint(greenThread DebugAddress, from DebugAddress, to DebugAddress)
+	function rebaseReturnPoint(greenThread DebugAddress, from DebugAddress, to DebugAddress)
 		let kept = DebugReturnPointArray.create(self.returnPoints.count(), zeroed: false)
 
 		for standing in self.returnPoints 'eachPoint'
@@ -874,11 +874,11 @@ export type DebugEngine implements DebugMemory
 		self.returnPoints = kept
 	end 'rebaseReturnPoint'
 
-	module function returnPointsStand() returns bool
+	function returnPointsStand() returns bool
 		return not self.returnPoints.isEmpty()
 	end 'returnPointsStand'
 
-	module function returnPointReachedBy(landed EngineStop) returns DebugReturnPointLookup
+	function returnPointReachedBy(landed EngineStop) returns DebugReturnPointLookup
 		for standing in self.returnPoints 'eachPoint'
 			if standing.reachedBy(landed) 'thisOne'
 				return DebugReturnPointLookup.at(standing)
@@ -1932,7 +1932,7 @@ export function debugDeadlinePassed(deadline DebugDeadline) returns bool
 	return (Clock.nowMs() as DebugDeadline) >= deadline
 end 'debugDeadlinePassed'
 
-export function msLeftBefore(deadline DebugDeadline) returns StopTimeoutMs
+function msLeftBefore(deadline DebugDeadline) returns StopTimeoutMs
 	let now = Clock.nowMs() as DebugDeadline
 
 	return 0 if now >= deadline else (deadline - now) as StopTimeoutMs
@@ -1950,7 +1950,7 @@ export union GreenThreadWalkOutcome
 	gone(outcome TargetOutcome)
 end 'GreenThreadWalkOutcome'
 
-export function refusalDependsOnTheInstruction(reason String) returns bool
+function refusalDependsOnTheInstruction(reason String) returns bool
 	return reason == DebugUnclassifiedReason or reason == DebugOutOfTextReason or reason == DebugInsideRuntimeSymbolReason
 end 'refusalDependsOnTheInstruction'
 

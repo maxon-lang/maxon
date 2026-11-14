@@ -1,4 +1,4 @@
-export let SemanticTokenQuintupleWidth = 5
+let SemanticTokenQuintupleWidth = 5
 
 let SemanticTokenDeltaLineSlot = 0
 let SemanticTokenDeltaCharacterSlot = 1
@@ -9,20 +9,20 @@ let SemanticTokenLineBreak = "\n"
 
 typealias SemanticTokenTally = int(0 to i64.max)
 
-export type LocatedSemanticToken
+type LocatedSemanticToken
 	export var line as SemanticTokenValue
 	export var character as SemanticTokenValue
 	export var length as SemanticTokenValue
 	export var tokenType as SemanticTokenValue
 
-	export static function create(line SemanticTokenValue, character SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns LocatedSemanticToken
+	static function create(line SemanticTokenValue, character SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns LocatedSemanticToken
 		return Self{line: line, character: character, length: length, tokenType: tokenType}
 	end 'create'
 end 'LocatedSemanticToken'
 
-export typealias LocatedSemanticTokenArray = Array with LocatedSemanticToken
+typealias LocatedSemanticTokenArray = Array with LocatedSemanticToken
 
-export function locatedSemanticTokensOf(data SemanticTokenValueArray) returns LocatedSemanticTokenArray
+function locatedSemanticTokensOf(data SemanticTokenValueArray) returns LocatedSemanticTokenArray
 	let tokens = LocatedSemanticTokenArray.create(0)
 	var currentLine = 0 as SemanticTokenValue
 	var currentCharacter = 0 as SemanticTokenValue
@@ -47,7 +47,7 @@ export function locatedSemanticTokensOf(data SemanticTokenValueArray) returns Lo
 	return tokens
 end 'locatedSemanticTokensOf'
 
-export function requireSemanticTokenType(tokens LocatedSemanticTokenArray, source String, line SemanticTokenValue, word String, expected SemanticTokenValue, what String) throws TestFailure
+function requireSemanticTokenType(tokens LocatedSemanticTokenArray, source String, line SemanticTokenValue, word String, expected SemanticTokenValue, what String) throws TestFailure
 	let lines = source.split(SemanticTokenLineBreak)
 	let text = try lines.get(line as ElementIndex) otherwise panic("requireSemanticTokenType: {what}: the fixture has {lines.count()} lines and the claim is about line {line}")
 	let found = try text.findFirst(word) otherwise panic("requireSemanticTokenType: {what}: line {line} of the fixture, `{text}`, does not contain `{word}`")

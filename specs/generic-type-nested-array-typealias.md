@@ -2707,7 +2707,7 @@ sweep reaches first, reserves exactly what the same program written the other wa
 ```maxon
 // --- file: a_ext.maxon
 extension Vault
-	export function stashIf(item Element, keep bool)
+	function stashIf(item Element, keep bool)
 		if keep 'wanted'
 			items.push(item)
 		end 'wanted'
@@ -2716,16 +2716,16 @@ end 'Vault'
 // --- file: b_type.maxon
 public typealias Count = int(0 to u64.max)
 
-export type Vault uses Element
-	export typealias ElementArray = Array with Element
+type Vault uses Element
+	typealias ElementArray = Array with Element
 
-	export var items as ElementArray
+	var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
-	export function count() returns Count
+	function count() returns Count
 		return items.count()
 	end 'count'
 end 'Vault'
@@ -3709,21 +3709,21 @@ end 'main'
 The two types in two files, so the file order the loader walks decides which `Transform` is last.
 ```maxon
 // --- file: a.maxon
-export typealias Level = int(0 to 125)
+typealias Level = int(0 to 125)
 
 function triple(x Count) returns Count
 	return x * 3
 end 'triple'
 
-export type Other uses U
-	export typealias Transform = function(Count) returns Count
-	export var item as U
+type Other uses U
+	typealias Transform = function(Count) returns Count
+	var item as U
 
-	export static function create(item U) returns Self
+	static function create(item U) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function twice(n Count, f Transform = triple) returns Count
+	function twice(n Count, f Transform = triple) returns Count
 		return f(f(n))
 	end 'twice'
 end 'Other'
@@ -3733,15 +3733,15 @@ function bump(x Level) returns Level
 	return x + 1
 end 'bump'
 
-export type Box uses T
-	export typealias Transform = function(Level) returns Level
-	export var item as T
+type Box uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function run(n Level, f Transform = bump) returns Level
+	function run(n Level, f Transform = bump) returns Level
 		return f(n)
 	end 'run'
 end 'Box'

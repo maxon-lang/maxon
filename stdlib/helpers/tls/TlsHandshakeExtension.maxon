@@ -28,9 +28,9 @@ public typealias TlsKeyShareArray = Array with TlsKeyShare
 /// Extensions, in wire order.
 public typealias TlsExtensionArray = Array with TlsExtension
 
-module typealias TlsRawExtensionArray = Array with TlsRawExtension
+typealias TlsRawExtensionArray = Array with TlsRawExtension
 typealias TlsExtensionTypeSet = Set with TlsExtensionType
-module typealias TlsGroupCodeSet = Set with TlsGroupCode
+typealias TlsGroupCodeSet = Set with TlsGroupCode
 
 let tlsNameTypeHostName = 0
 let tlsHostNameFirst = 0x21
@@ -104,7 +104,7 @@ public union TlsExtensionBlock
 	listed(extensions TlsExtensionArray)
 end 'TlsExtensionBlock'
 
-module enum TlsExtensionKind
+enum TlsExtensionKind
 	serverName = 0
 	maxFragmentLength = 1
 	statusRequest = 5
@@ -132,7 +132,7 @@ module enum TlsExtensionKind
 	keyShare = 51
 	renegotiationInfo = 65281
 
-	module function code() returns TlsExtensionType
+	function code() returns TlsExtensionType
 		return self.rawValue as TlsExtensionType
 	end 'code'
 
@@ -141,13 +141,13 @@ module enum TlsExtensionKind
 	end 'isDecodedInTls12ServerHello'
 end 'TlsExtensionKind'
 
-module function tlsIsTls12ServerHelloExtension(extensionType TlsExtensionType) returns bool
+function tlsIsTls12ServerHelloExtension(extensionType TlsExtensionType) returns bool
 	let kind = try TlsExtensionKind.fromRawValue(extensionType) otherwise return false
 
 	return kind.isDecodedInTls12ServerHello()
 end 'tlsIsTls12ServerHelloExtension'
 
-module enum TlsExtensionContext
+enum TlsExtensionContext
 	clientHello
 	serverHello
 	helloRetryRequest
@@ -171,8 +171,8 @@ module enum TlsExtensionContext
 	end 'allows'
 end 'TlsExtensionContext'
 
-module type TlsRawExtension
-	module let extensionType as TlsExtensionType
+type TlsRawExtension
+	let extensionType as TlsExtensionType
 	var storedData as ByteArray
 
 	function data() returns ByteArray
@@ -184,11 +184,11 @@ module type TlsRawExtension
 	end 'create'
 end 'TlsRawExtension'
 
-module function tlsReadExtensions(reader TlsReader, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
+function tlsReadExtensions(reader TlsReader, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
 	return try tlsDecodeExtensions(try tlsReadRawExtensions(reader), context: context)
 end 'tlsReadExtensions'
 
-module function tlsReadRawExtensions(reader TlsReader) returns TlsRawExtensionArray throws TlsCodecError
+function tlsReadRawExtensions(reader TlsReader) returns TlsRawExtensionArray throws TlsCodecError
 	let block = try reader.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
 	let raws = TlsRawExtensionArray.create(0)
 
@@ -201,7 +201,7 @@ module function tlsReadRawExtensions(reader TlsReader) returns TlsRawExtensionAr
 	return raws
 end 'tlsReadRawExtensions'
 
-module function tlsDecodeExtensions(raws TlsRawExtensionArray, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
+function tlsDecodeExtensions(raws TlsRawExtensionArray, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
 	let seen = TlsExtensionTypeSet.create()
 	let decoded = TlsExtensionArray.create(0)
 
@@ -425,7 +425,7 @@ function decodeRenegotiationInfo(data TlsReader) returns TlsExtension throws Tls
 	return TlsExtension.renegotiationInfo(connection)
 end 'decodeRenegotiationInfo'
 
-module function tlsReadSignatureSchemes(list TlsReader) returns TlsSignatureSchemeCodeArray throws TlsCodecError
+function tlsReadSignatureSchemes(list TlsReader) returns TlsSignatureSchemeCodeArray throws TlsCodecError
 	let schemes = TlsSignatureSchemeCodeArray.create(0)
 
 	while not list.isAtEnd() 'eachScheme'
@@ -435,7 +435,7 @@ module function tlsReadSignatureSchemes(list TlsReader) returns TlsSignatureSche
 	return schemes
 end 'tlsReadSignatureSchemes'
 
-module function tlsHasSupportedVersions(raws TlsRawExtensionArray) returns bool
+function tlsHasSupportedVersions(raws TlsRawExtensionArray) returns bool
 	for raw in raws 'eachExtension'
 		if raw.extensionType == TlsExtensionKind.supportedVersions.code() 'found'
 			return true
@@ -445,7 +445,7 @@ module function tlsHasSupportedVersions(raws TlsRawExtensionArray) returns bool
 	return false
 end 'tlsHasSupportedVersions'
 
-module function tlsRequireTls13Selection(extensions TlsExtensionArray) throws TlsCodecError
+function tlsRequireTls13Selection(extensions TlsExtensionArray) throws TlsCodecError
 	for item in extensions 'eachExtension'
 		let selectsTls13 = match item 'form'
 			selectedVersion(version) gives version == tlsTls13VersionCode
@@ -471,7 +471,7 @@ module function tlsRequireTls13Selection(extensions TlsExtensionArray) throws Tl
 	end 'eachExtension'
 end 'tlsRequireTls13Selection'
 
-module function tlsRequireSignatureAlgorithms(extensions TlsExtensionArray) throws TlsCodecError
+function tlsRequireSignatureAlgorithms(extensions TlsExtensionArray) throws TlsCodecError
 	for item in extensions 'eachExtension'
 		if item.extensionType() == TlsExtensionKind.signatureAlgorithms.code() 'found'
 			return
@@ -481,14 +481,14 @@ module function tlsRequireSignatureAlgorithms(extensions TlsExtensionArray) thro
 	throw TlsCodecError.missingExtension
 end 'tlsRequireSignatureAlgorithms'
 
-module function tlsAppendExtensionBlock(output ByteArray, block TlsExtensionBlock) throws TlsEncodeError
+function tlsAppendExtensionBlock(output ByteArray, block TlsExtensionBlock) throws TlsEncodeError
 	match block 'block'
 		absent then return
 		listed(extensions) then try tlsAppendExtensions(output, extensions: extensions)
 	end 'block'
 end 'tlsAppendExtensionBlock'
 
-module function tlsAppendExtensions(output ByteArray, extensions TlsExtensionArray) throws TlsEncodeError
+function tlsAppendExtensions(output ByteArray, extensions TlsExtensionArray) throws TlsEncodeError
 	let list = ByteArray.create(0)
 
 	for item in extensions 'eachExtension'
@@ -541,7 +541,7 @@ function appendVersions(output ByteArray, versions TlsVersionCodeArray) throws T
 	try appendVector(output, prefix: TlsLengthPrefix.uint8, contents: list)
 end 'appendVersions'
 
-module function tlsAppendSignatureSchemes(output ByteArray, schemes TlsSignatureSchemeCodeArray) throws TlsEncodeError
+function tlsAppendSignatureSchemes(output ByteArray, schemes TlsSignatureSchemeCodeArray) throws TlsEncodeError
 	let list = ByteArray.create(0)
 
 	for scheme in schemes 'eachScheme'

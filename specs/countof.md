@@ -938,7 +938,7 @@ end 'main'
 ```
 
 <!-- test: error.a-countof-of-a-type-another-file-hides-is-refused-in-a-body -->
-A type private to another file is not visible to `countof` in a function body.
+A type another directory keeps unexported is not visible to `countof` in a function body.
 ```maxon
 // --- file: lib/sizes.maxon
 typealias Int = int(i64.min to i64.max)
@@ -948,13 +948,13 @@ export function hiddenCount() returns Count
 	return countof(Hidden)
 end 'hiddenCount'
 
-// --- file: lib/main.maxon
+// --- file: main.maxon
 function main() returns ExitCode
 	return (countof(Hidden) + hiddenCount()) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: lib/<fragment>:12:18: typealias 'Hidden' is not exported
+error E3008: <fragment>:12:18: typealias 'Hidden' is not exported
 ```
 
 <!-- test: error.a-top-level-countof-of-a-type-another-file-hides-is-refused -->
@@ -964,11 +964,11 @@ The same type named by a file-scope `countof` is refused with the same diagnosti
 typealias Int = int(i64.min to i64.max)
 typealias Hidden = FixedArray with 3 Int
 
-module function hiddenCount() returns Count
+export function hiddenCount() returns Count
 	return countof(Hidden)
 end 'hiddenCount'
 
-// --- file: lib/main.maxon
+// --- file: main.maxon
 let n = countof(Hidden)
 
 function main() returns ExitCode
@@ -976,7 +976,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: lib/<fragment>:11:17: typealias 'Hidden' is not exported
+error E3008: <fragment>:11:17: typealias 'Hidden' is not exported
 ```
 
 <!-- test: error.countof-of-a-runtime-sized-fixed-array -->

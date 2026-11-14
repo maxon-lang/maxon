@@ -17,7 +17,7 @@ export union DriverWork
 	lexSweep(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray)
 	claims
 
-	module function word() returns String
+	function word() returns String
 		return match self 'work'
 			build gives "build"
 			check gives "check"
@@ -208,11 +208,11 @@ export function persistentCompileDriver() returns CompileDriver.handle
 	return spawn(capacity: AnswerMailboxCapacity) CompileDriver.create(MemoKind.persistent)
 end 'persistentCompileDriver'
 
-export function memoryOnlyCompileDriver() returns CompileDriver.handle
+function memoryOnlyCompileDriver() returns CompileDriver.handle
 	return spawn(capacity: AnswerMailboxCapacity) CompileDriver.create(MemoKind.withoutLibraryCache)
 end 'memoryOnlyCompileDriver'
 
-module function driverAnswerOf(driver CompileDriver.handle, request immutable CompileRequest) returns DriverAnswer
+function driverAnswerOf(driver CompileDriver.handle, request immutable CompileRequest) returns DriverAnswer
 	let asked = try driver.run(request, receiver: driver.clone() as CompileReceiver.handle, sendTimeout: ForeverMs) otherwise panic("driverAnswerOf: the compile driver stopped while its caller still held its handle")
 
 	let answer = try await asked otherwise panic("driverAnswerOf: the compile driver stopped before it answered")

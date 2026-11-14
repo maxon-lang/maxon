@@ -460,27 +460,27 @@ by passes that both run after every extension's members are known
 parameter. Before this rule the second file answered `E3011 Unknown type 'Idx'`.
 ```maxon
 // --- file: a.maxon
-export typealias Num = int(0 to 200)
+typealias Num = int(0 to 200)
 
-export type Holder
-	export var v as Num
+type Holder
+	var v as Num
 
-	export static function create(v Num) returns Holder
+	static function create(v Num) returns Holder
 		return Holder{v: v}
 	end 'create'
 end 'Holder'
 
 extension Holder
-	export typealias Idx = int(0 to 100)
+	typealias Idx = int(0 to 100)
 
-	export function fromA(i Idx) returns Num
+	function fromA(i Idx) returns Num
 		return self.v + (i as Num)
 	end 'fromA'
 end 'Holder'
 
 // --- file: b.maxon
 extension Holder
-	export function fromB(i Idx) returns Num
+	function fromB(i Idx) returns Num
 		return self.v + (i as Num)
 	end 'fromB'
 end 'Holder'
@@ -508,20 +508,20 @@ named from `b.maxon`'s — a different registry from the ranged case above
 (`genericAliases`, not `innerAliases`), which is why it is its own case.
 ```maxon
 // --- file: a.maxon
-export typealias Num = int(0 to 200)
+typealias Num = int(0 to 200)
 
-export type Holder
-	export var v as Num
+type Holder
+	var v as Num
 
-	export static function create(v Num) returns Holder
+	static function create(v Num) returns Holder
 		return Holder{v: v}
 	end 'create'
 end 'Holder'
 
 extension Holder
-	export typealias Bag = Array with Num
+	typealias Bag = Array with Num
 
-	export function fill() returns Bag
+	function fill() returns Bag
 		let b = Bag.create(0)
 		b.push(self.v)
 		b.push(self.v)
@@ -531,7 +531,7 @@ end 'Holder'
 
 // --- file: b.maxon
 extension Holder
-	export function firstOf(b Bag) returns Num
+	function firstOf(b Bag) returns Num
 		return try b.get(0) otherwise 0
 	end 'firstOf'
 end 'Holder'
@@ -601,21 +601,21 @@ reason — a `type` body's nested aliases are folded with their own file, before
 and it is pinned so the two directions cannot come apart.
 ```maxon
 // --- file: a.maxon
-export typealias Num = int(0 to 200)
+typealias Num = int(0 to 200)
 
-export type Holder
-	export typealias Idx = int(0 to 100)
+type Holder
+	typealias Idx = int(0 to 100)
 
-	export var v as Num
+	var v as Num
 
-	export static function create(v Num) returns Holder
+	static function create(v Num) returns Holder
 		return Holder{v: v}
 	end 'create'
 end 'Holder'
 
 // --- file: b.maxon
 extension Holder
-	export function fromB(i Idx) returns Num
+	function fromB(i Idx) returns Num
 		return self.v + (i as Num)
 	end 'fromB'
 end 'Holder'
@@ -1098,51 +1098,51 @@ Two `extension Seq` bodies declaring DIFFERENT members, and two conformers each 
 through ONE extension: the key is `<Type>.<member>`, so neither is a duplicate.
 ```maxon
 // --- file: seq.maxon
-export typealias Digit = int(0 to 9)
+typealias Digit = int(0 to 9)
 
-export interface Seq uses Item
+interface Seq uses Item
 	function first() returns Item
 end 'Seq'
 
 // --- file: box.maxon
-export type Box implements Seq with Digit
-	export var n as Digit
+type Box implements Seq with Digit
+	var n as Digit
 
-	export static function create(n Digit) returns Self
+	static function create(n Digit) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function first() returns Digit
+	function first() returns Digit
 		return self.n
 	end 'first'
 end 'Box'
 
-export type Crate implements Seq with Digit
-	export var n as Digit
+type Crate implements Seq with Digit
+	var n as Digit
 
-	export static function create(n Digit) returns Self
+	static function create(n Digit) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function first() returns Digit
+	function first() returns Digit
 		return self.n
 	end 'first'
 end 'Crate'
 
 // --- file: a.maxon
-export extension Seq
-	export typealias Items = Array with Item
+extension Seq
+	typealias Items = Array with Item
 
-	export function all() returns Items
+	function all() returns Items
 		return Items.create(0)
 	end 'all'
 end 'Seq'
 
 // --- file: b.maxon
-export extension Seq
-	export typealias Chain = List with Item
+extension Seq
+	typealias Chain = List with Item
 
-	export function chained() returns Chain
+	function chained() returns Chain
 		return Chain.create()
 	end 'chained'
 end 'Seq'
@@ -1170,68 +1170,68 @@ withheld extension gives its conformer no members, so `Flagged.Items` and `Ranke
 declaration.
 ```maxon
 // --- file: seq.maxon
-export interface Seq uses Item
+interface Seq uses Item
 	function first() returns Item
 end 'Seq'
 
 // --- file: items.maxon
-export enum Flag
+enum Flag
 	up
 	down
 end 'Flag'
 
-export type Rank implements Comparable
-	export var level as Level
+type Rank implements Comparable
+	var level as Level
 
-	export static function create(level Level) returns Self
+	static function create(level Level) returns Self
 		return Self{level: level}
 	end 'create'
 
-	export function compare(other Rank) returns Ordering
+	function compare(other Rank) returns Ordering
 		return self.level.compare(other.level)
 	end 'compare'
 end 'Rank'
 
-export typealias Level = int(0 to 9)
+typealias Level = int(0 to 9)
 
-export type Flagged implements Seq with Flag
-	export var flag as Flag
+type Flagged implements Seq with Flag
+	var flag as Flag
 
-	export static function create(flag Flag) returns Self
+	static function create(flag Flag) returns Self
 		return Self{flag: flag}
 	end 'create'
 
-	export function first() returns Flag
+	function first() returns Flag
 		return self.flag
 	end 'first'
 end 'Flagged'
 
-export type Ranked implements Seq with Rank
-	export var rank as Rank
+type Ranked implements Seq with Rank
+	var rank as Rank
 
-	export static function create(rank Rank) returns Self
+	static function create(rank Rank) returns Self
 		return Self{rank: rank}
 	end 'create'
 
-	export function first() returns Rank
+	function first() returns Rank
 		return self.rank
 	end 'first'
 end 'Ranked'
 
 // --- file: a.maxon
-export extension Seq where Item is Hashable
-	export typealias Items = Array with Item
+extension Seq where Item is Hashable
+	typealias Items = Array with Item
 
-	export function hashedItems() returns Items
+	function hashedItems() returns Items
 		return Items.create(0)
 	end 'hashedItems'
 end 'Seq'
 
 // --- file: b.maxon
-export extension Seq where Item is Comparable
-	export typealias Items = List with Item
+extension Seq where Item is Comparable
+	typealias Items = List with Item
 
-	export function rankedItems() returns Items
+	function rankedItems() returns Items
 		return Items.create()
 	end 'rankedItems'
 end 'Seq'
@@ -1451,29 +1451,29 @@ an `extension Crate` declaring `Items` as an `Array` are not duplicates, and eac
 declaration whichever file is folded first.
 ```maxon
 // --- file: types.maxon
-export typealias Digit = int(0 to 9)
+typealias Digit = int(0 to 9)
 
-export type Box
-	export var n as Digit
+type Box
+	var n as Digit
 
-	export static function create(n Digit) returns Self
+	static function create(n Digit) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Box'
 
-export type Crate
-	export var n as Digit
+type Crate
+	var n as Digit
 
-	export static function create(n Digit) returns Self
+	static function create(n Digit) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Crate'
 
 // --- file: box.maxon
-export extension Box
-	export typealias Items = List with Digit
+extension Box
+	typealias Items = List with Digit
 
-	export function items() returns Items
+	function items() returns Items
 		let made = Items.create()
 		made.append(self.n)
 		return made
@@ -1481,10 +1481,10 @@ export extension Box
 end 'Box'
 
 // --- file: crate.maxon
-export extension Crate
-	export typealias Items = Array with Digit
+extension Crate
+	typealias Items = Array with Digit
 
-	export function items() returns Items
+	function items() returns Items
 		let made = Items.create(0)
 		made.push(self.n)
 		return made
@@ -1743,39 +1743,39 @@ The extension sits in a file that sorts before the type's. A second extension de
 which the conformer still receives.
 ```maxon
 // --- file: a.maxon
-export typealias Digit = int(0 to 9)
+typealias Digit = int(0 to 9)
 
-export interface Seq uses Item
+interface Seq uses Item
 	function first() returns Item
 end 'Seq'
 
-export extension Seq
-	export typealias Items = Array with Item
+extension Seq
+	typealias Items = Array with Item
 
-	export function items() returns Items
+	function items() returns Items
 		return Items.create()
 	end 'items'
 end 'Seq'
 
 // --- file: b.maxon
-export type Box implements Seq with Digit
-	export typealias Items = List with Digit
-	export var n as Digit
+type Box implements Seq with Digit
+	typealias Items = List with Digit
+	var n as Digit
 
-	export static function create(n Digit) returns Self
+	static function create(n Digit) returns Self
 		return Self{n: n}
 	end 'create'
 
-	export function first() returns Digit
+	function first() returns Digit
 		return self.n
 	end 'first'
 end 'Box'
 
 // --- file: c.maxon
-export extension Seq
-	export typealias Wrapped = Array with Item
+extension Seq
+	typealias Wrapped = Array with Item
 
-	export function wrapped() returns Wrapped
+	function wrapped() returns Wrapped
 		return Wrapped.create(0)
 	end 'wrapped'
 end 'Seq'
@@ -1980,8 +1980,9 @@ of the type, spelled with the same name inside the program's extension bodies.
 - **A caller of the program's method** sees the program's member in its signature.
 - **A library body, and a caller of a library method, keeps the library's member**: `xs.map(…)` still returns
   an `Array`, and `xs.sortBy(…)` still takes a two-parameter comparator.
-- **A file-private member** is spelled from its own file only; another file's extension body naming it is
-  [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008), as for any member declared elsewhere.
+- **An unmarked member** is spelled from its own directory's subtree only; an extension body in another
+  directory naming it is [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008), as for any member
+  declared elsewhere.
 
 The rule holds for the generic-instance, function, ranged and tuple forms and for the members an interface
 extension (`extension Iterable`) publishes to each conformer.
@@ -2340,10 +2341,10 @@ end 'main'
 ```
 
 <!-- test: error.another-files-extension-naming-a-private-member-of-the-programs -->
-`ext.maxon` declares `ElementArray` without a visibility modifier, so it is spelled from that file only; the
-sibling extension in `second.maxon` naming it is refused rather than reading the library's.
+`ext/ext.maxon` declares `ElementArray` without a visibility modifier, so it is spelled from `ext/` and its
+subdirectories only; the extension in `second.maxon`, outside `ext/`, naming it is refused rather than reading the library's.
 ```maxon
-// --- file: ext.maxon
+// --- file: ext/ext.maxon
 extension Array
 	typealias ElementArray = List with Element
 
@@ -2400,18 +2401,18 @@ names.
 and the `push` one line down was `E2015`.
 ```maxon
 // --- file: a.maxon
-export typealias Num = int(0 to 200)
+typealias Num = int(0 to 200)
 
-export type Holder
-	export typealias Bag = Array with Num
+type Holder
+	typealias Bag = Array with Num
 
-	export var v as Num
+	var v as Num
 
-	export static function create(v Num) returns Holder
+	static function create(v Num) returns Holder
 		return Holder{v: v}
 	end 'create'
 
-	export function fill() returns Bag
+	function fill() returns Bag
 		let b = Bag.create(0)
 		b.push(self.v)
 		return b
@@ -2444,18 +2445,18 @@ RETURN and a plain struct's FIELD all name the member. Before this rule each was
 `E3011 Unknown type 'Bag'`.
 ```maxon
 // --- file: a.maxon
-export typealias Num = int(0 to 200)
+typealias Num = int(0 to 200)
 
-export type Holder
-	export typealias Bag = Array with Num
+type Holder
+	typealias Bag = Array with Num
 
-	export var v as Num
+	var v as Num
 
-	export static function create(v Num) returns Holder
+	static function create(v Num) returns Holder
 		return Holder{v: v}
 	end 'create'
 
-	export function fill() returns Bag
+	function fill() returns Bag
 		let b = Bag.create(0)
 		b.push(self.v)
 		return b
@@ -2563,33 +2564,33 @@ end 'main'
 error E3011: <fragment>:24:20: Unknown type 'Bag'
 ```
 
-### Two plain types in two files may declare one member name, exactly as two file-scope aliases may
+### Two plain types in two directories may declare one member name, exactly as two file-scope aliases may
 
-<!-- test: crossfile-plain-type-member-aliases-of-one-name-stay-file-scoped -->
+<!-- test: crossfile-plain-type-member-aliases-of-one-name-stay-directory-scoped -->
 `crossfile-generic-alias-same-name-still-legal`'s rule, reached through the nested form: the bare key a
-member files is the same registry a file-scope `typealias` files, so a name two files disagree
-about is settled the same way — each file reads its own declaration.
+member files is the same registry a file-scope `typealias` files, so a name two directories disagree
+about is settled the same way — each file reads its own directory's declaration.
 ```maxon
 // --- file: a.maxon
 export typealias Num = int(0 to 200)
 
-export type HolderA
+type HolderA
 	typealias Bag = Array with Num
 
-	export var v as Num
+	var v as Num
 
-	export static function create(v Num) returns HolderA
+	static function create(v Num) returns HolderA
 		return HolderA{v: v}
 	end 'create'
 end 'HolderA'
 
-export function fromA() returns Num
+function fromA() returns Num
 	let b = Bag.create(0)
 	b.push(20)
 	return try b.get(0) otherwise 0
 end 'fromA'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 export type HolderB
 	typealias Bag = Array with String
 

@@ -207,7 +207,7 @@ end 'InlineOpRole'
 // column after, so the dialect's table stays the one source and the walk pays one probe per op.
 typealias OpRoleColumn = Array with OpRole
 
-module type StdOpMetaMemo
+type StdOpMetaMemo
 	var known as BoolArray
 	var roles as OpRoleColumn
 	var unsupported as BoolArray
@@ -234,12 +234,12 @@ module type StdOpMetaMemo
 		return InlineOpRole.body
 	end 'bodyRole'
 
-	module function holdsACall(op StdOp) returns bool
+	function holdsACall(op StdOp) returns bool
 		let variant = self.learned(op)
 		return try self.calls.get(variant) otherwise panic("StdOpMetaMemo.holdsACall: calls.get OOB at {variant} after learning it")
 	end 'holdsACall'
 
-	module function hasRole(op StdOp, role OpRole) returns bool
+	function hasRole(op StdOp, role OpRole) returns bool
 		let variant = self.learned(op)
 		return (try self.roles.get(variant) otherwise panic("StdOpMetaMemo.hasRole: roles.get OOB at {variant} after learning it")) == role
 	end 'hasRole'
@@ -4774,7 +4774,7 @@ type SiteSplicer
 		return tableUsesResolveAtSite(plan.tablesReadBy(calleeIndex), args: args, project: self.project, module: self.module, defs: self.tableDefs, arith: self.tableArith, slots: plan.slots, byName: self.byName)
 	end 'callerHoldsTheTables'
 
-	module function restrictTo(allowed OfferedOpSet)
+	function restrictTo(allowed OfferedOpSet)
 		self.restricted = true
 
 		for opIdx in allowed 'eachOfferedOp'
@@ -4782,7 +4782,7 @@ type SiteSplicer
 		end 'eachOfferedOp'
 	end 'restrictTo'
 
-	module function appendedOps() returns OfferedOpSet
+	function appendedOps() returns OfferedOpSet
 		let ops = OfferedOpSet.create()
 
 		for range in 0 upto self.appendedFirsts.count() 'eachAppendedRange'

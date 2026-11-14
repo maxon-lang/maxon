@@ -1,7 +1,7 @@
 let ReachableHoverRootName = "hover-renders-only-reachable-members"
 let ReachableHoverMainFileName = "main.maxon"
-let ReachableHoverGaugeFileName = "gauge.maxon"
-let ReachableHoverDialFileName = "dial.maxon"
+let ReachableHoverGaugeFileName = "lib/gauge.maxon"
+let ReachableHoverDialFileName = "lib/dial.maxon"
 let ReachableHoverHiddenFieldLine = 3
 let ReachableHoverHiddenFieldCharacter = 19
 let ReachableHoverHiddenMethodLine = 5
@@ -17,9 +17,9 @@ test 'hover renders only the members a reader may reach'
 
 	let uri = fileUriOf(root.join(ReachableHoverMainFileName))
 
-	expectNoHoverAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverHiddenFieldLine, character: ReachableHoverHiddenFieldCharacter, note: "hovering `level` in `gauge.level` rendered a declaration. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every field read through a `Gauge` value.")
+	expectNoHoverAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverHiddenFieldLine, character: ReachableHoverHiddenFieldCharacter, note: "hovering `level` in `gauge.level` rendered a declaration. `Gauge` is declared with no visibility modifier in `lib/`, a directory this file is outside of, so the compiler refuses every field read through a `Gauge` value.")
 
-	expectNoHoverAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverHiddenMethodLine, character: ReachableHoverHiddenMethodCharacter, note: "hovering `describe` in `gauge.describe()` rendered a declaration. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every method call on a `Gauge` value.")
+	expectNoHoverAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverHiddenMethodLine, character: ReachableHoverHiddenMethodCharacter, note: "hovering `describe` in `gauge.describe()` rendered a declaration. `Gauge` is declared with no visibility modifier in `lib/`, a directory this file is outside of, so the compiler refuses every method call on a `Gauge` value.")
 
 	let visibleMethod = hoverRenderingAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverVisibleMethodLine, character: ReachableHoverVisibleMethodCharacter)
 

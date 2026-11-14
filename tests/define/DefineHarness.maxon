@@ -34,32 +34,32 @@
 // Where the corpus lives, relative to the checkout root. Staging goes to this process's test scratch
 // directory outside the checkout (`testScratchDir`): a live `.maxon` under `tests/` is one `maxon fmt`
 // over the checkout rewrites.
-export let FixturesDirName = "tests/define/fixtures"
+let FixturesDirName = "tests/define/fixtures"
 
 // The driver surface under test, spelled as the command line takes it.
-export let RecheckCommandName = "verify-recheck"
-export let DefineOption = "--define="
+let RecheckCommandName = "verify-recheck"
+let DefineOption = "--define="
 
 // What every case builds its program as. One spelling, because a second would be a name two cases could
 // come to disagree about.
 let BuiltStem = "program"
 
 // The fixtures, named once each.
-export let BannerFixtureName = "banner"
-export let TwoBannersFixtureName = "two-banners"
-export let NumberFixtureName = "number"
+let BannerFixtureName = "banner"
+let TwoBannersFixtureName = "two-banners"
+let NumberFixtureName = "number"
 
 // The default every `banner` fixture carries, and therefore what an un-defined build must print. Declared
 // here rather than in the one case that asserts it, because the fixture and the expectation are two
 // copies of one fact and this is the half a reader of the case can see.
-export let BannerDefault = "default"
+let BannerDefault = "default"
 
 // ============================================================================================
 // STAGING AND SPAWNING
 // ============================================================================================
 
 // Build with no `--define` at all — the control every override is measured against.
-export function requirePlainBuild(staged FilePath) throws TestFailure
+function requirePlainBuild(staged FilePath) throws TestFailure
 	let noArguments = StringArray.create(0)
 	let build = spawnBuild(staged, staged: staged, output: executableIn(staged, stem: BuiltStem), label: BuildCommandName, extraArguments: noArguments)
 
@@ -68,7 +68,7 @@ end 'requirePlainBuild'
 
 // Build with one `--define`, asserted rather than panicked: accepting the flag and writing a binary for
 // it is the surface this corpus gates.
-export function requireDefinedBuild(staged FilePath, pair String) throws TestFailure
+function requireDefinedBuild(staged FilePath, pair String) throws TestFailure
 	let arguments = StringArray.create(0)
 	arguments.push("{DefineOption}{pair}")
 
@@ -81,7 +81,7 @@ end 'requireDefinedBuild'
 // ⛔ **THE ABSENCE OF AN EXECUTABLE IS ASSERTED BESIDE THE EXIT CODE.** A refusal that still wrote a
 // binary is the failure that matters: the next step of any build is to run what came out, and a stale or
 // half-defined image there is worse than an error, because nothing downstream would say so.
-export function requireRefusedBuild(staged FilePath, pair String) returns String throws TestFailure
+function requireRefusedBuild(staged FilePath, pair String) returns String throws TestFailure
 	let arguments = StringArray.create(0)
 	arguments.push("{DefineOption}{pair}")
 
@@ -94,7 +94,7 @@ end 'requireRefusedBuild'
 
 // `verify-recheck` over the staged tree with one `--define`: the command that checks one project more than once,
 // which is where a problem found only while a memo is computed goes missing.
-export function recheckWithDefine(staged FilePath, pair String) returns CollectedOutput
+function recheckWithDefine(staged FilePath, pair String) returns CollectedOutput
 	let arguments = StringArray.create(0)
 	arguments.push(RecheckCommandName)
 	arguments.push(staged.toString())
@@ -105,7 +105,7 @@ end 'recheckWithDefine'
 
 // Run what a build produced and hand back its stdout. The program prints the constant and nothing else,
 // so its output IS the answer to "what value did the binary get?".
-export function runBuiltProgram(staged FilePath) returns String throws TestFailure
+function runBuiltProgram(staged FilePath) returns String throws TestFailure
 	let executable = executableIn(staged, stem: BuiltStem)
 	let run = spawnIn(Executable.path(executable), arguments: StringArray.create(0), staged: staged, what: "the built program at {executable.toString()}")
 
@@ -114,5 +114,5 @@ export function runBuiltProgram(staged FilePath) returns String throws TestFailu
 	return withoutCarriageReturns(run.stdout).trim()
 end 'runBuiltProgram'
 
-module let UnknownName = "NoSuchConstant"
-module let UnknownCode = "E3149"
+let UnknownName = "NoSuchConstant"
+let UnknownCode = "E3149"

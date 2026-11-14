@@ -1,18 +1,18 @@
 let CorpusDirName = "tests/specHarness"
-module let RefusalsDirName = "refusals"
-module let GatesDirName = "gates"
-module let ExpectedRefusalFileName = "expected-refusal.txt"
-module let FixtureSpecExtension = ".md"
+let RefusalsDirName = "refusals"
+let GatesDirName = "gates"
+let ExpectedRefusalFileName = "expected-refusal.txt"
+let FixtureSpecExtension = ".md"
 
 let SpecTestCommandWord = "spec-test"
 let NetworkFlag = "--network"
-module let SuccessExitCode = 0
-module let FilterFlagPrefix = "--filter="
-module let UnmatchedPattern = "nosuch"
-module let BatchingChecksMissedThisCase = "the batching checks missed this case"
-module let BrokeTheBatchProgram = "broke the batch program its siblings share"
-module let HarnessErrorMarker = "harness error:"
-module let TrialBudgetSpentText = "trial builds without isolating"
+let SuccessExitCode = 0
+let FilterFlagPrefix = "--filter="
+let UnmatchedPattern = "nosuch"
+let BatchingChecksMissedThisCase = "the batching checks missed this case"
+let BrokeTheBatchProgram = "broke the batch program its siblings share"
+let HarnessErrorMarker = "harness error:"
+let TrialBudgetSpentText = "trial builds without isolating"
 
 let IgnoredWrapperDirName = "ignored"
 let LinkedSpecDirSuffix = "-linked"
@@ -24,17 +24,17 @@ let StagedTierDirName = "tier"
 let BrokenCheckIndent = "\n  "
 
 let ResultNoteIndent = "  "
-module let FragmentsDirName = "fragments"
-module let WasiTargetFlag = "--target=wasm32-wasi"
+let FragmentsDirName = "fragments"
+let WasiTargetFlag = "--target=wasm32-wasi"
 
 let TargetIrFenceStem = "```TargetIr:"
-module let PlantedTargetIrLine = "planted.byTheTargetIrPinGates r0"
+let PlantedTargetIrLine = "planted.byTheTargetIrPinGates r0"
 let PlaceholderTargetIrLine = "placeholder.forALaneTheRunIsNotOn r0"
-module let UpdateRequiredFlag = "--update-required"
+let UpdateRequiredFlag = "--update-required"
 
-module typealias CaseTally = int(0 to u64.max)
-module typealias SpecLine = int(0 to u64.max)
-module typealias SpecLineArray = Array with SpecLine
+typealias CaseTally = int(0 to u64.max)
+typealias SpecLine = int(0 to u64.max)
+typealias SpecLineArray = Array with SpecLine
 
 type HarnessFixture
 	export let kind as String
@@ -46,7 +46,7 @@ type HarnessFixture
 	end 'create'
 end 'HarnessFixture'
 
-module function requireRefusalFires(caller String = __file__) throws TestFailure
+function requireRefusalFires(caller String = __file__) throws TestFailure
 	let fixture = fixtureOf(caller, kind: RefusalsDirName)
 	let expected = expectedRefusalIn(fixture)
 	let run = runOnceThenDiscard(stagedCopyOf(fixture))
@@ -56,19 +56,19 @@ module function requireRefusalFires(caller String = __file__) throws TestFailure
 	try Expect.isTrue(said.contains(expected), message: "'{fixture.caseName}' failed (exit {run.exitCode()}) but for the WRONG REASON. Expected the output to contain '{expected}', and it said:\n{said}")
 end 'requireRefusalFires'
 
-module function stagedGateFixture(caller String = __file__) returns FilePath
+function stagedGateFixture(caller String = __file__) returns FilePath
 	return stagedCopyOf(fixtureOf(caller, kind: GatesDirName))
 end 'stagedGateFixture'
 
-module function saidByOneGateRun(caller String = __file__) returns String
+function saidByOneGateRun(caller String = __file__) returns String
 	return everythingSaid(runGateFixtureOnce(StringArray.create(0), caller: caller))
 end 'saidByOneGateRun'
 
-module function runGateFixtureOnce(extraArguments StringArray, environment Environment = Environment.inherit, caller String = __file__) returns CollectedOutput
+function runGateFixtureOnce(extraArguments StringArray, environment Environment = Environment.inherit, caller String = __file__) returns CollectedOutput
 	return runOnceThenDiscard(stagedGateFixture(caller), extraArguments: extraArguments, environment: environment)
 end 'runGateFixtureOnce'
 
-module function runGateFixtureThroughASymlink(extraArguments StringArray, caller String = __file__) returns CollectedOutput
+function runGateFixtureThroughASymlink(extraArguments StringArray, caller String = __file__) returns CollectedOutput
 	let staged = stagedGateFixture(caller)
 	let link = try FilePath.from("{staged.toString()}{LinkedSpecDirSuffix}") otherwise panic("spec-harness tests: the gate could not run - '{staged.toString()}{LinkedSpecDirSuffix}' is not a spellable path")
 
@@ -85,21 +85,21 @@ module function runGateFixtureThroughASymlink(extraArguments StringArray, caller
 	return run
 end 'runGateFixtureThroughASymlink'
 
-module function runGateFixtureOnceFromTheCheckout(extraArguments StringArray, caller String = __file__) returns CollectedOutput
+function runGateFixtureOnceFromTheCheckout(extraArguments StringArray, caller String = __file__) returns CollectedOutput
 	let staged = stagedGateFixture(caller)
 	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments, fromTheCheckout: true)
 	discardStagedDir(staged)
 	return run
 end 'runGateFixtureOnceFromTheCheckout'
 
-module function requireMarkerShapeRan(label String, caller String = __file__) throws TestFailure
+function requireMarkerShapeRan(label String, caller String = __file__) throws TestFailure
 	let said = saidByOneGateRun(caller)
 	let ranVerdict = failVerdictPrefix(label)
 
 	try Expect.isTrue(said.contains(ranVerdict), message: "the fixture did NOT run '{label}': the compiler no longer reads this marker shape the way the reference does, and the case is simply GONE. Expected '{ranVerdict}', and it said:\n{said}")
 end 'requireMarkerShapeRan'
 
-module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(0), environment Environment = Environment.inherit, binary FilePath = testedCompilerPath(), fromTheCheckout bool = false) returns CollectedOutput
+function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(0), environment Environment = Environment.inherit, binary FilePath = testedCompilerPath(), fromTheCheckout bool = false) returns CollectedOutput
 	let arguments = StringArray.create(0)
 	arguments.push(SpecTestCommandWord)
 	arguments.push(staged.toString())
@@ -124,11 +124,11 @@ function runOnceThenDiscard(staged FilePath, extraArguments StringArray = String
 	return run
 end 'runOnceThenDiscard'
 
-module function filterFlag(pattern String) returns String
+function filterFlag(pattern String) returns String
 	return "{FilterFlagPrefix}{pattern}"
 end 'filterFlag'
 
-module function filterFlags(patterns StringArray) returns StringArray
+function filterFlags(patterns StringArray) returns StringArray
 	let flags = StringArray.create(0)
 
 	for pattern in patterns 'eachPattern'
@@ -138,48 +138,48 @@ module function filterFlags(patterns StringArray) returns StringArray
 	return flags
 end 'filterFlags'
 
-module function specPrefix(specName String) returns String
+function specPrefix(specName String) returns String
 	return testLabel(specName, testName: "")
 end 'specPrefix'
 
-module function selectedLabel(specName String) returns String
+function selectedLabel(specName String) returns String
 	return testLabel(specName, testName: "{specName}.selected")
 end 'selectedLabel'
 
-module function ranVerdictIn(said String, specName String) returns bool
+function ranVerdictIn(said String, specName String) returns bool
 	let label = selectedLabel(specName)
 	return said.contains(failVerdictPrefix(label)) or said.contains(passVerdictLine(label))
 end 'ranVerdictIn'
 
-module function everythingSaid(run CollectedOutput) returns String
+function everythingSaid(run CollectedOutput) returns String
 	return "{run.stdout}{LineFeed}{run.stderr}"
 end 'everythingSaid'
 
-module function testLabel(specName String, testName String) returns String
+function testLabel(specName String, testName String) returns String
 	return "{specName}/{testName}"
 end 'testLabel'
 
-module function failVerdictPrefix(label String) returns String
+function failVerdictPrefix(label String) returns String
 	return "FAIL {label}: "
 end 'failVerdictPrefix'
 
-module function passVerdictLine(label String) returns String
+function passVerdictLine(label String) returns String
 	return "PASS {label}"
 end 'passVerdictLine'
 
-module function skipVerdictLine(label String) returns String
+function skipVerdictLine(label String) returns String
 	return "SKIP {label}{LineFeed}"
 end 'skipVerdictLine'
 
-module function hostLaneName() returns String
+function hostLaneName() returns String
 	return hostTargetTriple()
 end 'hostLaneName'
 
-module function hostTargetIrFence() returns String
+function hostTargetIrFence() returns String
 	return "{TargetIrFenceStem}{hostTargetTriple()}"
 end 'hostTargetIrFence'
 
-module function linesOpening(lines StringArray, prefix String) returns SpecLineArray
+function linesOpening(lines StringArray, prefix String) returns SpecLineArray
 	let found = SpecLineArray.create(0)
 
 	for (iter, line) in lines.withIterator() 'eachLine'
@@ -191,12 +191,12 @@ module function linesOpening(lines StringArray, prefix String) returns SpecLineA
 	return found
 end 'linesOpening'
 
-module function firstLineOpening(lines StringArray, prefix String, said String) returns SpecLine
+function firstLineOpening(lines StringArray, prefix String, said String) returns SpecLine
 	let found = linesOpening(lines, prefix: prefix)
 	return try found.get(0) otherwise panic("spec-harness tests: the re-minted spec holds no line opening with '{prefix}'. {said}")
 end 'firstLineOpening'
 
-module function plantBogusTargetIrPin(specPath FilePath)
+function plantBogusTargetIrPin(specPath FilePath)
 	let text = fileText(specPath)
 	writeStagedFile(specPath, content: "{text}{LineFeed}{hostTargetIrFence()}{LineFeed}{PlantedTargetIrLine}{LineFeed}```{LineFeed}")
 end 'plantBogusTargetIrPin'
@@ -204,7 +204,7 @@ end 'plantBogusTargetIrPin'
 // A spec holding a pin is refused unless every compiling case pins every native lane. The pin gates plant
 // a block for each lane but the host's beneath the named markers, so the run reaches the one host-lane pin
 // under test; a run only compares the block of its own lane.
-module function plantPlaceholderPinsBeneath(specPath FilePath, markers StringArray)
+function plantPlaceholderPinsBeneath(specPath FilePath, markers StringArray)
 	let planted = StringBuilder.create()
 
 	for (iter, line) in fileText(specPath).split(LineFeed).withIterator() 'eachLine'
@@ -226,7 +226,7 @@ module function plantPlaceholderPinsBeneath(specPath FilePath, markers StringArr
 	writeStagedFile(specPath, content: planted.build())
 end 'plantPlaceholderPinsBeneath'
 
-module function otherNativeLanes() returns StringArray
+function otherNativeLanes() returns StringArray
 	let others = StringArray.create(0)
 
 	for lane in nativeTargets() 'eachLane'
@@ -238,11 +238,11 @@ module function otherNativeLanes() returns StringArray
 	return others
 end 'otherNativeLanes'
 
-module function batchSummaryLine(batched CaseTally, programs CaseTally, alone CaseTally) returns String
+function batchSummaryLine(batched CaseTally, programs CaseTally, alone CaseTally) returns String
 	return "{batched} run case(s) ran batched in {programs} program(s); {alone} ran alone"
 end 'batchSummaryLine'
 
-module function collectNotPassed(said String, specName String, testNames StringArray, broken StringArray)
+function collectNotPassed(said String, specName String, testNames StringArray, broken StringArray)
 	for testName in testNames 'eachCase'
 		let verdict = "{passVerdictLine(testLabel(specName, testName: testName))}{LineFeed}"
 
@@ -252,23 +252,23 @@ module function collectNotPassed(said String, specName String, testNames StringA
 	end 'eachCase'
 end 'collectNotPassed'
 
-module function collectMissingSummary(said String, expected String, broken StringArray)
+function collectMissingSummary(said String, expected String, broken StringArray)
 	if not said.contains(expected) 'summaryAbsent'
 		broken.push("the run's summary does not say '{expected}'. It said:\n{said}\n")
 	end 'summaryAbsent'
 end 'collectMissingSummary'
 
-module let LeakerProcessIdFileName = "leaker.pid"
+let LeakerProcessIdFileName = "leaker.pid"
 let LeakedOneProcessText = "the case left 1 process running: "
-module let LeakAdviceText = "wait for every process it starts before it ends"
+let LeakAdviceText = "wait for every process it starts before it ends"
 
-module function recordedProcessId(file FilePath) returns Pid
+function recordedProcessId(file FilePath) returns Pid
 	let spelled = try File.readText(file) otherwise panic("spec-harness tests: the gate could not run - the case did not record the id of the process it started in {file.toString()}")
 
 	return (try int.fromString(spelled.trim()) otherwise panic("spec-harness tests: the gate could not run - {file.toString()} holds '{spelled}', which is not a process id")) as Pid
 end 'recordedProcessId'
 
-module function collectLeakNotReported(said String, label String, leaker Pid, broken StringArray)
+function collectLeakNotReported(said String, label String, leaker Pid, broken StringArray)
 	if not said.contains(failVerdictPrefix(label)) 'caseDidNotFail'
 		broken.push("'{label}' left process {leaker} running and did not FAIL. Expected '{failVerdictPrefix(label)}', and the run said:\n{said}\n")
 	end 'caseDidNotFail'
@@ -286,11 +286,11 @@ module function collectLeakNotReported(said String, label String, leaker Pid, br
 	end 'leakerStays'
 end 'collectLeakNotReported'
 
-module function resultNoteEntry(label String) returns String
+function resultNoteEntry(label String) returns String
 	return "{ResultNoteIndent}{label}{LineFeed}"
 end 'resultNoteEntry'
 
-module function requireNothingBroken(broken StringArray, headline String) throws TestFailure
+function requireNothingBroken(broken StringArray, headline String) throws TestFailure
 	if broken.isEmpty() 'everyCheckHeld'
 		return
 	end 'everyCheckHeld'
@@ -304,7 +304,7 @@ module function requireNothingBroken(broken StringArray, headline String) throws
 	try Expect.fail("{broken.count()} check(s) FAILED: {headline}{report.build()}")
 end 'requireNothingBroken'
 
-module function corpusDir(kind String) returns FilePath
+function corpusDir(kind String) returns FilePath
 	let spelled = "{CorpusDirName}{PortablePathSeparator}{kind}"
 	let relative = try FilePath.from(spelled) otherwise panic("spec-harness tests: the gate could not run - '{spelled}' is not a spellable path")
 	let dir = relative.resolve(Directory.currentPath())
@@ -316,7 +316,7 @@ module function corpusDir(kind String) returns FilePath
 	return dir
 end 'corpusDir'
 
-module function caseNameOf(testFileName String) returns String
+function caseNameOf(testFileName String) returns String
 	if not testFileName.endsWith(TestSourceSuffix) 'notATestSource'
 		panic("spec-harness tests: '{testFileName}' is not a `{TestSourceSuffix}` file, so it names no fixture.")
 	end 'notATestSource'
@@ -388,12 +388,12 @@ function stagedCopyOf(fixture HarnessFixture) returns FilePath
 	return staged
 end 'stagedCopyOf'
 
-module function stagedRunCacheRoot(caller String = __file__) returns FilePath
+function stagedRunCacheRoot(caller String = __file__) returns FilePath
 	let fixture = fixtureOf(caller, kind: GatesDirName)
 	return freshOutsideCheckoutDir("{RunCacheRootDirName}-{fixture.caseName}")
 end 'stagedRunCacheRoot'
 
-module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) returns CollectedOutput
+function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) returns CollectedOutput
 	let fixture = fixtureOf(caller, kind: GatesDirName)
 	let wrapper = freshOutsideCheckoutDir(IgnoredWrapperDirName)
 	writeStagedFile(wrapper.join(IgnoreMarkerFileName), content: "")
@@ -406,7 +406,7 @@ module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) 
 	return run
 end 'runGateFixtureBelowAnIgnoredDirectory'
 
-module function runGateFixtureBesideAStagedScriptlib(package String, fileName String, content String, caller String = __file__) returns CollectedOutput
+function runGateFixtureBesideAStagedScriptlib(package String, fileName String, content String, caller String = __file__) returns CollectedOutput
 	let fixture = fixtureOf(caller, kind: GatesDirName)
 	let staged = stagedCopyOf(fixture)
 	let tier = freshOutsideCheckoutDir("{StagedTierDirName}-{fixture.caseName}")

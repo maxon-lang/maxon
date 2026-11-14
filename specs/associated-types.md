@@ -829,7 +829,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: b.maxon
-export interface Duo uses P, Q
+interface Duo uses P, Q
 	function getFirst() returns P
 	function getSecond() returns Q
 end 'Duo'
@@ -2730,7 +2730,7 @@ end 'main'
 ```
 
 <!-- test: error.an-exported-conformance-with-a-file-private-alias-is-refused -->
-An interface instance written in the interface's file names that file's file-private `Level`. `Tick` binds the interface's `Element` to it in its `implements` clause and `LevelCursor` is the alias of the instance, and neither may be exported over a file-private alias, so a file with its own `Level` can never call through them.
+An interface instance written in the interface's file names that file's unmarked `Level`. `Tick` binds the interface's `Element` to it in its `implements` clause and `LevelCursor` is the alias of the instance, and neither may be exported over an unmarked alias, so a file with its own `Level` can never call through them.
 ```maxon
 // --- file: a/a.maxon
 typealias Level = int(0 to 100)
@@ -2769,8 +2769,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: a/<fragment>:9:13: exported type 'a.Tick' names file-private typealias 'Level' in its implements clause
-error E3167: a/<fragment>:21:18: exported typealias 'a.LevelCursor' names file-private typealias 'Level' in its target
+error E3167: a/<fragment>:9:13: exported type 'a.Tick' names unexported typealias 'Level' in its implements clause
+error E3167: a/<fragment>:21:18: exported typealias 'a.LevelCursor' names unexported typealias 'Level' in its target
 ```
 
 <!-- test: error.associated-return-bound-to-a-generic-instance -->
@@ -4788,7 +4788,7 @@ error E3127: <fragment>:54:10: cannot widen 'A' into 's', which is declared at t
 
 <!-- test: error.two-files-binding-one-associated-type-to-their-own-same-named-alias -->
 E3119 compares two conformers' bindings as the declarations their own files mean, not as the names they
-spell. `alpha/a.maxon` and `beta/b.maxon` each declare a file-private `Num` — one over `int`, one over
+spell. `alpha/a.maxon` and `beta/b.maxon` each declare an unmarked `Num` — one over `int`, one over
 `float` — and each binds `Taker`'s `Element` to its own. The two bindings are two types, so the dispatch
 in `useIt`, compiled once for both conformers, is refused exactly as `float` beside `Integer` is.
 ```maxon

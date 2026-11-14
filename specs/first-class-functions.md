@@ -516,21 +516,21 @@ parameter's function type is therefore settled only once every file in the
 project has been parsed.
 ```maxon
 // --- file: aaa_alias.maxon
-module extension Sorter
-	module typealias Comparator = function(Element, Element) returns Element
+extension Sorter
+	typealias Comparator = function(Element, Element) returns Element
 end 'Sorter'
 
 // --- file: zzz_consumer.maxon
-module typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-module type Sorter uses Element
-	module var stub as Integer
+type Sorter uses Element
+	var stub as Integer
 
-	module static function create() returns Self
+	static function create() returns Self
 		return Self{stub: 0}
 	end 'create'
 
-	module function compareAndSwap(a Element, b Element, cmp Comparator) returns Element
+	function compareAndSwap(a Element, b Element, cmp Comparator) returns Element
 		return cmp(a, b)
 	end 'compareAndSwap'
 end 'Sorter'
@@ -1449,17 +1449,17 @@ A function-typed field declared in another file is called the same way: the fiel
 signature travels with the type, not with the file that reads it.
 ```maxon
 // --- file: handler.maxon
-export typealias Integer = int(i64.min to i64.max)
-export typealias UnaryOp = function(Integer) returns Integer
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
 
-export type Handler
-	export var op as UnaryOp
+type Handler
+	var op as UnaryOp
 
-	export static function create(op UnaryOp) returns Self
+	static function create(op UnaryOp) returns Self
 		return Self{op: op}
 	end 'create'
 
-	export function run(x Integer) returns Integer
+	function run(x Integer) returns Integer
 		return self.op(x)
 	end 'run'
 end 'Handler'

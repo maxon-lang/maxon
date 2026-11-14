@@ -52,8 +52,8 @@ export let SpecScratchDirName = ".spec-tmp"
 // directory's tree and this directory by the working directory, so two runs of different spec
 // directories from one checkout share no lock, and a shared directory would be emptied and removed
 // under the cases of the one still running.
-module let RunWorkingDirPrefix = ".spec-run"
-module let RunWorkingDirOwnedPrefix = ".spec-run-"
+let RunWorkingDirPrefix = ".spec-run"
+let RunWorkingDirOwnedPrefix = ".spec-run-"
 
 // A multi-file test's staged source DIRECTORY hangs off `<tempDir>/<name>.src`, NOT `<tempDir>/<name>`
 // — because `<tempDir>/<name>` is exactly the output base (`exeBase`, prepareOneTest). With no suffix
@@ -84,7 +84,7 @@ let SharedTierReadyName = "staged.ok"
 
 let SharedTierReadyContent = "staged\n"
 
-module let CarriageReturn = "\r"
+let CarriageReturn = "\r"
 
 let FragmentTestPrefix = "// Test: "
 
@@ -690,7 +690,7 @@ end 'ProcessCapture'
 // — but it cannot say WHICH of the several hundred compiles that worker ran was the leaker.
 // ⇒ Per-test attribution for a leak is recovered by re-running the suspect spec under `--filter`,
 // which puts one spec's compiles in one worker.
-module enum CompileVerdict
+enum CompileVerdict
 	// The build ran to completion and wrote its executable.
 	built
 
@@ -717,7 +717,7 @@ end 'CompileVerdict'
 // one: a clean build's is the empty string, which is a real answer and not an absence — the same
 // distinction `DiagnosticSink.requireCaptured` panics to protect, since `""` is exactly what a
 // compile that said nothing legitimately returns.
-module type CompileAnswer
+type CompileAnswer
 	export let verdict as CompileVerdict
 
 	// Byte for byte what `maxon build` would have written to stderr, taken at the ONE sink every
@@ -726,7 +726,7 @@ module type CompileAnswer
 	// blocks are compared against. See `compileOneTest`.
 	export let diagnostics as String
 
-	module static function create(verdict CompileVerdict, diagnostics String) returns CompileAnswer
+	static function create(verdict CompileVerdict, diagnostics String) returns CompileAnswer
 		return Self{verdict: verdict, diagnostics: diagnostics}
 	end 'create'
 
@@ -769,7 +769,7 @@ end 'CompileAnswer'
 // value inside the guest with coreutils `timeout`, which takes seconds, and the spawn by their sum
 // (`batchDeadlineMs`). So the milliseconds are derived from the seconds rather than written twice.
 let SpecSpawnTimeoutSeconds = 120
-export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
+let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 
 // `workingDirectory` is required: a working directory is a fact only the caller knows, and a spawn
 // that states none starts its child somewhere nobody chose (see `RunWorkingDirPrefix`).
@@ -920,13 +920,13 @@ end 'SuiteCpuTally'
 // The two travel together because they are counted together: the tally's `tests()` must equal the
 // result count, and a shape that could return one without the other is a shape in which they can
 // silently disagree.
-export type SpecRun
+type SpecRun
 	export let results as SpecTestResultArray
 	export let cpu as SuiteCpuTally
 	export let batch as BatchTally
 	export let harnessErrors as StringArray
 
-	export static function create(results SpecTestResultArray, cpu SuiteCpuTally, batch BatchTally, harnessErrors StringArray) returns SpecRun
+	static function create(results SpecTestResultArray, cpu SuiteCpuTally, batch BatchTally, harnessErrors StringArray) returns SpecRun
 		return Self{results: results, cpu: cpu, batch: batch, harnessErrors: harnessErrors}
 	end 'create'
 end 'SpecRun'
@@ -967,7 +967,7 @@ end 'TestRun'
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, driver CompileDriver.handle, runWorkingDir FilePath) returns SpecRun throws CompileError
+function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, driver CompileDriver.handle, runWorkingDir FilePath) returns SpecRun throws CompileError
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
@@ -1141,12 +1141,12 @@ export type SpecRunMode
 	end 'create'
 end 'SpecRunMode'
 
-module union IrAction
+union IrAction
 	none
 	compare(expected String)
 	mint(slice TraceSlice)
 
-	module function needsIr() returns bool
+	function needsIr() returns bool
 		return match self 'action'
 			none gives false
 			compare or
@@ -1261,7 +1261,7 @@ export typealias ExcludedCaseArray = Array with ExcludedCase
 // restate that whole conjunction, and a rule added to one copy and not the other would either report
 // cases this run was never going to run anyway or quietly stop reporting ones it dropped. This is the
 // duplication `selectedTests`'s own header is about, one level in.
-export type SpecSelection
+type SpecSelection
 	export let selected as SpecTestArray
 
 	// EMPTY on most runs. It is the literal count of cases this run passed over and owes a sentence about
@@ -1292,7 +1292,7 @@ end 'SpecSelection'
 // of the pool. `--network` joined that list for the identical reason: the parent forwards it to
 // every worker (`spawnNoWait`), and a worker that did not read it back would run live-network cases
 // the parent never counted.
-export function selectedTests(specTests SpecTestArray, specName String, filterPatterns FilterPatternArray, effectiveTarget Target, includeNetwork bool, assumeNativeHost bool) returns SpecSelection
+function selectedTests(specTests SpecTestArray, specName String, filterPatterns FilterPatternArray, effectiveTarget Target, includeNetwork bool, assumeNativeHost bool) returns SpecSelection
 	let selected = SpecTestArray.create(0)
 	let excluded = ExcludedCaseArray.create(0)
 	let filterTally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
@@ -1344,7 +1344,7 @@ end 'selectedTests'
 // The selected tests one JOB of a spec runs. A spec's `alone` cases are a job of their own, which the pool
 // dispatches with nothing else in flight (`SpecWorkerPool.runSpecPool`), so the parent's plan and the worker's
 // run split one selection by this one rule and cannot disagree about which job a case is in.
-export function testsThatRun(tests SpecTestArray, runs SpecRuns) returns SpecTestArray
+function testsThatRun(tests SpecTestArray, runs SpecRuns) returns SpecTestArray
 	let job = SpecTestArray.create(0)
 
 	for test in tests 'eachTest'
@@ -1473,7 +1473,7 @@ function targetCanCheckSectionPins(test SpecTest, effectiveTarget Target) return
 end 'targetCanCheckSectionPins'
 
 // What the compiler's own stderr says about whether this target could express the case AT ALL.
-module union TargetRefusal
+union TargetRefusal
 	// The compiler said something OTHER than "this target has no implementation for that": an ordinary
 	// diagnostic, a panic, a crash, or nothing at all. Whatever the verdict was, it stands.
 	notRefused
@@ -1514,7 +1514,7 @@ end 'TargetRefusal'
 //     never an exit code: a compiler that leaks exits 101 having printed the very same lines, and
 //     folding that into a skip deletes the leak gate (`CompileVerdict` owns where the leak signal
 //     goes). A `driverFailed` build is refused too: its text is not `Diagnostic.render()` output.
-module function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
+function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 	let diagnosticsWereReported = match compile.verdict 'v'
 		built or
 		driverFailed or
@@ -1809,7 +1809,7 @@ end 'needsExternalRunner'
 // true, including the ones that need an external runner.
 //
 // Exported because the parser asks it too, to refuse a `TargetIr` pin naming a lane that renders none.
-export function emitsTargetIr(target Target) returns bool
+function emitsTargetIr(target Target) returns bool
 	return match target.cpu 'cpu'
 		x64 or
 		arm64 gives true
@@ -1832,7 +1832,7 @@ end 'specTempDirFor'
 
 // The root the per-spec scratch directories hang off. The pool creates it once, in the parent,
 // so N workers don't race `Directory.create`'s mkdir -p on the shared parent.
-export function specTempRootDir(specDir FilePath) returns FilePath
+function specTempRootDir(specDir FilePath) returns FilePath
 	let tempSub = try FilePath.from(SpecScratchDirName) otherwise panic("SpecTestRunner: SpecScratchDirName '{SpecScratchDirName}' must be a valid relative path")
 	return specDir.joinPath(tempSub)
 end 'specTempRootDir'
@@ -1848,7 +1848,7 @@ end 'specTempRootDir'
 // directory nobody created. The parent passes the name to each worker as `--run-dir`
 // (`runWorkingDirNamed`), and a flag rather than an environment variable, so a spec-test a case runs
 // names its own.
-export function specRunWorkingDir() returns FilePath
+function specRunWorkingDir() returns FilePath
 	return runWorkingDirNamed("{RunWorkingDirOwnedPrefix}{Process.id()}")
 end 'specRunWorkingDir'
 
@@ -1866,17 +1866,17 @@ export function runWorkingDirNamed(name String) returns FilePath
 	return Directory.currentPath().joinPath(runSub)
 end 'runWorkingDirNamed'
 
-module typealias PatternMatch = function(String) returns bool
+typealias PatternMatch = function(String) returns bool
 
 typealias FilterPatternIndexArray = Array with ElementIndex
 
-export type FilterPatternTally
+type FilterPatternTally
 	let keys as FilterPatternArray
 	let spellings as FilterPatternArray
 	var matched as FixedBoolArray
 	var hits as FilterPatternIndexArray
 
-	module static function create(keys FilterPatternArray, spellings FilterPatternArray) returns FilterPatternTally
+	static function create(keys FilterPatternArray, spellings FilterPatternArray) returns FilterPatternTally
 		if keys.count() != spellings.count() 'unpaired'
 			panic("FilterPatternTally.create: {keys.count()} match key(s) for {spellings.count()} spelling(s), and each pattern has one of each")
 		end 'unpaired'
@@ -1884,11 +1884,11 @@ export type FilterPatternTally
 		return Self{keys: keys, spellings: spellings, matched: FixedBoolArray.create(keys.count()), hits: FilterPatternIndexArray.create(0)}
 	end 'create'
 
-	module function filters() returns bool
+	function filters() returns bool
 		return not self.keys.isEmpty()
 	end 'filters'
 
-	module function admits(selects PatternMatch) returns bool
+	function admits(selects PatternMatch) returns bool
 		self.hits.clear()
 
 		for (iter, key) in self.keys.withIterator() 'eachPattern'
@@ -1900,13 +1900,13 @@ export type FilterPatternTally
 		return self.keys.isEmpty() or not self.hits.isEmpty()
 	end 'admits'
 
-	module function credit()
+	function credit()
 		for index in self.hits 'eachHit'
 			self.mark(index)
 		end 'eachHit'
 	end 'credit'
 
-	module function absorb(other FilterPatternTally)
+	function absorb(other FilterPatternTally)
 		if other.matched.count() != self.matched.count() 'differentPatterns'
 			panic("FilterPatternTally.absorb: a tally of {other.matched.count()} pattern(s) cannot be merged into one of {self.matched.count()}")
 		end 'differentPatterns'
@@ -1922,7 +1922,7 @@ export type FilterPatternTally
 		try self.matched.set(index, value: true) otherwise panic("FilterPatternTally.mark: pattern {index} has no slot, and one is minted per pattern")
 	end 'mark'
 
-	module function unmatched() returns FilterPatternArray
+	function unmatched() returns FilterPatternArray
 		let unmatched = FilterPatternArray.create(0)
 
 		for (iter, spelling) in self.spellings.withIterator() 'eachPattern'
@@ -1941,7 +1941,7 @@ end 'FilterPatternTally'
 //
 // THIS ORDER IS THE REPORT ORDER. The pool reassembles every worker's out-of-order answers
 // back into it, which is how `--workers=1` and `--workers=N` print the same bytes.
-export function specFilePaths(specDir FilePath) returns FilePathArray throws CompileError
+function specFilePaths(specDir FilePath) returns FilePathArray throws CompileError
 	let entries = try Directory.list(specDir) otherwise throw CompileError.directoryNotFound(specDir.path)
 	let specs = FilePathArray.create(0)
 
@@ -1961,7 +1961,7 @@ end 'specFilePaths'
 // SAY WHICH FILE COMPLAINED.** Normalizing every staged file to the bare `<fragment>` token makes
 // `dir_a/helper.maxon:3:1` and `dir_b/main.maxon:3:1` produce the SAME text, so a spec pinning the
 // diagnostic against one file would pass just as well when the other file raised it. The corpus
-// records the directory (`error E3088: dir_b/<fragment>:11:9`, `module-keyword`). A file at the
+// records the directory (`error E3008: other/<fragment>:11:9`, `directory-scope`). A file at the
 // test directory's top level carries an empty prefix.
 type FragmentPathMapping
 	export let compiledPath as String
@@ -2472,7 +2472,7 @@ end 'compileOneTest'
 // printed through the sink). Every other arm is a build that never got that far — no `Diagnostic`
 // exists for it and `Main.reportCompileError` prints a sentence of its own instead. The distinction is
 // what `targetRefusalIn` rests on; see `CompileVerdict`.
-module function compileVerdictOf(e CompileError) returns CompileVerdict
+function compileVerdictOf(e CompileError) returns CompileVerdict
 	match e.failure() 'failure'
 		reportedDiagnostics then return CompileVerdict.reportedDiagnostics
 		driverFailed then return CompileVerdict.sourceOrderUnplaceable if e.refusesTheSourceOrder() else CompileVerdict.driverFailed
@@ -2649,7 +2649,7 @@ end 'copyLines'
 // Is this case in capture mode? Asked at the COMPILE (which flag to pass), at the RUN (whether to go
 // through the monitor) and at the target gate. One reading of the three-state field, so the three cannot
 // come to disagree about what "a capture case" is.
-module function traceCaptureMode(test SpecTest) returns bool
+function traceCaptureMode(test SpecTest) returns bool
 	return match test.traceCapture 'mode'
 		off gives false
 		unpinned or
@@ -2999,7 +2999,7 @@ end 'stageTest'
 // Why staging stopped when the runtime tier could not be derived. `missingStdlibReason`'s twin, for that
 // function's stated reason: both staging shapes report it and the sentence has to say the same thing in
 // both.
-module function missingRuntimeReason() returns String
+function missingRuntimeReason() returns String
 	return "no runtime source tier beside the located {StdlibDirName}/, so a diagnostic raised inside it could not be rewritten to a portable path"
 end 'missingRuntimeReason'
 
@@ -3119,9 +3119,9 @@ function sourceDirectoryFor(tempDir FilePath, test SpecTest, tiers StagedTierDir
 	end 'tier'
 end 'sourceDirectoryFor'
 
-// A `module` declaration is visible only in its declaring directory's subtree, so a case reaches the ones
+// An unmarked declaration is visible only in its declaring directory's subtree, so a case reaches the ones
 // under `stdlib/helpers/<area>/` only from a directory inside it. The directory must already exist: a case
-// staged into a new one would see no `module` declaration and report that as its own result.
+// staged into a new one would see no unmarked declaration and report that as its own result.
 function stdlibSubdirectoryTierDir(directory String, stagedStdlib FilePath) returns FilePath throws TierStagingError
 	if not isSafeRelativeName(directory) 'unsafeDirectory'
 		throw TierStagingError.refused("'{TierMarker} {TierSubdirectoryPrefix}{directory} -->' names '{directory}': it must be a relative path of directories under {StdlibDirName}/, with no '.' or '..' segment")
@@ -3203,7 +3203,7 @@ end 'isIgnoredWithin'
 // explicit that this is a STAGING failure rather than a compile one: the compile would have failed too
 // (`CompileError.stdlibNotFound`), but it would have failed AFTER the runner had already promised it
 // could rewrite what the compiler printed.
-module function missingStdlibReason() returns String
+function missingStdlibReason() returns String
 	return "no {StdlibDirName}/ above this executable, so a diagnostic raised inside the library could not be rewritten to a portable path"
 end 'missingStdlibReason'
 
@@ -3403,7 +3403,7 @@ end 'applyOverlaySections'
 // rather than silently stacked on top of the first. A Set because membership is the only question.
 typealias StagedSectionNameSet = Set with String
 
-module function emptyScratchDirectory(dir FilePath)
+function emptyScratchDirectory(dir FilePath)
 	for stuck in Directory.removeContents(dir) 'eachStuck'
 		printError("error: could not remove {stuck.toString()}, which is in the scratch directory {dir.toString()} a spec run stages into\n")
 	end 'eachStuck'
@@ -4192,7 +4192,7 @@ end 'reportGuestUnavailable'
 // and no other. It is what a batch must produce for every test it could not account for, because the
 // pool's accounting is one record per test and an absence would be a missing record rather than a
 // failure anyone could read.
-export union RunObservation
+union RunObservation
 	notRequired
 	completed(capture ProcessCapture)
 	failed(reason String)
@@ -4832,7 +4832,7 @@ end 'launchBatch'
 // actually bounds a wedged PROGRAM, per test, at exactly the value one spawn is bounded by; this
 // bounds only a `wsl` that never returns at all, which the pool's own wedge watchdog would report
 // anyway.
-export function batchDeadlineMs(executions TestTally) returns WaitDeadlineMs
+function batchDeadlineMs(executions TestTally) returns WaitDeadlineMs
 	return SpecSpawnTimeoutMs * ((executions + 1) as WaitDeadlineMs)
 end 'batchDeadlineMs'
 
@@ -5330,7 +5330,7 @@ end 'sidecarLocalWindowOutcome'
 //
 // `notRequired` is unreachable and says so: the executors mint it for exactly the tests that FINISHED
 // in the compile pass, and nothing but a `PendingRun` reaches here.
-export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, traceCapture SpecTraceCapture, asyncTrace bool) returns TestOutcome
+function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, traceCapture SpecTraceCapture, asyncTrace bool) returns TestOutcome
 	return match observation 'observed'
 		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
 		failed(reason) gives TestOutcome.fail(reason)
@@ -5843,7 +5843,7 @@ end 'referenceFragmentPath'
 // `<name>.ir` and no `<name>.metrics`. A `<!-- DebugInfo -->` case DOES write a `<name>.exe.mxdbg`, and it
 // goes here with the executable it describes: the pair is written together and must not outlive it
 // separately, or the next run's `--dump-info` on a stale path would answer from a build that is gone.
-module function discardBuild(writtenFiles FilePathArray, exePath FilePath)
+function discardBuild(writtenFiles FilePathArray, exePath FilePath)
 	deleteWrittenFiles(writtenFiles)
 	discardDebugInfoSidecar(exePath)
 	try File.delete(exePath) otherwise ignore

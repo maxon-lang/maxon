@@ -10,10 +10,10 @@ let AdapterExitDeadlineMs = 3000
 
 // Full width on purpose: every one is a number the adapter sends, and a narrower range would turn
 // an out-of-protocol value into a range-check panic instead of a failed assertion.
-export typealias DapNumber = int(i64.min to i64.max)
-export typealias DapReference = int(i64.min to i64.max)
+typealias DapNumber = int(i64.min to i64.max)
+typealias DapReference = int(i64.min to i64.max)
 
-export typealias JsonDocArray = Array with JsonDoc
+typealias JsonDocArray = Array with JsonDoc
 
 typealias DapSequenceNumber = int(1 to i64.max)
 typealias StashedMessageTally = int(0 to i64.max)
@@ -46,7 +46,7 @@ end 'DapSessionOutcome'
 
 // `release` runs before any assertion: an `Expect` that threw first would skip it, and an unreleased
 // `StreamingSubprocess` leaks and exits the run 101.
-export function dapRunSession(session mutable DapSession, completing String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+function dapRunSession(session mutable DapSession, completing String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 	var client = DapClient.start()
 	var outcome = DapSessionOutcome.completed
 
@@ -75,23 +75,23 @@ function dapBroke(reason DapClientError) returns String
 	end 'why'
 end 'dapBroke'
 
-export let FixturesDirName = "tests/debug/fixtures"
+let FixturesDirName = "tests/debug/fixtures"
 
-export let SteppingFixtureName = "stepping"
-export let ValuesFixtureName = "values"
-export let WorkersFixtureName = "workers"
-export let SpinFixtureName = "spin"
-export let IdleFixtureName = "idlegt"
-export let SpinSignalFixtureName = "spinsignal"
-export let LiveSpinFixtureName = "livespin"
-export let HeaplessFixtureName = "heapless"
-export let CrashFixtureName = "crash"
-export let ConditionFixtureName = "condition"
-export let SplicedFixtureName = "spliced"
-export let TwoDirsFixtureName = "twodirs"
-export let TestBodyFixtureName = "testbody"
-export let LeafPairFixtureName = "leafpair"
-export let FaultCalleeFixtureName = "faultcallee"
+let SteppingFixtureName = "stepping"
+let ValuesFixtureName = "values"
+let WorkersFixtureName = "workers"
+let SpinFixtureName = "spin"
+let IdleFixtureName = "idlegt"
+let SpinSignalFixtureName = "spinsignal"
+let LiveSpinFixtureName = "livespin"
+let HeaplessFixtureName = "heapless"
+let CrashFixtureName = "crash"
+let ConditionFixtureName = "condition"
+let SplicedFixtureName = "spliced"
+let TwoDirsFixtureName = "twodirs"
+let TestBodyFixtureName = "testbody"
+let LeafPairFixtureName = "leafpair"
+let FaultCalleeFixtureName = "faultcallee"
 
 export type DapClient
 	var server as StreamingSubprocess
@@ -304,19 +304,19 @@ let OutputTextKey = "output"
 let ResponseType = "response"
 let EventType = "event"
 
-export let InitializedEvent = "initialized"
-export let StoppedEvent = "stopped"
-export let OutputEvent = "output"
-export let ExitedEvent = "exited"
-export let TerminatedEvent = "terminated"
+let InitializedEvent = "initialized"
+let StoppedEvent = "stopped"
+let OutputEvent = "output"
+let ExitedEvent = "exited"
+let TerminatedEvent = "terminated"
 
-export let StdoutCategory = "stdout"
-export let StderrCategory = "stderr"
+let StdoutCategory = "stdout"
+let StderrCategory = "stderr"
 
-export let BreakpointReason = "breakpoint"
-export let StepReason = "step"
-export let PauseReason = "pause"
-export let ExceptionReason = "exception"
+let BreakpointReason = "breakpoint"
+let StepReason = "step"
+let PauseReason = "pause"
+let ExceptionReason = "exception"
 
 function dapIsEvent(doc JsonDoc, kind String) returns bool
 	let messageType = try doc.getString(doc.root, key: TypeKey) otherwise return false
@@ -370,7 +370,7 @@ end 'DapOutputPiece'
 
 export typealias DapOutputPieceArray = Array with DapOutputPiece
 
-export function dapOutputOf(pieces DapOutputPieceArray, category String) returns String
+function dapOutputOf(pieces DapOutputPieceArray, category String) returns String
 	var collected = ""
 
 	for piece in pieces 'eachPiece'
@@ -382,11 +382,11 @@ export function dapOutputOf(pieces DapOutputPieceArray, category String) returns
 	return collected
 end 'dapOutputOf'
 
-export function dapSuccess(doc JsonDoc) returns bool
+function dapSuccess(doc JsonDoc) returns bool
 	return try doc.getBool(doc.root, key: SuccessKey) otherwise panic("dap tests: a response carries no `{SuccessKey}`: {Json.stringify(doc)}")
 end 'dapSuccess'
 
-export function dapRefusal(doc JsonDoc) returns String
+function dapRefusal(doc JsonDoc) returns String
 	if dapSuccess(doc) 'notARefusal'
 		panic("dap tests: a refusal was read off a response that succeeded: {Json.stringify(doc)}")
 	end 'notARefusal'
@@ -394,7 +394,7 @@ export function dapRefusal(doc JsonDoc) returns String
 	return try doc.getString(doc.root, key: MessageKey) otherwise panic("dap tests: a refused response carries no `{MessageKey}`: {Json.stringify(doc)}")
 end 'dapRefusal'
 
-export function dapDescribed(doc JsonDoc) returns String
+function dapDescribed(doc JsonDoc) returns String
 	return Json.stringify(doc)
 end 'dapDescribed'
 
@@ -402,23 +402,23 @@ function dapBody(doc JsonDoc) returns JsonNodeId
 	return try doc.getChild(doc.root, key: BodyKey) otherwise panic("dap tests: a message carries no `{BodyKey}`: {Json.stringify(doc)}")
 end 'dapBody'
 
-export function dapBodyString(doc JsonDoc, key String) returns String
+function dapBodyString(doc JsonDoc, key String) returns String
 	return try doc.getString(dapBody(doc), key: key) otherwise panic("dap tests: a message body carries no `{key}`: {Json.stringify(doc)}")
 end 'dapBodyString'
 
-export function dapBodyNumber(doc JsonDoc, key String) returns DapNumber
+function dapBodyNumber(doc JsonDoc, key String) returns DapNumber
 	return try doc.getInt(dapBody(doc), key: key) otherwise panic("dap tests: a message body carries no `{key}`: {Json.stringify(doc)}")
 end 'dapBodyNumber'
 
-export function dapCapability(doc JsonDoc, name String) returns bool
+function dapCapability(doc JsonDoc, name String) returns bool
 	return try doc.getBool(dapBody(doc), key: name) otherwise panic("dap tests: the `initialize` capabilities name no `{name}`: {Json.stringify(doc)}")
 end 'dapCapability'
 
 let BreakpointsKey = "breakpoints"
-export let StackFramesKey = "stackFrames"
-export let ScopesKey = "scopes"
-export let VariablesKey = "variables"
-export let ThreadsKey = "threads"
+let StackFramesKey = "stackFrames"
+let ScopesKey = "scopes"
+let VariablesKey = "variables"
+let ThreadsKey = "threads"
 let NameKey = "name"
 let LineKey = "line"
 let ColumnKey = "column"
@@ -440,38 +440,38 @@ function dapListNodes(doc JsonDoc, key String) returns JsonNodeIdArray
 	return nodes
 end 'dapListNodes'
 
-export function dapBreakpointVerified(doc JsonDoc, index BreakpointIndex) returns bool
+function dapBreakpointVerified(doc JsonDoc, index BreakpointIndex) returns bool
 	let node = dapBreakpointNode(doc, index: index)
 	return try doc.getBool(node, key: VerifiedKey) otherwise panic("dap tests: a breakpoint carries no `{VerifiedKey}`: {Json.stringify(doc)}")
 end 'dapBreakpointVerified'
 
-export function dapBreakpointLine(doc JsonDoc, index BreakpointIndex) returns DapNumber
+function dapBreakpointLine(doc JsonDoc, index BreakpointIndex) returns DapNumber
 	let node = dapBreakpointNode(doc, index: index)
 	return try doc.getInt(node, key: LineKey) otherwise panic("dap tests: a breakpoint carries no `{LineKey}`: {Json.stringify(doc)}")
 end 'dapBreakpointLine'
 
-export function dapBreakpointHasMessage(doc JsonDoc, index BreakpointIndex) returns bool
+function dapBreakpointHasMessage(doc JsonDoc, index BreakpointIndex) returns bool
 	let node = dapBreakpointNode(doc, index: index)
 	let message = try doc.getString(node, key: MessageKey) otherwise return false
 
 	return not message.isEmpty()
 end 'dapBreakpointHasMessage'
 
-export typealias BreakpointIndex = int(0 to 1000)
+typealias BreakpointIndex = int(0 to 1000)
 
 function dapBreakpointNode(doc JsonDoc, index BreakpointIndex) returns JsonNodeId
 	return try dapListNodes(doc, key: BreakpointsKey).get(index as ElementIndex) otherwise panic("dap tests: `setBreakpoints` answered fewer than {index + 1} breakpoints: {Json.stringify(doc)}")
 end 'dapBreakpointNode'
 
-export function dapStackFrameNames(doc JsonDoc) returns StringArray
+function dapStackFrameNames(doc JsonDoc) returns StringArray
 	return dapStringsOf(doc, key: StackFramesKey, field: NameKey)
 end 'dapStackFrameNames'
 
-export function dapStackFrameLines(doc JsonDoc) returns DapNumberArray
+function dapStackFrameLines(doc JsonDoc) returns DapNumberArray
 	return dapNumbersOf(doc, key: StackFramesKey, field: LineKey)
 end 'dapStackFrameLines'
 
-export function dapStackFrameColumns(doc JsonDoc) returns DapNumberArray
+function dapStackFrameColumns(doc JsonDoc) returns DapNumberArray
 	return dapNumbersOf(doc, key: StackFramesKey, field: ColumnKey)
 end 'dapStackFrameColumns'
 
@@ -485,31 +485,31 @@ function dapNumbersOf(doc JsonDoc, key String, field String) returns DapNumberAr
 	return values
 end 'dapNumbersOf'
 
-export typealias DapNumberArray = Array with DapNumber
+typealias DapNumberArray = Array with DapNumber
 
-export function dapFrameNumberAt(values DapNumberArray, frame FramePosition) returns DapNumber
+function dapFrameNumberAt(values DapNumberArray, frame FramePosition) returns DapNumber
 	return try values.get(frame as ElementIndex) otherwise panic("dap tests: a stack of {values.count()} frames holds no frame {frame}")
 end 'dapFrameNumberAt'
 
-export function dapThreadIds(doc JsonDoc) returns DapNumberArray
+function dapThreadIds(doc JsonDoc) returns DapNumberArray
 	return dapNumbersOf(doc, key: ThreadsKey, field: IdKey)
 end 'dapThreadIds'
 
-export function dapFrameNameAt(names StringArray, frame FramePosition) returns String
+function dapFrameNameAt(names StringArray, frame FramePosition) returns String
 	return try names.get(frame as ElementIndex) otherwise panic("dap tests: a stack of {names.count()} frames holds no frame {frame}: {joined(names, separator: Space)}")
 end 'dapFrameNameAt'
 
-export typealias FramePosition = int(0 to 1000)
+typealias FramePosition = int(0 to 1000)
 
-export function dapScopeNames(doc JsonDoc) returns StringArray
+function dapScopeNames(doc JsonDoc) returns StringArray
 	return dapStringsOf(doc, key: ScopesKey, field: NameKey)
 end 'dapScopeNames'
 
-export function dapVariableNames(doc JsonDoc) returns StringArray
+function dapVariableNames(doc JsonDoc) returns StringArray
 	return dapStringsOf(doc, key: VariablesKey, field: NameKey)
 end 'dapVariableNames'
 
-export function dapThreadNames(doc JsonDoc) returns StringArray
+function dapThreadNames(doc JsonDoc) returns StringArray
 	return dapStringsOf(doc, key: ThreadsKey, field: NameKey)
 end 'dapThreadNames'
 
@@ -524,12 +524,12 @@ function dapStringsOf(doc JsonDoc, key String, field String) returns StringArray
 	return values
 end 'dapStringsOf'
 
-export function dapTopFrameId(doc JsonDoc) returns DapReference
+function dapTopFrameId(doc JsonDoc) returns DapReference
 	let node = try dapListNodes(doc, key: StackFramesKey).get(0) otherwise panic("dap tests: `stackTrace` answered no frames: {Json.stringify(doc)}")
 	return try doc.getInt(node, key: IdKey) otherwise panic("dap tests: a stack frame carries no `{IdKey}`: {Json.stringify(doc)}")
 end 'dapTopFrameId'
 
-export function dapScopeReference(doc JsonDoc, name String) returns DapReference
+function dapScopeReference(doc JsonDoc, name String) returns DapReference
 	for node in dapListNodes(doc, key: ScopesKey) 'eachScope'
 		let seen = try doc.getString(node, key: NameKey) otherwise continue
 
@@ -541,7 +541,7 @@ export function dapScopeReference(doc JsonDoc, name String) returns DapReference
 	panic("dap tests: `scopes` names no `{name}` scope: {Json.stringify(doc)}")
 end 'dapScopeReference'
 
-export function dapVariableValue(doc JsonDoc, name String) returns String
+function dapVariableValue(doc JsonDoc, name String) returns String
 	for node in dapListNodes(doc, key: VariablesKey) 'eachVariable'
 		let seen = try doc.getString(node, key: NameKey) otherwise continue
 
@@ -553,90 +553,90 @@ export function dapVariableValue(doc JsonDoc, name String) returns String
 	panic("dap tests: `variables` names no `{name}`: {Json.stringify(doc)}")
 end 'dapVariableValue'
 
-export function dapListLength(doc JsonDoc, key String) returns DapNumber
+function dapListLength(doc JsonDoc, key String) returns DapNumber
 	return dapListNodes(doc, key: key).count() as DapNumber
 end 'dapListLength'
 
-export function dapInitializeArguments(countsFromOne bool = true) returns String
+function dapInitializeArguments(countsFromOne bool = true) returns String
 	return "\{\"adapterID\":\"maxon\",\"clientID\":\"maxon-tests\",\"linesStartAt1\":{countsFromOne},\"columnsStartAt1\":{countsFromOne},\"pathFormat\":\"path\"\}"
 end 'dapInitializeArguments'
 
-export function dapLaunchArguments(program FilePath) returns String
+function dapLaunchArguments(program FilePath) returns String
 	return "\{\"program\":{Json.quote(program.toString())}\}"
 end 'dapLaunchArguments'
 
-export function dapLaunchArgumentsWithEnv(program FilePath, envJson String) returns String
+function dapLaunchArgumentsWithEnv(program FilePath, envJson String) returns String
 	return "\{\"program\":{Json.quote(program.toString())},\"env\":{envJson}\}"
 end 'dapLaunchArgumentsWithEnv'
 
-export function dapSetBreakpointsArguments(source FilePath, line SourceLine) returns String
+function dapSetBreakpointsArguments(source FilePath, line SourceLine) returns String
 	return "\{\"source\":\{\"path\":{Json.quote(source.toString())}\},\"breakpoints\":[\{\"line\":{line}\}]\}"
 end 'dapSetBreakpointsArguments'
 
-export function dapSetConditionalBreakpointArguments(source FilePath, line SourceLine, condition String) returns String
+function dapSetConditionalBreakpointArguments(source FilePath, line SourceLine, condition String) returns String
 	return "\{\"source\":\{\"path\":{Json.quote(source.toString())}\},\"breakpoints\":[\{\"line\":{line},\"condition\":{Json.quote(condition)}\}]\}"
 end 'dapSetConditionalBreakpointArguments'
 
-export function dapClearBreakpointsArguments(source FilePath) returns String
+function dapClearBreakpointsArguments(source FilePath) returns String
 	return "\{\"source\":\{\"path\":{Json.quote(source.toString())}\},\"breakpoints\":[]\}"
 end 'dapClearBreakpointsArguments'
 
-export function dapSetFunctionBreakpointsArguments(name String) returns String
+function dapSetFunctionBreakpointsArguments(name String) returns String
 	return "\{\"breakpoints\":[\{\"name\":{Json.quote(name)}\}]\}"
 end 'dapSetFunctionBreakpointsArguments'
 
-export function dapThreadArguments(threadId DapNumber) returns String
+function dapThreadArguments(threadId DapNumber) returns String
 	return "\{\"threadId\":{threadId}\}"
 end 'dapThreadArguments'
 
-export function dapScopesArguments(frameId DapReference) returns String
+function dapScopesArguments(frameId DapReference) returns String
 	return "\{\"frameId\":{frameId}\}"
 end 'dapScopesArguments'
 
-export function dapVariablesArguments(reference DapReference) returns String
+function dapVariablesArguments(reference DapReference) returns String
 	return "\{\"variablesReference\":{reference}\}"
 end 'dapVariablesArguments'
 
-export function dapEvaluateArguments(expression String, context String, frameId DapReference) returns String
+function dapEvaluateArguments(expression String, context String, frameId DapReference) returns String
 	return "\{\"expression\":{Json.quote(expression)},\"context\":{Json.quote(context)},\"frameId\":{frameId}\}"
 end 'dapEvaluateArguments'
 
-export let InitializeCommand = "initialize"
-export let LaunchCommand = "launch"
-export let SetBreakpointsCommand = "setBreakpoints"
-export let SetFunctionBreakpointsCommand = "setFunctionBreakpoints"
-export let ConfigurationDoneCommand = "configurationDone"
-export let ThreadsCommand = "threads"
-export let StackTraceCommand = "stackTrace"
-export let ScopesCommand = "scopes"
-export let VariablesCommand = "variables"
-export let EvaluateCommand = "evaluate"
-export let ContinueCommand = "continue"
-export let NextCommand = "next"
-export let StepInCommand = "stepIn"
-export let StepOutCommand = "stepOut"
-export let PauseCommand = "pause"
-export let DisconnectCommand = "disconnect"
-export let TerminateCommand = "terminate"
+let InitializeCommand = "initialize"
+let LaunchCommand = "launch"
+let SetBreakpointsCommand = "setBreakpoints"
+let SetFunctionBreakpointsCommand = "setFunctionBreakpoints"
+let ConfigurationDoneCommand = "configurationDone"
+let ThreadsCommand = "threads"
+let StackTraceCommand = "stackTrace"
+let ScopesCommand = "scopes"
+let VariablesCommand = "variables"
+let EvaluateCommand = "evaluate"
+let ContinueCommand = "continue"
+let NextCommand = "next"
+let StepInCommand = "stepIn"
+let StepOutCommand = "stepOut"
+let PauseCommand = "pause"
+let DisconnectCommand = "disconnect"
+let TerminateCommand = "terminate"
 
-export let LocalsScopeName = "Locals"
+let LocalsScopeName = "Locals"
 
-module let HitBodyAnchor = "hit-body"
-module let ReplContext = "repl"
-module let NoFrame = 0
-module let LongCallAnchor = "main-long-call"
-module let AfterAnchor = "main-after"
-module let ReplContextName = "repl"
-module let WalkHeadStartMs = 300
-module let LongCallFixtureName = "longcall"
-module let InnerLoopAnchor = "inner-loop"
-module let RenderedAnchor = "rendered"
-module let RenderFunctionName = "render"
-module let LabelLocalName = "label"
-module let LabelLocalText = "parcel"
-module let HoverContext = "hover"
-module let HotAnchor = "hot"
-module let InnerFunctionName = "inner"
-module let WorkerLoopAnchor = "worker-loop"
-module let SingleProcessorEnv = "\{\"MAXON_MAX_PROCS\":\"1\"\}"
-module let OuterCallAnchor = "outer-call"
+let HitBodyAnchor = "hit-body"
+let ReplContext = "repl"
+let NoFrame = 0
+let LongCallAnchor = "main-long-call"
+let AfterAnchor = "main-after"
+let ReplContextName = "repl"
+let WalkHeadStartMs = 300
+let LongCallFixtureName = "longcall"
+let InnerLoopAnchor = "inner-loop"
+let RenderedAnchor = "rendered"
+let RenderFunctionName = "render"
+let LabelLocalName = "label"
+let LabelLocalText = "parcel"
+let HoverContext = "hover"
+let HotAnchor = "hot"
+let InnerFunctionName = "inner"
+let WorkerLoopAnchor = "worker-loop"
+let SingleProcessorEnv = "\{\"MAXON_MAX_PROCS\":\"1\"\}"
+let OuterCallAnchor = "outer-call"

@@ -823,13 +823,16 @@ end 'bump'
 function main() returns ExitCode
 	var y = 4 as Wide
 	b.bump(y, amount: 7)
-	print("{y} {callA()}\n")
+	var z = 1 as Wide
+	a.bump(z, other: 9)
+	print("{y} {callA()} {z}\n")
 	return 0
 end 'main'
 ```
 ```stdout
+9
 5
-7 50
+7 50 50
 ```
 ```exitcode
 0
@@ -861,10 +864,10 @@ error E3006: <fragment>:8:10: duplicate definition of 'bump' — already declare
 ```
 
 <!-- test: a-private-generic-function-of-another-file-is-refused-as-not-exported-before-its-instance-is-judged -->
-The instance of `relay` is declared in `app/lib.maxon` and the call names it from `app/main.maxon`, so the call is refused as naming a function that is not exported.
+The instance of `relay` is declared in `lib/lib.maxon` and the call names it from `app/main.maxon`, outside `lib/`, so the call is refused as naming a function that is not exported.
 
 ```maxon
-// --- file: app/lib.maxon
+// --- file: lib/lib.maxon
 export typealias Wide = int(0 to 100)
 
 function widen(n mutable Wide)
@@ -896,7 +899,7 @@ error E3008: app/<fragment>:21:2: function 'relay' is not exported
 `widen` is not exported, so the call is refused as naming it; the callee's `Wide` formal is not compared with the `Narrow` variable.
 
 ```maxon
-// --- file: app/lib.maxon
+// --- file: lib/lib.maxon
 export typealias Wide = int(0 to 100)
 export typealias Narrow = int(0 to 10) implements Wide
 

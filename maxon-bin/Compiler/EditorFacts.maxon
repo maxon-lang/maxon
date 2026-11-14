@@ -49,14 +49,14 @@ export union EditorReadTable
 	entries(reads EditorReadMap)
 end 'EditorReadTable'
 
-module let noEditorReads = EditorReadTable.unwritten
+let noEditorReads = EditorReadTable.unwritten
 
 export union EditorFactsSubject
 	nobody
 	document(path FilePath)
 end 'EditorFactsSubject'
 
-module function recordsEditorFactsFor(project Project, path FilePath) returns bool
+function recordsEditorFactsFor(project Project, path FilePath) returns bool
 	return match project.editorFacts 'subject'
 		document(held) gives held.equals(path)
 		nobody gives false
@@ -64,8 +64,8 @@ module function recordsEditorFactsFor(project Project, path FilePath) returns bo
 end 'recordsEditorFactsFor'
 
 export type CalledParameter
-	module let parameter as String
-	module let site as CallSite
+	let parameter as String
+	let site as CallSite
 
 	export static function create(parameter String, site CallSite) returns CalledParameter
 		return Self{parameter: parameter, site: site}
@@ -121,33 +121,33 @@ export typealias FunctionFactMap = Map with (PositionKey, FunctionFact)
 
 export typealias FinalizerNamesByType = Map with (String, StringArray)
 
-module type EditorFacts
-	module let reads as EditorReadMap
-	module let functions as FunctionFactMap
-	module let finalizers as FinalizerNamesByType
+type EditorFacts
+	let reads as EditorReadMap
+	let functions as FunctionFactMap
+	let finalizers as FinalizerNamesByType
 
-	module static function create(reads EditorReadMap, functions FunctionFactMap, finalizers FinalizerNamesByType) returns EditorFacts
+	static function create(reads EditorReadMap, functions FunctionFactMap, finalizers FinalizerNamesByType) returns EditorFacts
 		return Self{reads: reads, functions: functions, finalizers: finalizers}
 	end 'create'
 
-	module static function empty() returns EditorFacts
+	static function empty() returns EditorFacts
 		return Self{reads: EditorReadMap.create(), functions: FunctionFactMap.create(), finalizers: FinalizerNamesByType.create()}
 	end 'empty'
 
-	module function readAt(line LineNumber, column ColumnNumber) returns EditorRead throws AbsentError
+	function readAt(line LineNumber, column ColumnNumber) returns EditorRead throws AbsentError
 		return try self.reads.get(positionKey(line, column: column)) otherwise throw AbsentError.absent
 	end 'readAt'
 
-	module function functionNamedAt(name PositionKey) returns FunctionFact throws AbsentError
+	function functionNamedAt(name PositionKey) returns FunctionFact throws AbsentError
 		return try self.functions.get(name) otherwise throw AbsentError.absent
 	end 'functionNamedAt'
 
-	module function finalizersOf(typeText String) returns StringArray throws AbsentError
+	function finalizersOf(typeText String) returns StringArray throws AbsentError
 		return try self.finalizers.get(typeText) otherwise throw AbsentError.absent
 	end 'finalizersOf'
 end 'EditorFacts'
 
-module function readOnlyReasonSuffix(reason ReadOnlyReason) returns String
+function readOnlyReasonSuffix(reason ReadOnlyReason) returns String
 	return match reason 'reason'
 		whileOpen(label) gives " while '{label}' is open"
 		whileDrained(label) gives " while '{label}' drains it"

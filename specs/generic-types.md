@@ -1176,19 +1176,19 @@ x
 <!-- test: alias-named-type-argument-cross-file-types-first -->
 ```maxon
 // --- file: a_types.maxon
-export type S0
-	export var s as String
-	export static function make(t String) returns Self
+type S0
+	var s as String
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
-export type Box uses T
-	export var value as T
-	export static function create(v T) returns Self
+type Box uses T
+	var value as T
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
-export typealias N0 = Box with S0
+typealias N0 = Box with S0
 // --- file: b_use.maxon
 typealias N1 = Box with N0
 function main() returns ExitCode
@@ -1217,19 +1217,19 @@ function main() returns ExitCode
 	return 0
 end 'main'
 // --- file: b_types.maxon
-export type S0
-	export var s as String
-	export static function make(t String) returns Self
+type S0
+	var s as String
+	static function make(t String) returns Self
 		return Self{s: t}
 	end 'make'
 end 'S0'
-export type Box uses T
-	export var value as T
-	export static function create(v T) returns Self
+type Box uses T
+	var value as T
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
 end 'Box'
-export typealias N0 = Box with S0
+typealias N0 = Box with S0
 ```
 ```exitcode
 0

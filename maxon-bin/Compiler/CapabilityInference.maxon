@@ -85,9 +85,9 @@ function pausedOperandsOfFunction(func IrFunction) returns PausedOperandsByOp
 	return paused
 end 'pausedOperandsOfFunction'
 
-module type SettledMemo
+type SettledMemo
 	var capabilities as SettledCapabilityMap
-	module let sources as ParamSources
+	let sources as ParamSources
 	let phiArms as PhiArmMap
 	let literals as ValueMarkSet
 	let exitChainPhis as ValueMarkSet
@@ -96,7 +96,7 @@ module type SettledMemo
 	let constructionOps as ConstructionOpSet
 	let pausedOperands as PausedOperandsByOp
 
-	module static function over(sources ParamSources) returns SettledMemo
+	static function over(sources ParamSources) returns SettledMemo
 		let constructionOps = ConstructionOpSet.create()
 
 		for opIdx in sources.func.capabilityNotes.constructionOps 'eachConstructionOp'
@@ -106,20 +106,20 @@ module type SettledMemo
 		return Self{capabilities: SettledCapabilityMap.create(), sources: sources, phiArms: phiArmsOfFunction(sources.ir, func: sources.func), literals: literalResultsOfFunction(sources.ir, func: sources.func), exitChainPhis: exitChainPhisOfFunction(sources.ir, func: sources.func), settling: SettlingDepthMap.create(), oldestOpenRead: NoOpenRead, constructionOps: constructionOps, pausedOperands: pausedOperandsOfFunction(sources.func)}
 	end 'over'
 
-	module function buildsALiteral(opIdx ElementIndex) returns bool
+	function buildsALiteral(opIdx ElementIndex) returns bool
 		return self.constructionOps.contains(opIdx)
 	end 'buildsALiteral'
 
-	module function windowPausesOperand(opIdx ElementIndex, argIndex ParamCount) returns bool
+	function windowPausesOperand(opIdx ElementIndex, argIndex ParamCount) returns bool
 		let paused = try self.pausedOperands.get(opIdx) otherwise return false
 		return maskHasParam(paused, param: argIndex)
 	end 'windowPausesOperand'
 
-	module function beginSettling(value ValueId)
+	function beginSettling(value ValueId)
 		self.settling.upsert(value, value: self.settling.count())
 	end 'beginSettling'
 
-	module function endSettling(value ValueId) returns bool
+	function endSettling(value ValueId) returns bool
 		let depth = try self.settling.get(value) otherwise panic("SettledMemo.endSettling: v{value} is not being settled")
 		_ = self.settling.remove(value)
 
@@ -131,11 +131,11 @@ module type SettledMemo
 		return true
 	end 'endSettling'
 
-	module function isSettling(value ValueId) returns bool
+	function isSettling(value ValueId) returns bool
 		return self.settling.contains(value)
 	end 'isSettling'
 
-	module function noteRead(value ValueId)
+	function noteRead(value ValueId)
 		let depth = try self.settling.get(value) otherwise return
 
 		if depth < self.oldestOpenRead 'anOlderOpenValue'
@@ -143,35 +143,35 @@ module type SettledMemo
 		end 'anOlderOpenValue'
 	end 'noteRead'
 
-	module function forget(value ValueId)
+	function forget(value ValueId)
 		_ = self.capabilities.remove(value)
 	end 'forget'
 
-	module function isAnExitChainPhi(value ValueId) returns bool
+	function isAnExitChainPhi(value ValueId) returns bool
 		return self.exitChainPhis.contains(value)
 	end 'isAnExitChainPhi'
 
-	module function definesALiteral(value ValueId) returns bool
+	function definesALiteral(value ValueId) returns bool
 		return self.literals.contains(value)
 	end 'definesALiteral'
 
-	module function mergesArms(value ValueId) returns bool
+	function mergesArms(value ValueId) returns bool
 		return self.phiArms.contains(value)
 	end 'mergesArms'
 
-	module function armsOfPhi(value ValueId) returns ValueIdArray throws AbsentError
+	function armsOfPhi(value ValueId) returns ValueIdArray throws AbsentError
 		return try self.phiArms.get(value) otherwise throw AbsentError.absent
 	end 'armsOfPhi'
 
-	module function settled(value ValueId) returns ValueCapability throws AbsentError
+	function settled(value ValueId) returns ValueCapability throws AbsentError
 		return try self.capabilities.get(value) otherwise throw AbsentError.absent
 	end 'settled'
 
-	module function record(value ValueId, capability ValueCapability)
+	function record(value ValueId, capability ValueCapability)
 		self.capabilities.upsert(value, value: capability)
 	end 'record'
 
-	module function parameterBehind(value ValueId) returns ParamCount throws AbsentError
+	function parameterBehind(value ValueId) returns ParamCount throws AbsentError
 		let position = try self.sources.parameterBehind(value)
 
 		if position >= self.sources.func.paramCount 'aCapturedSlot'
@@ -181,7 +181,7 @@ module type SettledMemo
 		return position
 	end 'parameterBehind'
 
-	module function unmarkedParameterBehind(project Project, value ValueId) returns ParamCount throws AbsentError
+	function unmarkedParameterBehind(project Project, value ValueId) returns ParamCount throws AbsentError
 		let position = try self.parameterBehind(value)
 
 		if not isAnUnmarkedParameter(project, func: self.sources.func, argId: valueIdAtParamPosition(position)) 'aDeclaredMarker'
@@ -191,7 +191,7 @@ module type SettledMemo
 		return position
 	end 'unmarkedParameterBehind'
 
-	module function isAnUnmarkedParameterValue(project Project, value ValueId) returns bool
+	function isAnUnmarkedParameterValue(project Project, value ValueId) returns bool
 		let _ = try self.unmarkedParameterBehind(project, value: value) otherwise return false
 		return true
 	end 'isAnUnmarkedParameterValue'
@@ -209,9 +209,9 @@ function seedOriginKey(index ElementIndex, position ParamCount, mutable bool) re
 	return (positionSlotKey(index, position: position as ElementIndex) as SeedOriginKey) * (SeedOriginKind.allCases.count() as SeedOriginKey) + (kind.rawValue as SeedOriginKey)
 end 'seedOriginKey'
 
-module type SeedOrigin
-	module let line as LineNumber
-	module let reason as String
+type SeedOrigin
+	let line as LineNumber
+	let reason as String
 
 	static function create(line LineNumber, reason String) returns SeedOrigin
 		return Self{line: line, reason: reason}
@@ -220,9 +220,9 @@ end 'SeedOrigin'
 
 typealias SeedOriginMap = Map with (SeedOriginKey, SeedOrigin)
 
-module type NeedHop
-	module let callee as ElementIndex
-	module let calleeParam as ParamCount
+type NeedHop
+	let callee as ElementIndex
+	let calleeParam as ParamCount
 
 	static function create(callee ElementIndex, calleeParam ParamCount) returns NeedHop
 		return Self{callee: callee, calleeParam: calleeParam}
@@ -231,19 +231,19 @@ end 'NeedHop'
 
 typealias NeedHopMap = Map with (PositionSlotKey, NeedHop)
 
-module type NeedHops
+type NeedHops
 	let tracked as bool
 	var hops as NeedHopMap
 
-	module static function tracking() returns NeedHops
+	static function tracking() returns NeedHops
 		return Self{tracked: true, hops: NeedHopMap.create()}
 	end 'tracking'
 
-	module static function untracked() returns NeedHops
+	static function untracked() returns NeedHops
 		return Self{tracked: false, hops: NeedHopMap.create()}
 	end 'untracked'
 
-	module function record(index ElementIndex, position ParamCount, callee ElementIndex, calleeParam ParamCount)
+	function record(index ElementIndex, position ParamCount, callee ElementIndex, calleeParam ParamCount)
 		if not self.tracked 'nothingToKeep'
 			return
 		end 'nothingToKeep'
@@ -251,34 +251,34 @@ module type NeedHops
 		self.hops.upsert(positionSlotKey(index, position: position as ElementIndex), value: NeedHop.create(callee, calleeParam: calleeParam))
 	end 'record'
 
-	module function viaOf(index ElementIndex, position ParamCount) returns NeedHop throws AbsentError
+	function viaOf(index ElementIndex, position ParamCount) returns NeedHop throws AbsentError
 		return try self.hops.get(positionSlotKey(index, position: position as ElementIndex)) otherwise throw AbsentError.absent
 	end 'viaOf'
 end 'NeedHops'
 
 typealias DefiningOpsByFunction = Map with (ElementIndex, OptionalElementIndexColumn)
 
-module type CapabilityFacts
-	module var writtenHops as NeedHops
-	module var frozenHops as NeedHops
-	module var frozenSomeHops as NeedHops
-	module var mutableOnly as ParamPositionMaskArray
-	module var immutableOnly as ParamPositionMaskArray
-	module var frozenInSomeInstance as ParamPositionMaskArray
-	module var buildsRecordFrom as ParamPositionMaskArray
-	module var directMutable as ParamPositionMaskArray
-	module var directImmutable as ParamPositionMaskArray
-	module var movedParams as ParamPositionMaskArray
-	module var movedUniqueParams as ParamPositionMaskArray
+type CapabilityFacts
+	var writtenHops as NeedHops
+	var frozenHops as NeedHops
+	var frozenSomeHops as NeedHops
+	var mutableOnly as ParamPositionMaskArray
+	var immutableOnly as ParamPositionMaskArray
+	var frozenInSomeInstance as ParamPositionMaskArray
+	var buildsRecordFrom as ParamPositionMaskArray
+	var directMutable as ParamPositionMaskArray
+	var directImmutable as ParamPositionMaskArray
+	var movedParams as ParamPositionMaskArray
+	var movedUniqueParams as ParamPositionMaskArray
 	var definingOps as DefiningOpsByFunction
-	module var mayWait as BoolArray
-	module var mayYield as BoolArray
+	var mayWait as BoolArray
+	var mayYield as BoolArray
 	var seedOrigins as SeedOriginMap
-	module var funcNames as FunctionNameIndex
-	module var ir as MaxonModule
-	module let kinds as ArgumentRecordKinds
+	var funcNames as FunctionNameIndex
+	var ir as MaxonModule
+	let kinds as ArgumentRecordKinds
 
-	module static function create(funcNames FunctionNameIndex, ir MaxonModule, kinds ArgumentRecordKinds) returns CapabilityFacts
+	static function create(funcNames FunctionNameIndex, ir MaxonModule, kinds ArgumentRecordKinds) returns CapabilityFacts
 		let funcCount = funcNames.functions.count()
 		return Self{writtenHops: NeedHops.tracking(), frozenHops: NeedHops.tracking(), frozenSomeHops: NeedHops.tracking(), mutableOnly: ParamPositionMaskArray.create(funcCount, zeroed: false), immutableOnly: ParamPositionMaskArray.create(funcCount, zeroed: false), frozenInSomeInstance: ParamPositionMaskArray.create(funcCount, zeroed: false), buildsRecordFrom: ParamPositionMaskArray.create(funcCount, zeroed: false), directMutable: ParamPositionMaskArray.create(0), directImmutable: ParamPositionMaskArray.create(0), movedParams: ParamPositionMaskArray.create(0), movedUniqueParams: ParamPositionMaskArray.create(0), definingOps: DefiningOpsByFunction.create(), mayWait: BoolArray.create(0), mayYield: BoolArray.create(0), seedOrigins: SeedOriginMap.create(), funcNames: funcNames, ir: ir, kinds: kinds}
 	end 'create'
@@ -311,25 +311,25 @@ module type CapabilityFacts
 		end 'eachPosition'
 	end 'noteSeedOrigins'
 
-	module function seedOriginAt(index ElementIndex, position ParamCount, mutable bool) returns SeedOrigin throws AbsentError
+	function seedOriginAt(index ElementIndex, position ParamCount, mutable bool) returns SeedOrigin throws AbsentError
 		return try self.seedOrigins.get(seedOriginKey(index, position: position, mutable: mutable)) otherwise throw AbsentError.absent
 	end 'seedOriginAt'
 
-	module function frozenOnlyWhereRecordsAreHeld(index ElementIndex, position ParamCount) returns bool
+	function frozenOnlyWhereRecordsAreHeld(index ElementIndex, position ParamCount) returns bool
 		let inSome = maskHasParam(try self.frozenInSomeInstance.get(index) otherwise panic("CapabilityFacts.frozenOnlyWhereRecordsAreHeld: frozenInSomeInstance.get OOB at {index}"), param: position)
 		let inEvery = maskHasParam(try self.immutableOnly.get(index) otherwise panic("CapabilityFacts.frozenOnlyWhereRecordsAreHeld: immutableOnly.get OOB at {index}"), param: position)
 		return inSome and not inEvery
 	end 'frozenOnlyWhereRecordsAreHeld'
 
-	module function movesAUniqueAt(index ElementIndex, position ParamCount) returns bool
+	function movesAUniqueAt(index ElementIndex, position ParamCount) returns bool
 		return maskHasParam(summaryMaskAt(self.movedUniqueParams, index: index), param: position)
 	end 'movesAUniqueAt'
 
-	module function movesAt(index ElementIndex, position ParamCount) returns bool
+	function movesAt(index ElementIndex, position ParamCount) returns bool
 		return maskHasParam(summaryMaskAt(self.movedParams, index: index), param: position)
 	end 'movesAt'
 
-	module function definingRangeOf(project Project, func IrFunction, value ValueId, fallback SourceRange) returns SourceRange
+	function definingRangeOf(project Project, func IrFunction, value ValueId, fallback SourceRange) returns SourceRange
 		let funcIndex = try self.indexOf(func.name) otherwise return fallback
 		let defining = try self.definingOpsOf(funcIndex, func: func).get(value) otherwise return fallback
 
@@ -352,11 +352,11 @@ module type CapabilityFacts
 		return column
 	end 'definingOpsOf'
 
-	module function buildsRecordAt(index ElementIndex, position ParamCount) returns bool
+	function buildsRecordAt(index ElementIndex, position ParamCount) returns bool
 		return maskHasParam(try self.buildsRecordFrom.get(index) otherwise panic("CapabilityFacts.buildsRecordAt: buildsRecordFrom.get OOB at {index}"), param: position)
 	end 'buildsRecordAt'
 
-	module function classAt(index ElementIndex, position ParamCount, declared ParamCapability) returns ParamClass
+	function classAt(index ElementIndex, position ParamCount, declared ParamCapability) returns ParamClass
 		return match declared 'capability'
 			mutable gives ParamClass.mutableOnly
 			immutable gives ParamClass.immutableOnly
@@ -366,7 +366,7 @@ module type CapabilityFacts
 		end 'capability'
 	end 'classAt'
 
-	module function inferredClassAt(index ElementIndex, position ParamCount) returns ParamClass
+	function inferredClassAt(index ElementIndex, position ParamCount) returns ParamClass
 		let needsMutable = maskHasParam(try self.mutableOnly.get(index) otherwise panic("CapabilityFacts.inferredClassAt: mutableOnly.get OOB at {index}"), param: position)
 		let needsFrozen = maskHasParam(try self.immutableOnly.get(index) otherwise panic("CapabilityFacts.inferredClassAt: immutableOnly.get OOB at {index}"), param: position)
 
@@ -381,7 +381,7 @@ module type CapabilityFacts
 		return ParamClass.immutableOnly if needsFrozen else ParamClass.anyCapability
 	end 'inferredClassAt'
 
-	module function fixedCapabilityAt(index ElementIndex, position ParamCount) returns ValueCapability throws AbsentError
+	function fixedCapabilityAt(index ElementIndex, position ParamCount) returns ValueCapability throws AbsentError
 		match self.inferredClassAt(index, position: position) 'paramClass'
 			mutableOnly then return ValueCapability.mutable
 			immutableOnly then return ValueCapability.immutable
@@ -391,15 +391,15 @@ module type CapabilityFacts
 		end 'paramClass'
 	end 'fixedCapabilityAt'
 
-	module function waits(index ElementIndex) returns bool
+	function waits(index ElementIndex) returns bool
 		return try self.mayWait.get(index) otherwise panic("CapabilityFacts.waits: mayWait.get OOB at {index}")
 	end 'waits'
 
-	module function yields(index ElementIndex) returns bool
+	function yields(index ElementIndex) returns bool
 		return try self.mayYield.get(index) otherwise panic("CapabilityFacts.yields: mayYield.get OOB at {index}")
 	end 'yields'
 
-	module function indexOf(callee ByteArray) returns ElementIndex throws AbsentError
+	function indexOf(callee ByteArray) returns ElementIndex throws AbsentError
 		return try self.funcNames.byName.get(callee) otherwise throw AbsentError.absent
 	end 'indexOf'
 end 'CapabilityFacts'
@@ -414,7 +414,7 @@ function heldParamMaskOf(func IrFunction) returns ParamPositionMask
 	return mask
 end 'heldParamMaskOf'
 
-module function declaredCapabilityAt(declared ParamCapabilityArray, position ParamCount) returns ParamCapability
+function declaredCapabilityAt(declared ParamCapabilityArray, position ParamCount) returns ParamCapability
 	if position >= declared.count() 'pastTheDeclaredParameters'
 		return ParamCapability.unmarked
 	end 'pastTheDeclaredParameters'
@@ -422,7 +422,7 @@ module function declaredCapabilityAt(declared ParamCapabilityArray, position Par
 	return try declared.get(position) otherwise panic("declaredCapabilityAt: declared.get OOB at {position} below the count just read")
 end 'declaredCapabilityAt'
 
-module function declaredCapabilityOf(sig FuncSignature, position ParamCount) returns ParamCapability
+function declaredCapabilityOf(sig FuncSignature, position ParamCount) returns ParamCapability
 	if not sig.takesReceiver() 'noReceiver'
 		return declaredCapabilityAt(sig.paramCapabilities, position: position)
 	end 'noReceiver'
@@ -459,7 +459,7 @@ function isAnUnmarkedParameter(project Project, func IrFunction, argId ValueId) 
 	return declaredCapabilityOf(sig, position: paramPositionOfValueId(argId)) == ParamCapability.unmarked
 end 'isAnUnmarkedParameter'
 
-module function argumentCapabilityOf(project Project, func IrFunction, argId ValueId) returns ValueCapability
+function argumentCapabilityOf(project Project, func IrFunction, argId ValueId) returns ValueCapability
 	if argId < valueIdAtParamPosition(func.paramCount) 'aParameter'
 		if let sig = try project.funcSignatures.get(func.name) 'aDeclaredSignature'
 			match declaredCapabilityOf(sig, position: paramPositionOfValueId(argId)) 'declared'
@@ -501,7 +501,7 @@ function tagAlwaysCarriesACapability(tag ValueTypeTag) returns bool
 	end 'tag'
 end 'tagAlwaysCarriesACapability'
 
-module function paramTagCarriesACapability(project Project, sig FuncSignature, func IrFunction, position ParamCount) returns bool
+function paramTagCarriesACapability(project Project, sig FuncSignature, func IrFunction, position ParamCount) returns bool
 	let tag = maxonTypeTag(try func.maxonParamTypes.get(position) otherwise panic("paramTagCarriesACapability: maxonParamTypes.get OOB at {position} — a compared position names a parameter the function declares"))
 
 	return tagAlwaysCarriesACapability(tag) or ((tag == ValueTypeTag.named or tag == ValueTypeTag.integer) and paramIsABoxedUnion(project, sig: sig, position: position))
@@ -513,13 +513,13 @@ function paramIsABoxedUnion(project Project, sig FuncSignature, position ParamCo
 	return not aggregate.isEmpty() and programSignaturesIn(project, asker: "paramIsABoxedUnion").enumNameIsBoxed(aggregate)
 end 'paramIsABoxedUnion'
 
-module function valueCarriesACapability(project Project, func IrFunction, value ValueId) returns bool
+function valueCarriesACapability(project Project, func IrFunction, value ValueId) returns bool
 	let tag = valueTagOf(func, value: value)
 
 	return tagAlwaysCarriesACapability(tag) or tag == ValueTypeTag.typeParameter or (tag == ValueTypeTag.named and nameIsABoxedUnion(project, nameId: try func.valueNameIds.get(value) otherwise panic("valueCarriesACapability: valueNameIds.get OOB at v{value} of '{String.from(func.name)}' — the type columns are minted in lockstep")))
 end 'valueCarriesACapability'
 
-module function storedSlotTargetOf(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, stored StoredSlotArg) returns (immutable ByteArray, String) throws AbsentError
+function storedSlotTargetOf(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, stored StoredSlotArg) returns (immutable ByteArray, String) throws AbsentError
 	let op = try module.ops.get(stored.op) otherwise throw AbsentError.absent
 	let parts = try directCallPartsOf(op)
 	let callee = parts.0
@@ -539,7 +539,7 @@ module function storedSlotTargetOf(project Project, module MaxonModule, funcName
 	return (callee, parameter.name)
 end 'storedSlotTargetOf'
 
-module function calleeKeepsParameter(project Project, facts CapabilityFacts, calleeFunc IrFunction, parameter CalleeParameter, uniqueOnly bool) returns bool
+function calleeKeepsParameter(project Project, facts CapabilityFacts, calleeFunc IrFunction, parameter CalleeParameter, uniqueOnly bool) returns bool
 	if bodyIsOpaqueToSummaries(calleeFunc, libraryFacts: project.libraryFacts) 'aBodyNoSummaryCanSee'
 		return true
 	end 'aBodyNoSummaryCanSee'
@@ -547,24 +547,24 @@ module function calleeKeepsParameter(project Project, facts CapabilityFacts, cal
 	return facts.movesAUniqueAt(parameter.calleeIndex, position: parameter.position) if uniqueOnly else facts.movesAt(parameter.calleeIndex, position: parameter.position)
 end 'calleeKeepsParameter'
 
-module type CalleeParameter
-	module let calleeIndex as ElementIndex
-	module let position as ParamCount
-	module let name as String
+type CalleeParameter
+	let calleeIndex as ElementIndex
+	let position as ParamCount
+	let name as String
 
-	module static function create(calleeIndex ElementIndex, position ParamCount, name String) returns CalleeParameter
+	static function create(calleeIndex ElementIndex, position ParamCount, name String) returns CalleeParameter
 		return Self{calleeIndex: calleeIndex, position: position, name: name}
 	end 'create'
 end 'CalleeParameter'
 
-module function calleeParameterOf(project Project, funcNames FunctionNameIndex, callee immutable ByteArray, labels NameRoster, argIndex ParamCount) returns CalleeParameter throws AbsentError
+function calleeParameterOf(project Project, funcNames FunctionNameIndex, callee immutable ByteArray, labels NameRoster, argIndex ParamCount) returns CalleeParameter throws AbsentError
 	let calleeIndex = try funcNames.byName.get(callee) otherwise throw AbsentError.absent
 	let sig = try project.funcSignatures.get(callee) otherwise throw AbsentError.absent
 	let position = try argSlotPosition(sig.paramNames, argIndex: argIndex, label: try labels.get(argIndex) otherwise throw AbsentError.absent) otherwise throw AbsentError.absent
 	return CalleeParameter.create(calleeIndex, position: position, name: displayParamName(try sig.paramNames.get(position) otherwise throw AbsentError.absent))
 end 'calleeParameterOf'
 
-module function resultFromPositionCount(func IrFunction) returns ParamCount
+function resultFromPositionCount(func IrFunction) returns ParamCount
 	var count = 0 as ParamCount
 
 	for position in 0 upto func.paramCount 'eachPosition'
@@ -578,7 +578,7 @@ end 'resultFromPositionCount'
 
 // The one door for a function value's declared boundary. Absent for a name a failed file would have
 // declared, and for a function or lifted closure, which have a shape but no `aliasShapes` entry.
-module function declaredBoundaryShapeOf(project Project, func IrFunction, value ValueId) returns FunctionShape throws AbsentError
+function declaredBoundaryShapeOf(project Project, func IrFunction, value ValueId) returns FunctionShape throws AbsentError
 	let name = functionValueGoverningName(project, func: func, value: value)
 	let registry = functionTypeRegistryOf(project)
 
@@ -595,12 +595,12 @@ module function declaredBoundaryShapeOf(project Project, func IrFunction, value 
 	return shape
 end 'declaredBoundaryShapeOf'
 
-module function functionValueIsMutable(project Project, func IrFunction, value ValueId) returns bool
+function functionValueIsMutable(project Project, func IrFunction, value ValueId) returns bool
 	let shape = try declaredBoundaryShapeOf(project, func: func, value: value) otherwise return false
 	return shape.mutableFunction
 end 'functionValueIsMutable'
 
-module function inferCapabilities(project Project, module MaxonModule, signatures ProgramSignatures, kinds ArgumentRecordKinds, funcNames FunctionNameIndex, writeSeeds ParamWriteSeeds, edges CallParamEdges, byCallee CsrGraph, paramSources ParamSourceIndex) returns CapabilityFacts
+function inferCapabilities(project Project, module MaxonModule, signatures ProgramSignatures, kinds ArgumentRecordKinds, funcNames FunctionNameIndex, writeSeeds ParamWriteSeeds, edges CallParamEdges, byCallee CsrGraph, paramSources ParamSourceIndex) returns CapabilityFacts
 	let funcCount = funcNames.functions.count()
 	let facts = CapabilityFacts.create(funcNames, ir: module, kinds: kinds)
 	let waitSeeds = BoolArray.create(funcCount, zeroed: false)
@@ -685,13 +685,13 @@ function settleRetainDoors(module MaxonModule, funcNames FunctionNameIndex, fact
 	end 'eachFunc'
 end 'settleRetainDoors'
 
-module enum CallEdgeKind
+enum CallEdgeKind
 	call
 	async
 	spawn
 end 'CallEdgeKind'
 
-module function callEdgeOf(op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
+function callEdgeOf(op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
 	match op 'op'
 		call(_, callee, _, _, _, _, _) then return (callee, CallEdgeKind.call)
 		tryCall(_, _, callee, _, _, _, _, _) then return (callee, CallEdgeKind.call)
@@ -701,7 +701,7 @@ module function callEdgeOf(op MaxonOp) returns (immutable ByteArray, CallEdgeKin
 	end 'op'
 end 'callEdgeOf'
 
-module function directCallPartsOf(op MaxonOp) returns (immutable ByteArray, ValueIdArray, NameRoster, SourceRangeArray, NameRoster) throws AbsentError
+function directCallPartsOf(op MaxonOp) returns (immutable ByteArray, ValueIdArray, NameRoster, SourceRangeArray, NameRoster) throws AbsentError
 	match op 'op'
 		call(_, callee, args, argLabels, argRanges, argImmutableNames, _) then return (callee, args, argLabels, argRanges, argImmutableNames)
 		tryCall(_, _, callee, args, argLabels, argRanges, argImmutableNames, _) then return (callee, args, argLabels, argRanges, argImmutableNames)
@@ -710,7 +710,7 @@ module function directCallPartsOf(op MaxonOp) returns (immutable ByteArray, Valu
 	end 'op'
 end 'directCallPartsOf'
 
-module function directCalleeOf(op MaxonOp) returns immutable ByteArray throws AbsentError
+function directCalleeOf(op MaxonOp) returns immutable ByteArray throws AbsentError
 	let edge = try callEdgeOf(op)
 
 	if edge.1 == CallEdgeKind.spawn 'aFactoryNotACall'
@@ -720,7 +720,7 @@ module function directCalleeOf(op MaxonOp) returns immutable ByteArray throws Ab
 	return edge.0
 end 'directCalleeOf'
 
-module enum CapabilityDoor
+enum CapabilityDoor
 	inert
 	directCall
 	spawn
@@ -729,7 +729,7 @@ module enum CapabilityDoor
 	returned
 end 'CapabilityDoor'
 
-module function capabilityDoorOf(op MaxonOp) returns CapabilityDoor
+function capabilityDoorOf(op MaxonOp) returns CapabilityDoor
 	return match op 'op'
 		call or
 		tryCall or
@@ -773,7 +773,7 @@ module function capabilityDoorOf(op MaxonOp) returns CapabilityDoor
 	end 'op'
 end 'capabilityDoorOf'
 
-module function witnessCallPartsOf(op MaxonOp) returns (ValueIdArray, NameRoster, WitnessMethodIndex, ElementIndex) throws AbsentError
+function witnessCallPartsOf(op MaxonOp) returns (ValueIdArray, NameRoster, WitnessMethodIndex, ElementIndex) throws AbsentError
 	match op 'op'
 		witnessDispatch(_, args, argImmutableNames, _, methodIndex, interfaceDeclIndex, _, _) then return (args, argImmutableNames, methodIndex, interfaceDeclIndex)
 		witnessTryDispatch(_, _, args, argImmutableNames, _, methodIndex, interfaceDeclIndex, _) then return (args, argImmutableNames, methodIndex, interfaceDeclIndex)
@@ -789,13 +789,13 @@ function edgeTransmits(kind CallEdgeKind, waits bool) returns bool
 	end 'kind'
 end 'edgeTransmits'
 
-module enum CallBlocking
+enum CallBlocking
 	neither
 	yields
 	waits
 end 'CallBlocking'
 
-module function edgeCarriesMark(facts CapabilityFacts, calleeIndex ElementIndex, kind CallEdgeKind, waits bool) returns bool
+function edgeCarriesMark(facts CapabilityFacts, calleeIndex ElementIndex, kind CallEdgeKind, waits bool) returns bool
 	if not edgeTransmits(kind, waits: waits) 'theEdgeStopsIt'
 		return false
 	end 'theEdgeStopsIt'
@@ -803,7 +803,7 @@ module function edgeCarriesMark(facts CapabilityFacts, calleeIndex ElementIndex,
 	return facts.waits(calleeIndex) if waits else facts.yields(calleeIndex)
 end 'edgeCarriesMark'
 
-module function callBlockingOf(facts CapabilityFacts, calleeIndex ElementIndex, kind CallEdgeKind) returns CallBlocking
+function callBlockingOf(facts CapabilityFacts, calleeIndex ElementIndex, kind CallEdgeKind) returns CallBlocking
 	if edgeCarriesMark(facts, calleeIndex: calleeIndex, kind: kind, waits: true) 'itWaits'
 		return CallBlocking.waits
 	end 'itWaits'
@@ -822,7 +822,7 @@ function closureCallEdgeOf(project Project, func IrFunction, op MaxonOp) returns
 	end 'op'
 end 'closureCallEdgeOf'
 
-module function callOrClosureEdgeOf(project Project, func IrFunction, op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
+function callOrClosureEdgeOf(project Project, func IrFunction, op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
 	if let edge = try callEdgeOf(op) 'aNamedCall'
 		return edge
 	end 'aNamedCall'
@@ -830,13 +830,13 @@ module function callOrClosureEdgeOf(project Project, func IrFunction, op MaxonOp
 	return try closureCallEdgeOf(project, func: func, op: op)
 end 'callOrClosureEdgeOf'
 
-module union WaitCandidate
+union WaitCandidate
 	aCall
 	anAwait
 	aSend(timed bool)
 end 'WaitCandidate'
 
-module function waitCandidateOf(op MaxonOp) returns WaitCandidate throws AbsentError
+function waitCandidateOf(op MaxonOp) returns WaitCandidate throws AbsentError
 	match op 'op'
 		call or
 		tryCall or
@@ -850,7 +850,7 @@ module function waitCandidateOf(op MaxonOp) returns WaitCandidate throws AbsentE
 	end 'op'
 end 'waitCandidateOf'
 
-module function opMayWaitForAnotherParty(op MaxonOp) returns bool
+function opMayWaitForAnotherParty(op MaxonOp) returns bool
 	let candidate = try waitCandidateOf(op) otherwise return false
 
 	return match candidate 'candidate'
@@ -860,7 +860,7 @@ module function opMayWaitForAnotherParty(op MaxonOp) returns bool
 	end 'candidate'
 end 'opMayWaitForAnotherParty'
 
-module function blockingSeedOf(func IrFunction, waits bool, libraryFacts LibraryFacts) returns bool
+function blockingSeedOf(func IrFunction, waits bool, libraryFacts LibraryFacts) returns bool
 	if bodyIsUnreadable(func) 'aBodyNothingCanBeProvedAbout'
 		return bodyIsOpaqueToSummaries(func, libraryFacts: libraryFacts) and not isRuntimeCallee(func.name)
 	end 'aBodyNothingCanBeProvedAbout'
@@ -894,8 +894,8 @@ type BlockingEdges
 	end 'markCallers'
 end 'BlockingEdges'
 
-module typealias FixedCallEdgeKindArray = FixedArray with CallEdgeKind
-module typealias CallEdgeKindArray = Array with CallEdgeKind
+typealias FixedCallEdgeKindArray = FixedArray with CallEdgeKind
+typealias CallEdgeKindArray = Array with CallEdgeKind
 
 function collectCapabilitySeeds(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, facts CapabilityFacts, blockingEdges BlockingEdges, paramSources ParamSourceIndex)
 	let witnessSlots = WitnessSlotsByDeclIndex.create()
@@ -929,12 +929,12 @@ function collectCapabilitySeeds(project Project, module MaxonModule, signatures 
 	end 'eachFunc'
 end 'collectCapabilitySeeds'
 
-module function opDefinesValue(module MaxonModule, opIdx ElementIndex, value ValueId) returns bool
+function opDefinesValue(module MaxonModule, opIdx ElementIndex, value ValueId) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("opDefinesValue: ops.get OOB at {opIdx}")
 	return (try maxonOpDefinedValue(op) otherwise return false) == value
 end 'opDefinesValue'
 
-module function firstOpDefiningSince(module MaxonModule, value ValueId, floor ElementIndex) returns ElementIndex throws AbsentError
+function firstOpDefiningSince(module MaxonModule, value ValueId, floor ElementIndex) returns ElementIndex throws AbsentError
 	for opIdx in floor upto module.ops.count() 'eachNewOp'
 		if opDefinesValue(module, opIdx: opIdx, value: value) 'theProducer'
 			return opIdx
@@ -944,7 +944,7 @@ module function firstOpDefiningSince(module MaxonModule, value ValueId, floor El
 	throw AbsentError.absent
 end 'firstOpDefiningSince'
 
-module function callerParamMaskOf(project Project, sources ParamSources, value ValueId) returns ParamPositionMask
+function callerParamMaskOf(project Project, sources ParamSources, value ValueId) returns ParamPositionMask
 	var mask = NoParamPositions
 	let reached = sources.maskOf(value)
 
@@ -1018,7 +1018,7 @@ function noteResultWriteSeeds(project Project, sources ParamSources, callerIndex
 	end 'eachResultWrite'
 end 'noteResultWriteSeeds'
 
-module function returnedResultValueOf(op MaxonOp) returns ValueId throws AbsentError
+function returnedResultValueOf(op MaxonOp) returns ValueId throws AbsentError
 	match op 'op'
 		ret(value) then return value
 		default throws AbsentError.absent
@@ -1070,7 +1070,7 @@ function noteStoredSlotSeeds(project Project, funcNames FunctionNameIndex, sourc
 	end 'eachStoredSlotArg'
 end 'noteStoredSlotSeeds'
 
-module function orIntoMask(masks ParamPositionMaskArray, index ElementIndex, bits ParamPositionMask)
+function orIntoMask(masks ParamPositionMaskArray, index ElementIndex, bits ParamPositionMask)
 	try masks.set(index, value: (try masks.get(index) otherwise panic("orIntoMask: masks.get OOB at {index}")) or bits) otherwise panic("orIntoMask: masks.set OOB at {index}")
 end 'orIntoMask'
 
@@ -1181,7 +1181,7 @@ function noteRequirementCallSeeds(project Project, signatures ProgramSignatures,
 	end 'eachArg'
 end 'noteRequirementCallSeeds'
 
-module function requirementCapabilityAt(method InterfaceMethodSig, position ParamCount, first ParamCount) returns ParamCapability
+function requirementCapabilityAt(method InterfaceMethodSig, position ParamCount, first ParamCount) returns ParamCapability
 	if position < first 'theReceiver'
 		return method.selfCapability
 	end 'theReceiver'

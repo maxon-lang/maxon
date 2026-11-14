@@ -1,8 +1,8 @@
 let SkipMinBlocks = 48
 let SkipMinSpan = 4
-export let EntryBlockLocal = 0 as ElementIndex
+let EntryBlockLocal = 0 as ElementIndex
 
-export type DominatorTree
+type DominatorTree
 	var pre as CfgIndexArray
 	var size as CfgIndexArray
 	var reached as BoolArray
@@ -10,11 +10,11 @@ export type DominatorTree
 	export var idom as CfgIndexArray
 	export var reducible as bool
 
-	export static function empty() returns DominatorTree
+	static function empty() returns DominatorTree
 		return Self{pre: CfgIndexArray.create(0), size: CfgIndexArray.create(0), reached: BoolArray.create(0), blockAt: CfgIndexArray.create(0), idom: CfgIndexArray.create(0), reducible: true}
 	end 'empty'
 
-	export static function of(topo FuncTopology) returns DominatorTree
+	static function of(topo FuncTopology) returns DominatorTree
 		let n = topo.numBlocks
 		let visited = FixedBoolArray.create(n)
 		let postorder = CfgIndexArray.create(n, zeroed: false)
@@ -153,16 +153,16 @@ end 'DominatorTree'
 // Lets a liveness walk mark a value live over a stretch of blocks in one step (`coversUpTo`). Block
 // indices are assumed to be a layout in which every reachable block has an earlier predecessor; a
 // CFG that breaks that disables the skip.
-export type DomSkip
+type DomSkip
 	export var enabled as bool
 	export var tree as DominatorTree
 	export var bounds as LayoutBounds
 
-	export static function disabled() returns DomSkip
+	static function disabled() returns DomSkip
 		return Self{enabled: false, tree: DominatorTree.empty(), bounds: LayoutBounds.none()}
 	end 'disabled'
 
-	export static function build(topo FuncTopology, force bool) returns DomSkip
+	static function build(topo FuncTopology, force bool) returns DomSkip
 		let n = topo.numBlocks
 
 		if n < SkipMinBlocks and not force 'tooSmallToPay'
@@ -225,7 +225,7 @@ function intersectDominators(idom CfgIndexArray, postIndex FixedCfgIndexArray, a
 	return finger
 end 'intersectDominators'
 
-export type LayoutBounds
+type LayoutBounds
 	var leafBase as ElementIndex
 	var highestPred as CfgIndexArray
 	var nearestForwardSucc as CfgIndexArray
@@ -277,7 +277,7 @@ export type LayoutBounds
 		return (try self.highestPred.get(self.leafBase + b) otherwise panic("LayoutBounds.hasRetreatingPred: highestPred.get OOB at block {b}")) >= b
 	end 'hasRetreatingPred'
 
-	export function lastStrandedBelow(b ElementIndex) returns ElementIndex throws NoBlockExceeds
+	function lastStrandedBelow(b ElementIndex) returns ElementIndex throws NoBlockExceeds
 		return try lastExceedingBelow(self.nearestForwardSucc, leafBase: self.leafBase, below: b, bound: b)
 	end 'lastStrandedBelow'
 
@@ -286,7 +286,7 @@ export type LayoutBounds
 	end 'lastEnteredFromBeyondBelow'
 end 'LayoutBounds'
 
-export type PredLevels
+type PredLevels
 	var blockStart as CfgIndexArray
 	var sorted as CfgIndexArray
 	let edgeCount as ElementIndex
@@ -442,7 +442,7 @@ function foldMaxUp(tree CfgIndexArray, leafBase ElementIndex)
 	end 'eachNode'
 end 'foldMaxUp'
 
-export enum NoBlockExceeds implements Error
+enum NoBlockExceeds implements Error
 	noneExceeds
 end 'NoBlockExceeds'
 

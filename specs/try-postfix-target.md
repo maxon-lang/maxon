@@ -445,7 +445,7 @@ bare-name `print` would answer *"this builtin call cannot fail"* and fail here.
 compiler names a callee it has RESOLVED by its module — `error.two-throwing-calls-in-one-chain` above
 expects `'stdlib.Array.slice'` — because `specs/testing-assertions.md`'s `error.forgotten-try` demands it.
 That is wired to **E3057 alone**, so this E3055 case expects the bare `'print'`. The same rule puts E3055,
-E3008, E3088 and E3036 on the qualified side, and moving them rewrites ~50 committed expectations;
+E3008 and E3036 on the qualified side, and moving them rewrites ~50 committed expectations;
 `ProgramSignatures.diagnosticCalleeSpelling` carries the argument. Read the two cases together: the pair is
 the current state of the divergence, not an inconsistency nobody noticed.
 ```maxon

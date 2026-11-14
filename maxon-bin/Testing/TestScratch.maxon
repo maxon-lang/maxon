@@ -7,11 +7,11 @@ let ProjectScratchDirPrefix = "scratch-"
 
 let ReportLineSeparator = "\n"
 
-module type TestProcessScratch
+type TestProcessScratch
 	let outside as FilePath
 	let inProject as FilePath
 
-	module static function create(projectScratchRoot FilePath) returns TestProcessScratch throws TestStagingError
+	static function create(projectScratchRoot FilePath) returns TestProcessScratch throws TestStagingError
 		let area = try hostTempArea()
 		let outside = try freshScratchDirectory(area.join(runnerScratchName(OutsideScratchDirPrefix)))
 
@@ -22,7 +22,7 @@ module type TestProcessScratch
 		return Self{outside: outside, inProject: inProject}
 	end 'create'
 
-	module function environment(tracksDescendants bool, serial ElementIndex) returns Environment
+	function environment(tracksDescendants bool, serial ElementIndex) returns Environment
 		let overrides = EnvMap.create()
 		overrides.upsert(TestScratch.outsideCheckoutVariable, value: self.outside.toString())
 		overrides.upsert(TestScratch.insideProjectVariable, value: self.inProject.toString())
@@ -34,7 +34,7 @@ module type TestProcessScratch
 		return Environment.inheritUpdating(overrides)
 	end 'environment'
 
-	module function discard() returns StringArray
+	function discard() returns StringArray
 		let left = StringArray.create(0)
 		discardScratchDirectory(self.outside, variable: TestScratch.outsideCheckoutVariable, left: left)
 		discardScratchDirectory(self.inProject, variable: TestScratch.insideProjectVariable, left: left)
@@ -43,14 +43,14 @@ module type TestProcessScratch
 	end 'discard'
 end 'TestProcessScratch'
 
-module function removeEndedRunsScratch(projectScratchRoot FilePath)
+function removeEndedRunsScratch(projectScratchRoot FilePath)
 	removeEndedScratchIn(projectScratchRoot.anchoredAt(Directory.currentPath()), prefix: ProjectScratchDirPrefix)
 
 	let area = try hostTempArea() otherwise return
 	removeEndedScratchIn(area, prefix: OutsideScratchDirPrefix)
 end 'removeEndedRunsScratch'
 
-module function scratchLeftoverReport(headline String, leftovers StringArray) returns String
+function scratchLeftoverReport(headline String, leftovers StringArray) returns String
 	let lines = StringArray.create(leftovers.count() + 1, zeroed: false)
 	lines.push(headline)
 

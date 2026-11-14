@@ -1,13 +1,9 @@
 // Arm64RuntimeAsm — the assembler the arm64 RUNTIME CHUNKS are hand-written with: a frame, locals,
 // chunk-local labels, and the emit fragments every such chunk repeats.
 //
-// ⭐ **IT WAS `Arm64PanicRuntime`'s PRIVATE HARNESS UNTIL THERE WERE TWO RUNTIMES.** The panic runtime was
-// the first hand-assembled arm64 code in the tree, so its assembler lived beside it; `Arm64DarwinRuntime`
-// is the second, and a `type` declared in one file is invisible to the other, because a non-`export`ed
-// declaration is file-private. Copying the harness would have been the
-// project's own signature bug (ONE FACT WRITTEN DOWN TWICE) reproduced in the frame layout, where a drift
-// between two copies is a corrupted stack rather than a compile error. So it moved here, whole, and the
-// two runtimes are its two consumers.
+// ⭐ **ONE HARNESS, TWO RUNTIMES.** `Arm64PanicRuntime` and `Arm64DarwinRuntime` both assemble through it.
+// Copying the harness would be ONE FACT WRITTEN DOWN TWICE in the frame layout, where a drift between two
+// copies is a corrupted stack rather than a compile error.
 //
 // ⚠ **WHAT DID NOT MOVE, AND WHY.** `arm64EmitPrintConstant` stayed with the panic runtime: it branches to
 // `mrt_write_cstr_stderr`, which is that runtime's own symbol, so it is a fragment OF a runtime rather than
@@ -24,7 +20,7 @@ end 'arm64RuntimeReg'
 // class-checking door (`arm64FpField` panics on a GPR exactly as `arm64GprField` panics on a SIMD
 // register). The green-thread context switch and the relocating grower are its readers: both move
 // d-registers by name rather than by colouring.
-export function arm64RuntimeFpReg(reg Arm64Register) returns MachineWord
+function arm64RuntimeFpReg(reg Arm64Register) returns MachineWord
 	return arm64FpField(arm64PhysReg(reg))
 end 'arm64RuntimeFpReg'
 
@@ -38,7 +34,7 @@ end 'arm64RuntimeFpReg'
 // It carries no per-instruction methods, for `X64RuntimeAsm`'s reason: `Arm64Backend`'s encoders ARE
 // the instruction vocabulary and are called directly. What lives here is only what needs STATE — the
 // frame, and the labels.
-export type Arm64RuntimeAsm
+type Arm64RuntimeAsm
 	export var code as ByteArray
 	export var callFixups as CallFixupArray
 	export var iatRelocs as RelocationArray
@@ -61,13 +57,13 @@ export type Arm64RuntimeAsm
 	// the very chain it is about to print.
 	//
 	// AAPCS64 puts the first eight arguments in registers, and every chunk opened here stays inside them.
-	export static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
+	static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
 		return Self.openFrame(ByteArray.create(0), callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), slots: slots, outgoingArgBytes: NoOutgoingArgRegion)
 	end 'beginFunction'
 
 	// Open a function whose first bytes, `entry`, run BEFORE its frame record exists — x64's
 	// `X64RuntimeAsm.beginFunctionAfterEntry`, for `mrt_panic`'s green-thread stack guard.
-	export static function beginFunctionAfterEntry(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize) returns Arm64RuntimeAsm
+	static function beginFunctionAfterEntry(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize) returns Arm64RuntimeAsm
 		return Self.openFrame(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: slots, outgoingArgBytes: NoOutgoingArgRegion)
 	end 'beginFunctionAfterEntry'
 
@@ -76,7 +72,7 @@ export type Arm64RuntimeAsm
 	// mode)` leaves the mode at `[sp]` (MEASURED: clang emits `str x8, [sp]` for it). The frame record moves
 	// up by exactly that region, which is the shape `Arm64PrologueEpilogue`'s `recordOffset` already gives a
 	// compiled function.
-	export static function beginVariadicCallerFunction(slots StackSize) returns Arm64RuntimeAsm
+	static function beginVariadicCallerFunction(slots StackSize) returns Arm64RuntimeAsm
 		return Self.openFrame(ByteArray.create(0), callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), slots: slots, outgoingArgBytes: OneOutgoingArgWord)
 	end 'beginVariadicCallerFunction'
 
@@ -119,7 +115,7 @@ export type Arm64RuntimeAsm
 	// deliberately: the switch and the trampoline sit at a green thread's stack BOUNDARY, where the chain
 	// legitimately ends (`__gt_spawn` seeds a fresh GT's x29 slot to 0, which is what stops the walk), and
 	// morestack runs off the chain entirely. `mrt_start` is frameless for the same class of reason.
-	export static function beginRawFunction() returns Arm64RuntimeAsm
+	static function beginRawFunction() returns Arm64RuntimeAsm
 		return Self{
 			code: ByteArray.create(0),
 			callFixups: CallFixupArray.create(0),
@@ -200,7 +196,7 @@ end 'Arm64RuntimeAsm'
 // The scale a BYTE access divides its immediate offset by. One, because a `strb`/`ldrb` immediate
 // counts bytes — named rather than written as a bare `1` beside the 8s and 4s of the wider forms,
 // where a lone digit says nothing about which of them it is.
-module let ByteAccessStride = 1
+let ByteAccessStride = 1
 
 // No outgoing-argument region: the frame record sits at SP, which is every chunk whose calls fit
 // AAPCS64's eight argument registers (see `Arm64PrologueEpilogue`'s `recordOffset`).
@@ -210,7 +206,7 @@ let NoOutgoingArgRegion = 0
 // because SP may not move by less: rounding 8 up gives 16, and the second word is padding the callee
 // never reads. EXPORTED for `Arm64GtRuntime.mrt_darwin_libc_call`, which carries this region across its stack
 // switch.
-export let OneOutgoingArgWord = StackFrameAlignment as StackSize
+let OneOutgoingArgWord = StackFrameAlignment as StackSize
 
 // ==========================================================================
 // Shared emit fragments
@@ -218,24 +214,24 @@ export let OneOutgoingArgWord = StackFrameAlignment as StackSize
 
 // `str Xt, [x29, #slot]` / `ldr Xt, [x29, #slot]` — a runtime chunk's locals. Slot offsets are
 // positive and 8-aligned by construction, so the scaled unsigned form always encodes.
-export function arm64EmitStoreSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
+function arm64EmitStoreSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: Arm64SlotScale)
 end 'arm64EmitStoreSlot'
 
-export function arm64EmitLoadSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
+function arm64EmitLoadSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: Arm64SlotScale)
 end 'arm64EmitLoadSlot'
 
 // `ldr Xt, [Xn, #byteOffset]` — a 64-bit load through an arbitrary base (a frame record's two words,
 // a chain link).
-export function arm64EmitLoadWord64At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
+function arm64EmitLoadWord64At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitLoadWord64At'
 
 // `str Xt, [Xn, #byteOffset]` — the 64-bit STORE twin. Every hand-assembled arm64 runtime writes through a
 // pointer it was handed: the Darwin host surface's out-params, the green-thread chunks' GT struct fields and
 // the relocating grower's chain links. It lives beside its load rather than three times over.
-export function arm64EmitStoreWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
+function arm64EmitStoreWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitStoreWord64At'
 
@@ -252,12 +248,12 @@ end 'arm64EmitStoreWord64At'
 //
 // ⚠ It is the SAME encoder the isel uses (`arm64EmitOrderedAccess`), so a change to the instruction reaches
 // the compiled and the hand-assembled publication together.
-export function arm64EmitStoreReleaseWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset Imm32, scratch Arm64Register)
+function arm64EmitStoreReleaseWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset Imm32, scratch Arm64Register)
 	arm64EmitAddRuntimeImm(asm, dest: scratch, base: base, imm: byteOffset)
 	arm64EmitOrderedAccess(asm.code, byteOpcode: Arm64OpStlrB, rt: arm64RuntimeReg(src), rn: arm64RuntimeReg(scratch), width: X64AccessWidth.word64)
 end 'arm64EmitStoreReleaseWord64At'
 
-export function arm64EmitLoadAcquireWord64At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset Imm32)
+function arm64EmitLoadAcquireWord64At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset Imm32)
 	arm64EmitAddRuntimeImm(asm, dest: dest, base: base, imm: byteOffset)
 	arm64EmitOrderedAccess(asm.code, byteOpcode: Arm64OpLdarB, rt: arm64RuntimeReg(dest), rn: arm64RuntimeReg(dest), width: X64AccessWidth.word64)
 end 'arm64EmitLoadAcquireWord64At'
@@ -271,97 +267,97 @@ end 'arm64EmitLoadAcquireWord64At'
 // ⚠ It stops at the ARGUMENT. What follows differs by runtime and by intent — the panic runtime WRITES the
 // string and returns, the green-thread floor ABORTS through `mrt_panic` and does not — so the branch is each
 // caller's and only the materialisation is shared.
-export function arm64EmitCStringArg(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
+function arm64EmitCStringArg(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
 	let label = registerStringBlob(globalData, bytes: bytes)
 	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x0), label: label.toByteArray(), adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
 end 'arm64EmitCStringArg'
 
 // `ldr Wt, [Xn, #byteOffset]` — a `__symtable` column. 32 bits, ZERO-extended into the full X
 // register, which is what makes the count and both entry fields read as the u32s the writer emitted.
-export function arm64EmitLoadColumn(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset Imm32)
+function arm64EmitLoadColumn(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset Imm32)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrW, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset as MachineWord, scale: SymbolTableColumnBytes)
 end 'arm64EmitLoadColumn'
 
 // `ldrb Wt, [Xn, #0]` — one byte of a C string, zero-extended, so the `cbz` that follows tests the
 // whole register against the NUL.
-export function arm64EmitLoadByte(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register)
+function arm64EmitLoadByte(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrB, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: 0, scale: ByteAccessStride)
 end 'arm64EmitLoadByte'
 
 // `strb Wt, [Xn, #0]` — the store twin, and the second half of a byte-at-a-time C-string copy. The
 // register's upper 56 bits are ignored by the encoding, so a byte read with `arm64EmitLoadByte` can be
 // written straight back with no masking step.
-export function arm64EmitStoreByte(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register)
+function arm64EmitStoreByte(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrB, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: 0, scale: ByteAccessStride)
 end 'arm64EmitStoreByte'
 
-export function arm64EmitMovRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, src Arm64Register)
+function arm64EmitMovRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, src Arm64Register)
 	arm64EmitMovGpr(asm.code, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(src))
 end 'arm64EmitMovRuntimeReg'
 
 // `mov Xd, #value` — the movz/movk ladder, which already answers zero with `mov Xd, XZR`.
-export function arm64EmitMovRuntimeImm(asm Arm64RuntimeAsm, dest Arm64Register, value MachineWord)
+function arm64EmitMovRuntimeImm(asm Arm64RuntimeAsm, dest Arm64Register, value MachineWord)
 	arm64EmitMovImm(asm.code, rd: arm64RuntimeReg(dest), value: value)
 end 'arm64EmitMovRuntimeImm'
 
 // `add Xd, Xn, Xm` / `sub Xd, Xn, Xm`.
-export function arm64EmitAddRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+function arm64EmitAddRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
 	emitArm64Rrr(asm.code, opcode: Arm64OpAdd, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
 end 'arm64EmitAddRuntimeReg'
 
-export function arm64EmitSubRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+function arm64EmitSubRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
 	emitArm64Rrr(asm.code, opcode: Arm64OpSub, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
 end 'arm64EmitSubRuntimeReg'
 
 // `add Xd, Xn, #imm` — a signed immediate, so a negative one encodes as the SUB form.
-export function arm64EmitAddRuntimeImm(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, imm Imm32)
+function arm64EmitAddRuntimeImm(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, imm Imm32)
 	arm64EmitAddImmSigned(asm.code, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(base), imm: imm)
 end 'arm64EmitAddRuntimeImm'
 
-export function arm64EmitCmpRuntimeReg(asm Arm64RuntimeAsm, lhs Arm64Register, rhs Arm64Register)
+function arm64EmitCmpRuntimeReg(asm Arm64RuntimeAsm, lhs Arm64Register, rhs Arm64Register)
 	arm64EmitCmpReg(asm.code, rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
 end 'arm64EmitCmpRuntimeReg'
 
-export function arm64EmitCmpRuntimeImm(asm Arm64RuntimeAsm, reg Arm64Register, imm Imm32)
+function arm64EmitCmpRuntimeImm(asm Arm64RuntimeAsm, reg Arm64Register, imm Imm32)
 	arm64EmitCmpImm(asm.code, rn: arm64RuntimeReg(reg), imm: imm)
 end 'arm64EmitCmpRuntimeImm'
 
 // The 32-bit twin, for the C `int`s the OS hands a runtime chunk: AAPCS64 leaves bits 63:32 of such an
 // argument UNSPECIFIED, so only a W-form compare asks about the bits the caller actually promised.
-export function arm64EmitCmpRuntimeImm32(asm Arm64RuntimeAsm, reg Arm64Register, imm Imm32)
+function arm64EmitCmpRuntimeImm32(asm Arm64RuntimeAsm, reg Arm64Register, imm Imm32)
 	arm64EmitCmpImm32(asm.code, rn: arm64RuntimeReg(reg), imm: imm)
 end 'arm64EmitCmpRuntimeImm32'
 
-export function arm64EmitBranchTo(asm Arm64RuntimeAsm, label BlockId)
+function arm64EmitBranchTo(asm Arm64RuntimeAsm, label BlockId)
 	arm64EmitBranch(asm.code, branches: asm.branches, targetBlock: label)
 end 'arm64EmitBranchTo'
 
-export function arm64EmitCondBranchTo(asm Arm64RuntimeAsm, cond Arm64CondCode, label BlockId)
+function arm64EmitCondBranchTo(asm Arm64RuntimeAsm, cond Arm64CondCode, label BlockId)
 	arm64EmitCondBranch(asm.code, branches: asm.branches, cond: cond, targetBlock: label)
 end 'arm64EmitCondBranchTo'
 
-export function arm64EmitCbzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
+function arm64EmitCbzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
 	arm64EmitCbz(asm.code, branches: asm.branches, reg: arm64RuntimeReg(reg), targetBlock: label)
 end 'arm64EmitCbzTo'
 
 // The complement. A chunk that has both spellings can branch on the case it wants to LEAVE rather than
 // emitting a `cbz` over an unconditional `b`, which is two instructions and an extra label to say one thing.
-export function arm64EmitCbnzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
+function arm64EmitCbnzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
 	arm64EmitCbnz(asm.code, branches: asm.branches, reg: arm64RuntimeReg(reg), targetBlock: label)
 end 'arm64EmitCbnzTo'
 
 // `adrp`+`add` the runtime address of a `.text` symbol into `dest` — how a runtime chunk names another
 // chunk without calling it. The backtrace's `text_base` (`mrt_start`) and its upper bound (`__symtable`)
 // are both reached this way, and so is the handler address a `sigaction` install stores.
-export function arm64EmitLeaRuntimeFuncAddr(asm Arm64RuntimeAsm, dest Arm64Register, funcName ByteArray)
+function arm64EmitLeaRuntimeFuncAddr(asm Arm64RuntimeAsm, dest Arm64Register, funcName ByteArray)
 	arm64EmitLeaFuncAddr(asm.code, funcAdrpRelocs: asm.funcAdrpRelocs, dest: arm64RuntimeReg(dest), funcName: funcName)
 end 'arm64EmitLeaRuntimeFuncAddr'
 
-module function arm64EmitDataAddr(asm Arm64RuntimeAsm, dest Arm64Register, label ByteArray)
+function arm64EmitDataAddr(asm Arm64RuntimeAsm, dest Arm64Register, label ByteArray)
 	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(dest), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
 end 'arm64EmitDataAddr'
 
-module function arm64EmitLoadDataWord(asm Arm64RuntimeAsm, dest Arm64Register, label ByteArray)
+function arm64EmitLoadDataWord(asm Arm64RuntimeAsm, dest Arm64Register, label ByteArray)
 	arm64EmitDataAddr(asm, dest: dest, label: label)
 	arm64EmitLoadWord64At(asm, dest: dest, base: dest, byteOffset: 0)
 end 'arm64EmitLoadDataWord'
@@ -373,7 +369,7 @@ end 'arm64EmitLoadDataWord'
 // Shared by the frame walker (which applies it to every return address) and the fault backtrace (which
 // applies it to the faulting PC), because "is this offset inside our code" is one question and a second
 // copy of it could answer differently. `scratchA`/`scratchB` are clobbered.
-export function arm64EmitTextBoundsGuard(asm Arm64RuntimeAsm, offsetReg Arm64Register, scratchA Arm64Register, scratchB Arm64Register, textBaseSlot StackSize, symtableSlot StackSize, rejectLabel BlockId)
+function arm64EmitTextBoundsGuard(asm Arm64RuntimeAsm, offsetReg Arm64Register, scratchA Arm64Register, scratchB Arm64Register, textBaseSlot StackSize, symtableSlot StackSize, rejectLabel BlockId)
 	arm64EmitCmpRuntimeImm(asm, reg: offsetReg, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: rejectLabel)
 
@@ -387,7 +383,7 @@ end 'arm64EmitTextBoundsGuard'
 // The OS door every terminal step in this file goes through — the same one `StdToArm64Conversion`'s
 // `lowerOsExit` uses, so the panic runtime cannot grow a second opinion about which OSes this backend
 // serves or how each one is reached. The macOS route is a libSystem call, so it takes the system-stack door.
-export function arm64EmitOsPrimitive(asm Arm64RuntimeAsm, os Os, importSlot OsImportSlot, syscallNumber MachineWord)
+function arm64EmitOsPrimitive(asm Arm64RuntimeAsm, os Os, importSlot OsImportSlot, syscallNumber MachineWord)
 	match arm64OsCallKind(os) 'route'
 		importCall then arm64EmitLibcCall(asm.code, iatRelocs: asm.iatRelocs, callFixups: asm.callFixups, slotIndex: osImportSlotIndex(importSlot))
 		syscall then arm64EmitSyscall(asm.code, number: syscallNumber)
@@ -398,7 +394,7 @@ end 'arm64EmitOsPrimitive'
 // the panic and fault diagnostics (`PanicExitCode`) and `__gt_morestack`'s two refusals (a `RuntimeAbort`
 // code). The `brk` stops an exit that returned — it does not — from running off the chunk into the next
 // function.
-export function arm64EmitProcessExit(asm Arm64RuntimeAsm, os Os, exitCode MachineWord)
+function arm64EmitProcessExit(asm Arm64RuntimeAsm, os Os, exitCode MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: exitCode)
 	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
 	arm64EmitBrk(asm.code)
@@ -416,27 +412,27 @@ end 'arm64EmitProcessExit'
 // consumer can use it UNCHANGED.
 
 // `add Xd, x29, #<slot>` — the ADDRESS of a frame local, for the out-param calls that fill one.
-export function arm64EmitSlotAddr(asm Arm64RuntimeAsm, dest Arm64Register, slot StackSize)
+function arm64EmitSlotAddr(asm Arm64RuntimeAsm, dest Arm64Register, slot StackSize)
 	arm64EmitAddRuntimeImm(asm, dest: dest, base: Arm64Register.x29, imm: asm.slotOffset(slot) as Imm32)
 end 'arm64EmitSlotAddr'
 
 // `<op> Xd, Xn, Xm` for the three-register arithmetic these chunks need (`mul`, `udiv`, `and`, `orr`). The
 // register-name spelling goes through `arm64RuntimeReg` like every other operand in a runtime chunk, so the
 // GPR class check that guards an allocated operand guards these too.
-export function arm64EmitRuntimeRrr(asm Arm64RuntimeAsm, opcode MachineWord, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+function arm64EmitRuntimeRrr(asm Arm64RuntimeAsm, opcode MachineWord, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
 	emitArm64Rrr(asm.code, opcode: opcode, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
 end 'arm64EmitRuntimeRrr'
 
 // `ldr Wt, [Xn, #byteOffset]` — a 32-bit ZERO-EXTENDING load, for the C `int`s and `mode_t`s these surfaces
 // read out of structures the OS owns. The offset must be 4-aligned, which every field read through it is.
-export function arm64EmitLoadWord32At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
+function arm64EmitLoadWord32At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrW, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: RuntimeWord32Bytes)
 end 'arm64EmitLoadWord32At'
 
 // `str Wt, [Xn, #byteOffset]` — the store twin, and the ONLY width that may be used on a C `int` the OS
 // owns: `*__error()` on Darwin is one, and a 64-bit store there would write four bytes into whatever the C
 // library placed after it.
-export function arm64EmitStoreWord32At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
+function arm64EmitStoreWord32At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrW, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: RuntimeWord32Bytes)
 end 'arm64EmitStoreWord32At'
 
@@ -446,7 +442,7 @@ let RuntimeWord32Bytes = 4
 // `str Xt, [Xn, #byteOffset]` for an offset that is NOT 8-aligned — the address is formed first and the
 // store then uses offset 0. `WIN32_FIND_DATAW` begins with a DWORD, so three of its four 64-bit fields sit
 // at 4, 12 and 20; the scaled store form cannot encode any of them and the unscaled one is not exposed.
-export function arm64EmitStoreWord64Unaligned(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord, scratch Arm64Register)
+function arm64EmitStoreWord64Unaligned(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord, scratch Arm64Register)
 	arm64EmitAddRuntimeImm(asm, dest: scratch, base: base, imm: byteOffset as Imm32)
 	arm64EmitStoreWord64At(asm, src: src, base: scratch, byteOffset: 0)
 end 'arm64EmitStoreWord64Unaligned'
@@ -456,7 +452,7 @@ end 'arm64EmitStoreWord64Unaligned'
 //
 // ⚠ **IT TAKES ITS REGISTERS AS PARAMETERS RATHER THAN FIXING THEM**, because `mrt_host_exe_path` and
 // `mrt_host_env_read` — two of its callers — have each already chosen different ones.
-export function arm64EmitCStringLength(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, cursor Arm64Register, scratch Arm64Register)
+function arm64EmitCStringLength(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, cursor Arm64Register, scratch Arm64Register)
 	let walk = asm.newLabel()
 	let atNul = asm.newLabel()
 
@@ -479,7 +475,7 @@ end 'arm64EmitCStringLength'
 // they share.
 //
 // ⚠ It CONSUMES `src`, `dest` and `limit` (all three are stepped) and clobbers `scratch`.
-export function arm64EmitCopyCStringBounded(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, limit Arm64Register, scratch Arm64Register)
+function arm64EmitCopyCStringBounded(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, limit Arm64Register, scratch Arm64Register)
 	let step = asm.newLabel()
 	let terminate = asm.newLabel()
 

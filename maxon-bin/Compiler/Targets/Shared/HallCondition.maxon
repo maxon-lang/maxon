@@ -77,7 +77,7 @@
 // docs/internals/register-allocation.md states for the whole allocator (Scaling: "scratch buffers are allocated
 // once and reused across calls").
 
-export typealias LiveIndexColumn = Array with ElementIndex
+typealias LiveIndexColumn = Array with ElementIndex
 
 // The registers `valueId` may actually be coloured into: the registers of ITS OWN CLASS that the pool
 // offers, minus every register an op wrote while the value was live across it (`forbidden` — a call's
@@ -88,7 +88,7 @@ export typealias LiveIndexColumn = Array with ElementIndex
 // ⚠ THE CLASS FILTER IS PART OF THE DEFINITION, NOT A REFINEMENT OF IT. Without it an f64's allowed
 // set is computed from the GPR pool it can never touch, and every downstream question inherits the
 // error — `valueConfinedTo` most damagingly (see there).
-export function allowedRegistersOf(liveness LivenessResult, valueId ValueId, pool RegMask) returns RegMask
+function allowedRegistersOf(liveness LivenessResult, valueId ValueId, pool RegMask) returns RegMask
 	return poolOfClass(pool, class: liveness.classOf(valueId), file: liveness.registerFile) and not liveness.forbiddenOf(valueId)
 end 'allowedRegistersOf'
 
@@ -99,7 +99,7 @@ end 'allowedRegistersOf'
 // at `p = |U| <= maxClassPoolSize`, so nothing is missed. Scanning to the MIXED pool size instead
 // would be unsound in the other direction — it would treat one file's full-pool overflow as a
 // confined one, which is the pigeonhole's job and outranks it.
-export function maxClassPoolSize(pool RegMask, file RegisterFile) returns RegCount
+function maxClassPoolSize(pool RegMask, file RegisterFile) returns RegCount
 	var widest = 0 as RegCount
 
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
@@ -147,7 +147,7 @@ end 'maxClassPoolSize'
 // (that is what finds the overflow — the panic reads "1 values confined to the 0 registers of witness
 // 0"), and a `false` here says it is not. One fact, two places, opposite answers; the peak exists and
 // nothing is allowed to relieve it.
-export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool RegMask, witness RegMask) returns bool
+function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool RegMask, witness RegMask) returns bool
 	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
 end 'valueConfinedTo'
 
@@ -162,7 +162,7 @@ end 'valueConfinedTo'
 // fresh ids it minted. Re-deriving the whole column per split was Θ(splits × values), which is the
 // quadratic the incremental splitter exists to remove; `refresh` re-derives ONE value, and keeps the
 // constrained tally exact as it goes.
-export type EffectivePools
+type EffectivePools
 	export var sizes as RegCountColumn
 
 	// How many values are CONSTRAINED (an effective pool strictly smaller than THEIR OWN CLASS's full
@@ -174,7 +174,7 @@ export type EffectivePools
 	// census entirely — see `anyXmm`.
 	var xmmValues as ElementIndex
 
-	export static function create() returns EffectivePools
+	static function create() returns EffectivePools
 		return Self{sizes: RegCountColumn.create(0), constrained: 0, xmmValues: 0}
 	end 'create'
 
@@ -182,7 +182,7 @@ export type EffectivePools
 	// [0, valueCount) is written, so a longer previous life cannot leak a stale size (see
 	// `Array.refill`, which is this loop generalised; this one stays hand-written because it also
 	// counts `constrained` as it goes).
-	export function fillAll(liveness LivenessResult, pool RegMask)
+	function fillAll(liveness LivenessResult, pool RegMask)
 		self.sizes.resize(liveness.valueCount)
 		self.constrained = 0
 		self.xmmValues = 0
@@ -223,7 +223,7 @@ export type EffectivePools
 	// intrinsic and permanent, so a split — which only ever cuts a live range and rebuilds a forbidden
 	// mask — cannot move a value between files. That is the same property that keeps the class out of
 	// `forbidden` entirely.
-	export function refresh(liveness LivenessResult, valueId ValueId, pool RegMask)
+	function refresh(liveness LivenessResult, valueId ValueId, pool RegMask)
 		let fullPoolSize = classPoolSizeOf(pool, class: liveness.classOf(valueId), file: liveness.registerFile)
 		let previous = try self.sizes.get(valueId) otherwise panic("EffectivePools.refresh: sizes.get OOB for value {valueId}")
 		let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: valueId, pool: pool))
@@ -271,7 +271,7 @@ end 'EffectivePools'
 // reason `liveCount` is: recomputing it would be a walk of the live set at every op — O(ops × live)
 // per sweep, per splitter iteration — which is the quadratic the sparse representation exists to
 // remove.
-export type RegPoolCensus
+type RegPoolCensus
 	// effective-pool size (0 .. RegisterFileSize) -> how many live values have it.
 	var byPoolSize as FixedRegCountColumn
 
@@ -288,7 +288,7 @@ export type RegPoolCensus
 	// per-value "is it constrained?" test is a row read rather than a popcount at every flip.
 	var classPoolSizes as FixedRegCountColumn
 
-	export static function create() returns RegPoolCensus
+	static function create() returns RegPoolCensus
 		let byPoolSize = FixedRegCountColumn.create(RegisterFileSize + 1)
 		return Self{byPoolSize: byPoolSize, occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
@@ -410,7 +410,7 @@ end 'RegPoolCensus'
 // sweep. The snapshot DEDUPES: an op may name one value twice (`x + x`, or a reuse def whose input
 // is also its use), and counting a single flip twice would corrupt the census for the rest of the
 // block.
-export function stepCensusBackwardOverOp(row BitRow, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass FixedRegCountColumn, ids ValueIdArray, wasLive BoolArray)
+function stepCensusBackwardOverOp(row BitRow, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass FixedRegCountColumn, ids ValueIdArray, wasLive BoolArray)
 	ids.clear()
 	wasLive.clear()
 
@@ -495,7 +495,7 @@ end 'valueIdListContains'
 // Two things stop it. A generic's ranged element type is part of its type, so the substitution is a
 // compile error (E3005) rather than corruption; and the sizing is `Array.resize`, a METHOD, which
 // is generic over the element type and cannot be handed the wrong width at all.
-export type HallScratch
+type HallScratch
 	// value position -> the registers it is allowed (`A(v)`), for THIS point's live list.
 	export var allowed as RegMaskColumn
 
@@ -522,12 +522,12 @@ export type HallScratch
 
 	export var memo as HallMemo
 
-	export static function create() returns HallScratch
+	static function create() returns HallScratch
 		return Self{allowed: RegMaskColumn.create(0), regOfValue: RegNumColumn.create(0), valueMatched: BoolArray.create(0), valueOfReg: LiveIndexColumn.create(0), heldRegisters: 0, parentOfReg: LiveIndexColumn.create(0), queue: LiveIndexColumn.create(0), classLive: ValueIdArray.create(0), verdict: HallVerdict.create(), memo: HallMemo.create()}
 	end 'create'
 end 'HallScratch'
 
-export type HallMemoEntry
+type HallMemoEntry
 	export var masks as RegMaskColumn
 	export var feasible as bool
 	export var witness as RegMask
@@ -542,7 +542,7 @@ end 'HallMemoEntry'
 // a hit whose masks are equal (`sameAllowedMasks` — the digest alone can collide) answers what a
 // fresh matching would. A hit runs no matching, so nothing outside `hallVerdictAt` may read the
 // matching's columns.
-export typealias HallMemo = Map with (HashDigest, HallMemoEntry)
+typealias HallMemo = Map with (HashDigest, HallMemoEntry)
 
 let HallMemoLimit = 8192
 
@@ -586,12 +586,12 @@ end 'rememberVerdict'
 // subset at a point that is not a call at all), and `tight` is how many live values are confined to
 // it, so `tight - popcount(witness)` is the EXACT number that must leave. `witness` and `tight` are
 // meaningless while `feasible`.
-export type HallVerdict
+type HallVerdict
 	export var feasible as bool
 	export var witness as RegMask
 	export var tight as RegCount
 
-	export static function create() returns HallVerdict
+	static function create() returns HallVerdict
 		return Self{feasible: true, witness: 0, tight: 0}
 	end 'create'
 
@@ -670,7 +670,7 @@ end 'HallVerdict'
 // `SplitDriver.repairAtExhaustion`, which splits the stuck value across a clobber in its own live range
 // rather than re-ordering anything. (Both are read within the value's own register FILE — a
 // class-agnostic pool question is exactly the confusion the volatility rename exists to end.)
-export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
+function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 
 	let allowed = scratch.allowed

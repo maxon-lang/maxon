@@ -561,21 +561,21 @@ element whichever file is parsed first — the instantiation is a fact about the
 parsed before the body.
 ```maxon
 // --- file: a_box.maxon
-export type Box uses T
-	export var saved as T
-	export static function create(first T) returns Self
+type Box uses T
+	var saved as T
+	static function create(first T) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next T)
+	function replace(next T)
 		self.saved = next
 	end 'replace'
 end 'Box'
-export type Outer uses T
-	export var inner as Box
-	export static function create(first T) returns Self
+type Outer uses T
+	var inner as Box
+	static function create(first T) returns Self
 		return Self{ inner: Box.create(first) }
 	end 'create'
-	export function swapInner(next T)
+	function swapInner(next T)
 		self.inner.replace(next)
 	end 'swapInner'
 end 'Outer'
@@ -626,21 +626,21 @@ function main() returns ExitCode
 	return 0
 end 'main'
 // --- file: b_box.maxon
-export type Box uses T
-	export var saved as T
-	export static function create(first T) returns Self
+type Box uses T
+	var saved as T
+	static function create(first T) returns Self
 		return Self{ saved: first }
 	end 'create'
-	export function replace(next T)
+	function replace(next T)
 		self.saved = next
 	end 'replace'
 end 'Box'
-export type Outer uses T
-	export var inner as Box
-	export static function create(first T) returns Self
+type Outer uses T
+	var inner as Box
+	static function create(first T) returns Self
 		return Self{ inner: Box.create(first) }
 	end 'create'
-	export function swapInner(next T)
+	function swapInner(next T)
 		self.inner.replace(next)
 	end 'swapInner'
 end 'Outer'

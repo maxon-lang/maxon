@@ -898,9 +898,9 @@ end 'main'
 ```
 
 <!-- test: error.a-list-from-head-another-file-keeps-private-is-refused -->
-A `List` instance alias at the head of `from […]` is a type name, and another file's file-private one is refused.
+A `List` instance alias at the head of `from […]` is a type name, and another directory's unexported one is refused.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 typealias Readings = List with ExitCode
 
 export function probeReadings() returns ExitCode

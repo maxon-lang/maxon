@@ -1,10 +1,10 @@
-export enum WasmControlFlow
+enum WasmControlFlow
 	straightLine
 	structured
 	dispatcher
 end 'WasmControlFlow'
 
-export enum WasmFlowTask
+enum WasmFlowTask
 	tree
 	body
 	endBlock
@@ -15,7 +15,7 @@ end 'WasmFlowTask'
 
 typealias WasmFlowTaskArray = Array with WasmFlowTask
 
-export type WasmFlowPlan
+type WasmFlowPlan
 	export let flow as WasmControlFlow
 	export var tree as StdDominatorTree
 	var rpoIndex as BlockPositionColumn
@@ -23,7 +23,7 @@ export type WasmFlowPlan
 	var loopHeader as BoolArray
 	var subtreeSize as BlockPositionColumn
 
-	export static function build(module StdModule, func IrFunction) returns WasmFlowPlan
+	static function build(module StdModule, func IrFunction) returns WasmFlowPlan
 		let blockCount = func.blockRefs.count()
 
 		if not Self.branches(module, func: func) 'straightLine'
@@ -167,7 +167,7 @@ end 'WasmFlowPlan'
 
 let MergeNodeForwardEdges = 2
 
-export type WasmFlowState
+type WasmFlowState
 	var level as Wasm32Index
 	var blockLevel as Wasm32IndexArray
 	var loopLevel as Wasm32IndexArray
@@ -180,14 +180,14 @@ export type WasmFlowState
 	export var taskFrom as ElementIndex
 	export var taskTo as ElementIndex
 
-	export static function create(blockCount ElementIndex) returns WasmFlowState
+	static function create(blockCount ElementIndex) returns WasmFlowState
 		let state = Self{level: 0, blockLevel: Wasm32IndexArray.create(0), loopLevel: Wasm32IndexArray.create(0), taskKinds: WasmFlowTaskArray.create(0), taskFroms: BlockPositionColumn.create(0), taskTos: BlockPositionColumn.create(0), task: WasmFlowTask.tree, taskFrom: 0, taskTo: 0}
 		state.blockLevel.growFilled(blockCount, value: 0 as Wasm32Index)
 		state.loopLevel.growFilled(blockCount, value: 0 as Wasm32Index)
 		return state
 	end 'create'
 
-	export function push(kind WasmFlowTask, source ElementIndex, target ElementIndex)
+	function push(kind WasmFlowTask, source ElementIndex, target ElementIndex)
 		self.taskKinds.push(kind)
 		self.taskFroms.push(source)
 		self.taskTos.push(target)

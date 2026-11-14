@@ -617,7 +617,7 @@ error E3005: <fragment>:20:10: argument type mismatch for 'o': expected 'fn(Hand
 ```
 
 <!-- test: error.a-function-value-over-a-contested-shape-is-named-in-source-form -->
-`pkg/lib.maxon` and `app/main.maxon` each declare a file-private `Score` and a file-private `Grader` over
+`pkg/lib.maxon` and `app/main.maxon` each declare an unmarked `Score` and an unmarked `Grader` over
 it, so the two `Grader`s are two types. A `lib` `Grader` could reach `main` only through an exported field, and the
 field is refused where it is declared, naming the alias as `lib` wrote it; the value read from it is refused
 at `main`'s own `Grader` parameter, which E3005 names with each declaration's file.
@@ -652,7 +652,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: app/<fragment>:27:9: argument type mismatch for 'g': expected 'app.Grader', got 'pkg.Grader'
-error E3167: pkg/<fragment>:11:22: exported field 'pkg.Holder.grade' names file-private typealias 'Grader' in its type
+error E3167: pkg/<fragment>:11:22: exported field 'pkg.Holder.grade' names unexported typealias 'Grader' in its type
 ```
 
 <!-- test: a-closure-literal-decays-into-any-function-alias -->

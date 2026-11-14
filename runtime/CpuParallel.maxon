@@ -27,7 +27,7 @@
 // and every comparison on one reads unsigned, which turns -1 into the largest count the machine could have.
 // It cannot be narrowed to the post-clamp `1 to i64.max` either: a narrowed alias is a guarded door, and the
 // guard would panic on a word the host itself wrote, in a body with no caller to report to.
-module typealias ReportedProcessorCount = int(i64.min to i64.max)
+typealias ReportedProcessorCount = int(i64.min to i64.max)
 
 // The floor a processor count never answers below. A count is a divisor for callers, so a 0 must never
 // escape.
@@ -42,7 +42,7 @@ let MinimumProcessorCount = 1
 // ⚠ **THE FLOOR IS NOT DEAD CODE.** `GetActiveProcessorCount` answers 0 for an invalid processor group and
 // `sysconf` answers -1, so the arm is what a failing host read reaches. One signed test covers both
 // spellings, which is why a lane supplies only the read.
-module function __cpu_count() returns ReportedProcessorCount
+function __cpu_count() returns ReportedProcessorCount
 	let reported = __Raw.osCpuCount() as ReportedProcessorCount
 
 	if reported < MinimumProcessorCount 'belowFloor'
@@ -59,7 +59,7 @@ end '__cpu_count'
 // ⚠ **IT ANSWERS 1 FOR AN `async` PROGRAM AT ANY PROCESSOR COUNT.** An `async` frame is a coroutine of its
 // caller and a member of its strand, and a member readied while its strand is held owes no wake, so an
 // `async` program that reads no pipe creates no worker M. A `spawn` does, and raises the mark.
-module function __sched_max_active_workers() returns MachineWord
+function __sched_max_active_workers() returns MachineWord
 	return __Raw.loadWord(__Raw.schedMaxActiveWorkersAddr(), offset: 0)
 end '__sched_max_active_workers'
 
@@ -69,6 +69,6 @@ end '__sched_max_active_workers'
 // ⚠ The word is `__sched_num_procs`, so the ADDRESS ROW and the entry point do not share a name. The word is
 // the P array's length wearing this query's second hat (`SchedRuntime.SchedNumProcsLabel`), and this body
 // must read that word rather than a second one kept in step with it.
-module function __sched_processor_count() returns MachineWord
+function __sched_processor_count() returns MachineWord
 	return __Raw.loadWord(__Raw.schedNumProcsAddr(), offset: 0)
 end '__sched_processor_count'

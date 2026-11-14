@@ -137,11 +137,11 @@ export let ScaleCorpusDirName = ".scale-tmp"
 // A union carrying its own message, because Maxon errors are enums/unions and a message is the only
 // payload any of these needs — every one of them is reported to a human and none is recovered from
 // programmatically. `scaleErrorText` is the single place it is unwrapped.
-export union ScaleError implements Error
+union ScaleError implements Error
 	reason(message String)
 end 'ScaleError'
 
-export function scaleErrorText(error ScaleError) returns String
+function scaleErrorText(error ScaleError) returns String
 	return match error 'e'
 		reason(message) gives message
 	end 'e'
@@ -162,27 +162,27 @@ end 'scaleErrorText'
 // signal the doubling ladder reads, which has a 100% margin. So: a movement in the memory columns
 // is always real; a movement in this one is real only outside the noise band. See the trust table
 // in docs/optimization-log.md, which states the band that was actually measured.
-export type PhaseMetric
+type PhaseMetric
 	export let allocs as AllocCount
 	export let frees as AllocCount
 	export let bytes as HeapByteCount
 	export let cpuTicks as CpuTicks
 
-	export static function create(allocs AllocCount, frees AllocCount, bytes HeapByteCount, cpuTicks CpuTicks) returns PhaseMetric
+	static function create(allocs AllocCount, frees AllocCount, bytes HeapByteCount, cpuTicks CpuTicks) returns PhaseMetric
 		return Self{allocs: allocs, frees: frees, bytes: bytes, cpuTicks: cpuTicks}
 	end 'create'
 
-	export static function zero() returns PhaseMetric
+	static function zero() returns PhaseMetric
 		return Self{allocs: 0, frees: 0, bytes: 0, cpuTicks: 0}
 	end 'zero'
 end 'PhaseMetric'
 
-export typealias PhaseMetricArray = Array with PhaseMetric
+typealias PhaseMetricArray = Array with PhaseMetric
 
 // Everything one rung reported. `phases` and `regAlloc` are dense, indexed by their enum's ordinal,
 // so a phase that failed to appear in the TSV is a parse ERROR rather than a silent zero — see
 // `parseRungMetrics`.
-export type RungResult
+type RungResult
 	export let rung as RungIndex
 	export let sourceBytes as BytePos
 	export let codeBytes as CodeByteCount
@@ -190,20 +190,20 @@ export type RungResult
 	export let phases as PhaseMetricArray
 	export let regAlloc as PhaseMetricArray
 
-	export static function create(rung RungIndex, sourceBytes BytePos, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
+	static function create(rung RungIndex, sourceBytes BytePos, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
 		return Self{rung: rung, sourceBytes: sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc}
 	end 'create'
 
-	export function phaseAt(phase CompilePhase) returns PhaseMetric
+	function phaseAt(phase CompilePhase) returns PhaseMetric
 		return try self.phases.get(phase.ordinal) otherwise panic("RungResult.phaseAt: phases.get OOB for '{phase.name}'")
 	end 'phaseAt'
 
-	export function regAllocAt(sub RegAllocPhase) returns PhaseMetric
+	function regAllocAt(sub RegAllocPhase) returns PhaseMetric
 		return try self.regAlloc.get(sub.ordinal) otherwise panic("RungResult.regAllocAt: regAlloc.get OOB for '{sub.name}'")
 	end 'regAllocAt'
 end 'RungResult'
 
-export typealias RungResultArray = Array with RungResult
+typealias RungResultArray = Array with RungResult
 
 // ===========================================================================================
 // The phases this instrument reports, enumerated ONCE
@@ -220,17 +220,17 @@ export typealias RungResultArray = Array with RungResult
 // of the same enums is how a phase gets added to `CompilePhase`, timed, metered, and then silently
 // omitted from one output but not the other; and a name built at two sites is a name that can differ
 // at two sites. The list, and the naming, live here.
-export union PhaseSource
+union PhaseSource
 	compilePhase(phase CompilePhase)
 	regAllocPhase(sub RegAllocPhase)
 end 'PhaseSource'
 
-export typealias PhaseSourceArray = Array with PhaseSource
+typealias PhaseSourceArray = Array with PhaseSource
 
 let PhaseNamePrefix = "phase:"
 let RegAllocNamePrefix = "regalloc:"
 
-export function scalePhaseSources() returns PhaseSourceArray
+function scalePhaseSources() returns PhaseSourceArray
 	let sources = PhaseSourceArray.create(CompilePhase.allCases.count() + RegAllocPhase.allCases.count(), zeroed: false)
 
 	for phase in CompilePhase.allCases 'eachPhase'
@@ -244,14 +244,14 @@ export function scalePhaseSources() returns PhaseSourceArray
 	return sources
 end 'scalePhaseSources'
 
-export function phaseSourceName(source PhaseSource) returns String
+function phaseSourceName(source PhaseSource) returns String
 	return match source 'src'
 		compilePhase(phase) gives "{PhaseNamePrefix}{phase.name}"
 		regAllocPhase(sub) gives "{RegAllocNamePrefix}{sub.name}"
 	end 'src'
 end 'phaseSourceName'
 
-export function phaseMetricOf(source PhaseSource, result RungResult) returns PhaseMetric
+function phaseMetricOf(source PhaseSource, result RungResult) returns PhaseMetric
 	return match source 'src'
 		compilePhase(phase) gives result.phaseAt(phase)
 		regAllocPhase(sub) gives result.regAllocAt(sub)
@@ -834,7 +834,7 @@ function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleE
 	return PhaseMetric.create(allocs as AllocCount, frees: frees as AllocCount, bytes: bytes as HeapByteCount, cpuTicks: cpuTicks as CpuTicks)
 end 'parseMetricFields'
 
-export typealias ParsedCount = int(0 to u64.max)
+typealias ParsedCount = int(0 to u64.max)
 
 // A non-negative decimal integer — THE one decimal parser in the suite (the metrics TSV, the trend
 // log's grouped digits and `--rungs` all come through here). Every number any of them carries is a
@@ -843,7 +843,7 @@ export typealias ParsedCount = int(0 to u64.max)
 // The digit-count guard is not decoration: `--rungs=999999999999999999999` is user input, and
 // without it the accumulator would run past `u64.max` and trap on the range rather than being
 // rejected as the nonsense it is. Twenty digits is `u64.max`'s own width.
-export function parseCount(raw String) returns ParsedCount throws ScaleError
+function parseCount(raw String) returns ParsedCount throws ScaleError
 	if raw.isEmpty() 'empty'
 		throw ScaleError.reason("expected a number, got an empty field")
 	end 'empty'
@@ -870,8 +870,8 @@ end 'parseCount'
 // The decimal width of u64.max — one more digit than any value the accumulator above can hold.
 let MaxDecimalDigits = 20
 
-module let AsciiDigitZero = 0x30
-module let AsciiDigitNine = 0x39
+let AsciiDigitZero = 0x30
+let AsciiDigitNine = 0x39
 
 // ===========================================================================================
 // Reporting — data, and nothing but
@@ -938,7 +938,7 @@ end 'growthAgainstPrevious'
 // frees N-k has k live at exit, and k is small and constant), so a copy of this table would be a
 // near-duplicate paid for in a screenful. They are measured, printed per rung above, and carried
 // per phase in `--result-json` for anyone who wants them.
-export enum ScaleMeasure
+enum ScaleMeasure
 	allocations
 	bytes
 
@@ -947,7 +947,7 @@ export enum ScaleMeasure
 	cpuTicks
 end 'ScaleMeasure'
 
-export function measureOf(metric PhaseMetric, measure ScaleMeasure) returns MeasuredQuantity
+function measureOf(metric PhaseMetric, measure ScaleMeasure) returns MeasuredQuantity
 	return match measure 'm'
 		allocations gives metric.allocs as MeasuredQuantity
 		bytes gives metric.bytes as MeasuredQuantity

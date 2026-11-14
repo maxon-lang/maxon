@@ -11,8 +11,8 @@ category: crypto
 
 `TlsClientHandshake` (`specs/tls-handshake.md`) continues as the TLS 1.2 client (RFC 5246, RFC 8422) when the
 ServerHello selects TLS 1.2: it hands the rest of the handshake to `Tls12ClientFlow`, which shares the machine's
-`TlsSession` (the record input and writer, the transcript, what was negotiated, the received data). It is `module`
-code in `stdlib/`, so a program outside `stdlib/` cannot name it (E3088); the cases here are library-tier
+`TlsSession` (the record input and writer, the transcript, what was negotiated, the received data). It is unexported
+code in `stdlib/`, so a program outside `stdlib/` cannot name it (E3008); the cases here are library-tier
 (`<!-- tier: stdlib/helpers/tls -->`) and reach it, and the test seams, as a stdlib source file does.
 
 It follows the canra `tls12-handshake` contract. The ServerHello is checked against the downgrade sentinel when the

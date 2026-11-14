@@ -1,39 +1,39 @@
-module typealias FailureLimit = int(0 to 1000)
+typealias FailureLimit = int(0 to 1000)
 
-module let LowestFailureLimit = 0 as FailureLimit
-module let HighestFailureLimit = 1000 as FailureLimit
-module let DefaultFailureLimit = 20 as FailureLimit
-module let FailureMessageMaxBytes = 4000 as BytePos
+let LowestFailureLimit = 0 as FailureLimit
+let HighestFailureLimit = 1000 as FailureLimit
+let DefaultFailureLimit = 20 as FailureLimit
+let FailureMessageMaxBytes = 4000 as BytePos
 
-export enum SpecDocumentError implements Error
+enum SpecDocumentError implements Error
 	malformed
 end 'SpecDocumentError'
 
-export type SpecTestEntry
+type SpecTestEntry
 	export let spec as String
 	export let name as String
 	export let verdict as VerdictToken
 
-	export static function create(spec String, name String, verdict VerdictToken) returns SpecTestEntry
+	static function create(spec String, name String, verdict VerdictToken) returns SpecTestEntry
 		return Self{spec: spec, name: name, verdict: verdict}
 	end 'create'
 end 'SpecTestEntry'
 
-export typealias SpecTestEntryArray = Array with SpecTestEntry
+typealias SpecTestEntryArray = Array with SpecTestEntry
 
-export type SpecFailureSummary
+type SpecFailureSummary
 	export let spec as String
 	export let test as String
 	export let message as String
 
-	export static function create(spec String, test String, message String) returns SpecFailureSummary
+	static function create(spec String, test String, message String) returns SpecFailureSummary
 		return Self{spec: spec, test: test, message: message}
 	end 'create'
 end 'SpecFailureSummary'
 
-export typealias SpecFailureSummaryArray = Array with SpecFailureSummary
+typealias SpecFailureSummaryArray = Array with SpecFailureSummary
 
-export type SpecReport
+type SpecReport
 	export var tally as ResultTally
 	export var tests as SpecTestEntryArray
 	export var failures as SpecFailureSummaryArray
@@ -100,7 +100,7 @@ function harnessErrorsIn(doc JsonDoc) returns StringArray throws SpecDocumentErr
 	return errors
 end 'harnessErrorsIn'
 
-export function readSpecReport(doc JsonDoc) returns SpecReport throws SpecDocumentError
+function readSpecReport(doc JsonDoc) returns SpecReport throws SpecDocumentError
 	let casesId = try doc.getChild(doc.root, key: SpecResultKey.cases.rawValue) otherwise throw SpecDocumentError.malformed
 	let caseCount = try doc.arrayLength(casesId) otherwise throw SpecDocumentError.malformed
 

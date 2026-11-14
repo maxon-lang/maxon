@@ -51,7 +51,7 @@ let DataKey = "data"
 // legend is empty. A modifier an editor cannot decode is worse than one it is never sent.
 let NoTokenModifiers = 0 as LspSemanticTokenValue
 
-module function semanticTokensServedMethods() returns LspMethodArray
+function semanticTokensServedMethods() returns LspMethodArray
 	let served = LspMethodArray.create(0)
 	served.push(LspMethod.semanticTokensFull)
 	return served
@@ -59,7 +59,7 @@ end 'semanticTokensServedMethods'
 
 // This server's `SemanticTokensOptions`. `full` is the only request form it answers; a `range` form would
 // be a second classifier over the same document, and this one is a walk of an already-lexed file.
-module function semanticTokensCapabilityOptions(doc JsonDoc) returns JsonNodeId
+function semanticTokensCapabilityOptions(doc JsonDoc) returns JsonNodeId
 	let legend = LspJsonObject.create(doc)
 	legend.putNode(TokenTypesKey, value: stringArrayNode(doc, values: legendTokenTypeNames()))
 	legend.putNode(TokenModifiersKey, value: stringArrayNode(doc, values: StringArray.create(0)))
@@ -70,7 +70,7 @@ module function semanticTokensCapabilityOptions(doc JsonDoc) returns JsonNodeId
 	return options.finish()
 end 'semanticTokensCapabilityOptions'
 
-module function semanticTokensAnswer(request LspRequest) returns LspAnswer
+function semanticTokensAnswer(request LspRequest) returns LspAnswer
 	if request.method != LspMethod.semanticTokensFull 'notThisArea'
 		panic("semanticTokensAnswer: {lspMethodSpelling(request.method).wireName} is not this area's — `semanticTokensServedMethods` names the one method it answers")
 	end 'notThisArea'

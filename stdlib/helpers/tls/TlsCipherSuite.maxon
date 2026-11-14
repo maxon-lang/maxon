@@ -12,7 +12,7 @@ let tlsAesGcmSaltBytes = 4
 let tlsPrintableFirst = 0x20
 let tlsPrintableLast = 0x7E
 
-module enum TlsAeadKind
+enum TlsAeadKind
 	aesGcm
 	chaCha20Poly1305
 end 'TlsAeadKind'
@@ -46,7 +46,7 @@ public enum Tls13CipherSuite
 		return tlsFullIvBytes
 	end 'ivBytes'
 
-	module function aeadKind() returns TlsAeadKind
+	function aeadKind() returns TlsAeadKind
 		return match self 'kind'
 			aes128GcmSha256 or
 			aes256GcmSha384 gives TlsAeadKind.aesGcm
@@ -100,7 +100,7 @@ public enum Tls12CipherSuite
 		end 'width'
 	end 'ivBytes'
 
-	module function signsWithRsa() returns bool
+	function signsWithRsa() returns bool
 		return match self 'authentication'
 			ecdheRsaAes128GcmSha256 or
 			ecdheRsaAes256GcmSha384 or
@@ -111,7 +111,7 @@ public enum Tls12CipherSuite
 		end 'authentication'
 	end 'signsWithRsa'
 
-	module function aeadKind() returns TlsAeadKind
+	function aeadKind() returns TlsAeadKind
 		return match self 'kind'
 			ecdheEcdsaAes128GcmSha256 or
 			ecdheRsaAes128GcmSha256 or
@@ -123,7 +123,7 @@ public enum Tls12CipherSuite
 	end 'aeadKind'
 end 'Tls12CipherSuite'
 
-module function tlsSuiteFitsKey(suite Tls12CipherSuite, algorithm X509KeyAlgorithm) returns bool
+function tlsSuiteFitsKey(suite Tls12CipherSuite, algorithm X509KeyAlgorithm) returns bool
 	return suite.signsWithRsa() == (algorithm == X509KeyAlgorithm.rsa)
 end 'tlsSuiteFitsKey'
 
@@ -133,14 +133,14 @@ public union TlsCipherSuite
 	tls12(suite Tls12CipherSuite)
 end 'TlsCipherSuite'
 
-module function tlsServerSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns TlsCipherSuite throws TlsHandshakeError
+function tlsServerSuite(code TlsCipherSuiteCode, protocol TlsProtocol) returns TlsCipherSuite throws TlsHandshakeError
 	return match protocol 'protocol'
 		tls13 gives TlsCipherSuite.tls13(try Tls13CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
 		tls12 gives TlsCipherSuite.tls12(try Tls12CipherSuite.fromRawValue(code) otherwise throw TlsHandshakeError.illegalParameter)
 	end 'protocol'
 end 'tlsServerSuite'
 
-module function tlsIsPrintableAscii(text String) returns bool
+function tlsIsPrintableAscii(text String) returns bool
 	if text.byteLength() == 0 'empty'
 		return false
 	end 'empty'

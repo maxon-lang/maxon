@@ -94,9 +94,9 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'isAscii'
 
 	/// Whether every grapheme is one byte — the `helpers/string/` grapheme walks' way to ask, since
-	/// the field itself is theirs to read but not to reach. `module`, for the same reason
+	/// the field itself is theirs to read but not to reach. Unmarked, for the same reason
 	/// `addressableBytes()` is: open to `stdlib/` and its subdirectories, shut to everyone else.
-	module function hasSingleByteGraphemes() returns bool
+	function hasSingleByteGraphemes() returns bool
 		return singleByteGraphemesFlag
 	end 'hasSingleByteGraphemes'
 
@@ -156,19 +156,13 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// that stays put for the duration of the call. Use it when the intrinsic's parameter is declared
 	/// `__ManagedMemory`; when it is declared `cstring`, use `cstr()`.
 	///
-	/// `module`, not `public`, and deliberately so: this is meant to be the stdlib's own door to the
-	/// bytes — open to `stdlib/` and its subdirectories, shut to everyone else. ⚠ It is one of only SIX
-	/// `module` declarations left in the stdlib, every other of which is in this file; everything else
-	/// here is `public`, so `module` is the marked case and reads as the deliberate narrowing it is.
-	/// **`public` would be the wrong widening AND the wrong claim** — see `Visibility` in
-	/// `maxon-bin/Compiler/Project.maxon`: `public` exempts a declaration from the unused-export
-	/// family, and this one wants exactly the opposite, to be told when nothing outside its file
-	/// reaches it any more. The marker is
-	/// load-bearing already, and not decoration: `helpers/http` and `helpers/url` live in
-	/// SUBDIRECTORIES of `stdlib/` and reach this, which file-private visibility would refuse.
+	/// Unmarked, not `public`, and deliberately so: this is meant to be the stdlib's own door to the
+	/// bytes — open to `stdlib/` and its subdirectories (`helpers/http` and `helpers/url` reach it), shut to
+	/// everyone else. **`public` would be the wrong widening AND the wrong claim** — see `Visibility` in
+	/// `maxon-bin/Compiler/Project.maxon`.
 	///
 	/// This is ENFORCED: a caller outside `stdlib/` gets E3008.
-	module function addressableBytes() returns ByteMemory
+	function addressableBytes() returns ByteMemory
 		return managed
 	end 'addressableBytes'
 
@@ -217,7 +211,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	///
 	/// ⛔ A cstring is NUL-TERMINATED, so this cannot carry an embedded 0 and stops at the first
 	/// one. Bytes that may hold a 0 travel as a `ByteArray` through `from(bytes)`.
-	module static function fromCString(cs cstring) returns String
+	static function fromCString(cs cstring) returns String
 		return String.init(ByteMemory.fromCString(cs))
 	end 'fromCString'
 
@@ -284,7 +278,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// signature the emitted code does not honour — and translating the error would mean a second
 	/// copy of the bounds-check-and-load lowering, which is the duplication this project's rules
 	/// exist to prevent.
-	module function byteAt(index BytePos) returns Byte throws __ManagedMemoryError
+	function byteAt(index BytePos) returns Byte throws __ManagedMemoryError
 		return try managed.byteAt(index)
 	end 'byteAt'
 
@@ -298,7 +292,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// read bytes inside NESTED CONDITIONS (`if s.byteAtOrPanic(pos) == 46`), and a `try` cannot go
 	/// there. Unlike `byteAt` this is a real CALL, so a loop that CAN phrase its bounds inline should
 	/// use `byteAt` directly — String's own helpers do.
-	module function byteAtOrPanic(index BytePos) returns Byte
+	function byteAtOrPanic(index BytePos) returns Byte
 		return try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — caller guarantees index < byteLength()")
 	end 'byteAtOrPanic'
 
@@ -318,7 +312,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// allocation that owns its bytes and references nothing.
 	///
 	/// Callers must guarantee `pos + len <= byteLength()`; the lowering's bounds check panics.
-	module function makeCharFromBytes(pos BytePos, len BytePos) returns Character
+	function makeCharFromBytes(pos BytePos, len BytePos) returns Character
 		return managed.makeCharFromBytes(pos, len)
 	end 'makeCharFromBytes'
 
@@ -333,7 +327,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// under 4b-2 this writes a small string's INLINE bytes in place, so `sliceBytes` + `setByte`
 	/// maps a short string with no record and no allocation at all. Reaching a mutable buffer via
 	/// `addressableBytes()` instead would materialize one per call.
-	module function setByte(index BytePos, value Byte) throws __ManagedMemoryError
+	function setByte(index BytePos, value Byte) throws __ManagedMemoryError
 		try managed.setByte(index, value)
 	end 'setByte'
 
@@ -484,7 +478,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return indexAtByte(try findIn(self, offset: 0, len: byteLength(), needle: needle))
 	end 'findFirst'
 
-	module function bytePosOf(needle String, from BytePos) returns BytePos throws StringError
+	function bytePosOf(needle String, from BytePos) returns BytePos throws StringError
 		if from > byteLength() 'pastTheEnd'
 			throw StringError.invalidIndex
 		end 'pastTheEnd'

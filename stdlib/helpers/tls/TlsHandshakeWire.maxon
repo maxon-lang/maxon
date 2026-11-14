@@ -1,23 +1,23 @@
-module typealias TlsWireValue = int(0 to u32.max)
-module typealias TlsVectorBytes = int(0 to 16777215) implements Count
+typealias TlsWireValue = int(0 to u32.max)
+typealias TlsVectorBytes = int(0 to 16777215) implements Count
 
-module enum TlsWireWidth
+enum TlsWireWidth
 	uint8 = 1
 	uint16 = 2
 	uint24 = 3
 	uint32 = 4
 end 'TlsWireWidth'
 
-module enum TlsLengthPrefix
+enum TlsLengthPrefix
 	uint8 = 1
 	uint16 = 2
 	uint24 = 3
 
-	module function width() returns ByteWordWidth
+	function width() returns ByteWordWidth
 		return self.rawValue as ByteWordWidth
 	end 'width'
 
-	module function maximum() returns TlsVectorBytes
+	function maximum() returns TlsVectorBytes
 		return match self 'prefix'
 			uint8 gives tlsMaxUint8Vector
 			uint16 gives tlsMaxUint16Vector
@@ -30,34 +30,34 @@ let tlsMaxUint8Vector = 255
 let tlsMaxUint16Vector = 65535
 let tlsMaxUint24Vector = 16777215
 let tlsCodePointBytes = 2
-module let tlsMaxCodePointCount = 32767
-module let tlsAnyLength = 0
-module let tlsNonEmpty = 1
+let tlsMaxCodePointCount = 32767
+let tlsAnyLength = 0
+let tlsNonEmpty = 1
 
-module type TlsReader
+type TlsReader
 	var bytes as ByteArray
 	var position as ElementIndex
 	var limit as ElementIndex
 
-	module static function over(bytes ByteArray) returns TlsReader
+	static function over(bytes ByteArray) returns TlsReader
 		return Self{bytes: bytes.clone(), position: 0, limit: bytes.count()}
 	end 'over'
 
-	module function remaining() returns Count
+	function remaining() returns Count
 		return limit - position
 	end 'remaining'
 
-	module function isAtEnd() returns bool
+	function isAtEnd() returns bool
 		return position == limit
 	end 'isAtEnd'
 
-	module function finish() throws TlsCodecError
+	function finish() throws TlsCodecError
 		if not isAtEnd() 'trailing'
 			throw TlsCodecError.decodeError
 		end 'trailing'
 	end 'finish'
 
-	module function readUnsigned(width TlsWireWidth) returns TlsWireValue throws TlsCodecError
+	function readUnsigned(width TlsWireWidth) returns TlsWireValue throws TlsCodecError
 		return (try readWord(width.rawValue as ByteWordWidth)) as TlsWireValue
 	end 'readUnsigned'
 
@@ -72,7 +72,7 @@ module type TlsReader
 		return word
 	end 'readWord'
 
-	module function readBytes(count Count) returns ByteArray throws TlsCodecError
+	function readBytes(count Count) returns ByteArray throws TlsCodecError
 		if remaining() < count 'truncated'
 			throw TlsCodecError.decodeError
 		end 'truncated'
@@ -83,11 +83,11 @@ module type TlsReader
 		return taken
 	end 'readBytes'
 
-	module function readRemaining() returns ByteArray
+	function readRemaining() returns ByteArray
 		return try readBytes(remaining()) otherwise panic("TlsReader.readRemaining: the remaining bytes are available")
 	end 'readRemaining'
 
-	module function readBoundedVector(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
+	function readBoundedVector(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
 		let length = (try readWord(prefix.width())) as TlsVectorBytes
 
 		if length < minimum or length > maximum or length > remaining() 'length'
@@ -100,21 +100,21 @@ module type TlsReader
 		return Self{bytes: bytes, position: start, limit: start + length}
 	end 'readBoundedVector'
 
-	module function readVector(prefix TlsLengthPrefix, minimum TlsVectorBytes) returns TlsReader throws TlsCodecError
+	function readVector(prefix TlsLengthPrefix, minimum TlsVectorBytes) returns TlsReader throws TlsCodecError
 		return try readBoundedVector(prefix, minimum: minimum, maximum: prefix.maximum())
 	end 'readVector'
 
-	module function readBoundedVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns ByteArray throws TlsCodecError
+	function readBoundedVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns ByteArray throws TlsCodecError
 		let window = try readBoundedVector(prefix, minimum: minimum, maximum: maximum)
 
 		return window.readRemaining()
 	end 'readBoundedVectorBytes'
 
-	module function readVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes) returns ByteArray throws TlsCodecError
+	function readVectorBytes(prefix TlsLengthPrefix, minimum TlsVectorBytes) returns ByteArray throws TlsCodecError
 		return try readBoundedVectorBytes(prefix, minimum: minimum, maximum: prefix.maximum())
 	end 'readVectorBytes'
 
-	module function readCodePointList(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
+	function readCodePointList(prefix TlsLengthPrefix, minimum TlsVectorBytes, maximum TlsVectorBytes) returns TlsReader throws TlsCodecError
 		let window = try readBoundedVector(prefix, minimum: (minimum * tlsCodePointBytes) as TlsVectorBytes, maximum: (maximum * tlsCodePointBytes) as TlsVectorBytes)
 
 		if window.remaining() mod tlsCodePointBytes != 0 'odd'
@@ -125,11 +125,11 @@ module type TlsReader
 	end 'readCodePointList'
 end 'TlsReader'
 
-module function appendUnsigned(output ByteArray, value TlsWireValue, width TlsWireWidth)
+function appendUnsigned(output ByteArray, value TlsWireValue, width TlsWireWidth)
 	appendOrderedWord(output, word: value as OrderedWord, width: width.rawValue as ByteWordWidth, order: ByteOrder.bigEndian)
 end 'appendUnsigned'
 
-module function appendVector(output ByteArray, prefix TlsLengthPrefix, contents ByteArray) throws TlsEncodeError
+function appendVector(output ByteArray, prefix TlsLengthPrefix, contents ByteArray) throws TlsEncodeError
 	if contents.count() > prefix.maximum() 'overflow'
 		throw TlsEncodeError.vectorTooLong
 	end 'overflow'

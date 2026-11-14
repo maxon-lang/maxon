@@ -1023,14 +1023,14 @@ public type ChildOutput implements ByteSource
 	end 'requireEnded'
 end 'ChildOutput'
 
-module type ChildInput
+type ChildInput
 	let handle as StreamingHandle
 
 	static function over(handle StreamingHandle) returns ChildInput
 		return Self{handle: handle}
 	end 'over'
 
-	module function write(text String) throws SubprocessError
+	function write(text String) throws SubprocessError
 		let rc = __Builtins.subprocessWriteStdinBytes(handle, text.cstr(), text.byteLength())
 
 		if rc == StdinQueuePendingAnswer 'queued'
@@ -1043,19 +1043,19 @@ module type ChildInput
 	end 'write'
 end 'ChildInput'
 
-module typealias BlockedPasses = int(0 to 5)
+typealias BlockedPasses = int(0 to 5)
 
-module let BlockedPassesNone = 0 as BlockedPasses
-module let BlockedPassesMax = 5 as BlockedPasses
+let BlockedPassesNone = 0 as BlockedPasses
+let BlockedPassesMax = 5 as BlockedPasses
 
-module type StdinWatch
+type StdinWatch
 	let handle as StreamingHandle
 
 	static function over(handle StreamingHandle) returns Self
 		return Self{handle: handle}
 	end 'over'
 
-	module function untilWritable(passes BlockedPasses)
+	function untilWritable(passes BlockedPasses)
 		let answer = __Builtins.subprocessAwaitStdinWritable(handle, passes)
 
 		if answer != StdinAcceptedAnswer 'refused'
@@ -1157,7 +1157,7 @@ public type StreamingSubprocess is unique
 		try ChildInput.over(handle).write(text)
 	end 'writeStdin'
 
-	module function queueStdin(text String) throws SubprocessError
+	function queueStdin(text String) throws SubprocessError
 		try requireLive()
 
 		let rc = __Builtins.subprocessQueueStdin(handle, text.cstr(), text.byteLength())
@@ -1171,13 +1171,13 @@ public type StreamingSubprocess is unique
 		end 'refused'
 	end 'queueStdin'
 
-	module function stdinWatch() returns StdinWatch throws SubprocessError
+	function stdinWatch() returns StdinWatch throws SubprocessError
 		try requireLive()
 
 		return StdinWatch.over(handle)
 	end 'stdinWatch'
 
-	module function pushQueuedStdin() returns BytePos throws SubprocessError
+	function pushQueuedStdin() returns BytePos throws SubprocessError
 		try requireLive()
 		let remaining = __Builtins.subprocessPushStdin(handle)
 

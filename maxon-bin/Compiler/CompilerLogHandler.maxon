@@ -12,7 +12,7 @@ export enum CompilerLogGroup
 end 'CompilerLogGroup'
 
 // The level numbers the DebugStream ring carries and `maxon monitor` prints.
-module enum RingLogLevel
+enum RingLogLevel
 	error = 1
 	info = 2
 	debug = 3
@@ -91,7 +91,7 @@ export function installCompilerLogHandler()
 	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 end 'installCompilerLogHandler'
 
-module function attributeCompilerLogThen(unit TraceUnit, receiver CompileReceiver.handle)
+function attributeCompilerLogThen(unit TraceUnit, receiver CompileReceiver.handle)
 	try CompilerLogRoute.current().handler.attribute(unit) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then break
@@ -106,7 +106,7 @@ end 'attributeCompilerLogThen'
 // moves on, allocating inside whatever measured bracket is open by then. A compile flushes before
 // its totals close. The acknowledgement is a message to `receiver`, so a run that holds a service
 // waits for it as a stage and not inside one.
-module function flushCompilerLogThen(receiver CompileReceiver.handle)
+function flushCompilerLogThen(receiver CompileReceiver.handle)
 	try CompilerLogRoute.current().handler.flushThen(receiver) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then panic("flushCompilerLogThen: the compiler's log mailbox is full, and a run that holds a service cannot wait for room")
@@ -115,7 +115,7 @@ module function flushCompilerLogThen(receiver CompileReceiver.handle)
 	end 'refused'
 end 'flushCompilerLogThen'
 
-module function releaseAcknowledgedCompilerLog()
+function releaseAcknowledgedCompilerLog()
 	try CompilerLogRoute.current().handler.releaseAcknowledged() otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then break
@@ -141,7 +141,7 @@ export function compilerLogger(group CompilerLogGroup) returns Logger
 	return Log.default().withGroup(group.name).withAttrs(bound)
 end 'compilerLogger'
 
-module function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
+function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
 	return level.rank >= Log.groupLevel(group.name).rank
 end 'compilerLogEnabled'
 
@@ -155,7 +155,7 @@ export function compilerLogShowsDetail() returns bool
 	return false
 end 'compilerLogShowsDetail'
 
-module function ringLogLevelOf(level LogLevel) returns RingLogLevel
+function ringLogLevelOf(level LogLevel) returns RingLogLevel
 	if level.rank <= LogLevel.trace.rank 'trace'
 		return RingLogLevel.trace
 	end 'trace'

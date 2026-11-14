@@ -3,10 +3,10 @@ export typealias DebugWidth = int(1 to 8)
 export let MinDebugWidth = 1 as DebugWidth
 export let MaxDebugWidth = 8 as DebugWidth
 
-module typealias DebugBitShift = int(0 to 63)
+typealias DebugBitShift = int(0 to 63)
 
 export let DebuggeeWordBytes = MaxDebugWidth
-module let DebugUserSpaceLimit = 0x0000800000000000 as DebuggeeWord
+let DebugUserSpaceLimit = 0x0000800000000000 as DebuggeeWord
 
 let DebugSignBearingByteValue = 128
 let DebugByteModulus = 256
@@ -17,7 +17,7 @@ export union DebugBytesRead
 	read(value DebuggeeWord)
 end 'DebugBytesRead'
 
-export union DebugUserSpaceAddress
+union DebugUserSpaceAddress
 	unresolved
 	at(address DebugAddress)
 end 'DebugUserSpaceAddress'
@@ -64,7 +64,7 @@ export function debugWordWidthWithin(left DebugAddress) returns DebugWidth
 	return DebuggeeWordBytes if left >= (DebuggeeWordBytes as DebugAddress) else left as DebugWidth
 end 'debugWordWidthWithin'
 
-module function debugSignExtended(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
+function debugSignExtended(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
 	if width >= DebuggeeWordBytes 'theWordCarriesItsSign'
 		return value
 	end 'theWordCarriesItsSign'
@@ -74,7 +74,7 @@ module function debugSignExtended(value DebuggeeWord, width DebugWidth) returns 
 	return value - signBit * 2 if value >= signBit else value
 end 'debugSignExtended'
 
-module function debugMaskedToWidth(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
+function debugMaskedToWidth(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
 	if width >= DebuggeeWordBytes 'theWholeWord'
 		return value
 	end 'theWholeWord'
@@ -82,7 +82,7 @@ module function debugMaskedToWidth(value DebuggeeWord, width DebugWidth) returns
 	return value and (((1 as DebuggeeWord) shl (((width as FullRangeInt) * BitsPerByte) as DebugBitShift)) - 1)
 end 'debugMaskedToWidth'
 
-module function debugUserSpaceAddress(value DebuggeeWord) returns DebugUserSpaceAddress
+function debugUserSpaceAddress(value DebuggeeWord) returns DebugUserSpaceAddress
 	if value < 0 or value >= DebugUserSpaceLimit 'notAUserSpaceAddress'
 		return DebugUserSpaceAddress.unresolved
 	end 'notAUserSpaceAddress'

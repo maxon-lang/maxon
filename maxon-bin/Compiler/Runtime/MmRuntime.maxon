@@ -68,7 +68,7 @@ let HeaderBytes = 16
 
 // Every box total is a multiple of this and so is every prefix, so a heap box's payload is 16-aligned.
 // The slab's only smaller-aligned classes (8 and 24) are therefore unreachable for a box.
-export let BoxSlotAlignment = 16
+let BoxSlotAlignment = 16
 let ImmortalSizeSlotBelowHeader = 8
 
 // ⭐⭐ **THE `--debugstream` PREFIX WORD — `(alloc_id << 16 | tag_index)`, AND IT SITS *BELOW* THE HEADER
@@ -95,7 +95,7 @@ let DebugStreamPackedIdBytes = 16
 // disagree about where the payload starts. (`emitBoxAllocationBase` walks the SAME distance in two hops,
 // from a header base a caller already holds, so an untraced build spends no op on a displacement of zero;
 // both routes come out of `HeaderBytes` and `DebugStreamPackedIdBytes` and there is no third number.)
-export function boxPrefixBytes(debugStream bool) returns FullRangeInt
+function boxPrefixBytes(debugStream bool) returns FullRangeInt
 	// ⚠ THE PARENTHESES ARE LOAD-BEARING. `a + b if c else d` binds as `a + (b if c else d)`, so the
 	// unparenthesized form returns `HeaderBytes + HeaderBytes` on an UNTRACED build — a 32-byte prefix
 	// where an untraced box has 16. It compiles and links, so only a byte-identical check against a
@@ -161,7 +161,7 @@ let NoAllocationId = 0
 // Each slot is appended at its named offset and the appender refuses to write it anywhere else, so the
 // offsets the runtime loads by and the offsets this writes are one set of constants that cannot drift —
 // `BufferOwnership.appendRecordSlot`'s discipline, applied to the header the record is addressed through.
-export function immortalBoxHeaderBytes(debugStream bool, recordBytes FullRangeInt) returns ByteArray
+function immortalBoxHeaderBytes(debugStream bool, recordBytes FullRangeInt) returns ByteArray
 	let header = ByteArray.create(0)
 
 	if debugStream 'tracedBuild'
@@ -194,7 +194,7 @@ end 'immortalPrefixBytes'
 // Where inside an image record's `.rdata` payload the record itself begins — the bytes the header above
 // spends, and therefore where the payload's LABEL points. Derived from `boxPrefixBytes`, the same number
 // `immortalBoxHeaderBytes` asserts its own length against, so an address and the bytes at it cannot drift.
-export function immortalBoxHeaderSize(debugStream bool) returns ByteOffset
+function immortalBoxHeaderSize(debugStream bool) returns ByteOffset
 	return immortalPrefixBytes(debugStream) as ByteOffset
 end 'immortalBoxHeaderSize'
 
@@ -250,8 +250,8 @@ end 'emitRouteOnRefcountWord'
 
 export let MmIncrefName = b"__mm_incref"
 export let MmRetainName = b"__mm_retain"
-export let MmIncrefStickyName = b"__mm_incref_sticky"
-export let MmRetainStickyName = b"__mm_retain_sticky"
+let MmIncrefStickyName = b"__mm_incref_sticky"
+let MmRetainStickyName = b"__mm_retain_sticky"
 
 // ⭐⭐ **`__mm_own(box) -> box` — the co-own a DURABLE SINK owes a plain box: `__mm_retain` for a heap one
 // and a private COPY for an image record.** See `buildMmOwn` for the defect the plain incref was.
@@ -267,7 +267,7 @@ let MmFreeSlowName = b"__mm_free_slow"
 // `(size, destructor)`; a `--debugstream` build passes a trace tag as a third argument.
 export let MmAllocBaseArgCount = 2 as ParamCount
 export let MmDecrefName = b"__mm_decref"
-export let MmFreeName = b"__mm_free"
+let MmFreeName = b"__mm_free"
 let MmReleaseName = b"__mm_release"
 export let MmLeakCheckName = b"__mm_leak_check"
 
@@ -344,7 +344,7 @@ export let MmIsNullName = b"__mm_is_null"
 // other `__mm_*` names, because this is the one list of them and `isRuntimeCallee`'s prefix rule is stated
 // three lines below; its BODY is built in `BufferOwnership`, which owns the record layout it reads and the
 // ownership encoding it republishes. See `buildMmCowDetach` for why it is an `__mm_` operation at all.
-export let MmCowDetachName = b"__mm_cow_detach"
+let MmCowDetachName = b"__mm_cow_detach"
 
 // ⭐ **THE NAME OF A MANAGED-PAYLOAD UNION'S SYNTHESIZED DESTRUCTOR — `__destruct_<UnionName>`**.
 // It is `__`-prefixed, so `isCompilerInternalCallee` routes its call past the user-function
@@ -835,7 +835,7 @@ end 'installMmRuntime'
 // One i64 parameter — the shape five of the six runtime functions share. Exported: the String
 // runtime's `__print_string` (one string pointer) shares it, so it is the same helper rather than a
 // second copy.
-export function oneI64Param() returns StdTypeArray
+function oneI64Param() returns StdTypeArray
 	let types = StdTypeArray.create(0)
 	types.push(StdType.i64)
 	return types
@@ -853,7 +853,7 @@ end 'twoI64Params'
 // `oneI64Param`, and it exists for `twoF64Params`' reason: the DECLARED f64 is what makes the ABI
 // agree at both ends, `calleeArgFloatMask` routing the argument into an XMM register and
 // `lowerParam` capturing it from one.
-export function oneF64Param() returns StdTypeArray
+function oneF64Param() returns StdTypeArray
 	let types = StdTypeArray.create(0)
 	types.push(StdType.f64)
 	return types
@@ -864,7 +864,7 @@ end 'oneF64Param'
 // reason, and the DECLARED f64 is what makes the ABI agree at both ends: `calleeArgFloatMask` reads
 // these types to route each ARGUMENT into an XMM register, and `lowerParam` reads them to capture
 // it from one.
-export function twoF64Params() returns StdTypeArray
+function twoF64Params() returns StdTypeArray
 	let types = StdTypeArray.create(0)
 	types.push(StdType.f64)
 	types.push(StdType.f64)
@@ -873,7 +873,7 @@ end 'twoF64Params'
 
 // Three i64 parameters — `__str_copy(dest, src, len)` and the managed-memory runtime's `__managed_set(arr, index,
 // value)` / `__managed_mem_set(mem, index, value)`. Shared here so a runtime builder does not mint its own.
-export function threeI64Params() returns StdTypeArray
+function threeI64Params() returns StdTypeArray
 	let types = StdTypeArray.create(0)
 	types.push(StdType.i64)
 	types.push(StdType.i64)
@@ -884,7 +884,7 @@ end 'threeI64Params'
 // Four i64 parameters — the managed-memory runtime's `__managed_slice_managed(arr, start, end, cloneFn)`, plus
 // `__managed_zero_elems` / `__managed_slice_opaque` beside it. It joins the 1/2/3-param
 // family here (rather than beside a single caller) because more than one entry needs it.
-export function fourI64Params() returns StdTypeArray
+function fourI64Params() returns StdTypeArray
 	let types = threeI64Params()
 	types.push(StdType.i64)
 	return types
@@ -892,14 +892,14 @@ end 'fourI64Params'
 
 // Five i64 parameters — one parameter fewer than `sixI64Params`, and the shape of the debug host's five-word entry
 // points (`DebugHostRuntime`).
-export function fiveI64Params() returns StdTypeArray
+function fiveI64Params() returns StdTypeArray
 	let types = fourI64Params()
 	types.push(StdType.i64)
 	return types
 end 'fiveI64Params'
 
 // Six i64 parameters — `__managed_move_elems(dest, destIndex, src, srcIndex, count, elementSize)`.
-export function sixI64Params() returns StdTypeArray
+function sixI64Params() returns StdTypeArray
 	let types = fiveI64Params()
 	types.push(StdType.i64)
 	return types
@@ -910,7 +910,7 @@ end 'sixI64Params'
 // a SOURCE FACT here in exactly the sense that note requires: `stdlib/Subprocess.maxon`'s spawn call passes
 // fifteen arguments because the contract has fifteen slots. The count and the list are one statement,
 // made once.
-export function fifteenI64Params() returns StdTypeArray
+function fifteenI64Params() returns StdTypeArray
 	let types = sixI64Params()
 
 	for _ in 0 upto SpawnContractExtraParams 'each'
@@ -921,7 +921,7 @@ export function fifteenI64Params() returns StdTypeArray
 end 'fifteenI64Params'
 
 // The attached spawn contract's arity, and how many of them the six-parameter base is short.
-export let SubprocessSpawnParamCount = 15 as ParamCount
+let SubprocessSpawnParamCount = 15 as ParamCount
 let SpawnContractExtraParams = 9 as ParamCount
 
 // ⚠ **THE LADDER IS NAMED, NOT A DERIVED `i64Params(count)`, BECAUSE EVERY ARITY ON IT IS A SOURCE
@@ -936,7 +936,7 @@ let SpawnContractExtraParams = 9 as ParamCount
 // incoming ABI register into its virtual register. Parameter `k` is ValueId `k`. All-i64: every
 // hand-assembled runtime chunk uses the GPR-only internal ABI. A chunk with a NON-i64 parameter (a
 // `__fnref_` thunk forwarding a float) uses `emitTypedParams` instead.
-export function emitParams(module StdModule, block IrBlock, count ParamCount)
+function emitParams(module StdModule, block IrBlock, count ParamCount)
 	for k in 0 upto count 'each'
 		module.appendOp(block, op: StdOp.param(k as ValueId, index: k, paramType: StdType.i64))
 	end 'each'
@@ -976,14 +976,14 @@ export function emitLoadElementStamp(module StdModule, block IrBlock, record Val
 	return emitLoadField(module, block: block, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
 end 'emitLoadElementStamp'
 
-export function emitStrideOfStamp(module StdModule, block IrBlock, stamp ValueId, ids ValueMinter) returns ValueId
+function emitStrideOfStamp(module StdModule, block IrBlock, stamp ValueId, ids ValueMinter) returns ValueId
 	let width = emitConst(module, block: block, value: ElementStampStrideBits, ids: ids)
 	let high = emitBin(module, block: block, a: stamp, b: width, opcode: StdBinOpcode.shl, ids: ids)
 
 	return emitBin(module, block: block, a: high, b: width, opcode: StdBinOpcode.shr, ids: ids)
 end 'emitStrideOfStamp'
 
-export function emitLoadElementStride(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+function emitLoadElementStride(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	return emitStrideOfStamp(module, block: block, stamp: emitLoadElementStamp(module, block: block, record: record, ids: ids), ids: ids)
 end 'emitLoadElementStride'
 
@@ -998,7 +998,7 @@ end 'emitStoreField'
 // those ops — so every atomic on a struct field has to compute the address first: a SHARED box's refcount
 // word (`emitAdjustRefcount`, through `emitFieldAccumulate`), `SchedRuntime`'s P fields and `GtRuntime`'s
 // releaser slot are the same arithmetic over three different structs.
-export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+function emitFieldAddr(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let displacement = emitConst(module, block: block, value: offset as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: record, b: displacement, opcode: StdBinOpcode.add, ids: ids)
 end 'emitFieldAddr'
@@ -1021,7 +1021,7 @@ end 'emitFieldAddr'
 // spellings (`and not (a - 1)` there, `and -a` here — identical for a power of two on two's complement), so
 // they are named for each other here rather than left to be found: a reader who changes one should know the
 // other exists.
-export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width FullRangeInt, ids ValueMinter) returns ValueId
+function emitAlignUp(module StdModule, block IrBlock, value ValueId, width FullRangeInt, ids ValueMinter) returns ValueId
 	if not isPowerOfTwo(width as MachineWord) 'widthNotAPowerOfTwo'
 		panic("emitAlignUp: a width of {width} is not a positive power of two, so `-{width}` is not the mask that clears its low bits")
 	end 'widthNotAPowerOfTwo'
@@ -1044,14 +1044,14 @@ let WordSlotBytes = 8
 // through it, `__list_from` reads the same buffer the same way, and the slab wants the same three
 // ops for the mcentral heads, the mcache rows and the packed class-geometry table. A second copy
 // would be "the address of word slot i" written down twice.
-export function emitWordSlotAddr(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+function emitWordSlotAddr(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	let slotBytes = emitConst(module, block: block, value: WordSlotBytes, ids: ids)
 	let offset = emitBin(module, block: block, a: index, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitWordSlotAddr'
 
 // Load slot `index` (one i64 word) of parallel buffer `base`.
-export function emitWordSlotLoad(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+function emitWordSlotLoad(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: emitWordSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, ids: ids)
 end 'emitWordSlotLoad'
 
@@ -1085,7 +1085,7 @@ end 'emitWordSlotStore'
 // one body.
 //
 // It returns the block execution continues in, because it FORKS: the caller goes on emitting into that.
-export function emitMovedOutSlotClear(module StdModule, func IrFunction, block IrBlock, base ValueId, index ValueId, elemDrop ValueId, ids ValueMinter) returns IrBlock
+function emitMovedOutSlotClear(module StdModule, func IrFunction, block IrBlock, base ValueId, index ValueId, elemDrop ValueId, ids ValueMinter) returns IrBlock
 	let clear = module.addBlock(func, label: b"clearmoved", heat: BlockHeat.normal)
 	let resume = module.addBlock(func, label: b"moveddone", heat: BlockHeat.normal)
 
@@ -1108,18 +1108,18 @@ end 'emitBin'
 // `callee(args)` into a fresh value — a call the compiler MINTS into a body it is building, which is the
 // only way the appended band reaches a `runtime/` tier entry: no walk over source call edges can see one,
 // so the edge is declared (`StdlibSource.runtimeTierFileIsCompilerCalled`) and minted here.
-export function emitRuntimeCall(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter) returns ValueId
+function emitRuntimeCall(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.call(v, callee: callee, args: args))
 	return v
 end 'emitRuntimeCall'
 
-export function emitCallAndReturn(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
+function emitCallAndReturn(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
 	let answer = emitRuntimeCall(module, block: block, callee: callee, args: args, ids: ids)
 	module.setTerminator(block, op: StdOp.ret(answer))
 end 'emitCallAndReturn'
 
-export function emitCallAndReturnVoid(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
+function emitCallAndReturnVoid(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee, args: args))
 	module.setTerminator(block, op: StdOp.retVoid)
 end 'emitCallAndReturnVoid'
@@ -1163,7 +1163,7 @@ end 'emitUnary'
 // `lock xadd` plus an allocator-supplied copy a read result forces (`lowerAtomicRmw` states the saving).
 // The callers that want the number they just minted apply the delta again, which costs one ALU op on a
 // cold path. The plain arm keeps the same contract so that no caller has to know which arm it got.
-export function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
+function emitGlobalAccumulate(module StdModule, block IrBlock, label ByteArray, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 
@@ -1192,7 +1192,7 @@ end 'emitGlobalAccumulate'
 // wrong choice does not fail loudly**: a plain step on a contended word LOSES COUNTS and answers a number
 // that is merely too small, so the choice is never made by copying whichever neighbour a caller happened to
 // read.
-export function emitFieldAccumulate(module StdModule, block IrBlock, record ValueId, offset ByteOffset, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
+function emitFieldAccumulate(module StdModule, block IrBlock, record ValueId, offset ByteOffset, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
 	if not multiM 'soleWriter'
 		let current = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
 		let stepped = emitBin(module, block: block, a: current, b: delta, opcode: StdBinOpcode.add, ids: ids)
@@ -1217,11 +1217,11 @@ end 'emitFieldAccumulate'
 //
 // It lives here rather than with any one runtime family because "a literal as a C string" is a property of
 // the Std tier and of Win32's ABI: the scheduler, the poller and the subprocess runner all spell one.
-export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
+function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
 	return emitLiteralInSlab(module, block: block, ids: ids, text: text, byteCount: (text.count() + 1) as FullRangeInt)
 end 'emitLiteralCString'
 
-export function emitLiteralInSlab(module StdModule, block IrBlock, ids ValueMinter, text ByteArray, byteCount FullRangeInt) returns ValueId
+function emitLiteralInSlab(module StdModule, block IrBlock, ids ValueMinter, text ByteArray, byteCount FullRangeInt) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: byteCount, ids: ids)
 	let buf = emitSlabAlloc(module, block: block, bytes: sizeConst, kind: SlabBufferKind.hostText, ids: ids)
 	emitStoreLiteralBytes(module, block: block, base: buf, offset: 0, text: text, ids: ids)
@@ -1231,7 +1231,7 @@ end 'emitLiteralInSlab'
 // `text` stored byte by byte at `base + offset`. No terminator is written: every caller stores into a
 // zeroed region sized one byte past the text, or into one exactly its size when `text` carries its
 // own terminator (`HostTextRuntime.emitLiteralHostString`).
-export function emitStoreLiteralBytes(module StdModule, block IrBlock, base ValueId, offset ByteOffset, text ByteArray, ids ValueMinter)
+function emitStoreLiteralBytes(module StdModule, block IrBlock, base ValueId, offset ByteOffset, text ByteArray, ids ValueMinter)
 	for k in 0 upto text.count() 'each'
 		let ch = try text.get(k) otherwise panic("emitStoreLiteralBytes: text.get OOB at {k}")
 		let byteConst = emitConst(module, block: block, value: ch as FullRangeInt, ids: ids)
@@ -1243,32 +1243,32 @@ end 'emitStoreLiteralBytes'
 // `isPure: true` and freely rematerializable, so a caller that does both around one word pays nothing for
 // asking twice; the readers that hoist the address across a load-then-store pair are deliberately left
 // alone, because there a hoist only widens a live range.
-export function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
+function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	return emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
 end 'emitLoadGlobalWord'
 
-export function emitLoadAcquireField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+function emitLoadAcquireField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.loadAcquire(v, addrId: record, offset: offset, valueType: StdType.i64))
 	return v
 end 'emitLoadAcquireField'
 
-export function emitLoadAcquireGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
+function emitLoadAcquireGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	return emitLoadAcquireField(module, block: block, record: addr, offset: 0, ids: ids)
 end 'emitLoadAcquireGlobalWord'
 
-export function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
+function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	emitStoreField(module, block: block, record: addr, offset: 0, value: value)
 end 'emitStoreGlobalWord'
 
 // `emitStoreGlobalWord` with RELEASE ordering, the writer an `emitLoadAcquireGlobalWord` reader pairs with.
-export function emitStoreReleaseGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
+function emitStoreReleaseGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	module.appendOp(block, op: StdOp.storeRelease(addr, offset: 0, valueId: value, valueType: StdType.i64))
@@ -1298,7 +1298,7 @@ end 'emitConst'
 // (`BuiltinConformanceRuntime.buildFloatCompare` and `buildBuiltinEquals` under an f64 operand), and they
 // pass `operandType` explicitly. Parameterized rather than FORKED into an `emitFloatCmp`: a fork would be
 // this three-line body copied, so the day `StdOp.cmp` gains a field only one copy would learn about it.
-export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter, operandType StdType = StdType.i64) returns ValueId
+function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter, operandType StdType = StdType.i64) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: operandType))
 	return v
@@ -1315,16 +1315,16 @@ end 'emitCompareWithConstant'
 // Records the edge even when `values` is empty, unlike `pushCascadeEdge`: the allocator's serial bail
 // edge and the runtime lock's entry edge are recorded empty, and skipping them changes the Std IR.
 // A caller that means "no edge" guards the call itself.
-export function pushBranchEdge(block IrBlock, to IrBlock, values ValueIdArray)
+function pushBranchEdge(block IrBlock, to IrBlock, values ValueIdArray)
 	block.branchEdges.push(BranchEdge.create(to.id, argIds: values))
 end 'pushBranchEdge'
 
-export function emitBranchCarrying(module StdModule, from IrBlock, to IrBlock, values ValueIdArray)
+function emitBranchCarrying(module StdModule, from IrBlock, to IrBlock, values ValueIdArray)
 	module.setTerminator(from, op: StdOp.branch(to.id))
 	pushBranchEdge(from, to: to, values: values)
 end 'emitBranchCarrying'
 
-export function emitBranchOnCompareValues(module StdModule, block IrBlock, a ValueId, pred StdCmpPred, b ValueId, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter, operandType StdType = StdType.i64)
+function emitBranchOnCompareValues(module StdModule, block IrBlock, a ValueId, pred StdCmpPred, b ValueId, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter, operandType StdType = StdType.i64)
 	let holds = emitCmp(module, block: block, a: a, b: b, pred: pred, ids: ids, operandType: operandType)
 
 	module.setTerminator(block, op: StdOp.condBranch(holds, thenBlockId: whenTrue.id, elseBlockId: whenFalse.id))
@@ -1342,14 +1342,14 @@ end 'emitBranchOnCompare'
 //
 // ⚠ A VOID throwing function passes a 0 through `value` that the ABI never moves (a void
 // `emitReturnValueMove` emits nothing); only the flag register is read.
-export function emitErrorReturn(module StdModule, block IrBlock, flag FullRangeInt, ids ValueMinter)
+function emitErrorReturn(module StdModule, block IrBlock, flag FullRangeInt, ids ValueMinter)
 	let zeroVal = emitConst(module, block: block, value: 0, ids: ids)
 	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
 	module.setTerminator(block, op: StdOp.errorReturn(zeroVal, errorFlagId: flagVal))
 end 'emitErrorReturn'
 
 // A successful throwing return: `errorReturn(value, 0)`. See `emitErrorReturn` for why the pair lives here.
-export function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
+function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
 	let flag = emitConst(module, block: block, value: NoErrorFlag, ids: ids)
 	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
 end 'emitOkReturn'
@@ -1360,7 +1360,7 @@ end 'emitOkReturn'
 // `__md_create` and `__mf_*`'s void pair both end this way, and each spelled the same two
 // statements out — one fact written down seven times, whose failure mode is a family that "returns void"
 // with a garbage flag register the day the placeholder is written differently.
-export function emitVoidOkReturn(module StdModule, block IrBlock, ids ValueMinter)
+function emitVoidOkReturn(module StdModule, block IrBlock, ids ValueMinter)
 	let nothing = emitConst(module, block: block, value: 0, ids: ids)
 	emitOkReturn(module, block: block, value: nothing, ids: ids)
 end 'emitVoidOkReturn'
@@ -1373,7 +1373,7 @@ end 'emitVoidOkReturn'
 // ⚠ It lives with the single-op emit helpers, for `emitErrorReturn`'s stated reason: a helper about the STD
 // TIER's lack of a `setcc` is the property of no one predicate family, and every family that answers a bool
 // this way reaches it here rather than spelling the two statements out.
-export function emitConstReturn(module StdModule, block IrBlock, value FullRangeInt, ids ValueMinter)
+function emitConstReturn(module StdModule, block IrBlock, value FullRangeInt, ids ValueMinter)
 	let result = emitConst(module, block: block, value: value, ids: ids)
 	module.setTerminator(block, op: StdOp.ret(result))
 end 'emitConstReturn'
@@ -1397,7 +1397,7 @@ export let StrCopyName = b"__str_copy"
 
 // ⭐ **ONE BYTE AT `addr` — THE `u8` LOAD SPELLING FOR EVERY RUNTIME BUILDER**, so a widened read is a
 // one-line change rather than a sweep of every byte-walking loop.
-export function emitLoadByteAt(module StdModule, block IrBlock, addr ValueId, ids ValueMinter) returns ValueId
+function emitLoadByteAt(module StdModule, block IrBlock, addr ValueId, ids ValueMinter) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(v, addrId: addr, offset: 0, valueType: StdType.u8))
 	return v
@@ -1406,7 +1406,7 @@ end 'emitLoadByteAt'
 // One byte at `base[index]` — the address add plus the `u8` load, the shape every byte-walking loop that
 // does NOT also need the address repeats (the compare loop's two operands, the grapheme runtime's
 // byte-view fill, the classifying scan in `__str_from_bytes`).
-export function emitLoadByteIndexed(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+function emitLoadByteIndexed(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	return emitLoadByteAt(module, block: block, addr: emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids), ids: ids)
 end 'emitLoadByteIndexed'
 
@@ -1425,7 +1425,7 @@ end 'emitLoadByteIndexed'
 // FRESH record's inline buffer or a scratch allocation and reads from a different one, so `dest` and `src`
 // name disjoint allocations and no overlap rule applies — see `emitForwardCopy` for the rule that does apply
 // when they can be the same buffer.
-export function buildStrCopy(module StdModule)
+function buildStrCopy(module StdModule)
 	let func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	let ids = ValueMinter.create(3)
 
@@ -1444,7 +1444,7 @@ end 'buildStrCopy'
 // ⭐ **THE TWO WORDS A STD-TIER PREDICATE RETURNS — 1 for yes, 0 for no — WRITTEN DOWN ONCE.** They live
 // beside `emitConstReturn` because they are the same fact it is: with no `setcc` at this tier a bool is a
 // returned CONSTANT, and which constant means true is not a property of any one runtime family.
-export let PredicateTrue = 1 as FullRangeInt
+let PredicateTrue = 1 as FullRangeInt
 export let PredicateFalse = 0 as FullRangeInt
 
 // ⭐ **THE TWO DELTAS EVERY COUNTER AND REFCOUNT STEP IN THE EMITTED RUNTIME USES.** Named rather than
@@ -1468,7 +1468,7 @@ export let OneFewer = -1 as FullRangeInt
 // through blocks of its own; `closeCountedLoop` is told the block that work ENDED in and puts the increment
 // and the back edge there. That is what lets `__managed_fill`'s three stride arms share ONE loop shape when
 // two of them are a single store and the third is a packed read-modify-write with a byte loop inside it.
-export type CountedLoop
+type CountedLoop
 	// The loop header. The caller never emits into it — `openCountedLoop` has already terminated it.
 	export var header as IrBlock
 
@@ -1485,7 +1485,7 @@ export type CountedLoop
 	// `closeCountedLoop`'s `carriedNext` and readable in `body` and `done`.
 	export var carried as ValueIdArray
 
-	export static function create(header IrBlock, body IrBlock, done IrBlock, index ValueId, carried ValueIdArray) returns CountedLoop
+	static function create(header IrBlock, body IrBlock, done IrBlock, index ValueId, carried ValueIdArray) returns CountedLoop
 		return Self{header: header, body: body, done: done, index: index, carried: carried}
 	end 'create'
 end 'CountedLoop'
@@ -1496,7 +1496,7 @@ end 'CountedLoop'
 //
 // `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
 // loops reads back as several loops under `--emit-ir-runtime`.
-export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create(0)) returns CountedLoop
+function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create(0)) returns CountedLoop
 	let header = module.addBlock(func, label: freeze "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
 	let body = module.addBlock(func, label: freeze "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: freeze "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
@@ -1528,7 +1528,7 @@ end 'openCountedLoop'
 // op `foldConstOperands` produces, minted by the one party that already knows the operand is a compile-time
 // constant — so the fold has nothing to find here, and the emitted trip carries one `add` rather than a
 // `movRegImm32` AND an add, in the hottest loops the language has.
-export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter, carriedNext ValueIdArray = ValueIdArray.create(0))
+function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter, carriedNext ValueIdArray = ValueIdArray.create(0))
 	if carriedNext.count() != loop.carried.count() 'sameCarried'
 		panic("closeCountedLoop: {carriedNext.count()} carried values for a loop opened with {loop.carried.count()}")
 	end 'sameCarried'
@@ -1547,19 +1547,19 @@ end 'closeCountedLoop'
 
 // Declared widest first: `openCopyRunSplit` takes `widest` and every chunk after it in this order, and
 // the run ends at `byteCount` only because `byte` is last.
-export enum CopyChunk
+enum CopyChunk
 	block
 	word
 	byte
 end 'CopyChunk'
 
-export typealias AccessShift = int(0 to 3)
-export typealias AccessCount = int(1 to 8)
+typealias AccessShift = int(0 to 3)
+typealias AccessCount = int(1 to 8)
 
 let BlockAccessShift = 2
 let SingleAccessShift = 0
 
-export type CopyChunkShape
+type CopyChunkShape
 	export let accessType as StdType
 	export let accessShift as AccessShift
 	export let loopLetter as String
@@ -1568,7 +1568,7 @@ export type CopyChunkShape
 		return Self{accessType: accessType, accessShift: accessShift, loopLetter: loopLetter}
 	end 'create'
 
-	export function accesses() returns AccessCount
+	function accesses() returns AccessCount
 		return (1 shl self.accessShift) as AccessCount
 	end 'accesses'
 
@@ -1587,7 +1587,7 @@ export type CopyChunkShape
 	end 'wholeChunksMask'
 end 'CopyChunkShape'
 
-export function copyChunkShape(chunk CopyChunk) returns CopyChunkShape
+function copyChunkShape(chunk CopyChunk) returns CopyChunkShape
 	return match chunk 'c'
 		block gives CopyChunkShape.create(StdType.i64, accessShift: BlockAccessShift, loopLetter: "k")
 		word gives CopyChunkShape.create(StdType.i64, accessShift: SingleAccessShift, loopLetter: "w")
@@ -1595,18 +1595,18 @@ export function copyChunkShape(chunk CopyChunk) returns CopyChunkShape
 	end 'c'
 end 'copyChunkShape'
 
-export type CopyRun
+type CopyRun
 	export let chunk as CopyChunk
 	export let lower as ValueId
 	export let upper as ValueId
 	export let label as immutable ByteArray
 
-	export static function create(chunk CopyChunk, lower ValueId, upper ValueId, label ByteArray) returns CopyRun
+	static function create(chunk CopyChunk, lower ValueId, upper ValueId, label ByteArray) returns CopyRun
 		return Self{chunk: chunk, lower: lower, upper: upper, label: label}
 	end 'create'
 end 'CopyRun'
 
-export typealias CopyRunArray = Array with CopyRun
+typealias CopyRunArray = Array with CopyRun
 
 typealias CopyChunkArray = Array with CopyChunk
 
@@ -1614,7 +1614,7 @@ typealias CopyChunkArray = Array with CopyChunk
 // because `closeCountedLoop`'s step is a WIDTH everywhere else in this family (a word copy steps eight), so
 // a bare 1 beside a `MachineWordBytes` reads as a width that happens to be small rather than as "the next
 // one".
-export let SingleStep = 1 as Imm32
+let SingleStep = 1 as Imm32
 
 // ⭐⭐ **THE CHUNK PARTITION EVERY EMITTED CONTIGUOUS COPY RUNS ON, DERIVED IN ONE PLACE.** A range of
 // `byteCount` bytes splits from offset 0 into one run per chunk from `widest` down to `byte`: each
@@ -1640,7 +1640,7 @@ export let SingleStep = 1 as Imm32
 // alignment is a HINT that never changes what the access does. Every address this family is handed is an
 // arbitrary interior one — an element slot, a payload pointer, a String record's inline buffer — so this is
 // not a precondition the callers have to satisfy but the reason no alignment fixup is needed anywhere.
-export type CopyRunSplit
+type CopyRunSplit
 	// Where the caller emits its runs. Reached only when `byteCount > 0`.
 	export var run as IrBlock
 
@@ -1652,7 +1652,7 @@ export type CopyRunSplit
 	// and both neighbours read it.
 	export let runs as CopyRunArray
 
-	export static function create(run IrBlock, done IrBlock, runs CopyRunArray) returns CopyRunSplit
+	static function create(run IrBlock, done IrBlock, runs CopyRunArray) returns CopyRunSplit
 		return Self{run: run, done: done, runs: runs}
 	end 'create'
 end 'CopyRunSplit'
@@ -1666,7 +1666,7 @@ end 'CopyRunSplit'
 // under every array move and String copy do not get to lose that. No caller passes one today; the guard
 // is what keeps that from being load-bearing. It absorbs the empty range (a zero-length `__str_copy`, a
 // move of no elements) on the way past.
-export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, widest CopyChunk, label ByteArray, ids ValueMinter) returns CopyRunSplit
+function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, widest CopyChunk, label ByteArray, ids ValueMinter) returns CopyRunSplit
 	let run = module.addBlock(func, label: freeze "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: freeze "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
@@ -1708,7 +1708,7 @@ end 'openCopyRunSplit'
 // It exists so that no caller has to know HOW the two exits meet. The empty-range door and the completed
 // runs land in the same block by a plain branch today; a caller that spelled `branch(split.done.id)` itself
 // would be a third party stating that, in two places, for a join it does not own.
-export function closeCopyRunSplit(module StdModule, split CopyRunSplit, tail IrBlock) returns IrBlock
+function closeCopyRunSplit(module StdModule, split CopyRunSplit, tail IrBlock) returns IrBlock
 	module.setTerminator(tail, op: StdOp.branch(split.done.id))
 
 	return split.done
@@ -1786,9 +1786,9 @@ function emitSlowAllocSize(module StdModule, block IrBlock, total ValueId, ids V
 	return emitBin(module, block: block, a: total, b: emitConst(module, block: block, value: boxPrefixBytes(false), ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 end 'emitSlowAllocSize'
 
-module type InlineBoxAlloc
-	module var block as IrBlock
-	module let payload as ValueId
+type InlineBoxAlloc
+	var block as IrBlock
+	let payload as ValueId
 
 	static function create(block IrBlock, payload ValueId) returns InlineBoxAlloc
 		return Self{block: block, payload: payload}
@@ -1805,7 +1805,7 @@ function markBlocksAsyncUnsafe(module StdModule, func IrFunction, from ElementIn
 	end 'eachPopBlock'
 end 'markBlocksAsyncUnsafe'
 
-module function emitMmAllocInline(module StdModule, func IrFunction, cur IrBlock, size ValueId, destructor ValueId, model MachineModel, ids ValueMinter) returns InlineBoxAlloc
+function emitMmAllocInline(module StdModule, func IrFunction, cur IrBlock, size ValueId, destructor ValueId, model MachineModel, ids ValueMinter) returns InlineBoxAlloc
 	let bail = module.addBlock(func, label: b"__ia_slow", heat: BlockHeat.cold)
 	let joined = module.addBlock(func, label: b"__ia_done", heat: BlockHeat.normal)
 	let payload = ids.mint()
@@ -1924,7 +1924,7 @@ end 'buildMmAllocBody'
 // The TAG names what the box IS. A runtime chunk knows that statically and passes a fixed roster case; a
 // USER allocation's is interned from its own result type at the lowering (see `LowerMaxonToStd`'s
 // `__mm_alloc` arm), which is the only tier that can see it.
-export function emitMmAllocCall(module StdModule, block IrBlock, result ValueId, size ValueId, destructor ValueId, tag FullRangeInt, ids ValueMinter)
+function emitMmAllocCall(module StdModule, block IrBlock, result ValueId, size ValueId, destructor ValueId, tag FullRangeInt, ids ValueMinter)
 	for op in mmAllocOps(module.debugStream, result: result, size: size, destructor: destructor, tag: tag, ids: ids) 'eachOp'
 		module.appendOp(block, op: op)
 	end 'eachOp'
@@ -2201,7 +2201,7 @@ end 'buildMmBoxWalk'
 
 // ⭐ **EVERY WALK ENTRY'S SIGNATURE.** `(box) -> void`, and `(box, elementWalk) -> void` for a container's
 // per-element entry.
-export let WalkBoxParam = 0 as ValueId
+let WalkBoxParam = 0 as ValueId
 let WalkElementWalkParam = 1
 let SingleValueEntryParamCount = 1
 let ElementWalkParamCount = 2
@@ -2231,22 +2231,22 @@ end 'walkEntryParamCount'
 // ⭐ **WHERE A CASCADE BODY'S EMISSION CONTINUES, AND THE VALUES ITS BLOCKS CARRY FORWARD** — nothing for a walk,
 // the result word for a clone. A join block takes each carried value as a block argument, so a value one arm
 // replaces reaches the code after the join.
-export type CascadeCursor
+type CascadeCursor
 	export var block as IrBlock
 	export var carried as ValueIdArray
 
-	export static function create(block IrBlock, carried ValueIdArray) returns CascadeCursor
+	static function create(block IrBlock, carried ValueIdArray) returns CascadeCursor
 		return Self{block: block, carried: carried}
 	end 'create'
 
 	// The same carried values, continuing in `next` — sound only where they dominate `next`.
-	export function at(next IrBlock) returns CascadeCursor
+	function at(next IrBlock) returns CascadeCursor
 		return CascadeCursor.create(next, carried: self.carried)
 	end 'at'
 end 'CascadeCursor'
 
 // Append one i64 block argument to `block` per value `template` holds, answering the argument ids in order.
-export function appendCarriedBlockArgs(block IrBlock, template ValueIdArray, ids ValueMinter) returns ValueIdArray
+function appendCarriedBlockArgs(block IrBlock, template ValueIdArray, ids ValueMinter) returns ValueIdArray
 	let args = ValueIdArray.create(template.count(), zeroed: false)
 
 	for _ in template 'eachCarried'
@@ -2259,20 +2259,20 @@ export function appendCarriedBlockArgs(block IrBlock, template ValueIdArray, ids
 end 'appendCarriedBlockArgs'
 
 // A fresh block that joins cursors carrying values shaped like `template`.
-export function emitCascadeJoin(module StdModule, func IrFunction, label ByteArray, template ValueIdArray, ids ValueMinter) returns CascadeCursor
+function emitCascadeJoin(module StdModule, func IrFunction, label ByteArray, template ValueIdArray, ids ValueMinter) returns CascadeCursor
 	let block = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	let carried = appendCarriedBlockArgs(block, template: template, ids: ids)
 	return CascadeCursor.create(block, carried: carried)
 end 'emitCascadeJoin'
 
 // Terminate `from` with a branch to `to`, handing it `from`'s carried values.
-export function emitCascadeBranch(module StdModule, from CascadeCursor, to CascadeCursor)
+function emitCascadeBranch(module StdModule, from CascadeCursor, to CascadeCursor)
 	module.setTerminator(from.block, op: StdOp.branch(to.block.id))
 	pushCascadeEdge(from.block, to: to, values: from.carried)
 end 'emitCascadeBranch'
 
 // The block arguments `block`'s terminator hands `to` along that edge. A join carrying nothing takes no edge.
-export function pushCascadeEdge(block IrBlock, to CascadeCursor, values ValueIdArray)
+function pushCascadeEdge(block IrBlock, to CascadeCursor, values ValueIdArray)
 	if values.count() != to.carried.count() 'arityMismatch'
 		panic("pushCascadeEdge: an edge hands {values.count()} values to a join that carries {to.carried.count()}")
 	end 'arityMismatch'
@@ -2286,7 +2286,7 @@ end 'pushCascadeEdge'
 
 // A synthesized walk entry under construction: its function, its minter, the cursor its body starts at and the
 // join every stop and the fall-through reach.
-export type WalkBody
+type WalkBody
 	export let func as IrFunction
 	export let ids as ValueMinter
 	export let entry as CascadeCursor
@@ -2309,7 +2309,7 @@ end 'WalkBody'
 
 // Open a walk entry. `recursesPerLevel` is a per-type cascade's stack guard (`IrFunction.needsGreenThreadStackGuard`):
 // its depth is the program's data graph, not the runtime's.
-export function beginWalkBody(module StdModule, name ByteArray, walksElements bool, recursesPerLevel bool) returns WalkBody
+function beginWalkBody(module StdModule, name ByteArray, walksElements bool, recursesPerLevel bool) returns WalkBody
 	let paramCount = walkEntryParamCount(walksElements)
 	let paramTypes = StdTypeArray.create(paramCount, zeroed: false)
 
@@ -2328,12 +2328,12 @@ export function beginWalkBody(module StdModule, name ByteArray, walksElements bo
 	return WalkBody.create(func, ids: ids, entry: start, done: done, walksElements: walksElements)
 end 'beginWalkBody'
 
-export function finishWalkBody(module StdModule, body WalkBody)
+function finishWalkBody(module StdModule, body WalkBody)
 	module.setTerminator(body.done.block, op: StdOp.retVoid)
 	module.functions.push(body.func)
 end 'finishWalkBody'
 
-export function emitBoxWalkStep(module StdModule, func IrFunction, cursor CascadeCursor, box ValueId, stop CascadeCursor, ids ValueMinter) returns CascadeCursor
+function emitBoxWalkStep(module StdModule, func IrFunction, cursor CascadeCursor, box ValueId, stop CascadeCursor, ids ValueMinter) returns CascadeCursor
 	let counted = module.addBlock(func, label: b"walkcounted", heat: BlockHeat.normal)
 	let immortal = module.addBlock(func, label: b"walkimmortal", heat: BlockHeat.normal)
 	let shared = module.addBlock(func, label: b"walkshared", heat: BlockHeat.normal)
@@ -2358,7 +2358,7 @@ end 'emitBoxWalkStep'
 // bytes out — so the bytes are read-only for all of them. An allocation already marked is left
 // alone. A view's parent inside a larger graph is walked as a box instead (`emitBoxWalkStep`), because
 // the parent may be a record the graph also owns.
-export let MmShareBufferName = b"__mm_share_buffer"
+let MmShareBufferName = b"__mm_share_buffer"
 
 function buildMmShareBuffer(module StdModule)
 	let func = IrFunction.createFromStd(MmShareBufferName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
@@ -2395,7 +2395,7 @@ function emitAddSharedMark(module StdModule, block IrBlock, count RefcountWord, 
 	emitStoreField(module, block: block, record: count.header, offset: HeaderRefcountOffset, value: marked)
 end 'emitAddSharedMark'
 
-export function emitMarkBoxShared(module StdModule, block IrBlock, box ValueId, ids ValueMinter)
+function emitMarkBoxShared(module StdModule, block IrBlock, box ValueId, ids ValueMinter)
 	let header = emitHeaderBase(module, block: block, ptr: box, ids: ids)
 	let mark = emitConst(module, block: block, value: MmSharedRefcountMark, ids: ids)
 	emitStoreField(module, block: block, record: header, offset: HeaderRefcountOffset, value: mark)
@@ -2568,7 +2568,7 @@ end 'refcountLoadBox'
 
 // The box an `emitIsSharedAllocation` compare asks about, read back off the compare: `cmpImm ne
 // <its refcount word>, SoleOwnerRefcount`.
-export function sharedAllocationGuardBox(reader StdShapeReader, condId ValueId) returns ValueId throws StdShapeMismatch
+function sharedAllocationGuardBox(reader StdShapeReader, condId ValueId) returns ValueId throws StdShapeMismatch
 	if not reader.compareImmDefining(condId, pred: StdCmpPred.ne, imm: SoleOwnerRefcount) 'notTheCompare'
 		throw StdShapeMismatch.notTheShape
 	end 'notTheCompare'
@@ -2576,7 +2576,7 @@ export function sharedAllocationGuardBox(reader StdShapeReader, condId ValueId) 
 	return try refcountLoadBox(reader, loadResultId: reader.arith.lhs)
 end 'sharedAllocationGuardBox'
 
-export let CoAllocatedRefcountBytes = (HeaderBytes - HeaderRefcountOffset) as ByteOffset
+let CoAllocatedRefcountBytes = (HeaderBytes - HeaderRefcountOffset) as ByteOffset
 
 // **THE RELEASE EVERY DECREF SHARES.** One owner leaves (`emitStepOwnerCount`); when the count it displaced
 // says nobody else held the box this was the FINAL owner and control branches to `lastOwner` — the caller's
@@ -2624,7 +2624,7 @@ export let CoAllocatedRefcountBytes = (HeaderBytes - HeaderRefcountOffset) as By
 // release door is where the box is still deciding whether to die, so that is where it must be turned back.
 //
 // ⚠ `func` is needed because the route and the event SPLIT `entry` into new blocks.
-export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
+function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
 	let step = emitStepOwnerCount(module, func: func, entry: entry, ptr: record, delta: OneFewer, immortal: lower, stickiness: CountStickiness.plain, ids: ids)
 	let cur = emitMmDecrefEvent(module, func: func, block: step.block, ptr: record, priorCount: step.prior, ids: ids)
 
@@ -2657,7 +2657,7 @@ end 'buildMmIsNull'
 
 // `bufferRecord` is `__managed_decref`'s: a record in image memory is skipped before the count is
 // touched. `box` is `__mm_decref`'s, which has no image form.
-export enum DecrefRecordShape
+enum DecrefRecordShape
 	box
 	bufferRecord
 end 'DecrefRecordShape'
@@ -2668,7 +2668,7 @@ end 'DecrefRecordShape'
 // (`__managed_release`). For a box it is `__mm_release`, which runs the header's `destructor@0` and frees
 // the box, when the header holds a destructor, and `__mm_free` directly when it does not. This body has no
 // guard.
-export function buildCountedDecref(module StdModule, name ByteArray, releaseCallee ByteArray, shape DecrefRecordShape)
+function buildCountedDecref(module StdModule, name ByteArray, releaseCallee ByteArray, shape DecrefRecordShape)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
@@ -3553,7 +3553,7 @@ end 'declareDictionaryDropNeeds'
 
 // The runtime bits ONE released field's drop needs. `recordCallUsage` closes each family over what its own
 // body calls, and it is what turns on `usesDropTypeParam` for the bare-parameter slot.
-module function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
+function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
 	match kind 'kind'
 		direct(callee) then recordCallUsage(callee, usage: usage)
 		existential then usage.usesDropExistential = true
@@ -4437,7 +4437,7 @@ end 'emitManagedFieldDrops'
 // needs — load at `base + offset`, drop it if non-null, continue — is this one exactly, and a second
 // emitter there would be a copy nothing forces to agree with this one (a wild free or a leak, and a
 // compile error at neither site).
-export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
+function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
 	let ptr = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: offset, valueType: StdType.i64))
 

@@ -1,27 +1,27 @@
 // The first file of the warm-rebuild fixture. Reading a holder's cell through a concrete holder mints the
 // cell's instance at that holder's argument — an instance no declaration names — so a warm compile reuses an
 // artifact holding that instance's id.
-module typealias Tally = int(0 to 1000)
+typealias Tally = int(0 to 1000)
 
-module type Cell uses T
+type Cell uses T
 	export var value as T
 
-	module static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Cell'
 
-module type Holder uses T
+type Holder uses T
 	export var cell as Cell
 
-	module static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{cell: Cell.create(value)}
 	end 'create'
 end 'Holder'
 
 typealias TextHolder = Holder with String
 
-module function textLength() returns Tally
+function textLength() returns Tally
 	let holder = TextHolder.create("warm")
 	let text = holder.cell.value
 	return text.count()

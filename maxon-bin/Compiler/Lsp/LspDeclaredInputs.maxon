@@ -1,17 +1,17 @@
-module enum InputKind
+enum InputKind
 	missing
 	unreadable
 	directory
 	file
 end 'InputKind'
 
-export union InputState
+union InputState
 	missing
 	unreadable
 	directory
 	file(stat SourceFileStamp, digest ByteArray)
 
-	module function kind() returns InputKind
+	function kind() returns InputKind
 		return match self 'state'
 			missing gives InputKind.missing
 			unreadable gives InputKind.unreadable
@@ -20,7 +20,7 @@ export union InputState
 		end 'state'
 	end 'kind'
 
-	module function hasDigest(other ByteArray) returns bool
+	function hasDigest(other ByteArray) returns bool
 		return match self 'state'
 			file(_, digest) gives digest.equals(other)
 			missing or
@@ -29,7 +29,7 @@ export union InputState
 		end 'state'
 	end 'hasDigest'
 
-	module function vouchedBy(observed FileState) returns bool
+	function vouchedBy(observed FileState) returns bool
 		return match self 'state'
 			file(stat, _) gives stat.describes(observed)
 			missing or
@@ -38,7 +38,7 @@ export union InputState
 		end 'state'
 	end 'vouchedBy'
 
-	module function modifiedAtOrAfter(started Timestamp) returns bool
+	function modifiedAtOrAfter(started Timestamp) returns bool
 		return match self 'state'
 			file(stat, _) gives not settledBefore(stat.modifiedTime, observedAt: started)
 			missing or
@@ -47,7 +47,7 @@ export union InputState
 		end 'state'
 	end 'modifiedAtOrAfter'
 
-	module function isSettled() returns bool
+	function isSettled() returns bool
 		return match self 'state'
 			file(stat, _) gives settledBefore(stat.modifiedTime, observedAt: stat.observedAt)
 			missing or
@@ -57,7 +57,7 @@ export union InputState
 	end 'isSettled'
 end 'InputState'
 
-export typealias DeclaredInputStamps = Map with (FilePath, InputState)
+typealias DeclaredInputStamps = Map with (FilePath, InputState)
 
 union InputSighting
 	vouched(state InputState)
@@ -78,13 +78,13 @@ union InputSighting
 	end 'isNew'
 end 'InputSighting'
 
-module union InputsCheck
+union InputsCheck
 	vouched
 	refreshed(inputs DeclaredInputStamps)
 	changed
 end 'InputsCheck'
 
-module function declaredInputStampsOf(paths MaxonSourcePathArray, since DeclaredInputStamps) returns DeclaredInputStamps
+function declaredInputStampsOf(paths MaxonSourcePathArray, since DeclaredInputStamps) returns DeclaredInputStamps
 	let stamps = DeclaredInputStamps.create()
 
 	for path in paths 'eachPath'
@@ -94,7 +94,7 @@ module function declaredInputStampsOf(paths MaxonSourcePathArray, since Declared
 	return stamps
 end 'declaredInputStampsOf'
 
-module function declaredPathsOf(stamps DeclaredInputStamps) returns MaxonSourcePathArray
+function declaredPathsOf(stamps DeclaredInputStamps) returns MaxonSourcePathArray
 	let paths = MaxonSourcePathArray.create(stamps.count(), zeroed: false)
 
 	for (path, _) in stamps 'eachStamp'
@@ -104,7 +104,7 @@ module function declaredPathsOf(stamps DeclaredInputStamps) returns MaxonSourceP
 	return paths
 end 'declaredPathsOf'
 
-module function checkDeclaredInputs(held DeclaredInputStamps) returns InputsCheck
+function checkDeclaredInputs(held DeclaredInputStamps) returns InputsCheck
 	let renewed = DeclaredInputStamps.create()
 	var anyRefreshed = false
 
@@ -131,7 +131,7 @@ module function checkDeclaredInputs(held DeclaredInputStamps) returns InputsChec
 	return InputsCheck.refreshed(renewed) if anyRefreshed else InputsCheck.vouched
 end 'checkDeclaredInputs'
 
-module function inputsMovedBetween(before DeclaredInputStamps, after DeclaredInputStamps) returns bool
+function inputsMovedBetween(before DeclaredInputStamps, after DeclaredInputStamps) returns bool
 	for (path, was) in before 'eachInput'
 		if let now = try after.get(path) 'stillDeclared'
 			if not sameContent(was, now: now) 'moved'
@@ -143,7 +143,7 @@ module function inputsMovedBetween(before DeclaredInputStamps, after DeclaredInp
 	return false
 end 'inputsMovedBetween'
 
-module function unseenInputsModifiedSince(started Timestamp, stamps DeclaredInputStamps, seen DeclaredInputStamps) returns bool
+function unseenInputsModifiedSince(started Timestamp, stamps DeclaredInputStamps, seen DeclaredInputStamps) returns bool
 	for (path, state) in stamps 'eachInput'
 		if not seen.contains(path) and state.modifiedAtOrAfter(started) 'modifiedDuringTheRun'
 			return true

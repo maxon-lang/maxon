@@ -4,11 +4,11 @@ let tlsCertificateVerifySeparator = 0
 let tlsServerCertificateVerifyContext = "TLS 1.3, server CertificateVerify"
 let tlsClientCertificateVerifyContext = "TLS 1.3, client CertificateVerify"
 
-module enum TlsSchemeSelectionError implements Error
+enum TlsSchemeSelectionError implements Error
 	noCommonScheme
 end 'TlsSchemeSelectionError'
 
-module enum TlsSignatureScheme
+enum TlsSignatureScheme
 	rsaPkcs1Sha256 = 0x0401
 	rsaPkcs1Sha384 = 0x0501
 	rsaPkcs1Sha512 = 0x0601
@@ -19,11 +19,11 @@ module enum TlsSignatureScheme
 	rsaPssRsaeSha512 = 0x0806
 	ed25519 = 0x0807
 
-	module function isPkcs1() returns bool
+	function isPkcs1() returns bool
 		return self == TlsSignatureScheme.rsaPkcs1Sha256 or self == TlsSignatureScheme.rsaPkcs1Sha384 or self == TlsSignatureScheme.rsaPkcs1Sha512
 	end 'isPkcs1'
 
-	module function digest() returns HashAlgorithm
+	function digest() returns HashAlgorithm
 		return match self 'scheme'
 			rsaPkcs1Sha256 or
 			ecdsaSecp256r1Sha256 or
@@ -37,7 +37,7 @@ module enum TlsSignatureScheme
 		end 'scheme'
 	end 'digest'
 
-	module function fits(algorithm X509KeyAlgorithm) returns bool
+	function fits(algorithm X509KeyAlgorithm) returns bool
 		return match self 'scheme'
 			rsaPkcs1Sha256 or
 			rsaPkcs1Sha384 or
@@ -51,11 +51,11 @@ module enum TlsSignatureScheme
 		end 'scheme'
 	end 'fits'
 
-	module function code() returns TlsSignatureSchemeCode
+	function code() returns TlsSignatureSchemeCode
 		return self.rawValue as TlsSignatureSchemeCode
 	end 'code'
 
-	module function requireSignature(key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
+	function requireSignature(key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
 		if not (try verifies(key, message: message, signature: signature)) 'forged'
 			throw TlsHandshakeError.decryptError
 		end 'forged'
@@ -116,7 +116,7 @@ public union TlsPrivateKey
 	rsa(key RsaPrivateKey)
 	ed25519(seed ByteArray)
 
-	module function algorithm() returns X509KeyAlgorithm
+	function algorithm() returns X509KeyAlgorithm
 		return match self 'key'
 			ecP256 gives X509KeyAlgorithm.ecP256
 			ecP384 gives X509KeyAlgorithm.ecP384
@@ -125,7 +125,7 @@ public union TlsPrivateKey
 		end 'key'
 	end 'algorithm'
 
-	module function sign(scheme TlsSignatureScheme, message ByteArray, salt ByteArray) returns ByteArray throws TlsHandshakeError
+	function sign(scheme TlsSignatureScheme, message ByteArray, salt ByteArray) returns ByteArray throws TlsHandshakeError
 		if not scheme.fits(algorithm()) 'mismatch'
 			throw TlsHandshakeError.internalError
 		end 'mismatch'
@@ -155,11 +155,11 @@ public union TlsPrivateKey
 	end 'signRsa'
 end 'TlsPrivateKey'
 
-module enum TlsRole
+enum TlsRole
 	server
 	client
 
-	module function context() returns String
+	function context() returns String
 		return match self 'role'
 			server gives tlsServerCertificateVerifyContext
 			client gives tlsClientCertificateVerifyContext
@@ -167,7 +167,7 @@ module enum TlsRole
 	end 'context'
 end 'TlsRole'
 
-module function tlsCertificateVerifyContent(role TlsRole, transcriptHash ByteArray) returns ByteArray
+function tlsCertificateVerifyContent(role TlsRole, transcriptHash ByteArray) returns ByteArray
 	let content = ByteArray.create(0)
 	content.growFilled(tlsCertificateVerifyPaddingBytes, value: tlsCertificateVerifyPadding)
 	content.append(role.context().toByteArray())
@@ -177,7 +177,7 @@ module function tlsCertificateVerifyContent(role TlsRole, transcriptHash ByteArr
 	return content
 end 'tlsCertificateVerifyContent'
 
-module function tlsPickScheme(preference TlsSignatureSchemeCodeArray, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsSchemeSelectionError
+function tlsPickScheme(preference TlsSignatureSchemeCodeArray, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsSchemeSelectionError
 	for code in preference 'eachPreference'
 		if not offered.contains(code) 'notOffered'
 			continue
@@ -193,13 +193,13 @@ module function tlsPickScheme(preference TlsSignatureSchemeCodeArray, offered Tl
 	throw TlsSchemeSelectionError.noCommonScheme
 end 'tlsPickScheme'
 
-module function tlsIsPkcs1Code(code TlsSignatureSchemeCode) returns bool
+function tlsIsPkcs1Code(code TlsSignatureSchemeCode) returns bool
 	let scheme = try TlsSignatureScheme.fromRawValue(code) otherwise return false
 
 	return scheme.isPkcs1()
 end 'tlsIsPkcs1Code'
 
-module function tlsRequireOfferedScheme(code TlsSignatureSchemeCode, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsHandshakeError
+function tlsRequireOfferedScheme(code TlsSignatureSchemeCode, offered TlsSignatureSchemeCodeArray, algorithm X509KeyAlgorithm, protocol TlsProtocol) returns TlsSignatureScheme throws TlsHandshakeError
 	if not offered.contains(code) 'notOffered'
 		throw TlsHandshakeError.illegalParameter
 	end 'notOffered'

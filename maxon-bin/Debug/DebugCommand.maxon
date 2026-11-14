@@ -47,9 +47,9 @@ let CodeSectionName = ".text"
 let MachoTextSegmentName = "__TEXT"
 let MachoTextSectionName = "__text"
 
-module let HexOffsetPrefix = "0x"
-module let HexBase = 16
-module let DecimalBase = 10
+let HexOffsetPrefix = "0x"
+let HexBase = 16
+let DecimalBase = 10
 
 // Column widths of the dump. A name longer than its column widens its row rather than being truncated.
 let FunctionNameColumn = 32
@@ -73,7 +73,7 @@ let OptimizedOutLocation = "<optimized out>"
 typealias LocationMagnitude = int(0 to 2147483648)
 
 // A `.text` code offset as this command reads one off the command line.
-module typealias ParsedCodeOffset = int(0 to u32.max)
+typealias ParsedCodeOffset = int(0 to u32.max)
 
 // Wide enough to hold one more digit past the largest offset, so the accumulator below can OVERSHOOT
 // and be refused rather than trapping on the range check as it is written.
@@ -82,21 +82,21 @@ typealias OffsetAccumulator = int(0 to u64.max)
 let MaxCodeOffset = u32.max as OffsetAccumulator
 
 // One digit's value in the widest base read here.
-module typealias DigitValue = int(0 to 15)
+typealias DigitValue = int(0 to 15)
 
 // How many leading characters of a token are its base prefix rather than digits.
-module typealias PrefixLength = int(0 to u32.max)
+typealias PrefixLength = int(0 to u32.max)
 
 // Whether a command-line token named an offset at all. A union rather than a `-1`, because "not a
 // number" is a refusal the caller reports by name and 0 is a perfectly good offset.
-module union OffsetParse
+union OffsetParse
 	valid(offset ParsedCodeOffset)
 	invalid
 end 'OffsetParse'
 
 // Whether one character was a digit in the base being read. Its own union rather than `OffsetParse`,
 // because a digit is not an offset and a union that carried both would let one be returned for the other.
-module union DigitParse
+union DigitParse
 	valid(digit DigitValue)
 	invalid
 end 'DigitParse'
@@ -177,7 +177,7 @@ union DebuggerRequestParse
 	noExecutable
 end 'DebuggerRequestParse'
 
-module union DebugImageCheck
+union DebugImageCheck
 	usable(code ByteArray, reader MxdbgReader)
 	refused(reason String)
 end 'DebugImageCheck'
@@ -185,7 +185,7 @@ end 'DebugImageCheck'
 let ClassifySequenceSeparator = ","
 let ClassifyProbeAddress = 0x1000
 let ClassifyArm64ProbeAddress = 0x1000
-module let HexDigitsPerByte = 2
+let HexDigitsPerByte = 2
 
 typealias ClassificationPrinter = function(ByteArray)
 
@@ -226,12 +226,12 @@ function hexByteSequence(text String) returns HexBytesRead
 	return hexBytesOf(digits)
 end 'hexByteSequence'
 
-module union HexBytesRead
+union HexBytesRead
 	bytes(value ByteArray)
 	notHex
 end 'HexBytesRead'
 
-module function hexBytesOf(digits String) returns HexBytesRead
+function hexBytesOf(digits String) returns HexBytesRead
 	if (digits.count() mod HexDigitsPerByte) != 0 'notWholeBytes'
 		return HexBytesRead.notHex
 	end 'notWholeBytes'
@@ -401,7 +401,7 @@ function runDebuggerRequest(request DebuggerRequest) returns ExitCode
 	end 'checked'
 end 'runDebuggerRequest'
 
-module function debugImageCheckFor(program FilePath, spelled String) returns DebugImageCheck
+function debugImageCheckFor(program FilePath, spelled String) returns DebugImageCheck
 	let opening = try File.readBinary(program) otherwise return DebugImageCheck.refused("cannot read {spelled}")
 
 	if startsWithBytes(opening, magic: WasmMagic) 'aWasmModule'
@@ -992,7 +992,7 @@ end 'binaryCodeSection'
 //
 // ⚠ The prefix is skipped by length, never stripped by substitution. A substitution removes every
 // `0x` in the token, so `0x120x34` would read back as 0x1234 instead of being refused.
-module function parseCodeOffset(spelled String) returns OffsetParse
+function parseCodeOffset(spelled String) returns OffsetParse
 	let text = spelled.trim()
 
 	if text.startsWith(HexOffsetPrefix) 'hex'
@@ -1005,7 +1005,7 @@ end 'parseCodeOffset'
 // ⚠ **A NUMBER TOO LARGE TO BE A CODE OFFSET IS INVALID, NOT A TRAP.** The accumulator is wider than the
 // offset it produces, so the bound is TESTED after each digit; accumulating into `ParsedCodeOffset`
 // directly would abort the process on its range check for a token a user simply mistyped.
-module function parseDigits(text String, skipping PrefixLength, base ParsedCodeOffset) returns OffsetParse
+function parseDigits(text String, skipping PrefixLength, base ParsedCodeOffset) returns OffsetParse
 	var skipped = 0 as PrefixLength
 	var digits = 0 as PrefixLength
 	var value = 0 as OffsetAccumulator
@@ -1035,7 +1035,7 @@ module function parseDigits(text String, skipping PrefixLength, base ParsedCodeO
 	return OffsetParse.valid(value as ParsedCodeOffset)
 end 'parseDigits'
 
-module function digitValue(c Character, base ParsedCodeOffset) returns DigitParse
+function digitValue(c Character, base ParsedCodeOffset) returns DigitParse
 	let code = try c.asciiValue() otherwise return DigitParse.invalid
 
 	match decodedDigit(code) 'decoded'

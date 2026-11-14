@@ -43,7 +43,7 @@ let FoldEndLineKey = "endLine"
 // What kind of thing a block declares. `labelled` declares nothing — it is an `if`, a `while`, a `for`,
 // a `match`, a block-form `try`, an `else`/`otherwise` arm, or a `test`: anything whose header line ends
 // with the very label its `end` names.
-export enum LspBlockKind
+enum LspBlockKind
 	functionBody
 	structBody
 	enumBody
@@ -54,44 +54,44 @@ export enum LspBlockKind
 end 'LspBlockKind'
 
 // How many blocks enclose a block. 0 is top level.
-module typealias LspBlockDepth = int(0 to u64.max)
+typealias LspBlockDepth = int(0 to u64.max)
 
-module union LspBlockClosing
+union LspBlockClosing
 	spelled(nameSpan LspSpan)
 	unterminated
 end 'LspBlockClosing'
 
-module type LspDocumentBlock
-	module let kind as LspBlockKind
+type LspDocumentBlock
+	let kind as LspBlockKind
 
 	// The name the block is opened AND closed with — a declared name, or a statement label.
-	module let name as immutable ByteArray
+	let name as immutable ByteArray
 
 	// Where the OPENING occurrence of `name` sits. For a declaration that is the name's identifier; for
 	// a labelled block it is the bytes INSIDE the opening label's quotes, which is what a rename must
 	// replace so that the quotes are left standing.
-	module let nameSpan as LspSpan
+	let nameSpan as LspSpan
 
-	module let closing as LspBlockClosing
-	module let startLine as LspLineNumber
-	module let endLine as LspLineNumber
-	module let depth as LspBlockDepth
+	let closing as LspBlockClosing
+	let startLine as LspLineNumber
+	let endLine as LspLineNumber
+	let depth as LspBlockDepth
 
-	module static function create(kind LspBlockKind, name ByteArray, nameSpan LspSpan, closing LspBlockClosing, startLine LspLineNumber, endLine LspLineNumber, depth LspBlockDepth) returns LspDocumentBlock
+	static function create(kind LspBlockKind, name ByteArray, nameSpan LspSpan, closing LspBlockClosing, startLine LspLineNumber, endLine LspLineNumber, depth LspBlockDepth) returns LspDocumentBlock
 		return Self{kind: kind, name: name, nameSpan: nameSpan, closing: closing, startLine: startLine, endLine: endLine, depth: depth}
 	end 'create'
 end 'LspDocumentBlock'
 
-module typealias LspDocumentBlockArray = Array with LspDocumentBlock
+typealias LspDocumentBlockArray = Array with LspDocumentBlock
 
-module function symbolsServedMethods() returns LspMethodArray
+function symbolsServedMethods() returns LspMethodArray
 	let served = LspMethodArray.create(0)
 	served.push(LspMethod.documentSymbol)
 	served.push(LspMethod.foldingRange)
 	return served
 end 'symbolsServedMethods'
 
-module function symbolsAnswer(request LspRequest) returns LspAnswer
+function symbolsAnswer(request LspRequest) returns LspAnswer
 	let blocks = lspDocumentBlocks(lspDocumentTokens(request.text, keywords: request.keywords))
 
 	if request.method == LspMethod.documentSymbol 'outline'
@@ -196,24 +196,24 @@ end 'blockRangeNode'
 /// token stream to read, and every feature built on one then answers LSP's "nothing here" rather than a
 /// guess. Every language feature here re-lexes: a document changes on every keystroke, and one `tokenize`
 /// of one open file is cheap next to the request that follows it.
-module function lspDocumentTokens(source String, keywords KeywordTable) returns TokenArray
+function lspDocumentTokens(source String, keywords KeywordTable) returns TokenArray
 	return try tokenize(source, keywords: keywords) otherwise TokenArray.create(0)
 end 'lspDocumentTokens'
 
-// One source line's extent in the token stream, layout tokens excluded. `module`, because a line is the
+// One source line's extent in the token stream, layout tokens excluded. A line is the
 // unit every rule in this directory is written against — a block header, a label, an `end`, a field
 // declaration and an enum case are each exactly one line's worth of tokens.
-module type LspTokenLine
-	module let firstIndex as ElementIndex
-	module let lastIndex as ElementIndex
-	module let line as LineNumber
+type LspTokenLine
+	let firstIndex as ElementIndex
+	let lastIndex as ElementIndex
+	let line as LineNumber
 
-	module static function create(firstIndex ElementIndex, lastIndex ElementIndex, line LineNumber) returns LspTokenLine
+	static function create(firstIndex ElementIndex, lastIndex ElementIndex, line LineNumber) returns LspTokenLine
 		return Self{firstIndex: firstIndex, lastIndex: lastIndex, line: line}
 	end 'create'
 end 'LspTokenLine'
 
-module typealias LspTokenLineArray = Array with LspTokenLine
+typealias LspTokenLineArray = Array with LspTokenLine
 
 // A block whose `end` has not been seen yet.
 type OpenBlock
@@ -234,7 +234,7 @@ typealias OpenBlockArray = Array with OpenBlock
 // block at all — `let c = 'a'`, a line that merely ends in a character literal — is discarded the moment
 // an enclosing `end` names something else. A walk that trusted its own pushes would mis-nest the whole
 // rest of the file from one such line.
-module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArray
+function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArray
 	let lines = lspTokenLines(tokens)
 	let open = OpenBlockArray.create(0)
 	let closed = LspDocumentBlockArray.create(0)
@@ -408,7 +408,7 @@ function innermostKindIs(open OpenBlockArray, kind LspBlockKind) returns bool
 end 'innermostKindIs'
 
 // Group the stream into source lines, layout tokens excluded.
-module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
+function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
 	let lines = LspTokenLineArray.create(0)
 	var firstIndex = 0 as ElementIndex
 	var lastIndex = 0 as ElementIndex
@@ -444,28 +444,19 @@ module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
 	return lines
 end 'lspTokenLines'
 
-/// `export`, `public`, `static` and the contextual `module` — every word that may stand in front of a
-/// declaration keyword.
-///
-/// ⚠ **IT IS A TOKEN TEST AND NOT A `TokenKind` TEST, BECAUSE `module` IS CONTEXTUAL**: it is recognised
-/// only immediately before a declaration and is an ordinary identifier everywhere else, so it has no kind
-/// of its own to match on.
-module function lspIsDeclarationModifier(token Token) returns bool
-	if token.kind == TokenKind.export or token.kind == TokenKind.public or token.kind == TokenKind.static 'spelledAsAKeyword'
-		return true
-	end 'spelledAsAKeyword'
-
-	return spellsModuleModifier(token.kind, value: token.value)
+/// `export`, `public` and `static` — every word that may stand in front of a declaration keyword.
+function lspIsDeclarationModifier(token Token) returns bool
+	return token.kind == TokenKind.export or token.kind == TokenKind.public or token.kind == TokenKind.static
 end 'lspIsDeclarationModifier'
 
-module function lspBlockIsTerminated(block LspDocumentBlock) returns bool
+function lspBlockIsTerminated(block LspDocumentBlock) returns bool
 	return match block.closing 'closing'
 		spelled gives true
 		unterminated gives false
 	end 'closing'
 end 'lspBlockIsTerminated'
 
-module function lspBlockEndNameSpan(block LspDocumentBlock) returns LspSpan
+function lspBlockEndNameSpan(block LspDocumentBlock) returns LspSpan
 	match block.closing 'closing'
 		spelled(nameSpan) then return nameSpan
 		unterminated then panic("lspBlockEndNameSpan: an unterminated block spells no `end` label — `lspBlockIsTerminated` is the gate, and every caller asks it before asking this")
@@ -474,20 +465,20 @@ end 'lspBlockEndNameSpan'
 
 /// Does the cursor sit on this span? A cursor one past the last byte is still on it — an editor puts the
 /// caret at the end of a name the author has just finished typing.
-module function lspSpanHolds(span LspSpan, offset ByteOffset) returns bool
+function lspSpanHolds(span LspSpan, offset ByteOffset) returns bool
 	return offset >= span.startByte and offset <= span.endByte
 end 'lspSpanHolds'
 
 /// What kind of block a line sits in, or `absent` at module level. The INNERMOST one, which is what makes
 /// it an answer about the line rather than about the file: a nested block's kind is the one that decides
 /// how its lines read.
-module union LspEnclosingBlockKind
+union LspEnclosingBlockKind
 	found(kind LspBlockKind)
 	absent
 end 'LspEnclosingBlockKind'
 
-module typealias LspLineFlags = Array with bool
-module typealias LspLineBlockSlots = Array with ElementIndex
+typealias LspLineFlags = Array with bool
+typealias LspLineBlockSlots = Array with ElementIndex
 
 function markLine(flags LspLineFlags, line LspLineNumber)
 	try flags.set(line, value: true) otherwise panic("markLine: line {line} is below the {flags.count()} lines the deepest reach of any block sized this table to")
@@ -527,15 +518,15 @@ type LspLineHolders
 	end 'claim'
 end 'LspLineHolders'
 
-module type LspLineScopes
-	module let blocks as LspDocumentBlockArray
+type LspLineScopes
+	let blocks as LspDocumentBlockArray
 	let innermost as LspLineHolders
 	let enclosingTypes as LspLineHolders
 	let boundaries as LspLineFlags
 
 	// A block claims only the lines strictly inside it: its header and `end` lines carry the block's own
 	// syntax and belong to whatever encloses it, so they are never one of its members or cases.
-	module static function of(blocks LspDocumentBlockArray) returns LspLineScopes
+	static function of(blocks LspDocumentBlockArray) returns LspLineScopes
 		var lineCount = 0 as LspLineNumber
 
 		for block in blocks 'eachBlockForItsExtent'
@@ -564,17 +555,17 @@ module type LspLineScopes
 		return Self{blocks: blocks, innermost: innermost, enclosingTypes: enclosingTypes, boundaries: boundaries}
 	end 'of'
 
-	module function innermostBlockAt(line LspLineNumber) returns LspDocumentBlock throws AbsentError
+	function innermostBlockAt(line LspLineNumber) returns LspDocumentBlock throws AbsentError
 		return try self.innermost.blockAt(line, blocks: self.blocks)
 	end 'innermostBlockAt'
 
-	module function innermostKindAt(line LspLineNumber) returns LspEnclosingBlockKind
+	function innermostKindAt(line LspLineNumber) returns LspEnclosingBlockKind
 		let holder = try self.innermostBlockAt(line) otherwise return LspEnclosingBlockKind.absent
 
 		return LspEnclosingBlockKind.found(holder.kind)
 	end 'innermostKindAt'
 
-	module function enclosingTypeAt(line LspLineNumber) returns LspEnclosingType
+	function enclosingTypeAt(line LspLineNumber) returns LspEnclosingType
 		let holder = try self.enclosingTypes.blockAt(line, blocks: self.blocks) otherwise return LspEnclosingType.atFileScope
 
 		return LspEnclosingType.inside(holder.name)
@@ -582,19 +573,19 @@ module type LspLineScopes
 
 	// Only a terminated body counts: an unterminated one runs to the end of the buffer and would make
 	// every function written below a half-typed `type` a method of it.
-	module function isAMemberLine(line LspLineNumber) returns bool
+	function isAMemberLine(line LspLineNumber) returns bool
 		let holder = try self.innermostBlockAt(line) otherwise return false
 
 		return lspBlockDeclaresMembers(holder.kind) and lspBlockIsTerminated(holder)
 	end 'isAMemberLine'
 
-	module function directlyHolds(block LspDocumentBlock, line LspLineNumber) returns bool
+	function directlyHolds(block LspDocumentBlock, line LspLineNumber) returns bool
 		let holder = try self.innermostBlockAt(line) otherwise return false
 
 		return holder.startLine == block.startLine and holder.endLine == block.endLine
 	end 'directlyHolds'
 
-	module function isInsideACaseList(line LspLineNumber) returns bool
+	function isInsideACaseList(line LspLineNumber) returns bool
 		let atABoundary = try self.boundaries.get(line) otherwise false
 
 		if atABoundary 'opensOrClosesABlock'
@@ -655,7 +646,7 @@ end 'declaredNameToken'
 
 // The compiler counts source lines from 1 and LSP from 0. A synthesized token carries line 0, which is
 // not a source line at all; it clamps to the first, which is where a reader looking for it would start.
-module function lspLineOf(line LineNumber) returns LspLineNumber
+function lspLineOf(line LineNumber) returns LspLineNumber
 	if line == 0 'synthesized'
 		return 0
 	end 'synthesized'
@@ -665,6 +656,6 @@ end 'lspLineOf'
 
 // Every index this file forms is derived from an `LspTokenLine`, whose bounds came from the same array — so an
 // out-of-range read is a defect in this walk and not an input a document can present.
-module function lspTokenAt(tokens TokenArray, index ElementIndex) returns Token
+function lspTokenAt(tokens TokenArray, index ElementIndex) returns Token
 	return try tokens.get(index) otherwise panic("lspTokenAt: index {index} is outside a {tokens.count()}-token stream — every index here is derived from an LspTokenLine built off this same array")
 end 'lspTokenAt'

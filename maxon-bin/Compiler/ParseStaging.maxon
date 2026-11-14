@@ -11,7 +11,7 @@
 // A registry contribution is an ordered entry ARRAY rather than a map, which keeps
 // it insertion-ordered so the merge is byte-deterministic.
 
-export typealias FileParseArtifactArray = Array with FileParseArtifact
+typealias FileParseArtifactArray = Array with FileParseArtifact
 
 typealias RenderedDiagnosticSet = Set with String
 
@@ -25,12 +25,12 @@ let ArenaBytesPerTypeName = 20
 
 // The table is sized once, from the only figure available before a name is interned. A miss costs a
 // regrowth and never a refusal, so the bias is high.
-export function internedNameHintFor(sourceBytes SourceByteCount) returns NameId
+function internedNameHintFor(sourceBytes SourceByteCount) returns NameId
 	let estimate = (sourceBytes / SourceBytesPerTypeName) as NameId
 	return MinimumInternedTypeNames if estimate < MinimumInternedTypeNames else estimate
 end 'internedNameHintFor'
 
-export function internedArenaHintFor(nameHint NameId) returns NameByteCount
+function internedArenaHintFor(nameHint NameId) returns NameByteCount
 	return nameHint * ArenaBytesPerTypeName
 end 'internedArenaHintFor'
 
@@ -355,7 +355,7 @@ end 'cacheReadAbandonedRegionArray'
 // row-set answers it is told and the settled index, which it leaves as it found them. It reaches no
 // `Project`, so a pool worker may run it; the caller reports what the artifact refused. Its
 // parser's anchors are its own, so the artifact holds no record from outside itself.
-export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseArtifact
+function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseArtifact
 	let parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
 	signatures.openParseBand(overrides)
 
@@ -372,7 +372,7 @@ export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverr
 	return artifact
 end 'parseFile'
 
-module function abandonedRegionFor(error SourceParseError, blame LibraryBlame, openRegion AbandonableRegion, isLocal bool, path FilePath) returns AbandonedRegion throws AbsentError
+function abandonedRegionFor(error SourceParseError, blame LibraryBlame, openRegion AbandonableRegion, isLocal bool, path FilePath) returns AbandonedRegion throws AbsentError
 	if not isLocal 'theFileCannotBeReadPastIt'
 		throw AbsentError.absent
 	end 'theFileCannotBeReadPastIt'
@@ -381,7 +381,7 @@ module function abandonedRegionFor(error SourceParseError, blame LibraryBlame, o
 	return AbandonedRegion.create(error.clone(), blame: blame.clone(), part: part, consequence: consequenceNamedBy(error))
 end 'abandonedRegionFor'
 
-module function refusalIsLocal(parser Parser, job ParseJob, signatures ProgramSignatures) returns bool
+function refusalIsLocal(parser Parser, job ParseJob, signatures ProgramSignatures) returns bool
 	return job.readsAuthorSource() and not parser.blockStructureMisread and not signatures.hasMisclosedBlocks()
 end 'refusalIsLocal'
 
@@ -400,7 +400,7 @@ function consequenceOfReceiverOrigin(origin ReceiverOrigin) returns ConsequenceO
 	end 'origin'
 end 'consequenceOfReceiverOrigin'
 
-module function isGenericArgumentCountCode(code ErrorCode) returns bool
+function isGenericArgumentCountCode(code ErrorCode) returns bool
 	return code == ErrorCode.genericArityMismatch or code == ErrorCode.genericBaseNotGeneric
 end 'isGenericArgumentCountCode'
 
@@ -960,7 +960,7 @@ end 'cacheReadUnbuiltBodyArray'
 
 // @generated library-cache end
 
-module function requireRewoundCount(field String, now ElementIndex, marked ElementIndex)
+function requireRewoundCount(field String, now ElementIndex, marked ElementIndex)
 	if now != marked 'moved'
 		panic("parse rewind: {field} holds {now} after a rewind to {marked} — a write the rewind does not undo")
 	end 'moved'
@@ -1595,7 +1595,7 @@ export type FileParseArtifact
 	end 'recordCovPoint'
 
 	// @generated library-cache begin
-	module function cacheWrite(writer LibraryCacheWriter)
+	function cacheWrite(writer LibraryCacheWriter)
 		writer.text(self.filePath.toString())
 		writer.flag(self.livesUnderStdlibDirectory)
 		writer.flag(self.typeIdsAreProjectGlobal)
@@ -1645,7 +1645,7 @@ export type FileParseArtifact
 		cacheWriteGenericInstanceIdArray(writer, value: self.instanceIdsInUse)
 	end 'cacheWrite'
 
-	module static function cacheRead(reader LibraryCacheReader) returns FileParseArtifact throws LibraryCacheDamage
+	static function cacheRead(reader LibraryCacheReader) returns FileParseArtifact throws LibraryCacheDamage
 		let f_filePath = try reader.path()
 		let f_livesUnderStdlibDirectory = try reader.flag()
 		let f_typeIdsAreProjectGlobal = try reader.flag()
@@ -1704,7 +1704,7 @@ export type FileParseArtifact
 	// @generated library-cache end
 
 	// @generated library-cache begin
-	module function rewindTo(mark ArtifactMark)
+	function rewindTo(mark ArtifactMark)
 		let opLimit = self.module.opCount()
 
 		for opIndex in mark.ops to opLimit 'eachOpSince'
@@ -1750,41 +1750,41 @@ export type FileParseArtifact
 end 'FileParseArtifact'
 
 // @generated library-cache begin
-module type ArtifactMark
-	module let ops as ElementIndex
-	module let blocks as ElementIndex
-	module let functions as ElementIndex
-	module let covPoints as ElementIndex
-	module let valueOrigins as ValueOriginMark
-	module let valueOriginRows as ElementIndex
-	module let deferredChains as ElementIndex
-	module let funcSignatures as ElementIndex
-	module let pendingFnMergeChecks as ElementIndex
-	module let pendingFunctionTypeDoors as ElementIndex
-	module let pendingBrandRecords as ElementIndex
-	module let pendingDiscardedResults as ElementIndex
-	module let rangeChecks as ElementIndex
-	module let typeAliases as ElementIndex
-	module let functionTypeAliases as ElementIndex
-	module let structTypes as ElementIndex
-	module let writtenTupleTypes as ElementIndex
-	module let enumTypes as ElementIndex
-	module let interfaces as ElementIndex
-	module let typeNameDecls as ElementIndex
-	module let unbuiltBodies as ElementIndex
-	module let conformances as ElementIndex
-	module let literalInitSites as ElementIndex
-	module let inferredInstantiationSites as ElementIndex
-	module let typeNames as NameId
-	module let currentFuncIndex as ElementIndex
-	module let diagnostics as ElementIndex
-	module let secondaryDiagnostics as ElementIndex
+type ArtifactMark
+	let ops as ElementIndex
+	let blocks as ElementIndex
+	let functions as ElementIndex
+	let covPoints as ElementIndex
+	let valueOrigins as ValueOriginMark
+	let valueOriginRows as ElementIndex
+	let deferredChains as ElementIndex
+	let funcSignatures as ElementIndex
+	let pendingFnMergeChecks as ElementIndex
+	let pendingFunctionTypeDoors as ElementIndex
+	let pendingBrandRecords as ElementIndex
+	let pendingDiscardedResults as ElementIndex
+	let rangeChecks as ElementIndex
+	let typeAliases as ElementIndex
+	let functionTypeAliases as ElementIndex
+	let structTypes as ElementIndex
+	let writtenTupleTypes as ElementIndex
+	let enumTypes as ElementIndex
+	let interfaces as ElementIndex
+	let typeNameDecls as ElementIndex
+	let unbuiltBodies as ElementIndex
+	let conformances as ElementIndex
+	let literalInitSites as ElementIndex
+	let inferredInstantiationSites as ElementIndex
+	let typeNames as NameId
+	let currentFuncIndex as ElementIndex
+	let diagnostics as ElementIndex
+	let secondaryDiagnostics as ElementIndex
 
-	module static function of(artifact FileParseArtifact) returns ArtifactMark
+	static function of(artifact FileParseArtifact) returns ArtifactMark
 		return Self{ops: artifact.module.opCount(), blocks: artifact.module.blocks.count(), functions: artifact.module.funcCount(), covPoints: artifact.covPoints.count(), valueOrigins: artifact.valueOrigins.mark(), valueOriginRows: artifact.valueOrigins.count(), deferredChains: artifact.deferredChains.count(), funcSignatures: artifact.funcSignatures.count(), pendingFnMergeChecks: artifact.pendingFnMergeChecks.count(), pendingFunctionTypeDoors: artifact.pendingFunctionTypeDoors.count(), pendingBrandRecords: artifact.pendingBrandRecords.count(), pendingDiscardedResults: artifact.pendingDiscardedResults.count(), rangeChecks: artifact.rangeChecks.count(), typeAliases: artifact.typeAliases.count(), functionTypeAliases: artifact.functionTypeAliases.count(), structTypes: artifact.structTypes.count(), writtenTupleTypes: artifact.writtenTupleTypes.count(), enumTypes: artifact.enumTypes.count(), interfaces: artifact.interfaces.count(), typeNameDecls: artifact.typeNameDecls.count(), unbuiltBodies: artifact.unbuiltBodies.count(), conformances: artifact.conformances.count(), literalInitSites: artifact.literalInitSites.count(), inferredInstantiationSites: artifact.inferredInstantiationSites.count(), typeNames: artifact.typeNames.markTable(), currentFuncIndex: artifact.currentFuncIndex, diagnostics: artifact.diagnostics.count(), secondaryDiagnostics: artifact.secondaryDiagnostics.count()}
 	end 'of'
 
-	module function requireHeldBy(artifact FileParseArtifact)
+	function requireHeldBy(artifact FileParseArtifact)
 		requireRewoundCount("artifact ops", now: artifact.module.opCount(), marked: self.ops)
 		requireRewoundCount("artifact blocks", now: artifact.module.blocks.count(), marked: self.blocks)
 		requireRewoundCount("artifact functions", now: artifact.module.funcCount(), marked: self.functions)
@@ -1904,7 +1904,7 @@ end 'ownedNames'
 //      declarations, which `commitTypeNameDeclsInPathOrder` commits once every file has merged.
 // `target` is the accumulator module `FrontEndRun` builds (and caches); the
 // registries land on `Project`.
-export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
+function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
 	signatures.beginMerge()
 	renumberArtifact(project, artifact: artifact, signatures: signatures)
 
@@ -1928,7 +1928,7 @@ end 'mergeArtifact'
 // checkpoint: a parse needs the index at its baseline (`ProgramSignatures.openParseBand`), so the
 // index cannot be held mid-merge, and the same commits over the same files keep first-wins and push
 // order exactly a full merge's.
-module function replayMergedArtifact(project Project, artifact FileParseArtifact, before MergeMark, signatures ProgramSignatures)
+function replayMergedArtifact(project Project, artifact FileParseArtifact, before MergeMark, signatures ProgramSignatures)
 	signatures.beginMerge()
 
 	if not adoptedInstanceIds(artifact, signatures: signatures).equals(artifact.instanceIdsInUse) 'adoptionMoved'
@@ -1959,13 +1959,13 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitEditorReads(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
-	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
+	commitWrittenTypeNames(project, artifact: artifact, signatures: signatures)
 end 'commitArtifactRegistries'
 
 // Every `Project` table keyed by an op index into the merged module, or holding one, or running parallel
 // to the ops. One missing here escapes `FoldLedger.requireTablesHeld`, and a stale key in it names a
 // different op with nothing to notice.
-module enum OpKeyedTable
+enum OpKeyedTable
 	synthesizedOpFiles
 	registryUseSites
 	asyncSpawnSites
@@ -1980,9 +1980,9 @@ module enum OpKeyedTable
 	opRanges
 end 'OpKeyedTable'
 
-module typealias OpKeyedTableArray = Array with OpKeyedTable
+typealias OpKeyedTableArray = Array with OpKeyedTable
 
-module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
+function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 	return match table 'whichTable'
 		synthesizedOpFiles gives project.synthesizedOpFiles.count()
 		registryUseSites gives project.registryUseSites.count()
@@ -1999,22 +1999,22 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 	end 'whichTable'
 end 'heldBy'
 
-module type MergeMark
-	module let opCount as ElementIndex
+type MergeMark
+	let opCount as ElementIndex
 	let blockCount as ElementIndex
-	module let funcCount as ElementIndex
+	let funcCount as ElementIndex
 	let valueOrigins as ValueOriginMark
 	let deferredChains as ElementIndex
 
-	module static function empty() returns MergeMark
+	static function empty() returns MergeMark
 		return Self{opCount: 0, blockCount: 0, funcCount: 0, valueOrigins: ValueOriginMark.create(0, params: 0, derived: 0), deferredChains: 0}
 	end 'empty'
 
-	module static function of(project Project, target MaxonModule) returns MergeMark
+	static function of(project Project, target MaxonModule) returns MergeMark
 		return Self{opCount: target.ops.count(), blockCount: target.blocks.count(), funcCount: target.funcCount(), valueOrigins: project.valueOrigins.mark(), deferredChains: project.deferredChains.count()}
 	end 'of'
 
-	module function rollBack(project Project, target MaxonModule)
+	function rollBack(project Project, target MaxonModule)
 		target.truncateTo(self.opCount, blockCount: self.blockCount, functionCount: self.funcCount)
 		project.opRanges.truncate(self.opCount)
 		project.valueOrigins.truncate(self.valueOrigins)
@@ -2060,26 +2060,26 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 	end 'eachDeclared'
 end 'commitDeferredNameDiagnostics'
 
-// The cross-file half of E3062: a generic-instance alias may be written only in files other than the
-// one declaring it, which the per-file check cannot see.
-// `ProgramSignatures.fileMeansTheSoleGenericAliasDeclaration` owns when a spelling credits a
-// declaration.
-function commitWrittenGenericAliasNames(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
+// The cross-file half of E3062: an unmarked alias is named by a file of its directory subtree, which
+// the per-file check cannot see. A spelling credits the one declaration it resolves to
+// (`ProgramSignatures.aliasDeclarationFileMeantBy`).
+function commitWrittenTypeNames(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	match artifact.usedTypeNames 'written'
 		unwritten then break
-		entries(names) then noteWrittenGenericAliasNames(project, names: names, signatures: signatures, spellingFilePath: artifact.filePath)
+		entries(names) then noteWrittenTypeNames(project, names: names, signatures: signatures, readerPath: artifact.filePath)
 	end 'written'
-end 'commitWrittenGenericAliasNames'
+end 'commitWrittenTypeNames'
 
-function noteWrittenGenericAliasNames(project Project, names UsedTypeNameSet, signatures ProgramSignatures, spellingFilePath FilePath)
+function noteWrittenTypeNames(project Project, names UsedTypeNameSet, signatures ProgramSignatures, readerPath FilePath)
 	for name in names 'eachName'
-		if not signatures.fileMeansTheSoleGenericAliasDeclaration(name, readerFilePath: spellingFilePath) 'creditsNoOneDeclaration'
-			continue
-		end 'creditsNoOneDeclaration'
-
-		insertOwnedName(project.genericAliasNamesWrittenByAFile, name: name)
+		noteWrittenTypeName(project, name: name, signatures: signatures, readerPath: readerPath)
 	end 'eachName'
-end 'noteWrittenGenericAliasNames'
+end 'noteWrittenTypeNames'
+
+function noteWrittenTypeName(project Project, name ByteArray, signatures ProgramSignatures, readerPath FilePath)
+	let declaredIn = try signatures.aliasDeclarationFileMeantBy(name, readerFilePath: readerPath) otherwise return
+	insertOwnedName(project.aliasDeclarationsNamed, name: fileScopedDeclKey(unqualifiedMemberOf(name), declFilePath: declaredIn))
+end 'noteWrittenTypeName'
 
 // Append one recorded list to a whole-program one — its own function because a `match` arm may not open a
 // `for`, and a walk that deferred nothing never reaches it.
@@ -2119,7 +2119,7 @@ function diagnosticLosesDeclarationFacts(code ErrorCode) returns bool
 	return code == ErrorCode.unknownType or code == ErrorCode.genericFloatTypeArg or code == ErrorCode.genericBarePrimitiveArg or code == ErrorCode.genericArityMismatch or code == ErrorCode.genericBaseNotGeneric or code == ErrorCode.fixedArraySizeMalformed or code == ErrorCode.duplicateDefinition or code == ErrorCode.parserUnsupportedFeature or code == ErrorCode.conformanceWithArgSurplus
 end 'diagnosticLosesDeclarationFacts'
 
-module function noteFactsLostTo(project Project, diagnostic Diagnostic)
+function noteFactsLostTo(project Project, diagnostic Diagnostic)
 	if not diagnosticLosesDeclarationFacts(diagnostic.code) 'nothingIsLost'
 		return
 	end 'nothingIsLost'
@@ -2136,7 +2136,7 @@ function noteMemberRefusedAt(project Project, filePath FilePath, line LineNumber
 	project.poison.noteRefusedMemberAt(filePath, line: line, heads: heads, backing: backing)
 end 'noteMemberRefusedAt'
 
-module function noteDeclarationLostTo(project Project, filePath FilePath, poisoned PoisonedAt, backing PoisonBacking)
+function noteDeclarationLostTo(project Project, filePath FilePath, poisoned PoisonedAt, backing PoisonBacking)
 	match poisoned 'site'
 		abandonedBody(number) then noteBodyAbandonedAt(project, filePath: filePath, line: number, backing: backing)
 		line(number) then noteDeclarationRefusedAt(project, filePath: filePath, line: number, backing: backing)
@@ -2178,7 +2178,7 @@ end 'commitTypeNameDecls'
 // order they are committed. Committing the file whose path identity sorts earliest first makes that order,
 // and so the blame, the same on every host and for every spelling of the invocation. `entry.position`
 // indexes `artifacts` because `parseEveryFile` returns one artifact per source path, in source-path order.
-module function commitTypeNameDeclsInPathOrder(project Project, artifacts FileParseArtifactArray, pathOrder SourceFileInPathOrderArray, signatures ProgramSignatures)
+function commitTypeNameDeclsInPathOrder(project Project, artifacts FileParseArtifactArray, pathOrder SourceFileInPathOrderArray, signatures ProgramSignatures)
 	for entry in pathOrder 'eachInPathOrder'
 		let artifact = try artifacts.get(entry.position) otherwise panic("commitTypeNameDeclsInPathOrder: artifacts.get OOB at {entry.position} below count {artifacts.count()}")
 		commitTypeNameDecls(project, artifact: artifact, signatures: signatures)
@@ -2187,7 +2187,7 @@ end 'commitTypeNameDeclsInPathOrder'
 
 typealias TypeNameDeclsByFile = Map with (String, TypeNameDeclArray)
 
-module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
+function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
 	let collisions = TypeNameCollisionArray.create(0)
 
 	if decls.isEmpty() 'nothingDeclared'
@@ -2222,13 +2222,13 @@ module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathA
 	return collisions
 end 'nominalNameCollisionsOf'
 
-module function reportTypeNameCollisions(project Project, collisions TypeNameCollisionArray)
+function reportTypeNameCollisions(project Project, collisions TypeNameCollisionArray)
 	for collision in collisions 'eachCollision'
 		reportTypeNameCollision(project, decl: collision.decl, winner: collision.winner)
 	end 'eachCollision'
 end 'reportTypeNameCollisions'
 
-module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
+function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
 	let ordered = SourceFileInPathOrderArray.create(paths.count(), zeroed: false)
 	let workingDirectory = Directory.currentPath()
 
@@ -2240,7 +2240,7 @@ module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileIn
 	return ordered
 end 'sourceFilesInPathOrder'
 
-module type SourceFileInPathOrder
+type SourceFileInPathOrder
 	export let identity as ByteArray
 	export let position as ElementIndex
 
@@ -2249,7 +2249,7 @@ module type SourceFileInPathOrder
 	end 'create'
 end 'SourceFileInPathOrder'
 
-module typealias SourceFileInPathOrderArray = Array with SourceFileInPathOrder
+typealias SourceFileInPathOrderArray = Array with SourceFileInPathOrder
 
 // The two texts a collision can have, kept together because the CHOICE between them is the thing
 // worth reading in one place.
@@ -2312,7 +2312,7 @@ end 'InstantiationAnchor'
 //
 // Called once per compile from `prepareLowering`, after `queryProgramSignatures` has interned every
 // instantiation — the same placement, and for the same reason, as `checkWhereConstraints`.
-export function checkTypeSymbolNamespace(project Project, signatures ProgramSignatures)
+function checkTypeSymbolNamespace(project Project, signatures ProgramSignatures)
 	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
 	end 'theUniverseIsUnreadable'
@@ -2449,7 +2449,7 @@ end 'reportContestedTypeNames'
 // Blamed at the DECLARATION rather than at a use, because the declaration is the ill-formed thing and a
 // cycle is ill-formed whether or not anyone instantiates it. Run BEFORE the pipeline (so before
 // `semanticCheck`), which is also what guarantees no later reader has to survive a cycle.
-export function checkGenericAliasCycles(project Project, signatures ProgramSignatures)
+function checkGenericAliasCycles(project Project, signatures ProgramSignatures)
 	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
 	end 'theUniverseIsUnreadable'
@@ -2469,7 +2469,7 @@ end 'GenericSpellingVerdict'
 
 let AdmittedSpelling = GenericSpellingVerdict.admitted
 
-export function checkGenericSpellings(project Project, signatures ProgramSignatures)
+function checkGenericSpellings(project Project, signatures ProgramSignatures)
 	let reported = ReportedSpellingSet.create()
 
 	for site in signatures.genericWithSites() 'eachSpelling'
@@ -2911,7 +2911,7 @@ type InstanceMoves
 	end 'applyTo'
 end 'InstanceMoves'
 
-export function rebaseArtifact(artifact FileParseArtifact, rebase ParseRebase)
+function rebaseArtifact(artifact FileParseArtifact, rebase ParseRebase)
 	let moves = InstanceMoves.create()
 	var scratch = BandInstanceIdBase + (artifact.instanceIdsInUse.count() as GenericInstanceId)
 
@@ -2997,7 +2997,7 @@ function rewriteTypeIds(artifact FileParseArtifact, remap TypeIdRemap)
 	artifact.inferredInstantiationSites = sites
 end 'rewriteTypeIds'
 
-export function footprintOf(artifact FileParseArtifact, signatures ProgramSignatures) returns ParseFootprint
+function footprintOf(artifact FileParseArtifact, signatures ProgramSignatures) returns ParseFootprint
 	if artifact.typeIdsAreProjectGlobal 'alreadyMerged'
 		panic("footprintOf: a stashed artifact already carries program-wide name ids — a parse is stashed before its merge, while every name id it holds is its own file's")
 	end 'alreadyMerged'

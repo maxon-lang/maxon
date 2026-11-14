@@ -1,26 +1,26 @@
 /// The TLS versions a client or server enables.
 public typealias TlsProtocolArray = Array with TlsProtocol
-module typealias TlsKeySecretArray = Array with TlsKeySecret
+typealias TlsKeySecretArray = Array with TlsKeySecret
 
-module let tlsRandomLength = 32
+let tlsRandomLength = 32
 let tlsSessionIdLength = 32
 let tlsPrivateKeyLength = 32
-module let tlsPssSaltLength = 64
-module let tlsNullCompression = 0
-module let tlsUncompressedPointFormat = 0
-module let tlsLegacyVersion = 0x0303
-module let tlsDefaultCipherSuites = TlsCipherSuiteCodeArray from [0x1303, 0x1301, 0x1302, 0xCCA9, 0xCCA8, 0xC02B, 0xC02F, 0xC02C, 0xC030]
-module let tlsDefaultGroups = TlsGroupCodeArray from [0x001D, 0x0017]
+let tlsPssSaltLength = 64
+let tlsNullCompression = 0
+let tlsUncompressedPointFormat = 0
+let tlsLegacyVersion = 0x0303
+let tlsDefaultCipherSuites = TlsCipherSuiteCodeArray from [0x1303, 0x1301, 0x1302, 0xCCA9, 0xCCA8, 0xC02B, 0xC02F, 0xC02C, 0xC030]
+let tlsDefaultGroups = TlsGroupCodeArray from [0x001D, 0x0017]
 let tlsDefaultKeyShareGroups = TlsGroupCodeArray from [0x001D]
 let tlsClientDefaultSignatureAlgorithms = TlsSignatureSchemeCodeArray from [0x0403, 0x0804, 0x0807, 0x0503, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]
-module let tlsServerDefaultSignatureAlgorithms = TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]
+let tlsServerDefaultSignatureAlgorithms = TlsSignatureSchemeCodeArray from [0x0403, 0x0503, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601]
 
-module type TlsKeySecret
-	module var group as TlsGroupCode
-	module var privateKey as ByteArray
-	module var publicKey as ByteArray
+type TlsKeySecret
+	var group as TlsGroupCode
+	var privateKey as ByteArray
+	var publicKey as ByteArray
 
-	module static function create(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret throws TlsHandshakeError
+	static function create(group TlsGroupCode, privateKey ByteArray) returns TlsKeySecret throws TlsHandshakeError
 		let named = try TlsNamedGroup.fromRawValue(group) otherwise throw TlsHandshakeError.internalError
 
 		return Self{group: group, privateKey: privateKey, publicKey: try named.publicKey(privateKey)}
@@ -85,13 +85,13 @@ public type TlsClientConfig
 	public var peerName as X509VerifyHost
 	public var protocols as TlsProtocolArray
 	public var cipherSuites as TlsCipherSuiteCodeArray
-	module var groups as TlsGroupCodeArray
-	module var keyShareGroups as TlsGroupCodeArray
-	module var signatureAlgorithms as TlsSignatureSchemeCodeArray
+	var groups as TlsGroupCodeArray
+	var keyShareGroups as TlsGroupCodeArray
+	var signatureAlgorithms as TlsSignatureSchemeCodeArray
 	public var applicationProtocols as TlsProtocolNameArray
 	public var identity as TlsClientIdentity
 
-	module static function create(peerName X509VerifyHost, protocols TlsProtocolArray, cipherSuites TlsCipherSuiteCodeArray, groups TlsGroupCodeArray, keyShareGroups TlsGroupCodeArray, signatureAlgorithms TlsSignatureSchemeCodeArray, applicationProtocols TlsProtocolNameArray, identity TlsClientIdentity) returns TlsClientConfig
+	static function create(peerName X509VerifyHost, protocols TlsProtocolArray, cipherSuites TlsCipherSuiteCodeArray, groups TlsGroupCodeArray, keyShareGroups TlsGroupCodeArray, signatureAlgorithms TlsSignatureSchemeCodeArray, applicationProtocols TlsProtocolNameArray, identity TlsClientIdentity) returns TlsClientConfig
 		return Self{peerName: peerName, protocols: protocols, cipherSuites: cipherSuites, groups: groups, keyShareGroups: keyShareGroups, signatureAlgorithms: signatureAlgorithms, applicationProtocols: applicationProtocols, identity: identity}
 	end 'create'
 
@@ -101,12 +101,12 @@ public type TlsClientConfig
 end 'TlsClientConfig'
 
 public type TlsClientEntropy
-	module var random as ByteArray
-	module var sessionId as ByteArray
-	module var keySecrets as TlsKeySecretArray
-	module var pssSalt as ByteArray
+	var random as ByteArray
+	var sessionId as ByteArray
+	var keySecrets as TlsKeySecretArray
+	var pssSalt as ByteArray
 
-	module static function create(random ByteArray, sessionId ByteArray, keySecrets TlsKeySecretArray, pssSalt ByteArray) returns TlsClientEntropy
+	static function create(random ByteArray, sessionId ByteArray, keySecrets TlsKeySecretArray, pssSalt ByteArray) returns TlsClientEntropy
 		return Self{random: random, sessionId: sessionId, keySecrets: keySecrets, pssSalt: pssSalt}
 	end 'create'
 
@@ -114,16 +114,16 @@ public type TlsClientEntropy
 		return Self{random: try tlsDrawBytes(tlsRandomLength), sessionId: try tlsDrawBytes(tlsSessionIdLength), keySecrets: try tlsFreshSecrets(config.groups), pssSalt: try tlsDrawBytes(tlsPssSaltLength)}
 	end 'fresh'
 
-	module function secret(group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
+	function secret(group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
 		return try tlsSecretFor(keySecrets, group: group)
 	end 'secret'
 end 'TlsClientEntropy'
 
-module function tlsDrawBytes(count RandomByteCount) returns ByteArray throws TlsHandshakeError
+function tlsDrawBytes(count RandomByteCount) returns ByteArray throws TlsHandshakeError
 	return try Random.bytes(count) otherwise throw TlsHandshakeError.internalError
 end 'tlsDrawBytes'
 
-module function tlsFreshSecrets(groups TlsGroupCodeArray) returns TlsKeySecretArray throws TlsHandshakeError
+function tlsFreshSecrets(groups TlsGroupCodeArray) returns TlsKeySecretArray throws TlsHandshakeError
 	let secrets = TlsKeySecretArray.create(0)
 
 	for group in groups 'eachGroup'
@@ -134,7 +134,7 @@ module function tlsFreshSecrets(groups TlsGroupCodeArray) returns TlsKeySecretAr
 	return secrets
 end 'tlsFreshSecrets'
 
-module function tlsSecretFor(secrets TlsKeySecretArray, group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
+function tlsSecretFor(secrets TlsKeySecretArray, group TlsGroupCode) returns TlsKeySecret throws TlsHandshakeError
 	for candidate in secrets 'eachSecret'
 		if candidate.group == group 'found'
 			return candidate
@@ -163,16 +163,16 @@ public type TlsBuiltClientHello implements TlsClientHelloSource
 		return Self{}
 	end 'create'
 
-	module function first(built ByteArray) returns ByteArray
+	function first(built ByteArray) returns ByteArray
 		return built
 	end 'first'
 
-	module function second(built ByteArray) returns ByteArray
+	function second(built ByteArray) returns ByteArray
 		return built
 	end 'second'
 end 'TlsBuiltClientHello'
 
-module function tlsBuildClientHello(config TlsClientConfig, entropy TlsClientEntropy) returns ByteArray throws TlsHandshakeError
+function tlsBuildClientHello(config TlsClientConfig, entropy TlsClientEntropy) returns ByteArray throws TlsHandshakeError
 	if entropy.random.count() != tlsRandomLength or entropy.sessionId.count() > tlsSessionIdLength 'entropyLength'
 		throw TlsHandshakeError.internalError
 	end 'entropyLength'

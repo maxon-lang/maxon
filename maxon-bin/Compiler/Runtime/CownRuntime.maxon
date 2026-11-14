@@ -54,7 +54,7 @@ let CownInitialRefs = 2
 let CownHandleShift = 32 as FullRangeInt
 let CownHandleUnit = 1 shl CownHandleShift
 let CownRefUnit = 1
-module let CownShareUnit = CownHandleUnit + CownRefUnit
+let CownShareUnit = CownHandleUnit + CownRefUnit
 let CownInitialShares = CownInitialHandles * CownHandleUnit + CownInitialRefs * CownRefUnit
 let CownSoleHandle = 1
 
@@ -63,7 +63,7 @@ let CownNoRunner = 0
 let CownRefusedReplyFlag = ErrorFlagOrdinalBias
 
 let GrpOffCount = 0x00
-module let GrpOffWaiter = 0x08
+let GrpOffWaiter = 0x08
 let GrpOffCode = 0x10
 let GrpOffSlotCount = 0x18
 let GrpHeaderBytes = 0x20
@@ -75,7 +75,7 @@ let GrpWaiterGranted = 1
 let GrpWaiterAbandoned = 2
 export let AcquireStoppedBit = i64.min as FullRangeInt
 
-export enum CownSendWake
+enum CownSendWake
 	pending = 0
 	delivered = 1
 	cancelled = 2
@@ -97,23 +97,23 @@ let CownRunName = b"__cown_run"
 let CownDequeueSlowName = b"__cown_dequeue_slow"
 let CownEnqueueFinishName = b"__cown_enqueue_finish"
 export let CownCloseName = b"__cown_close"
-export let CownSendAbandonName = b"__cown_send_abandon"
+let CownSendAbandonName = b"__cown_send_abandon"
 export let CownHandleCloneBoxName = b"__cown_handle_clone_box"
 export let CownHandleDestructName = b"__cown_handle_destruct"
 export let CownReplyRefusedName = b"__cown_reply_refused"
-export let CownUnknownTagName = b"__cown_unknown_tag"
+let CownUnknownTagName = b"__cown_unknown_tag"
 let CownAcquireManyName = b"__cown_acquire_many"
 let CownAcquireGrantName = b"__cown_acquire_grant"
 export let CownAcquireName = b"__cown_acquire"
 export let CownAcquireReleaseName = b"__cown_acquire_release"
-export let CownAcquireAbandonName = b"__cown_acquire_abandon"
+let CownAcquireAbandonName = b"__cown_acquire_abandon"
 export let CownTestMultiName = b"__cown_test_multi"
 let CownTestWorkerName = b"__cown_test_worker"
 let CownTestBehaveName = b"__cown_test_behave"
 let CownTestStartName = b"__cown_test_start"
 let CownTestFinishName = b"__cown_test_finish"
 
-export function installCownRuntime(module StdModule, requestStagingBytes ByteOffset)
+function installCownRuntime(module StdModule, requestStagingBytes ByteOffset)
 	buildCownSpawn(module)
 	buildCownStaging(module, bytes: requestStagingBytes)
 	buildCownSend(module)
@@ -199,7 +199,7 @@ function emitCownSendUnlink(module StdModule, block IrBlock, sender ValueId, ids
 	emitStoreField(module, block: block, record: sender, offset: GtOffSendPrev, value: unlinked)
 end 'emitCownSendUnlink'
 
-export function emitCownClaimSender(module StdModule, block IrBlock, sender ValueId, outcome CownSendWake, lost IrBlock, won IrBlock, ids ValueMinter)
+function emitCownClaimSender(module StdModule, block IrBlock, sender ValueId, outcome CownSendWake, lost IrBlock, won IrBlock, ids ValueMinter)
 	let claim = emitCasField(module, block: block, record: sender, offset: GtOffSendOutcome, expected: emitConst(module, block: block, value: CownSendWake.pending.rawValue, ids: ids), replacement: emitConst(module, block: block, value: outcome.rawValue, ids: ids), ids: ids)
 	emitBranchOnCasLost(module, block: block, result: claim, lost: lost, won: won, ids: ids)
 end 'emitCownClaimSender'
@@ -249,7 +249,7 @@ function emitCownReadyClaimedSender(module StdModule, func IrFunction, cur IrBlo
 	emitBranchCarrying(module, from: readyFree, to: cont, values: argsOf(freeDebt))
 end 'emitCownReadyClaimedSender'
 
-module function emitCownSharesStep(module StdModule, block IrBlock, cown ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
+function emitCownSharesStep(module StdModule, block IrBlock, cown ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
 	return emitFieldAccumulate(module, block: block, record: cown, offset: CownOffShares, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: true, ids: ids)
 end 'emitCownSharesStep'
 
@@ -263,7 +263,7 @@ function emitCownGiveBack(module StdModule, func IrFunction, cur IrBlock, cown V
 	module.setTerminator(freeRegion, op: StdOp.branch(joined.id))
 end 'emitCownGiveBack'
 
-module function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
+function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
 	let size = emitConst(module, block: block, value: boxBytes, ids: ids)
 	let destructor = ids.mint()
 	module.appendOp(block, op: StdOp.funcAddr(destructor, funcName: CownHandleDestructName))
@@ -983,7 +983,7 @@ function emitCownParkWaiting(module StdModule, block IrBlock, machine ValueId, g
 	emitCownLockLeave(module, block: block, cown: cown, holder: CownLockHolder.machine(machine), ids: ids)
 end 'emitCownParkWaiting'
 
-export function emitCownSendParkCommit(module StdModule, func IrFunction, block IrBlock, machine ValueId, gt ValueId, cown ValueId, ids ValueMinter) returns IrBlock
+function emitCownSendParkCommit(module StdModule, func IrFunction, block IrBlock, machine ValueId, gt ValueId, cown ValueId, ids ValueMinter) returns IrBlock
 	let arm = module.addBlock(func, label: b"sendparkarm", heat: BlockHeat.normal)
 	let unbounded = module.addBlock(func, label: b"sendparkunbounded", heat: BlockHeat.normal)
 	let committed = module.addBlock(func, label: b"sendparkcommitted", heat: BlockHeat.normal)

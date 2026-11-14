@@ -33,7 +33,7 @@ earn lands BEHIND `used` where a one-line pin cannot see it. Spelling the traili
 makes an inserted word a mismatch rather than a longer tail.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeWorkers() returns MachineWord
+function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
@@ -99,7 +99,7 @@ function at all, so the reach split is decided by `deriveLibraryFacts`' short-ci
 library source at `__sched_max_active_workers`, so the precise from-`main` walk decides it.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeWorkers() returns MachineWord
+function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
@@ -196,7 +196,7 @@ lays no word of its own, so its presence leaves the `.data` roster exactly as th
 two sched words are the whole difference between the three programs in this group.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeWorkers() returns MachineWord
+function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon

@@ -56,7 +56,7 @@ typealias SlabObjectCount = int(0 to 1024)
 // one — and derived through the SAME `ceil(slotSize · objects / SlabChunkBytes)` the refill emits, so it is a
 // bound on the request the allocator actually makes rather than on the page count Go's table happens to
 // name. `SlabRuntime.checkSlabRuntimeGeometry` checks it against what an arena can serve on each lane.
-export function slabWidestSpanChunks() returns FullRangeInt
+function slabWidestSpanChunks() returns FullRangeInt
 	let sizes = slabClassSizes()
 	let pages = slabClassPages()
 	var widest = 0 as FullRangeInt
@@ -82,7 +82,7 @@ end 'slabWidestSpanChunks'
 //
 // It panics rather than returning a verdict — a broken class table cannot produce a working allocator,
 // so there is no caller who could sensibly continue.
-export function checkSlabClassTable()
+function checkSlabClassTable()
 	let sizes = slabClassSizes()
 	let pages = slabClassPages()
 
@@ -158,13 +158,13 @@ let SlabReverseTableEntryMax = 256
 // The ladder's length, derived rather than written down beside the table: a hand-maintained count is the
 // shape a regenerated table invalidates in silence. Every stride in `SlabRuntime.maxon` is computed from
 // this, so a wider ladder widens the mcache rows rather than leaving them addressing the old geometry.
-export function slabClassCount() returns SlabClassCount
+function slabClassCount() returns SlabClassCount
 	return slabClassSizes().count() as SlabClassCount
 end 'slabClassCount'
 
 // The ladder holds the sentinel plus the real classes, so it is never empty; the upper bound is a byte's
 // worth, which is what one reverse-table entry can name.
-export typealias SlabClassCount = int(1 to 256)
+typealias SlabClassCount = int(1 to 256)
 
 // --- The two reverse lookups ---
 //
@@ -188,11 +188,11 @@ function slabSizeToClass128Entries() returns FullRangeInt
 	return (SlabMaxSmallSize - SlabSmallSizeMax) / SlabLargeSizeDiv + 1
 end 'slabSizeToClass128Entries'
 
-export function slabSizeToClass8Table() returns ByteArray
+function slabSizeToClass8Table() returns ByteArray
 	return slabReverseTable(slabSizeToClass8Entries(), base: 0, step: SlabSmallSizeDiv)
 end 'slabSizeToClass8Table'
 
-export function slabSizeToClass128Table() returns ByteArray
+function slabSizeToClass128Table() returns ByteArray
 	return slabReverseTable(slabSizeToClass128Entries(), base: SlabSmallSizeMax, step: SlabLargeSizeDiv)
 end 'slabSizeToClass128Table'
 
@@ -230,7 +230,7 @@ end 'slabSmallestClassHolding'
 // ⭐⭐ **ONE PACKED WORD PER CLASS — `slot_size | (objects_per_span << 32)`.** Both are pure functions of
 // the class index, and an mspan stores only the index (`SlabRuntime`'s header states the trade), so a span's
 // geometry is ONE indexed `.rdata` load rather than two.
-export function slabClassGeometryTable() returns ByteArray
+function slabClassGeometryTable() returns ByteArray
 	let sizes = slabClassSizes()
 	let pages = slabClassPages()
 	let out = ByteArray.create(sizes.count() * SlabClassGeometryEntryBytes, zeroed: false)

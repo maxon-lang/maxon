@@ -35,7 +35,7 @@
 // whose `hash`/`equals` E3130 must hold to its requirement. It costs nothing in practice — any program
 // carrying the stdlib already has conformances — and skipping it would have made the new check silently
 // conditional on an unrelated declaration.
-export function checkConformance(project Project, module MaxonModule, signatures ProgramSignatures)
+function checkConformance(project Project, module MaxonModule, signatures ProgramSignatures)
 	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
 		return
 	end 'theUniverseIsUnreadable'
@@ -684,7 +684,7 @@ end 'reportAssociatedTypeBindingDisagreement'
 // holding it guards is minted by a WIDENING rather than by a call. Asking the transitive list is
 // load-bearing there for the same measured reason it is in that walk — a parameter projected in
 // from a parent is one `iface.methods` cannot see.
-export function requirementTakesAssociatedType(interfaces IrInterfaceMap, iface IrInterface, position ElementIndex, signatures ProgramSignatures) returns bool
+function requirementTakesAssociatedType(interfaces IrInterfaceMap, iface IrInterface, position ElementIndex, signatures ProgramSignatures) returns bool
 	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
 		for formal in slot.method.paramTypes 'eachFormal'
 			let formalPosition = try associatedPositionIn(formal, iface: iface, signatures: signatures) otherwise continue
@@ -704,7 +704,7 @@ end 'requirementTakesAssociatedType'
 export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 
 // @generated library-cache begin
-module function cacheWriteDeclaredConformanceMap(writer LibraryCacheWriter, value DeclaredConformanceMap)
+function cacheWriteDeclaredConformanceMap(writer LibraryCacheWriter, value DeclaredConformanceMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for (key, entry) in value 'eachEntry'
@@ -713,7 +713,7 @@ module function cacheWriteDeclaredConformanceMap(writer LibraryCacheWriter, valu
 	end 'eachEntry'
 end 'cacheWriteDeclaredConformanceMap'
 
-module function cacheReadDeclaredConformanceMap(reader LibraryCacheReader) returns DeclaredConformanceMap throws LibraryCacheDamage
+function cacheReadDeclaredConformanceMap(reader LibraryCacheReader) returns DeclaredConformanceMap throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = DeclaredConformanceMap.create()
 
@@ -744,7 +744,7 @@ end 'cacheReadDeclaredConformanceMap'
 // (`Project.inferredInstantiationSites`). Both lists are walked here, by one loop over one rule,
 // because *"does this type argument satisfy the base's `where` clause"* is one question and a
 // second copy of it would be free to answer the literal differently from the alias.
-export function checkWhereConstraints(project Project, signatures ProgramSignatures)
+function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	let aliasSites = signatures.instantiationSites()
 
 	// ⭐ **A THIRD PROVENANCE: a literal written at FILE SCOPE.** `var m = [b"if": Info.create(…)]` interns a
@@ -796,7 +796,7 @@ end 'checkInstantiationSites'
 // `E2004 Undefined variable`); a missing or wrongly-typed `init` is
 // the ordinary unknown-callee / argument check against `<Type>.init`, raised where every other call raises it.
 // A program with no such construction — every one in the suite but two specs — short-circuits allocation-free.
-export function checkLiteralInitConformance(project Project)
+function checkLiteralInitConformance(project Project)
 	if project.literalInitSites.count() == 0 'noConstructions'
 		return
 	end 'noConstructions'
@@ -824,7 +824,7 @@ export function checkLiteralInitConformance(project Project)
 	end 'eachSite'
 end 'checkLiteralInitConformance'
 
-module function instanceNamesATypeFromAFailedFile(project Project, signatures ProgramSignatures, gid GenericInstanceId) returns bool
+function instanceNamesATypeFromAFailedFile(project Project, signatures ProgramSignatures, gid GenericInstanceId) returns bool
 	if project.poison.isEmpty() 'noFileFailed'
 		return false
 	end 'noFileFailed'
@@ -853,9 +853,9 @@ function checkInstantiationHoldsNoLinearArgument(project Project, signatures Pro
 	end 'eachArgument'
 end 'checkInstantiationHoldsNoLinearArgument'
 
-module let LinearValueResidence = "lives only in locals, parameters and message arguments"
+let LinearValueResidence = "lives only in locals, parameters and message arguments"
 
-module function linearTypeArgumentMessage(argument String, holder String) returns String
+function linearTypeArgumentMessage(argument String, holder String) returns String
 	return "'{argument}' is a linear value and cannot be a type argument of '{holder}': a linear value {LinearValueResidence}, so no container, promise, generic record or generic function holds one"
 end 'linearTypeArgumentMessage'
 
@@ -1181,7 +1181,7 @@ end 'suppliedConstraintBinding'
 //
 // The verdict is SHARED with the lowering that must then supply the witness pointer; see
 // `opaqueParamDischarge` for why acceptance and slot index are one answer and not two.
-export function instantiationMeetsConstraint(signatures ProgramSignatures, interfaces IrInterfaceMap, declared DeclaredConformanceMap, gid GenericInstanceId, constraint WhereConstraint) returns bool
+function instantiationMeetsConstraint(signatures ProgramSignatures, interfaces IrInterfaceMap, declared DeclaredConformanceMap, gid GenericInstanceId, constraint WhereConstraint) returns bool
 	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
 
 	if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
@@ -1231,7 +1231,7 @@ end 'constrainedTypeParamName'
 // the `BuiltinArrayLiteral` marker; the enum row's is whatever the author named their `enum`. Both
 // are the same discovered answer `conformerNameOfType` already reduced `typeName` to. Asking one
 // home means the reduction and the rows cannot come to disagree about which conformer a name is.
-export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
+function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
 	if isIntrinsicBuiltinConformance(interfaces, typeName: typeName, interfaceName: interfaceName, discovered: discovered) 'intrinsic'
 		return true
 	end 'intrinsic'
@@ -1241,7 +1241,7 @@ end 'typeConformsTo'
 
 // Which of a conditional TYPE extension's constraints a concrete receiver instance FAILS, or `met`. It names
 // the interface and the offending type argument because those are the two nouns the refusal quotes.
-export union ExtensionConstraintOnReceiver
+union ExtensionConstraintOnReceiver
 	met
 	unmet(interfaceName immutable ByteArray, argDisplayName immutable ByteArray)
 end 'ExtensionConstraintOnReceiver'
@@ -1250,7 +1250,7 @@ end 'ExtensionConstraintOnReceiver'
 // `Parser.requireReceiverSatisfiesExtensionConstraints` at the member token, the only place a call to such a
 // method is judged. A call that skipped it would reach the lowering with a witness table built for a
 // conformance nothing validated.
-export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, gid GenericInstanceId, constraints WhereConstraintArray) returns ExtensionConstraintOnReceiver
+function receiverMeetsExtensionConstraints(signatures ProgramSignatures, gid GenericInstanceId, constraints WhereConstraintArray) returns ExtensionConstraintOnReceiver
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("receiverMeetsExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 
@@ -1291,7 +1291,7 @@ end 'receiverMeetsExtensionConstraints'
 // ⚠ **`extends` COUNTS, through the same `conformanceSatisfiesInterface` a concrete conformer is asked
 // about** — `where T is Ordered` with `interface Ordered extends Equatable` discharges a callee's
 // `Equatable`, and it discharges it FROM THE `Ordered` SLOT, which is the table that callee needs.
-module union OpaqueConstraintDischarge
+union OpaqueConstraintDischarge
 	// The owner's witness slot that already carries this interface for this parameter.
 	slot(index WitnessSlotIndex)
 
@@ -1299,7 +1299,7 @@ module union OpaqueConstraintDischarge
 	unsatisfied
 end 'OpaqueConstraintDischarge'
 
-module function opaqueParamDischarge(signatures ProgramSignatures, interfaces IrInterfaceMap, token TypeParamId, interfaceName ByteArray) returns OpaqueConstraintDischarge
+function opaqueParamDischarge(signatures ProgramSignatures, interfaces IrInterfaceMap, token TypeParamId, interfaceName ByteArray) returns OpaqueConstraintDischarge
 	// A token no declaration filed owns nothing and promises nothing. `typeParamOwnerOf` THROWS on absence
 	// rather than panicking, and answering `unsatisfied` here is the safe direction: a refused program, never
 	// a forwarded slot nobody reserved.
@@ -1346,7 +1346,7 @@ end 'opaqueParamDischarge'
 //
 // The empty list is the answer for every unconstrained parameter and every constraint that binds nothing,
 // which is the whole corpus but the shapes this exists for.
-export function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns RequirementTypeArray
+function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns RequirementTypeArray
 	let owner = try signatures.typeParamOwnerOf(token) otherwise return RequirementTypeArray.create(0)
 	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
 
@@ -1366,7 +1366,7 @@ end 'constrainedParamAssociatedBindings'
 // Does this verdict discharge the constraint? The bool the union deliberately is not, for the one caller
 // that needs the verdict WITHOUT the index — the E3017 check, which has a diagnostic to emit and no slot to
 // place. Asked through this rather than by re-matching the union, so "discharged" has one definition.
-module function opaqueConstraintIsDischarged(verdict OpaqueConstraintDischarge) returns bool
+function opaqueConstraintIsDischarged(verdict OpaqueConstraintDischarge) returns bool
 	return match verdict 'verdict'
 		slot gives true
 		unsatisfied gives false
@@ -1387,7 +1387,7 @@ end 'ExtensionConstraintCheck'
 // WITHOUT the names: `Parser.foldExtensionDeclarationInto` publishes an extension body's aliases only for the
 // conformers the extension actually reaches, and has no diagnostic to fill in. Asked through this rather
 // than by re-matching the union, so "withheld" has one definition.
-export function extensionMethodsWithheld(verdict ExtensionConstraintCheck) returns bool
+function extensionMethodsWithheld(verdict ExtensionConstraintCheck) returns bool
 	return match verdict 'verdict'
 		satisfied gives false
 		unmet gives true
@@ -1406,7 +1406,7 @@ let UnboundAssociatedTypePhrase = b"(nothing)"
 // a body parsed with no substitution, a `where` clause reported UNMET — instead of one going missing while
 // the other goes wrong. See `Parser.conformerAssociatedBindings` for how the two lists come to disagree at
 // all.
-export function pairableConformanceBindings(bindings ConformanceBinding, associatedTypeNames NameRoster) returns ConformanceBinding
+function pairableConformanceBindings(bindings ConformanceBinding, associatedTypeNames NameRoster) returns ConformanceBinding
 	if bindings.spellings.count() != associatedTypeNames.count() or bindings.types.count() != associatedTypeNames.count() 'noPositionalMeaning'
 		return ConformanceBinding.none()
 	end 'noPositionalMeaning'
@@ -1427,7 +1427,7 @@ end 'pairableConformanceBindings'
 // `__witness_int.*` tables are filed under. Asking about the alias spelling instead would withhold
 // `contains` from every `Array with <ranged alias>` in the program, which is the motivating case for the
 // feature.
-export function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings ConformanceBinding, readerFilePath FilePath) returns ExtensionConstraintCheck
+function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings ConformanceBinding, readerFilePath FilePath) returns ExtensionConstraintCheck
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 		let bound = try bindings.types.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
@@ -1453,7 +1453,7 @@ end 'checkExtensionConstraints'
 // `WitnessSlotImplMap`'s reason stated in full there: a warm rebuild whose sources changed which types
 // declare what would otherwise answer from the PREVIOUS compile's index, and a stale "conforms" is a
 // dispatch through a witness table nothing emitted.
-export function declaredConformanceIndex(project Project) returns DeclaredConformanceMap
+function declaredConformanceIndex(project Project) returns DeclaredConformanceMap
 	if project.declaredConformanceIndexBuilt 'alreadyBuilt'
 		return project.declaredConformances
 	end 'alreadyBuilt'
@@ -1489,7 +1489,7 @@ end 'declaredConformanceIndex'
 // widening, and converting between them needs a runtime table the compiler does not emit. A CONCRETE
 // `Impl implements Derived` reaching a `Base` place is a different question and is
 // ALLOWED — `typeConformsTo` walks `extends`, and `__witness_Impl.Base` has a real impl in every slot.
-export function valueWidensToInterface(project Project, signatures ProgramSignatures, valueType MaxonType, interfaceName ByteArray, readerFilePath FilePath) returns bool
+function valueWidensToInterface(project Project, signatures ProgramSignatures, valueType MaxonType, interfaceName ByteArray, readerFilePath FilePath) returns bool
 	if maxonTypeTag(valueType) == ValueTypeTag.interfaceRef 'alreadyExistential'
 		return interfaceNameOfType(valueType, typeNames: project.typeNames).equals(interfaceName)
 	end 'alreadyExistential'
@@ -1523,7 +1523,7 @@ end 'buildDeclaredConformanceMap'
 // ⚠ **THE SET IS COPIED RATHER THAN ADDED TO.** The copy is paid once per DECLARATION and copies only what an earlier declaration
 // of the SAME conformer already put there, which is nothing for every type in the corpus but the handful
 // carrying both a `type` clause and an `extension` one.
-module function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteArray, into InterfaceNameSet)
+function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteArray, into InterfaceNameSet)
 	if let already = try declared.get(typeName) 'declaredEarlierToo'
 		for interfaceName in already 'eachEarlier'
 			into.insert(interfaceName)
@@ -1531,7 +1531,7 @@ module function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName
 	end 'declaredEarlierToo'
 end 'copyDeclaredInterfaces'
 
-module function interfaceNamesDeclaredBy(declared DeclaredConformanceMap, conformer ByteArray, declares InterfaceConformanceArray) returns InterfaceNameSet
+function interfaceNamesDeclaredBy(declared DeclaredConformanceMap, conformer ByteArray, declares InterfaceConformanceArray) returns InterfaceNameSet
 	let interfaces = InterfaceNameSet.create()
 	copyDeclaredInterfaces(declared, typeName: conformer, into: interfaces)
 
@@ -2269,7 +2269,7 @@ end 'throwsRequirementIsAbstract'
 //   • **`undeclared` — neither**, which is a THIRD answer and not a shading of the second: a struct, a
 //     ranged alias, a generic type parameter, a stdlib type the compiler does not declare, or a typo.
 // The three — and only three — things a `throws` clause name can denote. See `classifyThrowsClauseName`.
-export enum ThrowsClauseKind
+enum ThrowsClauseKind
 	// A declared enum or union: the catch decode can discriminate its cases.
 	concreteError
 
@@ -2286,7 +2286,7 @@ end 'ThrowsClauseKind'
 // sorted `concreteError` off a DIFFERENT file's enum, and the catch would decode against cases the clause's
 // own file never named. The two callers each have a reader to give: a plain function's is its declaring
 // file, and an interface REQUIREMENT's is its declaring interface's file.
-export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String, readerFilePath FilePath) returns ThrowsClauseKind
+function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String, readerFilePath FilePath) returns ThrowsClauseKind
 	let key = freeze name.toByteArray()
 
 	if signatures.containsEnumFor(key, readerFilePath: readerFilePath) 'namesAConcreteError'

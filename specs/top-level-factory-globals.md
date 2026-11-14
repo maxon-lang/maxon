@@ -687,52 +687,6 @@ end 'main'
 error E3008: bin/<fragment>:14:20: function 'Database.create' is not exported
 ```
 
-<!-- test: error.cross-file-module-scoped-factory -->
-The initializer of a module-level or `static` `let` calls `Database.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
-```maxon
-// --- file: api/db.maxon
-export type Database
-	export var n as Integer
-
-	module static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Database'
-
-export typealias Integer = int(i64.min to i64.max)
-// --- file: bin/main.maxon
-let db = Database.create()
-
-function main() returns ExitCode
-	return db.n
-end 'main'
-```
-```maxoncstderr
-error E3220: bin/<fragment>:13:10: the initializer of 'db' calls 'Database.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
-```
-
-<!-- test: error.cross-file-module-scoped-factory-in-a-function-body -->
-```maxon
-// --- file: api/db.maxon
-export type Database
-	export var n as Integer
-
-	module static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Database'
-
-export typealias Integer = int(i64.min to i64.max)
-// --- file: bin/main.maxon
-function main() returns ExitCode
-	let db = Database.create()
-	return db.n
-end 'main'
-```
-```maxoncstderr
-error E3088: bin/<fragment>:14:20: function 'Database.create' is module-scoped and not visible from this directory
-```
-
 <!-- test: error.stdlib-factory-reached-from-the-initializer -->
 The initializer of a module-level or `static` `let` calls `FilePath.separator`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon

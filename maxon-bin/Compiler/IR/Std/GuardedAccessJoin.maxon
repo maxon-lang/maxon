@@ -19,7 +19,7 @@
 // know what a later pass reads off it, and the runtime states its contract in its own words. This is
 // where the two meet, and the one place a consumer looks.
 
-export type GuardedAccessJoinReader
+type GuardedAccessJoinReader
 	var branch as StdBranchOperands
 	var slowBranch as StdBranchOperands
 	var guard as ManagedGuardOperands
@@ -29,7 +29,7 @@ export type GuardedAccessJoinReader
 	// edge into the join.
 	export var guardCompareOpIdx as ElementIndex
 
-	export static function create() returns GuardedAccessJoinReader
+	static function create() returns GuardedAccessJoinReader
 		return Self{branch: StdBranchOperands.create(), slowBranch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), call: StdCallOperands.create(), guardCompareOpIdx: 0}
 	end 'create'
 
@@ -139,13 +139,13 @@ end 'GuardedAccessJoinReader'
 // Which arm of a block's closing test a `tryCall`'s success takes, when that test is its error flag
 // against `NoErrorFlag`. `reader.arith` holds the compare (`closingCompareOf`), and on either success
 // answer `reader.arith.lhs` is the flag. Shared by every reader of a success edge.
-export enum ErrorFlagTestArm
+enum ErrorFlagTestArm
 	notAFlagTest
 	successOnThen
 	successOnElse
 end 'ErrorFlagTestArm'
 
-export function errorFlagTestArm(reader StdShapeReader) returns ErrorFlagTestArm
+function errorFlagTestArm(reader StdShapeReader) returns ErrorFlagTestArm
 	if not reader.arith.isComparisonImm() or reader.arith.imm as FullRangeInt != NoErrorFlag 'notAgainstNoError'
 		return ErrorFlagTestArm.notAFlagTest
 	end 'notAgainstNoError'
@@ -164,7 +164,7 @@ end 'errorFlagTestArm'
 // The compare a block's exit branches on: whether `block` ends in a `condBranch` between two distinct
 // arms whose condition an arithmetic compare defines, filling `branch` with the terminator and
 // `reader.arith` with the compare. Shared by every reader of a block's closing test.
-export function closingCompareOf(module StdModule, block IrBlock, branch StdBranchOperands, reader StdShapeReader) returns bool
+function closingCompareOf(module StdModule, block IrBlock, branch StdBranchOperands, reader StdShapeReader) returns bool
 	if not block.hasTerminatorOp() 'noExitOp'
 		return false
 	end 'noExitOp'

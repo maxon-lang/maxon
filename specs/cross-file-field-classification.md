@@ -58,16 +58,16 @@ scalar field is COPIED, not borrowed, so reading it off a temporary is legal —
 in one file (below) runs.
 ```maxon
 // --- file: gate.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export type Gate
-	export var n as Num
+type Gate
+	var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Gate{n: v}
 	end 'make'
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Gate.make(v + v)
 	end 'twice'
 end 'Gate'
@@ -113,10 +113,10 @@ instead of an alias. A builtin carries its own type tag and never needs a name r
 never affected — which is what proves the alias RESOLUTION is the part that broke.
 ```maxon
 // --- file: gate.maxon
-export type Gate
-	export var n as ExitCode
+type Gate
+	var n as ExitCode
 
-	export static function make(v ExitCode) returns Gate
+	static function make(v ExitCode) returns Gate
 		return Gate{n: v}
 	end 'make'
 end 'Gate'
@@ -136,16 +136,16 @@ statement, so the guard never asks the classifier at all — which is what prove
 half that makes the misclassification visible, not the half that is wrong.
 ```maxon
 // --- file: gate.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export type Gate
-	export var n as Num
+type Gate
+	var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Gate{n: v}
 	end 'make'
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Gate.make(v + v)
 	end 'twice'
 end 'Gate'
@@ -167,16 +167,16 @@ different id. Under the defect this one COMPILED while the headline did not — 
 followed the id, not the type. Both must run.
 ```maxon
 // --- file: gate.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export type Gate
-	export var n as Num
+type Gate
+	var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Gate{n: v}
 	end 'make'
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Gate.make(v + v)
 	end 'twice'
 end 'Gate'
@@ -209,10 +209,10 @@ public enum Color
 	green
 end 'Color'
 
-export type Gate
-	export var c as Color
+type Gate
+	var c as Color
 
-	export static function make() returns Gate
+	static function make() returns Gate
 		return Gate{c: Color.green}
 	end 'make'
 end 'Gate'
@@ -263,17 +263,17 @@ The alias, the struct and the read in THREE different files. The name still cros
 answer is the same one the headline gives.
 ```maxon
 // --- file: num.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export function double(v Num) returns Num
+function double(v Num) returns Num
 	return v + v
 end 'double'
 
 // --- file: gate.maxon
-export type Gate
-	export var n as Num
+type Gate
+	var n as Num
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Gate{n: double(v)}
 	end 'twice'
 end 'Gate'
@@ -288,9 +288,9 @@ end 'main'
 ```
 
 <!-- test: error.crossfile-same-alias-name-declared-in-two-files -->
-Two file-private `typealias`es of one name coexist in one directory, so two files may each declare
-`Num`. `Gate.n` is typed by the STRUCT's own file's `Num`, and an exported field cannot be typed by a
-file-private alias, so the field is refused where it is declared.
+Two unmarked `typealias`es of one name coexist in two directories, so two files may each declare
+`Num`. `Gate.n` is typed by the STRUCT's own file's `Num`, and an exported field cannot be typed by an
+unmarked alias, so the field is refused where it is declared.
 ```maxon
 // --- file: gate/gate.maxon
 typealias Num = int(0 to 1000)
@@ -315,7 +315,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: gate/<fragment>:6:18: exported field 'gate.Gate.n' names file-private typealias 'Num' in its type
+error E3167: gate/<fragment>:6:18: exported field 'gate.Gate.n' names unexported typealias 'Num' in its type
 ```
 
 <!-- test: crossfile-float-alias-field-off-a-temporary -->
@@ -324,12 +324,12 @@ layout column the classifier reads still holds the bare name — so it travels t
 int alias does and must reach the same `false`.
 ```maxon
 // --- file: scale.maxon
-export typealias Weight = float(0.0 to 1000.0)
+typealias Weight = float(0.0 to 1000.0)
 
-export type Scale
-	export var w as Weight
+type Scale
+	var w as Weight
 
-	export static function make() returns Scale
+	static function make() returns Scale
 		return Scale{w: 42.0}
 	end 'make'
 end 'Scale'
@@ -348,17 +348,17 @@ A FUNCTION-typed field is a code pointer — an i64 stored inline that owns no h
 skips it and the read copies it. Declared in a sibling file it is the same scalar.
 ```maxon
 // --- file: holder.maxon
-export typealias Integer = int(i64.min to i64.max)
-export typealias UnaryOp = function(Integer) returns Integer
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
 
 function inc(v Integer) returns Integer
 	return v + 1
 end 'inc'
 
-export type Holder
-	export var op as UnaryOp
+type Holder
+	var op as UnaryOp
 
-	export static function make() returns Holder
+	static function make() returns Holder
 		return Holder{op: inc}
 	end 'make'
 end 'Holder'
@@ -380,10 +380,10 @@ text. Classified SCALAR the box would die at the statement's end and `byteLength
 memory — which is what a fix that reached the DOOR rather than the classifier would produce.
 ```maxon
 // --- file: box.maxon
-export type Box
-	export var name as String
+type Box
+	var name as String
 
-	export static function make(n String) returns Box
+	static function make(n String) returns Box
 		return Box{name: n}
 	end 'make'
 end 'Box'
@@ -403,25 +403,25 @@ end 'main'
 `0x3F3F3F3F` as the program's answer when the box is not held.
 ```maxon
 // --- file: inner.maxon
-export typealias Wide = int(i64.min to i64.max)
+typealias Wide = int(i64.min to i64.max)
 
-export type Inner
-	export var v as Wide
+type Inner
+	var v as Wide
 
-	export static function make(v Wide) returns Inner
+	static function make(v Wide) returns Inner
 		return Inner{v: v}
 	end 'make'
 
-	export function get() returns Wide
+	function get() returns Wide
 		return self.v
 	end 'get'
 end 'Inner'
 
 // --- file: outer.maxon
-export type Outer
-	export var inner as Inner
+type Outer
+	var inner as Inner
 
-	export static function make(i Inner) returns Outer
+	static function make(i Inner) returns Outer
 		return Outer{inner: i}
 	end 'make'
 end 'Outer'
@@ -445,25 +445,25 @@ file-local id resolved program-wide classifies correctly at 0–3 padding aliase
 upwards. A classification that changes at the fourth unrelated `typealias` is the defect stated as a test.
 ```maxon
 // --- file: shape.maxon
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export type Body
-	export var mass as Integer
+type Body
+	var mass as Integer
 
-	export static function create(mass Integer) returns Body
+	static function create(mass Integer) returns Body
 		return Body{mass: mass}
 	end 'create'
 end 'Body'
 
-export union Shape
+union Shape
 	empty
 	solid(body Body)
 end 'Shape'
 
-export type Holder
-	export var shape as Shape
+type Holder
+	var shape as Shape
 
-	export static function make() returns Holder
+	static function make() returns Holder
 		return Holder{shape: Shape.solid(Body.create(5))}
 	end 'make'
 end 'Holder'
@@ -495,13 +495,13 @@ end 'main'
 in a sibling file, whose record and buffer the box owns.
 ```maxon
 // --- file: bag.maxon
-export typealias Integer = int(i64.min to i64.max)
-export typealias IntArray = Array with Integer
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
-export type Bag
-	export var items as IntArray
+type Bag
+	var items as IntArray
 
-	export static function make() returns Bag
+	static function make() returns Bag
 		let xs = IntArray.create(0)
 		xs.push(1)
 		return Bag{items: xs}
@@ -523,19 +523,19 @@ end 'main'
 are declared in different files again — three files between the element's range and the read.
 ```maxon
 // --- file: elem.maxon
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export function seed() returns Integer
+function seed() returns Integer
 	return 7
 end 'seed'
 
 // --- file: bag.maxon
-export typealias IntArray = Array with Integer
+typealias IntArray = Array with Integer
 
-export type Bag
-	export var items as IntArray
+type Bag
+	var items as IntArray
 
-	export static function make() returns Bag
+	static function make() returns Bag
 		let xs = IntArray.create(0)
 		xs.push(seed())
 		return Bag{items: xs}
@@ -565,18 +565,18 @@ padding: the divergence is structural, not order-sensitive. Both doors ask
 `unionBoxDropCallee(name)`, which answers over the index's own layout and interner.
 ```maxon
 // --- file: bag.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export union Payloaded
+union Payloaded
 	some(v Num)
 	none
 end 'Payloaded'
 
-export type Bag
-	export var n as Num
-	export var u as Payloaded
+type Bag
+	var n as Num
+	var u as Payloaded
 
-	export static function make() returns Bag
+	static function make() returns Bag
 		return Bag{n: 42, u: Payloaded.some(3)}
 	end 'make'
 end 'Bag'
@@ -597,18 +597,18 @@ mispairing panics it identically, so the pairing is the drop routing's and not t
 at the guard alone leaves this case red.
 ```maxon
 // --- file: bag.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export union Payloaded
+union Payloaded
 	some(v Num)
 	none
 end 'Payloaded'
 
-export type Bag
-	export var n as Num
-	export var u as Payloaded
+type Bag
+	var n as Num
+	var u as Payloaded
 
-	export static function make() returns Bag
+	static function make() returns Bag
 		return Bag{n: 42, u: Payloaded.some(3)}
 	end 'make'
 end 'Bag'
@@ -635,16 +635,16 @@ public union Payloaded
 	none
 end 'Payloaded'
 
-export type Bag
-	export var n as Integer
-	export var u as Payloaded
+type Bag
+	var n as Integer
+	var u as Payloaded
 
-	export static function make() returns Bag
+	static function make() returns Bag
 		return Bag{n: 42, u: Payloaded.some("x")}
 	end 'make'
 end 'Bag'
 
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let b = Bag.make()
@@ -663,10 +663,10 @@ off a temporary is legal — cross-file, where the alias naming the instance liv
 and the generic type in the other.
 ```maxon
 // --- file: holder.maxon
-export type Holder uses T
-	export var item as T
+type Holder uses T
+	var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 end 'Holder'
@@ -689,10 +689,10 @@ frees at drop, so the box is held exactly as the struct arm's is. The instance a
 on the interning order: its answer is the same at 0–7 padding aliases in the reading file.
 ```maxon
 // --- file: holder.maxon
-export type Holder uses T
-	export var item as T
+type Holder uses T
+	var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 end 'Holder'

@@ -2,42 +2,42 @@
 // descriptor-gated `*_type_param` action. A generic body stays one shared function that reads its
 // tables from parameters, so its calls resolve only in a copy spliced into a caller that passes
 // constant tables.
-module typealias OfferedOpSet = Set with ElementIndex
-module typealias RdataSlotTargetArray = Array with RdataSlotTarget
-module typealias RdataSlotTargetsByLabel = Map with (String, RdataSlotTargetArray)
+typealias OfferedOpSet = Set with ElementIndex
+typealias RdataSlotTargetArray = Array with RdataSlotTarget
+typealias RdataSlotTargetsByLabel = Map with (String, RdataSlotTargetArray)
 typealias PatchedOffsetsByLabel = Map with (String, ByteOffsetArray)
-module typealias TableUseArray = Array with TableUse
-module typealias TableUsesByCallee = Map with (ElementIndex, TableUseArray)
+typealias TableUseArray = Array with TableUse
+typealias TableUsesByCallee = Map with (ElementIndex, TableUseArray)
 
 let MaxAddressChain = 8 as ElementIndex
 let RdataWordBytes = 8 as ByteOffset
 let DescriptorActionArity = 2
 
-module type RdataSlotTarget
+type RdataSlotTarget
 	export let offset as ByteOffset
 	export let funcName as immutable ByteArray
 
-	module static function create(offset ByteOffset, funcName ByteArray) returns RdataSlotTarget
+	static function create(offset ByteOffset, funcName ByteArray) returns RdataSlotTarget
 		return Self{offset: offset, funcName: funcName}
 	end 'create'
 end 'RdataSlotTarget'
 
-module union RdataWord
+union RdataWord
 	callee(name immutable ByteArray)
 	inert
 	unreadable
 end 'RdataWord'
 
-module type RdataSlotIndex
+type RdataSlotIndex
 	var byLabel as RdataSlotTargetsByLabel
 	var dataWordsByLabel as PatchedOffsetsByLabel
 	var built as bool
 
-	module static function create() returns RdataSlotIndex
+	static function create() returns RdataSlotIndex
 		return Self{byLabel: RdataSlotTargetsByLabel.create(), dataWordsByLabel: PatchedOffsetsByLabel.create(), built: false}
 	end 'create'
 
-	module function ensureBuilt(globalData GlobalDataTable)
+	function ensureBuilt(globalData GlobalDataTable)
 		if self.built 'alreadyBuilt'
 			return
 		end 'alreadyBuilt'
@@ -81,7 +81,7 @@ module type RdataSlotIndex
 	// its label is registered, before this pass: a word no reloc patches is its payload bytes.
 	// ⚠ A reloc channel `ensureBuilt` does not read would let a patched word with zero payload bytes
 	// answer `inert`.
-	module function wordAt(globalData GlobalDataTable, label String, offset ByteOffset) returns RdataWord
+	function wordAt(globalData GlobalDataTable, label String, offset ByteOffset) returns RdataWord
 		if not self.built 'notBuilt'
 			panic("RdataSlotIndex.wordAt: asked about '{label}' before `ensureBuilt` — an unbuilt index would read every function slot as an empty word")
 		end 'notBuilt'
@@ -158,7 +158,7 @@ function addressRootOf(module StdModule, defs StdValueDefs, arith StdArithOperan
 	return AddressRoot.create(current, offset: offset)
 end 'addressRootOf'
 
-module enum DescriptorAction
+enum DescriptorAction
 	retain
 	drop
 	release
@@ -170,22 +170,22 @@ union DescriptorOutcome
 	direct(name immutable ByteArray)
 end 'DescriptorOutcome'
 
-module union TableUseKind
+union TableUseKind
 	witnessSlot
 	descriptorAction(action DescriptorAction)
 end 'TableUseKind'
 
-module type TableUse
+type TableUse
 	export let kind as TableUseKind
 	export let position as ParamCount
 	export let wordOffset as ByteOffset
 
-	module static function create(kind TableUseKind, position ParamCount, wordOffset ByteOffset) returns TableUse
+	static function create(kind TableUseKind, position ParamCount, wordOffset ByteOffset) returns TableUse
 		return Self{kind: kind, position: position, wordOffset: wordOffset}
 	end 'create'
 end 'TableUse'
 
-module type TableCallProbe
+type TableCallProbe
 	var project as Project
 	var call as StdCallOperands
 	var witness as StdWitnessOperands
@@ -202,11 +202,11 @@ module type TableCallProbe
 	var liveOps as OpIndexArray
 	export var reads as TableUseArray
 
-	module static function create(project Project) returns TableCallProbe
+	static function create(project Project) returns TableCallProbe
 		return Self{project: project, call: StdCallOperands.create(), witness: StdWitnessOperands.create(), arith: StdArithOperands.create(), defs: StdValueDefs.create(), defsBuilt: false, forwarder: false, forwardedCalls: 0, allocations: 0, admitsPairBoxes: false, pairBoxesKnown: false, allocationSizes: ConstValueMap.create(), allocationSizesBuilt: false, liveOps: OpIndexArray.create(0), reads: TableUseArray.create(0)}
 	end 'create'
 
-	module function begin(func IrFunction)
+	function begin(func IrFunction)
 		self.defsBuilt = false
 		self.forwarder = isWitnessSlotAdapterName(func.name)
 		self.forwardedCalls = 0
@@ -216,11 +216,11 @@ module type TableCallProbe
 		self.reads = TableUseArray.create(0)
 	end 'begin'
 
-	module function isForwarder() returns bool
+	function isForwarder() returns bool
 		return self.forwarder
 	end 'isForwarder'
 
-	module function settles() returns bool
+	function settles() returns bool
 		if self.forwarder 'anAdapter'
 			return self.forwardedCalls <= 1
 		end 'anAdapter'
@@ -228,7 +228,7 @@ module type TableCallProbe
 		return self.allocations == 0 or self.reads.count() != 0
 	end 'settles'
 
-	module function admitsHotCall(op StdOp, module StdModule, func IrFunction) returns bool
+	function admitsHotCall(op StdOp, module StdModule, func IrFunction) returns bool
 		if self.forwarder 'anAdapter'
 			classifyCallOperands(op, call: self.call)
 
@@ -344,7 +344,7 @@ function resolveRdataWord(project Project, module StdModule, defs StdValueDefs, 
 	return slots.wordAt(project.globalData, label: label, offset: found.offset + wordOffset)
 end 'resolveRdataWord'
 
-module function tableUsesResolveAtSite(reads TableUseArray, args ValueIdArray, project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex) returns bool
+function tableUsesResolveAtSite(reads TableUseArray, args ValueIdArray, project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex) returns bool
 	for tableUse in reads 'eachUse'
 		let arg = try args.get(tableUse.position) otherwise panic("tableUsesResolveAtSite: a callee reads a table through parameter {tableUse.position} but the site passes {args.count()} argument(s)")
 
@@ -430,7 +430,7 @@ function reclaimOutcome(retainWord RdataWord, destroyWord RdataWord) returns Des
 	end 'gate'
 end 'reclaimOutcome'
 
-module function devirtualizeTableCalls(project Project, module StdModule, func IrFunction, byName FunctionNameIndex, meta StdOpMetaMemo, slots RdataSlotIndex) returns OfferedOpSet
+function devirtualizeTableCalls(project Project, module StdModule, func IrFunction, byName FunctionNameIndex, meta StdOpMetaMemo, slots RdataSlotIndex) returns OfferedOpSet
 	let rewritten = OfferedOpSet.create()
 	let candidates = OpIndexArray.create(0)
 	let call = StdCallOperands.create()
@@ -555,7 +555,7 @@ let MaxDeadSweeps = 4 as ElementIndex
 
 // Sound only while no `isPure` op can trap or allocate: one that could would vanish with its
 // result.
-module function dropDeadPureOps(module StdModule, func IrFunction)
+function dropDeadPureOps(module StdModule, func IrFunction)
 	let def = StdDefinedValues.create()
 
 	for _ in 0 upto MaxDeadSweeps 'eachSweep'

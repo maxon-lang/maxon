@@ -22,20 +22,20 @@ public union TlsPeerRefusal
 end 'TlsPeerRefusal'
 
 public type TlsX509Peer implements TlsPeerAuthenticator
-	module let anchors as immutable X509RootPool
-	module var now as UnixSeconds
-	module var purpose as X509Purpose
+	let anchors as immutable X509RootPool
+	var now as UnixSeconds
+	var purpose as X509Purpose
 	public var refusal as TlsPeerRefusal
 
 	public static function create(roots ByteArrays, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
 		return Self{anchors: X509RootPool.create(roots), now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
 	end 'create'
 
-	module static function trusting(anchors immutable X509RootPool, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
+	static function trusting(anchors immutable X509RootPool, now UnixSeconds, purpose X509Purpose) returns TlsX509Peer
 		return Self{anchors: anchors, now: now, purpose: purpose, refusal: TlsPeerRefusal.none}
 	end 'trusting'
 
-	module function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
+	function verifyChain(leaf ByteArray, intermediates ByteArrays, host X509VerifyHost) throws TlsHandshakeError
 		_ = try X509.verifyUnder(leaf, intermediates: intermediates, anchors: anchors, host: host, now: now, purpose: purpose) otherwise (failure) 'refused'
 			refusal = TlsPeerRefusal.refused(failure)
 
@@ -43,11 +43,11 @@ public type TlsX509Peer implements TlsPeerAuthenticator
 		end 'refused'
 	end 'verifyChain'
 
-	module function verifySignature(scheme TlsSignatureScheme, key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
+	function verifySignature(scheme TlsSignatureScheme, key X509PublicKey, message ByteArray, signature ByteArray) throws TlsHandshakeError
 		try scheme.requireSignature(key, message: message, signature: signature)
 	end 'verifySignature'
 
-	module function authenticates() returns bool
+	function authenticates() returns bool
 		return true
 	end 'authenticates'
 end 'TlsX509Peer'
@@ -62,7 +62,7 @@ public function tlsCertificates(installed RootCertificates) returns ByteArrays
 	return certificates
 end 'tlsCertificates'
 
-module function tlsVerifyCertificateVerify(session TlsSession, peer TlsPeerAuthenticator, signer TlsRole, key X509PublicKey, offered TlsSignatureSchemeCodeArray, code TlsSignatureSchemeCode, signature ByteArray) throws TlsHandshakeError
+function tlsVerifyCertificateVerify(session TlsSession, peer TlsPeerAuthenticator, signer TlsRole, key X509PublicKey, offered TlsSignatureSchemeCodeArray, code TlsSignatureSchemeCode, signature ByteArray) throws TlsHandshakeError
 	let suite = try session.negotiatedSuite()
 	let scheme = try tlsRequireOfferedScheme(code, offered: offered, algorithm: key.algorithm, protocol: TlsProtocol.tls13)
 	let content = tlsCertificateVerifyContent(signer, transcriptHash: session.transcript.hash(suite.hashAlgorithm()))
@@ -70,7 +70,7 @@ module function tlsVerifyCertificateVerify(session TlsSession, peer TlsPeerAuthe
 	try peer.verifySignature(scheme, key: key, message: content, signature: signature)
 end 'tlsVerifyCertificateVerify'
 
-module function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer TlsPeerAuthenticator, session TlsSession) returns Certificate throws TlsHandshakeError
+function tlsAuthenticateChain(chain ByteArrays, host X509VerifyHost, peer TlsPeerAuthenticator, session TlsSession) returns Certificate throws TlsHandshakeError
 	let leafDer = try chain.first() otherwise throw TlsHandshakeError.decodeError
 
 	let leaf = try X509.parse(leafDer) otherwise (failure) 'unparsed'

@@ -1,21 +1,21 @@
-module union SystemRootsOutcome
+union SystemRootsOutcome
 	unloaded
 	loaded(anchors immutable X509RootPool)
 	failed(error TrustStoreError)
 end 'SystemRootsOutcome'
 
 public type SystemRoots
-	module let outcome as SystemRootsOutcome
+	let outcome as SystemRootsOutcome
 
-	module static function unloaded() returns SystemRoots
+	static function unloaded() returns SystemRoots
 		return Self{outcome: SystemRootsOutcome.unloaded}
 	end 'unloaded'
 
-	module static function loaded(anchors immutable X509RootPool) returns SystemRoots
+	static function loaded(anchors immutable X509RootPool) returns SystemRoots
 		return Self{outcome: SystemRootsOutcome.loaded(anchors)}
 	end 'loaded'
 
-	module static function failed(error TrustStoreError) returns SystemRoots
+	static function failed(error TrustStoreError) returns SystemRoots
 		return Self{outcome: SystemRootsOutcome.failed(error)}
 	end 'failed'
 
@@ -25,7 +25,7 @@ public type SystemRoots
 		return try SystemRoots.current().authenticatorOver(purpose, now: now)
 	end 'authenticator'
 
-	module static function settle(source immutable TrustSource) throws TrustStoreError
+	static function settle(source immutable TrustSource) throws TrustStoreError
 		let seen = SystemRoots.current()
 
 		if seen.isUnloaded() 'unclaimed'

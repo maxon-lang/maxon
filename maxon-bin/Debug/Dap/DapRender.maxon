@@ -1,8 +1,8 @@
-export typealias DebugBreakpointAnswerArray = Array with DebugBreakpointAnswer
-export typealias DebugValueTreeArray = Array with DebugValueTree
-export typealias DapMovementArray = Array with DapMovement
+typealias DebugBreakpointAnswerArray = Array with DebugBreakpointAnswer
+typealias DebugValueTreeArray = Array with DebugValueTree
+typealias DapMovementArray = Array with DapMovement
 
-export let DapMainThreadId = 1 as DapNumber
+let DapMainThreadId = 1 as DapNumber
 let DapGreenThreadIdOffset = 1
 let LowestGreenThreadId = 1
 let HighestGreenThreadId = u32.max as DapNumber
@@ -11,7 +11,7 @@ let DapMainThreadName = "main"
 let DapBreakpointReason = "breakpoint"
 let DapStepReason = "step"
 let DapPauseReason = "pause"
-export let DapEntryReason = "entry"
+let DapEntryReason = "entry"
 let DapExceptionReason = "exception"
 
 let ReasonKey = "reason"
@@ -45,37 +45,37 @@ let ResultKey = "result"
 
 let SubtleFrameHint = "subtle"
 let LocalsScopeName = "Locals"
-export let NoChildren = 0 as DapNumber
+let NoChildren = 0 as DapNumber
 let UnavailableWordSeparator = "-"
 let LineBreak = "\n"
 
 let StdoutCategory = "stdout"
 let StderrCategory = "stderr"
-export let ConsoleCategory = "console"
+let ConsoleCategory = "console"
 
-export union DapMovement
+union DapMovement
 	stopped(stop DebugStop)
 	ended(code DapNumber)
 	running
 end 'DapMovement'
 
-export union DapFrameListing
+union DapFrameListing
 	none
 	walked(frames DebugFrameArray)
 	missing(reason String)
 end 'DapFrameListing'
 
-export union DapRosterAnswer
+union DapRosterAnswer
 	none
 	listed(roster DebugThreadRoster)
 end 'DapRosterAnswer'
 
-export union DapRequestedLine
+union DapRequestedLine
 	none
 	at(line DapNumber)
 end 'DapRequestedLine'
 
-export type DapAnswers
+type DapAnswers
 	export var movements as DapMovementArray
 	export var failures as StringArray
 	export var breakpoints as DebugBreakpointAnswerArray
@@ -84,7 +84,7 @@ export type DapAnswers
 	export var trees as DebugValueTreeArray
 	export var text as StringArray
 
-	export static function of(replies DebugReplyArray) returns DapAnswers
+	static function of(replies DebugReplyArray) returns DapAnswers
 		let answers = Self{movements: DapMovementArray.create(0), failures: StringArray.create(0), breakpoints: DebugBreakpointAnswerArray.create(0), frames: DapFrameListing.none, roster: DapRosterAnswer.none, trees: DebugValueTreeArray.create(0), text: StringArray.create(0)}
 
 		for reply in replies 'eachReply'
@@ -132,7 +132,7 @@ function walkedThread(walk DebugThreadWalk) returns DapFrameListing
 	return DapFrameListing.walked(walk.frames)
 end 'walkedThread'
 
-export function dapCapabilitiesBody(doc JsonDoc) returns JsonNodeId
+function dapCapabilitiesBody(doc JsonDoc) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addBool(doc, key: "supportsConfigurationDoneRequest", value: true)
 	body.addBool(doc, key: "supportsConditionalBreakpoints", value: true)
@@ -144,7 +144,7 @@ export function dapCapabilitiesBody(doc JsonDoc) returns JsonNodeId
 	return body.build(doc)
 end 'dapCapabilitiesBody'
 
-export function dapStopReason(stop DebugStop) returns String
+function dapStopReason(stop DebugStop) returns String
 	if stop.reason == BreakpointStopReasonName 'aBreakpoint'
 		return DapBreakpointReason
 	end 'aBreakpoint'
@@ -168,7 +168,7 @@ export function dapStopReason(stop DebugStop) returns String
 	panic("dapStopReason: '{stop.reason}' is none of the stop reasons the conversation reports")
 end 'dapStopReason'
 
-export function dapThreadIdOf(thread DebugThreadRef) returns DapNumber
+function dapThreadIdOf(thread DebugThreadRef) returns DapNumber
 	return match thread 'which'
 		none gives DapMainThreadId
 		id(value) gives dapGreenThreadId(value)
@@ -179,13 +179,13 @@ function dapGreenThreadId(green DebugThreadId) returns DapNumber
 	return (green as DapNumber) + DapGreenThreadIdOffset
 end 'dapGreenThreadId'
 
-export union DapThreadTarget
+union DapThreadTarget
 	mainThread
 	green(id DebugThreadId)
 	unknown
 end 'DapThreadTarget'
 
-export function dapThreadTargetOf(threadId DapNumber) returns DapThreadTarget
+function dapThreadTargetOf(threadId DapNumber) returns DapThreadTarget
 	if threadId == DapMainThreadId 'theMainThread'
 		return DapThreadTarget.mainThread
 	end 'theMainThread'
@@ -199,7 +199,7 @@ export function dapThreadTargetOf(threadId DapNumber) returns DapThreadTarget
 	return DapThreadTarget.green(green as DebugThreadId)
 end 'dapThreadTargetOf'
 
-export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, fault StatedText) returns JsonNodeId
+function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, fault StatedText) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addString(doc, key: ReasonKey, value: reason)
 
@@ -214,7 +214,7 @@ export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, f
 	return body.build(doc)
 end 'dapStoppedBody'
 
-export function dapContinuedBody(doc JsonDoc, threadId DapNumber) returns JsonNodeId
+function dapContinuedBody(doc JsonDoc, threadId DapNumber) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addNumber(doc, key: ThreadIdKey, value: threadId as JsonFloat)
 	body.addBool(doc, key: AllThreadsContinuedKey, value: true)
@@ -222,28 +222,28 @@ export function dapContinuedBody(doc JsonDoc, threadId DapNumber) returns JsonNo
 	return body.build(doc)
 end 'dapContinuedBody'
 
-export function dapAllContinuedBody(doc JsonDoc) returns JsonNodeId
+function dapAllContinuedBody(doc JsonDoc) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addBool(doc, key: AllThreadsContinuedKey, value: true)
 
 	return body.build(doc)
 end 'dapAllContinuedBody'
 
-export function dapExitedBody(doc JsonDoc, code DapNumber) returns JsonNodeId
+function dapExitedBody(doc JsonDoc, code DapNumber) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addNumber(doc, key: ExitCodeKey, value: code as JsonFloat)
 
 	return body.build(doc)
 end 'dapExitedBody'
 
-export function dapCategoryOf(stream StdioStream) returns String
+function dapCategoryOf(stream StdioStream) returns String
 	return match stream 'which'
 		stdout gives StdoutCategory
 		stderr gives StderrCategory
 	end 'which'
 end 'dapCategoryOf'
 
-export function dapOutputBody(doc JsonDoc, category String, lines StringArray) returns JsonNodeId
+function dapOutputBody(doc JsonDoc, category String, lines StringArray) returns JsonNodeId
 	var text = ""
 
 	for line in lines 'eachLine'
@@ -257,16 +257,16 @@ export function dapOutputBody(doc JsonDoc, category String, lines StringArray) r
 	return body.build(doc)
 end 'dapOutputBody'
 
-export function dapBreakpointsBody(doc JsonDoc, nodes JsonNodeIdArray) returns JsonNodeId
+function dapBreakpointsBody(doc JsonDoc, nodes JsonNodeIdArray) returns JsonNodeId
 	return listBody(doc, key: BreakpointsKey, nodes: nodes)
 end 'dapBreakpointsBody'
 
-export union DapBreakpointOutcome
+union DapBreakpointOutcome
 	armed(answer DebugBreakpointAnswer)
 	unverified(message String)
 end 'DapBreakpointOutcome'
 
-export function dapBreakpointOutcome(answers DapAnswers) returns DapBreakpointOutcome
+function dapBreakpointOutcome(answers DapAnswers) returns DapBreakpointOutcome
 	for answer in answers.breakpoints 'eachArmed'
 		if answer.action == BreakpointSetAction 'armed'
 			return DapBreakpointOutcome.armed(answer)
@@ -284,7 +284,7 @@ export function dapBreakpointOutcome(answers DapAnswers) returns DapBreakpointOu
 	panic("dapBreakpointOutcome: a `{BreakCommandWord}` answers a breakpoint or an error, and this one answered neither")
 end 'dapBreakpointOutcome'
 
-export function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer, numbering DapNumbering) returns JsonNodeId
+function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer, numbering DapNumbering) returns JsonNodeId
 	let node = JsonObjectBuilder.create()
 	node.addBool(doc, key: VerifiedKey, value: true)
 	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(answer.line) as JsonFloat)
@@ -296,7 +296,7 @@ export function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer
 	return node.build(doc)
 end 'dapArmedBreakpointNode'
 
-export function dapUnverifiedBreakpointNode(doc JsonDoc, message String, requested DapRequestedLine) returns JsonNodeId
+function dapUnverifiedBreakpointNode(doc JsonDoc, message String, requested DapRequestedLine) returns JsonNodeId
 	let node = JsonObjectBuilder.create()
 	node.addBool(doc, key: VerifiedKey, value: false)
 
@@ -310,7 +310,7 @@ export function dapUnverifiedBreakpointNode(doc JsonDoc, message String, request
 	return node.build(doc)
 end 'dapUnverifiedBreakpointNode'
 
-export function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, numbering DapNumbering) returns JsonNodeId
+function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, numbering DapNumbering) returns JsonNodeId
 	let node = JsonObjectBuilder.create()
 	node.addNumber(doc, key: IdKey, value: id as JsonFloat)
 	node.addString(doc, key: NameKey, value: frame.functionName)
@@ -332,7 +332,7 @@ export function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, n
 	return node.build(doc)
 end 'dapStackFrameNode'
 
-export function dapStackTraceBody(doc JsonDoc, frames JsonNodeIdArray, total DapNumber) returns JsonNodeId
+function dapStackTraceBody(doc JsonDoc, frames JsonNodeIdArray, total DapNumber) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addNode(StackFramesKey, node: doc.add(JsonNode.arrayNode(frames)))
 	body.addNumber(doc, key: TotalFramesKey, value: total as JsonFloat)
@@ -340,7 +340,7 @@ export function dapStackTraceBody(doc JsonDoc, frames JsonNodeIdArray, total Dap
 	return body.build(doc)
 end 'dapStackTraceBody'
 
-export function dapLocalsScopesBody(doc JsonDoc, reference DapNumber) returns JsonNodeId
+function dapLocalsScopesBody(doc JsonDoc, reference DapNumber) returns JsonNodeId
 	let scope = JsonObjectBuilder.create()
 	scope.addString(doc, key: NameKey, value: LocalsScopeName)
 	scope.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
@@ -355,7 +355,7 @@ export function dapLocalsScopesBody(doc JsonDoc, reference DapNumber) returns Js
 	return body.build(doc)
 end 'dapLocalsScopesBody'
 
-export function dapVariableNode(doc JsonDoc, value DebugValueNode, reference DapNumber) returns JsonNodeId
+function dapVariableNode(doc JsonDoc, value DebugValueNode, reference DapNumber) returns JsonNodeId
 	let node = JsonObjectBuilder.create()
 	node.addString(doc, key: NameKey, value: value.name)
 	node.addString(doc, key: ValueKey, value: dapValueText(value))
@@ -365,11 +365,11 @@ export function dapVariableNode(doc JsonDoc, value DebugValueNode, reference Dap
 	return node.build(doc)
 end 'dapVariableNode'
 
-export function dapVariablesBody(doc JsonDoc, nodes JsonNodeIdArray) returns JsonNodeId
+function dapVariablesBody(doc JsonDoc, nodes JsonNodeIdArray) returns JsonNodeId
 	return listBody(doc, key: VariablesKey, nodes: nodes)
 end 'dapVariablesBody'
 
-export function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber) returns JsonNodeId
+function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber) returns JsonNodeId
 	let body = JsonObjectBuilder.create()
 	body.addString(doc, key: ResultKey, value: result)
 	body.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
@@ -377,7 +377,7 @@ export function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber)
 	return body.build(doc)
 end 'dapEvaluateBody'
 
-export function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns JsonNodeId
+function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns JsonNodeId
 	let threads = JsonNodeIdArray.create(rows.count(), zeroed: false)
 
 	for row in rows 'eachRow'
@@ -391,11 +391,11 @@ export function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns Js
 	return listBody(doc, key: ThreadsKey, nodes: threads)
 end 'dapThreadsBody'
 
-export function dapNoThreadsBody(doc JsonDoc) returns JsonNodeId
+function dapNoThreadsBody(doc JsonDoc) returns JsonNodeId
 	return listBody(doc, key: ThreadsKey, nodes: JsonNodeIdArray.create(0))
 end 'dapNoThreadsBody'
 
-export function dapNoScopesBody(doc JsonDoc) returns JsonNodeId
+function dapNoScopesBody(doc JsonDoc) returns JsonNodeId
 	return listBody(doc, key: ScopesKey, nodes: JsonNodeIdArray.create(0))
 end 'dapNoScopesBody'
 
@@ -406,33 +406,33 @@ function listBody(doc JsonDoc, key String, nodes JsonNodeIdArray) returns JsonNo
 	return body.build(doc)
 end 'listBody'
 
-export type DapNumbering
+type DapNumbering
 	let linesStartAt1 as bool
 	let columnsStartAt1 as bool
 
-	export static function countingFromOne() returns DapNumbering
+	static function countingFromOne() returns DapNumbering
 		return Self{linesStartAt1: true, columnsStartAt1: true}
 	end 'countingFromOne'
 
-	export static function askedBy(arguments DapObject) returns DapNumbering throws DapArgumentError
+	static function askedBy(arguments DapObject) returns DapNumbering throws DapArgumentError
 		return Self{linesStartAt1: try arguments.flagOr(LinesStartAt1Argument, fallback: true), columnsStartAt1: try arguments.flagOr(ColumnsStartAt1Argument, fallback: true)}
 	end 'askedBy'
 
-	export function lineToClient(line DebugLineLookup) returns DapNumber
+	function lineToClient(line DebugLineLookup) returns DapNumber
 		return match line 'line'
 			unknown gives UnknownPosition
 			line(number) gives positionToClient(number as DapNumber, startsAtOne: self.linesStartAt1)
 		end 'line'
 	end 'lineToClient'
 
-	export function columnToClient(spot DebugSourceSpot) returns DapNumber
+	function columnToClient(spot DebugSourceSpot) returns DapNumber
 		return match spot 'spot'
 			unknown gives UnknownPosition
 			at(_, column) gives positionToClient(column as DapNumber, startsAtOne: self.columnsStartAt1)
 		end 'spot'
 	end 'columnToClient'
 
-	export function lineFromClient(line DapNumber) returns DapNumber
+	function lineFromClient(line DapNumber) returns DapNumber
 		return line if self.linesStartAt1 else line + ZeroBasedShift
 	end 'lineFromClient'
 end 'DapNumbering'
@@ -465,7 +465,7 @@ function threadName(row DebugThreadRow) returns String
 	end 'known'
 end 'threadName'
 
-export function dapValueText(value DebugValueNode) returns String
+function dapValueText(value DebugValueNode) returns String
 	let reason = try value.availability.reason() otherwise return value.display
 	return "<{reason.replace(UnavailableWordSeparator, with: " ")}>"
 end 'dapValueText'

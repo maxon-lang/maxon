@@ -2158,12 +2158,12 @@ end 'main'
 <!-- test: error.two-defaults-for-one-key -->
 ```maxon
 // --- file: a.maxon
-module typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-module type Config
+type Config
 	export let n as Integer
 
-	module static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Config'
@@ -2185,12 +2185,12 @@ note: <fragment>:13:9: the other `default` for `Config`
 The blamed `default` is the one in the file whose path sorts later byte for byte, not the one declared later.
 ```maxon
 // --- file: b.maxon
-module typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-module type Config
+type Config
 	export let n as Integer
 
-	module static function create(n Integer) returns Self
+	static function create(n Integer) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Config'

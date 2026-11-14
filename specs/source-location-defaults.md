@@ -184,12 +184,12 @@ second@8
 <!-- test: caller-file-and-line-across-files -->
 ```maxon
 // --- file: helper.maxon
-export function whereAmI(tag String, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
+function whereAmI(tag String, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
 	print("{tag}: {file}:{at}\n")
 	return at
 end 'whereAmI'
 
-export function callFromHelper() returns SourceLineNumber
+function callFromHelper() returns SourceLineNumber
 	return whereAmI("insideHelper")
 end 'callFromHelper'
 

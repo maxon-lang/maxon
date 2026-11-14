@@ -34,7 +34,7 @@ public union TlsError implements Error
 	peerAlertUnrecognised(code Byte)
 end 'TlsError'
 
-module function tlsNetworkFailure(failure NetworkError) returns TlsError
+function tlsNetworkFailure(failure NetworkError) returns TlsError
 	return match failure 'failure'
 		resolveFailed gives TlsError.resolveFailed
 		connectFailed gives TlsError.connectFailed
@@ -47,7 +47,7 @@ module function tlsNetworkFailure(failure NetworkError) returns TlsError
 	end 'failure'
 end 'tlsNetworkFailure'
 
-module function streamFaultOfTls(error TlsError) returns StreamError
+function streamFaultOfTls(error TlsError) returns StreamError
 	return match error 'error'
 		timedOut gives StreamError.timedOut
 		closed gives StreamError.closed
@@ -77,7 +77,7 @@ end 'streamFaultOfTls'
 
 // A refusal is recorded only by the chain check, which ends the handshake, so a recorded one is
 // the cause.
-module function tlsPublicFailure(failure TlsHandshakeError, session TlsSession, refusal TlsPeerRefusal) returns TlsError
+function tlsPublicFailure(failure TlsHandshakeError, session TlsSession, refusal TlsPeerRefusal) returns TlsError
 	match refusal 'refusal'
 		refused(reason) then return TlsError.certificateRejected(reason)
 		none then return tlsSessionFailure(failure, session: session)

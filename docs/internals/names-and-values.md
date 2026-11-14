@@ -8,7 +8,7 @@ sidebar:
 ## Names, SSA and phis
 
 The parser has no AST and there is no `mem2reg`: it emits Maxon IR already in SSA
-(`maxon-bin/Compiler/Parser.maxon`). A `let` or `var` binds its name, in the parser's `Scope`, straight to the
+(`maxon-bin/Compiler/Parser*.maxon`). A `let` or `var` binds its name, in the parser's `Scope`, straight to the
 value its initializer produced (`Scope.declareValueBinding`). There are no `varDecl`, `varLoad` or `varStore`
 ops, so `let x = 42` emits no op at all, and an IR pass cannot see a binding. Facts about bindings that a
 later check needs, such as the borrow checker's, must therefore be recorded by the parser.

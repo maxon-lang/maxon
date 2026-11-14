@@ -16,11 +16,10 @@
 // The command's own name — the word every message in this file uses for what failed, and the token
 // `MaxonArgs.parse` matches. One spelling, so a renamed command cannot keep announcing the old one.
 //
-// ⚠ **`export`, NEVER `module`, AND THE READER IS THE REASON.** `Main.MaxonArgs.parse` matches this
-// token, and `maxon-bin/` is this file's PARENT rather than its subtree — a `module let` is readable in
-// its declaring directory and below it and nowhere else (`specs/module-keyword.md`,
-// `error.module-let-different-directory`). Declared `module`, this is refused with E2004 at the
-// reader's line, so the only gate that sees it is the SELF-COMPILE.
+// ⚠ **`export`, AND THE READER IS THE REASON.** `Main.MaxonArgs.parse` matches this
+// token, and `maxon-bin/` is this file's PARENT rather than its subtree — an unmarked `let` is readable in
+// its declaring directory and below it and nowhere else (`specs/directory-scope.md`). Unmarked, this is
+// refused with E2004 at the reader's line, so the only gate that sees it is the SELF-COMPILE.
 export let TestCommandName = "test"
 
 // ============================================================================================
@@ -274,7 +273,7 @@ end 'noTestsFoundReason'
 
 // The reason a staging refusal carries. A `match` rather than a field read because `TestStagingError` is
 // a union, and a second arm added there must be answered here rather than silently rendered as the first.
-module function stagingRefusalReason(error TestStagingError) returns String
+function stagingRefusalReason(error TestStagingError) returns String
 	return match error 'reason'
 		refused(text) gives text
 	end 'reason'

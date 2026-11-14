@@ -136,7 +136,7 @@ public type DerHeader
 
 	/// The number of content octets.
 	public let length as DerLength
-	module let contentStart as ElementIndex
+	let contentStart as ElementIndex
 
 	/// Whether the element holds further elements rather than content octets.
 	public function isConstructed() returns bool
@@ -191,7 +191,7 @@ public type DerReader
 		return DerReader{bytes: bytes.clone(), position: 0, limit: bytes.count()}
 	end 'create'
 
-	module static function wholeSequence(bytes ByteArray) returns DerReader throws DerError
+	static function wholeSequence(bytes ByteArray) returns DerReader throws DerError
 		let outer = DerReader.create(bytes)
 		let header = try outer.peekHeader()
 
@@ -513,7 +513,7 @@ public type DerReader
 	end 'take'
 end 'DerReader'
 
-module function derElement(identifier Byte, contents ByteArray) returns ByteArray
+function derElement(identifier Byte, contents ByteArray) returns ByteArray
 	let element = ByteArray.create(0)
 	element.push(identifier)
 	element.append(derLengthOctets(contents.count()))

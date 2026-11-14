@@ -35,7 +35,7 @@ export typealias TraceUnit = int(0 to u32.max)
 // The two numeric slots a structured event carries. Deliberately opaque: what they mean is the
 // emitting site's business, and the monitor prints them as numbers — COUNTS and maxima, which is why
 // this is a quantity and not a `bits` pattern.
-export typealias TraceArg = int(0 to u64.max)
+typealias TraceArg = int(0 to u64.max)
 
 // The unit id for a compile rooted at `path`.
 //
@@ -46,7 +46,7 @@ export typealias TraceArg = int(0 to u64.max)
 // the 32 bits the wire field wants, so there is nothing to fold either. An instrument that made
 // the thing it measures allocate would be exactly the failure this whole instrument exists to
 // avoid, one level down.
-export function traceUnitOf(path FilePath) returns TraceUnit
+function traceUnitOf(path FilePath) returns TraceUnit
 	return path.path.hash()
 end 'traceUnitOf'
 
@@ -60,7 +60,7 @@ end 'traceUnitOf'
 // the BEGIN events of one real compile are the compile's EXECUTION ORDER. That matters now that
 // `CompilePhase` is append-only and its declaration order is the wire order rather than the pipeline's
 // — the order a reader wants is derived from the run instead of written down a second time.
-export function compilePhaseName(phase CompilePhase) returns TraceName
+function compilePhaseName(phase CompilePhase) returns TraceName
 	return match phase 'name'
 		load gives __DebugStream.nameId("load")
 		lex gives __DebugStream.nameId("lex")
@@ -95,7 +95,7 @@ export function compilePhaseName(phase CompilePhase) returns TraceName
 		installRuntime gives __DebugStream.nameId("installRuntime")
 		synthesizeBodies gives __DebugStream.nameId("synthesizeBodies")
 		checkUnusedExports gives __DebugStream.nameId("checkUnusedExports")
-		checkUnusedFilePrivate gives __DebugStream.nameId("checkUnusedFilePrivate")
+		checkUnusedUnexported gives __DebugStream.nameId("checkUnusedUnexported")
 		reportSecondaryFindings gives __DebugStream.nameId("reportSecondaryFindings")
 		checkSignatureVisibility gives __DebugStream.nameId("checkSignatureVisibility")
 		reportDeferredNames gives __DebugStream.nameId("reportDeferredNames")

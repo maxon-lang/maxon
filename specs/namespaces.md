@@ -36,7 +36,7 @@ function private_helper(x Score) returns Score
 	return x * 2
 end 'private_helper'
 ```
-Only `public_add` can be called from other files. `private_helper` is file-private.
+Only `public_add` can be called from other directories. `private_helper` is unmarked.
 
 ### Example
 
@@ -167,10 +167,10 @@ end 'main'
 
 
 <!-- test: same-directory-bare-name-sees-sibling -->
-Two files in the same directory `utils/` share a module namespace. A function in `utils/b.maxon` calls a function in `utils/a.maxon` with no qualifier because they belong to the same module. The producer uses `module` visibility so it is visible across files inside the `utils/` subtree but not to callers outside it; the consumer (`export`ed) is the only entry point from `app/main.maxon`.
+Two files in the same directory `utils/` share a namespace. A function in `utils/b.maxon` calls a function in `utils/a.maxon` with no qualifier because they belong to the same directory. The producer is unmarked, so it is visible across files inside the `utils/` subtree but not to callers outside it; the consumer (`export`ed) is the only entry point from `app/main.maxon`.
 ```maxon
 // --- file: utils/a.maxon
-module function siblingProducer() returns Integer
+function siblingProducer() returns Integer
 	return 21
 end 'siblingProducer'
 

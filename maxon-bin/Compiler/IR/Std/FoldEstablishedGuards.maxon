@@ -32,7 +32,7 @@
 // is decided only when the branch is its sole reader: the fact is one about the branch's site, and the
 // rewrite is of the compare's definition.
 
-module typealias ShapeFactBits = int(0 to 15)
+typealias ShapeFactBits = int(0 to 15)
 typealias ShapeFacts = Array with ShapeFactBits
 
 let NoShapeFact = 0 as ShapeFactBits
@@ -50,14 +50,14 @@ let DetachedFacts = (BufferOwnedFact or BufferUnsharedFact) as ShapeFactBits
 let EveryShapeFact = (WriterSuccessFacts or ElementTrivialFact) as ShapeFactBits
 
 // `length@8 >= floor` proved for the record; `AnyLengthFloor` proves nothing: every length is.
-module typealias LengthFloor = int(0 to u64.max)
+typealias LengthFloor = int(0 to u64.max)
 typealias LengthFloors = Array with LengthFloor
 
 let AnyLengthFloor = 0 as LengthFloor
 let EveryLengthFloor = u64.max as LengthFloor
 let OnePastTheIndex = 1
 
-module typealias RecordSlot = int(0 to u64.max) implements ElementIndex
+typealias RecordSlot = int(0 to u64.max) implements ElementIndex
 typealias FixedRecordSlotColumn = FixedArray with RecordSlot
 typealias RecordSlotColumn = Array with RecordSlot
 
@@ -65,13 +65,13 @@ typealias FactIndexColumn = Array with ElementIndex
 
 // The pass's summary line, from the tally its runs summed into (`StdPassPool`): over the
 // functions that hold an op in the fan-out, and over the band's functions in the appended band.
-module function foldEstablishedGuardsSummary(tally StdPassTally) returns String
+function foldEstablishedGuardsSummary(tally StdPassTally) returns String
 	return "foldEstablishedGuards: folded {tally.foldedGuards} guard(s) — {tally.foldedGuardKinds.summary(ManagedGuardKind.allCaseNames)} — in {tally.guardRewrittenFunctions} of the {tally.guardVisitedFunctions} function(s) visited"
 end 'foldEstablishedGuardsSummary'
 
 // Fold every established guard of one function, in place, counting the visit and the rewrite into the
 // tally.
-module function foldEstablishedGuardsInFunc(module StdModule, func IrFunction, scratch EstablishedScratch)
+function foldEstablishedGuardsInFunc(module StdModule, func IrFunction, scratch EstablishedScratch)
 	scratch.tally.guardVisitedFunctions = scratch.tally.guardVisitedFunctions + 1
 
 	if foldInFunc(module, func: func, scratch: scratch) 'rewrote'
@@ -536,7 +536,7 @@ end 'retireGuardOperands'
 
 // What an edge establishes for one record on top of the row: bits and a floor for `slot`, on the then
 // arm or the else arm. `establishNothing` is the plain edge.
-module type EdgeFacts
+type EdgeFacts
 	export var slot = 0 as RecordSlot
 	export var bits = NoShapeFact as ShapeFactBits
 	export var floor = AnyLengthFloor as LengthFloor
@@ -567,7 +567,7 @@ end 'EdgeFacts'
 
 // The `tryCall` to a callee with a stated effect that the block ran last among its effects: its
 // flag, its record and what its success proves.
-module type RememberedSuccess
+type RememberedSuccess
 	export var remembered = false
 	export var flag = 0 as ValueId
 	export var slot = 0 as RecordSlot
@@ -597,7 +597,7 @@ end 'RememberedSuccess'
 // once, on the first edge in, and afterwards only narrowed or dropped in place. The row is dense over
 // the record slots so a slot's fact is one subscript, and `rowLive` names the slots holding one so a
 // load or a clear touches only those.
-module type EstablishedState
+type EstablishedState
 	// Per block: whether an edge has reached it, and the run of `factSlot`/`factBits`/`factFloor`
 	// holding its facts.
 	var reached as BoolArray
@@ -801,7 +801,7 @@ end 'factIsEmpty'
 
 // The mutable state one run of the pass carries, created once per module: the flow state, the
 // classification records refilled per op, the decisions and the folded compares' operands.
-module type EstablishedScratch
+type EstablishedScratch
 	export var state as EstablishedState
 	export var edge as EdgeFacts
 	export var plainEdge as EdgeFacts
@@ -822,7 +822,7 @@ module type EstablishedScratch
 	// The step's counts, the pool worker's (`StdPassPool`).
 	export var tally as StdPassTally
 
-	module static function create(tally StdPassTally) returns EstablishedScratch
+	static function create(tally StdPassTally) returns EstablishedScratch
 		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(0), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), tally: tally}
 	end 'create'
 end 'EstablishedScratch'

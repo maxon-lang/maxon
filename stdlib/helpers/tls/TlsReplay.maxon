@@ -1,28 +1,28 @@
-module type TlsReplayTrace
-	module var connected as bool
-	module var negotiation as TlsNegotiation
-	module var alpn as TlsAlpnChoice
-	module var outbound as ByteArrays
-	module var received as ByteArray
-	module var peerClosed as bool
-	module var peerAuthenticated as bool
+type TlsReplayTrace
+	var connected as bool
+	var negotiation as TlsNegotiation
+	var alpn as TlsAlpnChoice
+	var outbound as ByteArrays
+	var received as ByteArray
+	var peerClosed as bool
+	var peerAuthenticated as bool
 
-	module static function of(session TlsSession, outbound ByteArrays) returns TlsReplayTrace
+	static function of(session TlsSession, outbound ByteArrays) returns TlsReplayTrace
 		return Self{connected: session.isConnected(), negotiation: session.negotiation, alpn: session.alpn, outbound: outbound, received: session.takeReceived(), peerClosed: session.hasPeerClosed(), peerAuthenticated: session.peerVerified}
 	end 'of'
 end 'TlsReplayTrace'
 
-module type TlsLoopbackTrace
-	module var client as TlsReplayTrace
-	module var server as TlsReplayTrace
+type TlsLoopbackTrace
+	var client as TlsReplayTrace
+	var server as TlsReplayTrace
 
-	module static function create(client TlsReplayTrace, server TlsReplayTrace) returns TlsLoopbackTrace
+	static function create(client TlsReplayTrace, server TlsReplayTrace) returns TlsLoopbackTrace
 		return Self{client: client, server: server}
 	end 'create'
 end 'TlsLoopbackTrace'
 
-module type TlsReplay
-	module static function run(endpoint TlsEndpoint, inbound ByteArrays, writes ByteArrays, closeNotify bool) returns TlsReplayTrace throws TlsHandshakeError
+type TlsReplay
+	static function run(endpoint TlsEndpoint, inbound ByteArrays, writes ByteArrays, closeNotify bool) returns TlsReplayTrace throws TlsHandshakeError
 		let outbound = endpoint.session().takeRecords()
 		var written = false
 
@@ -49,8 +49,8 @@ module type TlsReplay
 	end 'run'
 end 'TlsReplay'
 
-module type TlsLoopback
-	module static function run(client TlsEndpoint, server TlsEndpoint, clientWrites ByteArrays, serverWrites ByteArrays, closeNotify bool) returns TlsLoopbackTrace throws TlsHandshakeError
+type TlsLoopback
+	static function run(client TlsEndpoint, server TlsEndpoint, clientWrites ByteArrays, serverWrites ByteArrays, closeNotify bool) returns TlsLoopbackTrace throws TlsHandshakeError
 		let clientOutbound = ByteArrays.create(0)
 		let serverOutbound = ByteArrays.create(0)
 

@@ -322,7 +322,7 @@ error E2004: <fragment>:7:12: Function 'Set.insert' does not return a value
 ⚠ THE CONTROL for `String`, and one whose refusal DOES NOT COME FROM AN ARM. `append` is
 `stdlib/String.maxon`'s, so this is the ORDINARY refusal every void call gets. ⭐ **That is why it names
 `String.append` where an arm would name a bare member**: an arm blames the member the author wrote, while
-a corpus call names the function it actually resolved to, exactly as `stdlib-only-string-methods`' E3088
+a corpus call names the function it actually resolved to, exactly as `stdlib-only-string-methods`' E3008
 does.
 ```maxon
 function main() returns ExitCode

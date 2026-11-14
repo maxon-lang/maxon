@@ -43,10 +43,10 @@ mkdir -p "$OUT"
 rm -f "$OUT"/*.maxon
 
 cat > "$OUT/a_prelude.maxon" <<'PRELUDE'
-export typealias Quantity = int(0 to u64.max)
-export typealias LadderInt = int(i64.min to i64.max)
+typealias Quantity = int(0 to u64.max)
+typealias LadderInt = int(i64.min to i64.max)
 
-export function qOpaque(a Quantity) returns Quantity
+function qOpaque(a Quantity) returns Quantity
 	if a > 100 'big'
 		return a and 4095
 	end 'big'
@@ -56,7 +56,7 @@ PRELUDE
 
 if [ "$SHAPE" = "onefunc" ]; then
 	{
-		echo "export function many(a Quantity) returns Quantity"
+		echo "function many(a Quantity) returns Quantity"
 		echo "	var acc = 1 as Quantity"
 		for ((i = 0; i < N; i++)); do
 			echo "	acc = ${EXPR//QI/$i}"
@@ -74,7 +74,7 @@ if [ "$SHAPE" = "onefunc" ]; then
 else
 	{
 		for ((i = 0; i < N; i++)); do
-			echo "export function one$i(a Quantity, acc Quantity) returns Quantity"
+			echo "function one$i(a Quantity, acc Quantity) returns Quantity"
 			echo "	return ${EXPR//QI/$i}"
 			echo "end 'one$i'"
 		done

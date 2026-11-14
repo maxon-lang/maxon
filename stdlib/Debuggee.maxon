@@ -31,8 +31,8 @@ end 'DebuggeeError'
 
 typealias ScratchBase = int(0 to u64.max)
 public typealias TransferByteCount = int(0 to u64.max)
-module typealias ScratchBytes = int(0 to 0x20000)
-module typealias ScratchOffset = int(0 to 0x1FFF8)
+typealias ScratchBytes = int(0 to 0x20000)
+typealias ScratchOffset = int(0 to 0x1FFF8)
 typealias BitShift = int(0 to 63)
 typealias ByteLane = int(0 to 8)
 typealias RegisterWordArray = Array with RegisterWord
@@ -74,18 +74,18 @@ function packedWord(content ByteArray, from RegisterOffset) returns RegisterWord
 	return packed
 end 'packedWord'
 
-module type ScratchPages
+type ScratchPages
 	var box as __ManagedPages
 
-	module static function reserve(capacity ScratchBytes) returns ScratchPages
+	static function reserve(capacity ScratchBytes) returns ScratchPages
 		return Self{box: __ManagedPages.reserve(capacity)}
 	end 'reserve'
 
-	module function held() returns bool
+	function held() returns bool
 		return self.box.base() != 0
 	end 'held'
 
-	module function release()
+	function release()
 		self.box.release()
 	end 'release'
 
@@ -105,21 +105,21 @@ module type ScratchPages
 		return self.box.base() as ScratchBase
 	end 'heldBase'
 
-	module function word(offset ScratchOffset) returns RegisterWord
+	function word(offset ScratchOffset) returns RegisterWord
 		return __Builtins.profileReadWord(self.heldBase(offset), offset) as RegisterWord
 	end 'word'
 
-	module function setWord(offset ScratchOffset, value RegisterWord)
+	function setWord(offset ScratchOffset, value RegisterWord)
 		__Builtins.profileWriteWord(self.heldBase(offset), offset, value)
 	end 'setWord'
 
-	module function addressOf(offset ScratchOffset) returns RegisterWord
+	function addressOf(offset ScratchOffset) returns RegisterWord
 		self.requireWordInside(offset)
 
 		return (self.box.lend() as RegisterWord) + (offset as RegisterWord)
 	end 'addressOf'
 
-	module function bytesAt(offset ScratchOffset, count DebuggeeByteCount) returns ByteArray
+	function bytesAt(offset ScratchOffset, count DebuggeeByteCount) returns ByteArray
 		let taken = ByteArray.create(0)
 		var index = 0 as DebuggeeByteCount
 
@@ -140,7 +140,7 @@ module type ScratchPages
 		return taken
 	end 'bytesAt'
 
-	module function fill(offset ScratchOffset, content ByteArray)
+	function fill(offset ScratchOffset, content ByteArray)
 		var index = 0 as ElementIndex
 
 		while index < content.count() 'eachWord'
@@ -155,7 +155,7 @@ end 'ScratchPages'
 public type RegisterBlock
 	let words as RegisterWordArray
 
-	module static function readFrom(pages ScratchPages, at ScratchOffset, length ScratchBytes) returns RegisterBlock
+	static function readFrom(pages ScratchPages, at ScratchOffset, length ScratchBytes) returns RegisterBlock
 		let words = RegisterWordArray.create(0)
 		var index = 0 as ScratchBytes
 
@@ -167,13 +167,13 @@ public type RegisterBlock
 		return Self{words: words}
 	end 'readFrom'
 
-	module function storeInto(pages ScratchPages, at ScratchOffset)
+	function storeInto(pages ScratchPages, at ScratchOffset)
 		for (iter, packed) in self.words.withIterator() 'eachWord'
 			pages.setWord(((at as ElementIndex) + iter.index() * WordBytes) as ScratchOffset, value: packed)
 		end 'eachWord'
 	end 'storeInto'
 
-	module function byteCount() returns ScratchBytes
+	function byteCount() returns ScratchBytes
 		return (self.words.count() * WordBytes) as ScratchBytes
 	end 'byteCount'
 
@@ -191,7 +191,7 @@ public type RegisterBlock
 		return slot
 	end 'slotOf'
 
-	module function wordAtAnyOffset(offset RegisterOffset) returns RegisterWord throws DebuggeeError
+	function wordAtAnyOffset(offset RegisterOffset) returns RegisterWord throws DebuggeeError
 		let lane = offset mod WordBytes
 		let slot = (offset - lane) as RegisterOffset
 		let low = try self.word(slot)
@@ -736,8 +736,8 @@ let SignalCodeEventShift = 8
 let SignalCodeSentByKill = 0
 public let NoTraceSignal = 0 as DebuggeeSignal
 
-module let TraceProcRoot = "/proc"
-module let TraceProcTaskDirectory = "task"
+let TraceProcRoot = "/proc"
+let TraceProcTaskDirectory = "task"
 let TraceProcStatFile = "stat"
 let TraceProcCommandEnd = ")"
 let TraceProcStateRunning = "R"
@@ -894,15 +894,15 @@ public type ProcessTrace
 		return traceHostCall(TraceHostVerb.request, a0: PtraceDetach, a1: thread as RegisterWord, a2: 0, a3: signal as RegisterWord, a4: 0) != 0
 	end 'detach'
 
-	module function seize(thread DebuggeeThreadId) returns bool
+	function seize(thread DebuggeeThreadId) returns bool
 		return traceHostCall(TraceHostVerb.request, a0: PtraceSeize, a1: thread as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
 	end 'seize'
 
-	module function interrupt(thread DebuggeeThreadId) returns bool
+	function interrupt(thread DebuggeeThreadId) returns bool
 		return traceHostCall(TraceHostVerb.request, a0: PtraceInterrupt, a1: thread as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
 	end 'interrupt'
 
-	module function reapedGone(thread DebuggeeThreadId) returns bool
+	function reapedGone(thread DebuggeeThreadId) returns bool
 		self.scratch.setWord(TraceStatusSlot, value: 0)
 
 		let reporter = traceHostCall(TraceHostVerb.awaitTracee, a0: self.scratch.addressOf(TraceStatusSlot), a1: 0, a2: thread as RegisterWord, a3: 0, a4: 0)
@@ -920,15 +920,15 @@ public type ProcessTrace
 		end 'which'
 	end 'reapedGone'
 
-	module function readGeneralRegisters(thread DebuggeeThreadId) returns bool
+	function readGeneralRegisters(thread DebuggeeThreadId) returns bool
 		return self.generalBlockMoved(thread, writing: false)
 	end 'readGeneralRegisters'
 
-	module function generalRegister(offset ScratchOffset) returns RegisterWord
+	function generalRegister(offset ScratchOffset) returns RegisterWord
 		return self.scratch.word((TraceRegsSlot + offset) as ScratchOffset)
 	end 'generalRegister'
 
-	module function copyFrom(process DebuggeeProcessId, address DebuggeeAddress, destination RegisterWord, count RegisterWord) returns bool
+	function copyFrom(process DebuggeeProcessId, address DebuggeeAddress, destination RegisterWord, count RegisterWord) returns bool
 		return traceHostCall(TraceHostVerb.readTracee, a0: process as RegisterWord, a1: address as RegisterWord, a2: destination, a3: count, a4: self.scratch.addressOf(TraceReadCountSlot)) != 0
 	end 'copyFrom'
 
@@ -954,7 +954,7 @@ public type ProcessTrace
 		return (self.scratch.word(TraceSigInfoCodeSlot) and LowDwordMask) == SignalCodeSentByKill
 	end 'signalWasSentByKill'
 
-	module function signalAwaitingDelivery(thread DebuggeeThreadId) returns DebuggeeSignal
+	function signalAwaitingDelivery(thread DebuggeeThreadId) returns DebuggeeSignal
 		self.scratch.setWord(TraceSigInfoCodeSlot, value: 0)
 
 		if not self.signalInfoRead(thread) 'theKernelRefused'

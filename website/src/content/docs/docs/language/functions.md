@@ -32,8 +32,8 @@ end 'greet'
 - A function that can fail declares `throws ErrorType` (see
   [Error Handling](/docs/language/error-handling/)).
 - Name a parameter `_` to accept and ignore an argument: `function onClick(_ MouseEvent)`.
-- A function is private to its file unless marked `export`, `module` or `public` (see
-  [Namespaces](/docs/language/namespaces/)).
+- An unmarked function is visible to its directory's subtree; `export` and `public` widen it to every file
+  (see [Visibility](/docs/language/namespaces/#visibility)).
 
 ## Named Arguments
 

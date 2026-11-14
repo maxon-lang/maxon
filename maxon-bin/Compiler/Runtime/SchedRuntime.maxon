@@ -358,7 +358,7 @@ export let MOffSystemStackSP = 0x10 as ByteOffset
 // bounds are THIS OS thread's, which is the whole reason the struct may not live on a P that can move.
 //
 // EXPORTED for `GtRuntime.__gt_run_strand`, which switches into a strand's members from it.
-export let MOffSchedulerContext = 0x18 as ByteOffset
+let MOffSchedulerContext = 0x18 as ByteOffset
 
 // ==========================================================================
 // ⭐⭐⭐ THE M's TAIL — THE IDLE STATE
@@ -685,7 +685,7 @@ export let MOffPreemptThreadHandle = MOffOsThreadId + PointerSlotBytes
 // releases, and the next poll would otherwise inject a second one on top of the first.
 export let MOffSignalPending = MOffPreemptThreadHandle + PointerSlotBytes
 
-export let MOffLockedGt = MOffSignalPending + PointerSlotBytes
+let MOffLockedGt = MOffSignalPending + PointerSlotBytes
 
 // Not `LockedPark.none` exactly while this machine is committed to waiting on `MOffParkEvent` for its
 // pinned thread's next turn: set in `wlockedrelease`, cleared by the giver (`slmgive`) and by the
@@ -711,15 +711,15 @@ export let MOffOsThreadUniqueId = MOffLockedStrand + PointerSlotBytes
 // A runtime lock's sleeper (`RuntimeLock`): the next M on the lock word's sleeper stack, the
 // semaphore this M sleeps on, created on its first contended sleep, and the state of the release's
 // tail-wake draw.
-export let MOffLockWaitNext = MOffOsThreadUniqueId + PointerSlotBytes
-export let MOffLockSema = MOffLockWaitNext + PointerSlotBytes
-export let MOffLockRand = MOffLockSema + PointerSlotBytes
+let MOffLockWaitNext = MOffOsThreadUniqueId + PointerSlotBytes
+let MOffLockSema = MOffLockWaitNext + PointerSlotBytes
+let MOffLockRand = MOffLockSema + PointerSlotBytes
 
 // The owner of the strand this machine's `__gt_run_strand` is running, or `GtNoHeldStrand`: stored
 // at its entry and cleared on every return (`GtRuntime.emitStrandRunReturn`), so it covers the
 // scheduler context's tombstone reclaims between members. `__gt_promise_drop` checks its premise
 // against it.
-export let MOffHeldStrand = MOffLockRand + PointerSlotBytes
+let MOffHeldStrand = MOffLockRand + PointerSlotBytes
 
 // This machine's share of the green-thread live count, the leak gate for GT records and stacks, which the
 // heap gate cannot see. It counts promises still owned, not threads alive: +1 at a spawn and at
@@ -832,7 +832,7 @@ let POffRunqTail = 0x08
 // is an INDEX rather than a pointer or a thread id.
 //
 // EXPORTED because that day arrived: the sharded allocator reads it to pick its mcache row.
-export let POffId = 0x20 as ByteOffset
+let POffId = 0x20 as ByteOffset
 
 // The xorshift state a work-stealing P picks its victim with — its first reader arrived with the stealing
 // rounds in `__sched_find_runnable`. Seeded to `id + 1` at init, because a zero xorshift state is a FIXED
@@ -950,7 +950,7 @@ let POffRetakeCount = POffStealCount + PointerSlotBytes
 // decision is not.
 // EXPORTED, unlike its two neighbours, because its one WRITER is in another file: the credit happens at
 // `SlabRuntime.emitSlabRemotePush`, where the slot is queued. The sum stays here with the walk.
-export let POffRemoteFreeCount = POffRetakeCount + PointerSlotBytes
+let POffRemoteFreeCount = POffRetakeCount + PointerSlotBytes
 
 // ⭐⭐⭐ **`__sched_pidle`'s LINK — Go's `p.link` as `pidleput`/`pidleget` use it (`proc.go:7425`/`:7454`),
 // and the slot that makes *"a processor with no machine"* a state this runtime can write down.**
@@ -1043,13 +1043,13 @@ let RunqHalfSlots = RunqSlots shr 1
 // The stack cache (`GtRuntime.buildGtStackAlloc`), the adaptive seed's samples (`GtRuntime.buildGtSeedAdapt`,
 // which reads every processor's unlocked) and the trace-id batch (`GtRuntime.GtTraceCounterLabel`). The
 // machine holding this processor is their only writer, so none takes a lock.
-export let POffStackCache = POffSyscallCount + PointerSlotBytes
+let POffStackCache = POffSyscallCount + PointerSlotBytes
 
-export let POffStackSampleSum = POffStackCache + (GtStackCacheBytes as ByteOffset)
-export let POffStackSampleCount = POffStackSampleSum + PointerSlotBytes
+let POffStackSampleSum = POffStackCache + (GtStackCacheBytes as ByteOffset)
+let POffStackSampleCount = POffStackSampleSum + PointerSlotBytes
 
-export let POffTraceIdNext = POffStackSampleCount + PointerSlotBytes
-export let POffTraceIdEnd = POffTraceIdNext + PointerSlotBytes
+let POffTraceIdNext = POffStackSampleCount + PointerSlotBytes
+let POffTraceIdEnd = POffTraceIdNext + PointerSlotBytes
 
 // This P's reply-cell free list, kept under `POffFreeListHead`'s rule.
 let POffCellFreeHead = POffTraceIdEnd + PointerSlotBytes
@@ -1057,7 +1057,7 @@ let POffCellFreeLen = POffCellFreeHead + PointerSlotBytes
 
 // Finishes on this processor that taught the adaptive seed's window nothing, since the last live-thread scan
 // (`GtRuntime.buildGtSeedScan`). Its machine is its only writer, so it takes no atomic.
-export let POffStackQuietFinishes = POffCellFreeLen + PointerSlotBytes
+let POffStackQuietFinishes = POffCellFreeLen + PointerSlotBytes
 
 let POffRunqBase = POffStackQuietFinishes + PointerSlotBytes
 
@@ -1125,7 +1125,7 @@ let GtCellCarveBatchMin = 2
 
 // ⭐ **ONE SCHEDULER-ARENA CHUNK: 64 KiB, Windows' allocation granularity**, so no reservation strands address
 // space, and a whole multiple of every lane's page. A tail too short for the next carve is never carved.
-export let SchedArenaChunkBytes = 65536
+let SchedArenaChunkBytes = 65536
 
 // ==========================================================================
 // The `.data` slots
@@ -1229,7 +1229,7 @@ let SchedNpidleLabel = b"__sched_npidle"
 // moving the count. EXPORTED for those two.
 //
 // `underSchedLock`: both doors run under the lock, and so does the one read.
-export let SchedRunqSizeLabel = b"__sched_runq_size"
+let SchedRunqSizeLabel = b"__sched_runq_size"
 
 let SchedLoneTokenCount = 1
 
@@ -1243,7 +1243,7 @@ let WakeForRestNone = 0
 // preemption and a publish by a thread with no processor. EXPORTED for that one door.
 //
 // `underSchedLock`: the door runs under the lock, and the one read is an enumerated unlocked read.
-export let SchedGlobalPushesLabel = b"__sched_global_pushes"
+let SchedGlobalPushesLabel = b"__sched_global_pushes"
 
 // ⭐⭐⭐ **HOW MANY TIMER-HEAP ENTRIES THE CANCEL SCAN HAS INSPECTED — the WORK
 // `GtRuntime.emitGtTimerStoreRemove` does, not how often it is entered.** Finding a `(gt, tag)` on the heap is
@@ -1257,7 +1257,7 @@ export let SchedGlobalPushesLabel = b"__sched_global_pushes"
 // walk behind it is O(1) or O(n). Only this one moves when the shape of the work does.
 //
 // `underSchedLock`: every site that scans holds the lock, and the one read is an enumerated unlocked read.
-export let SchedTimerScanStepsLabel = b"__sched_timer_scan_steps"
+let SchedTimerScanStepsLabel = b"__sched_timer_scan_steps"
 
 // The global GT-record free lists — Go's `sched.gFree`, split as Go splits it into records with a
 // kept stack and records without: what a P sheds past `GtFreeLocalHigh`, what a P-less thread puts
@@ -1300,11 +1300,11 @@ export let SchedNumProcsLabel = b"__sched_num_procs"
 
 // The host's CPU count before `MAXON_MAX_PROCS` applies — Go's `ncpu`. A runtime lock spins only
 // while it exceeds 1, so a program capped at one processor on a multicore host still spins.
-export let SchedNcpuLabel = b"__sched_ncpu"
+let SchedNcpuLabel = b"__sched_ncpu"
 
 // Zero until the program arms, then the token record `emitCaptureArmedToken` builds: the descendant
 // gate reads the token through this word, so it must never hold a bare flag.
-export let SchedDescendantsArmedLabel = b"__sched_descendants_armed"
+let SchedDescendantsArmedLabel = b"__sched_descendants_armed"
 export let SchedDescendantLedgerLabel = b"__sched_descendant_ledger"
 
 // ⭐⭐ **HOW MANY MACHINES ARE ON `__sched_midle` — Go's `sched.nmidle`.** Stepped by the list's two doors
@@ -1327,7 +1327,7 @@ let SchedMainMLabel = b"__sched_main_m"
 // ⭐⭐⭐ **WHERE THE PROCESS IS IN ITS LIFE (`SchedPhase`) — THE ONE WORD `__sched_checkdead` DECIDES BY.**
 let SchedPhaseLabel = b"__sched_phase"
 
-export enum SchedPhase
+enum SchedPhase
 	// `main` has not completed. Every machine idle with nothing pending is a DEADLOCK:
 	// `RuntimeAbort.schedulerDeadlock`.
 	mainRunning = 0
@@ -1689,7 +1689,7 @@ export let ExitProcessGateName = b"__gt_exit_process"
 
 // `__sched_init_procs()` — reserve the TLS slot, size and build the P array, and adopt P[0] for the calling
 // (main) OS thread. Called once, from `__gt_init`, before that thread does anything else.
-export let SchedInitProcsName = b"__sched_init_procs"
+let SchedInitProcsName = b"__sched_init_procs"
 
 // `__sched_worker_loop(m)` — a worker M's whole life. The `lpParameter` `osThreadCreate` hands it IS its M,
 // because a thread cannot learn its own joinable handle (`emitSchedAllocM`); the processor it is to run on
@@ -1742,7 +1742,7 @@ let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 // wait; if none is polling, `__sched_wake_poller`. `GtRuntime.__gt_register_park`, `__np_pd_deadline` and a send's
 // park (`GtRuntime.emitGtArmTimerDeadline`, which holds the sender's cown lock) call it with `__sched_lock`
 // released; the wake takes it. EXPORTED for `GtRuntime.__gt_register_park`.
-export let SchedWakeNetpollerName = b"__sched_wake_netpoller"
+let SchedWakeNetpollerName = b"__sched_wake_netpoller"
 
 // ⭐⭐ `__sched_wake_poller()` — a timer or a child is pending and no machine waits in the poller: take one
 // PARKED machine off `__sched_midle` and signal it, handing it nothing, so it finds nothing to run and claims the
@@ -1763,9 +1763,9 @@ let SchedBreakIdlePollerName = b"__sched_break_idle_poller"
 // WALKS ARE OVER `__sched_allm` RATHER THAN `__sched_procs`** — a parked machine is on no processor, so a
 // walk of the processors could neither signal it nor join it. EXPORTED for that one cross-file
 // caller; the fields are this file's, so the function is here and the exit path merely asks for it.
-export let SchedStopWorkersName = b"__sched_stop_workers"
+let SchedStopWorkersName = b"__sched_stop_workers"
 
-export let SchedMainTakeProcName = b"__sched_main_take_proc"
+let SchedMainTakeProcName = b"__sched_main_take_proc"
 
 // `__sched_runq_put(gt)` — put a runnable green thread in the CURRENT P's `runnext` slot and the thread it
 // displaced on the ring tail, overflowing half the ring to the global queue when the ring is full. Go's
@@ -1782,19 +1782,19 @@ let SchedRunqPutHeldName = b"__sched_runq_put_held"
 // that holds it must call the held form, which neither takes nor releases it; the free form taken under
 // the lock waits for ever. The build checks the choice at every call: E5005 refuses the free form under
 // the lock, E5006 the held form where the lock may be free.
-export enum SchedLockHold
+enum SchedLockHold
 	free
 	held
 end 'SchedLockHold'
 
-export function lockHoldNameOf(hold SchedLockHold, whenFree immutable ByteArray, whenHeld immutable ByteArray) returns immutable ByteArray
+function lockHoldNameOf(hold SchedLockHold, whenFree immutable ByteArray, whenHeld immutable ByteArray) returns immutable ByteArray
 	return match hold 'hold'
 		free gives whenFree
 		held gives whenHeld
 	end 'hold'
 end 'lockHoldNameOf'
 
-export function requireSchedLockHeldWhen(module StdModule, func IrFunction, hold SchedLockHold)
+function requireSchedLockHeldWhen(module StdModule, func IrFunction, hold SchedLockHold)
 	if hold == SchedLockHold.held 'heldForm'
 		requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	end 'heldForm'
@@ -1842,7 +1842,7 @@ let SchedAnyWorkName = b"__sched_any_work"
 // ⭐ **EXPORTED FOR ONE CALLER, `__gt_promise_drop`**, which renounces a promise — and what a promise names
 // is a COROUTINE (tombstone in its owner's queue, swept by `__gt_coro_sweep_dropped`) or a GREEN THREAD
 // (tombstone in the global queue, swept here). The drop asks which and calls one of the two.
-export let SchedSweepDroppedName = b"__sched_sweep_dropped"
+let SchedSweepDroppedName = b"__sched_sweep_dropped"
 
 // ⭐ `__sched_steal_count() -> i64` — the sum of every P's steal counter, and the floor of
 // `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing
@@ -1949,7 +1949,7 @@ export let SchedGtStackBytesName = b"__sched_gt_stack_bytes"
 //
 // ⚠ **IT TAKES `__gt_gfree_lock` ONLY TO SHED OR ON THE P-LESS ROAD, AND CALLS NOTHING WHILE
 // HOLDING IT**, so it adds no lock order: the hold covers list links only.
-export let GtFreePutName = b"__gt_free_put"
+let GtFreePutName = b"__gt_free_put"
 
 // `__gt_cell_put(cell)` and `__gt_cell_get() -> cell` — the reply cells' pool, the two doors above and
 // below over a per-P list (`POffCellFreeHead`) and one global list, under the same lock and the same
@@ -1958,8 +1958,8 @@ export let GtFreePutName = b"__gt_free_put"
 // finds every list empty carves `GtCellCarveBatch` cells on a processor and one without; every carved
 // cell steps `GtRecordsCarvedLabel`, and none is appended to `__gt_allg`, whose reader, the debugger,
 // reads fields past the cell.
-export let GtCellPutName = b"__gt_cell_put"
-export let GtCellGetName = b"__gt_cell_get"
+let GtCellPutName = b"__gt_cell_put"
+let GtCellGetName = b"__gt_cell_get"
 
 // ⭐⭐⭐ **`__gt_free_get() -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a
 // GT record is taken through**, by `__gt_spawn`. It reads the seed's size (`__gt_seed_bytes`) once, on
@@ -1995,7 +1995,7 @@ export let GtCellGetName = b"__gt_cell_get"
 // `__gt_cell_put` zeroes every word of it past its record lock before the push, and a carved cell
 // arrives in zeroed arena pages, so `__gt_cell_alloc` writes only the words it sets. A taker that
 // skipped this would release the previous tenant's arguments.
-export let GtFreeGetName = b"__gt_free_get"
+let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
 // carved from. See `buildSchedArenaCarve`.
@@ -2036,7 +2036,7 @@ end 'isSchedSubstrateQueryCallee'
 //
 // ⚠ **IT IS CALLED WITH NO PROCESSOR AND NO ROSTER MACHINE OF ITS OWN**, from the sysmon thread, which is why
 // it may take `__sched_lock` freely and why it must not assume the calling machine holds a processor.
-export let SchedHandoffPName = b"__sched_handoffp"
+let SchedHandoffPName = b"__sched_handoffp"
 
 // ⭐⭐ `__sched_retake(now, preemptOff) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`):
 // ask a strand that has held its processor for `SchedForcePreemptNs` to yield (`__sched_preemptone`), and take
@@ -2099,7 +2099,7 @@ export let SchedExitSyscallName = b"__sched_exit_syscall"
 // zero TEB OFFSET is *"the scheduler has not initialized"*.
 // Neither is tested here — this door is straight-line by design — so a caller that cannot rule both out
 // takes `emitLoadCurrentGtAndProcIdOrZero` below, or tests what it must, as `__sched_runq_put` does.
-export function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitLoadMThroughOffset(module, block: block, tebOffset: emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids), ids: ids)
 end 'emitLoadCurrentM'
 
@@ -2124,7 +2124,7 @@ end 'emitLoadMThroughOffset'
 // `bailValues` are the constants the bail edge carries, one per block arg of `bail` — minted fresh in
 // whichever block takes the arm, because a branch edge's arguments must be defined in the block that
 // branches. A `bail` with no block args (`__sched_runq_put`'s global queue) passes none.
-export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues FullRangeIntArray, ids ValueMinter) returns ValueId
+function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues FullRangeIntArray, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
 	emitBailIfZero(module, block: cur, tested: tebOffset, bail: bail, bailValues: bailValues, otherwise: haveOffset, ids: ids)
 
@@ -2138,7 +2138,7 @@ end 'emitLoadCurrentMOrBail'
 // none — no scheduler yet, an OS thread with no M, an M holding no processor —
 // because a caller that wants a processor's per-P state has none to use in any of them. The blocks are the
 // caller's, for `emitLoadCurrentMOrBail`'s reason.
-export function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveProc IrBlock, noProc IrBlock, ids ValueMinter) returns ValueId
+function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveProc IrBlock, noProc IrBlock, ids ValueMinter) returns ValueId
 	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: FullRangeIntArray.create(0), ids: ids)
 
 	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
@@ -2172,7 +2172,7 @@ end 'emitBailIfZero'
 // with `__gt_init`. A thread with no M reads 0 from TLS and this load would be through null — so a caller
 // that cannot promise one tests the M first (`__sched_runq_put`) or takes the guarded door.
 //
-export function emitLoadCurrentP(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitLoadCurrentP(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: emitLoadCurrentM(module, block: block, ids: ids), offset: MOffCurrentP, ids: ids)
 end 'emitLoadCurrentP'
 
@@ -2185,7 +2185,7 @@ end 'emitLoadCurrentP'
 // `GtRuntime` caller meets it because `__gt_run_main` initializes the scheduler before any user code runs,
 // and the runtime is reached only from user code or from an M's scheduler context. A caller that CANNOT make
 // that claim takes `emitLoadCurrentGtAndProcIdOrZero` below instead.
-export function emitLoadCurrentGt(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitLoadCurrentGt(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	block.role = BlockRole.asyncUnsafe
 
 	return emitLoadField(module, block: block, record: emitLoadCurrentM(module, block: block, ids: ids), offset: MOffCurrentGt, ids: ids)
@@ -2226,7 +2226,7 @@ end 'emitLoadCurrentGt'
 //
 // It terminates `cur` and returns the block to CONTINUE IN, whose two block args are the answers — the shape
 // every branching emit helper in this runtime uses, because the Std tier has no select.
-export function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFunction, cur IrBlock, gtId ValueId, procIdId ValueId, ids ValueMinter) returns IrBlock
+function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFunction, cur IrBlock, gtId ValueId, procIdId ValueId, ids ValueMinter) returns IrBlock
 	let haveOffset = module.addBlock(func, label: b"gtoffset", heat: BlockHeat.normal)
 	let haveMachine = module.addBlock(func, label: b"gtmachine", heat: BlockHeat.normal)
 	let haveProc = module.addBlock(func, label: b"gtproc", heat: BlockHeat.normal)
@@ -2509,7 +2509,7 @@ end 'schedRuntimeGlobals'
 
 // Install the P/M half of the scheduler. Called from `installGtRuntime`, so it rides `usesGt` exactly as the
 // green-thread half does — there is no program that wants one without the other.
-export function installSchedRuntime(module StdModule, target Target)
+function installSchedRuntime(module StdModule, target Target)
 	buildSchedInitProcs(module, target: target)
 
 	for hold in SchedLockHold.allCases 'eachHold'
@@ -2621,7 +2621,7 @@ function emitProcSlotAddr(module StdModule, block IrBlock, index ValueId, ids Va
 end 'emitProcSlotAddr'
 
 // `__sched_procs[index]` — the P struct at that index.
-export function emitLoadProc(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
+function emitLoadProc(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: emitProcSlotAddr(module, block: block, index: index, ids: ids), offset: 0, ids: ids)
 end 'emitLoadProc'
 
@@ -2636,32 +2636,32 @@ end 'emitSchedWakeMachine'
 // the window in which this machine reads as lock-free is always a window in which it really is. The
 // other order would leave an instant holding the lock with a zero count, which is exactly the
 // instant a stop would wedge every other machine.
-export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: emitLoadCurrentM(module, block: block, ids: ids), depthOffset: MOffLocks, ids: ids)
 end 'emitLockEnterAt'
 
-export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitLockLeaveOnMachine(module, block: block, lock: lock, kind: kind, machine: emitLoadCurrentM(module, block: block, ids: ids), ids: ids)
 end 'emitLockLeaveAt'
 
-export function emitLockLeaveOnMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, machine ValueId, ids ValueMinter)
+function emitLockLeaveOnMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, machine ValueId, ids ValueMinter)
 	emitLockLeaveWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: machine, depthOffset: MOffLocks, ids: ids)
 end 'emitLockLeaveOnMachine'
 
-export function emitLockEnterBeforeMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+function emitLockEnterBeforeMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: emitLockDepthAddrOrSink(module, block: block, ids: ids), depthOffset: 0, ids: ids)
 end 'emitLockEnterBeforeMachine'
 
-export function emitLockLeaveBeforeMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+function emitLockLeaveBeforeMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitLockLeaveWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: emitLockDepthAddrOrSink(module, block: block, ids: ids), depthOffset: 0, ids: ids)
 end 'emitLockLeaveBeforeMachine'
 
-export function emitLockEnterWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthRecord ValueId, depthOffset ByteOffset, ids ValueMinter)
+function emitLockEnterWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthRecord ValueId, depthOffset ByteOffset, ids ValueMinter)
 	emitStepLockDepth(module, block: block, record: depthRecord, offset: depthOffset, delta: OneMore, ids: ids)
 	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: true), ids: ids)
 end 'emitLockEnterWithDepth'
 
-export function emitLockLeaveWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthRecord ValueId, depthOffset ByteOffset, ids ValueMinter)
+function emitLockLeaveWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthRecord ValueId, depthOffset ByteOffset, ids ValueMinter)
 	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: false), ids: ids)
 	emitStepLockDepth(module, block: block, record: depthRecord, offset: depthOffset, delta: OneFewer, ids: ids)
 end 'emitLockLeaveWithDepth'
@@ -2672,11 +2672,11 @@ function emitGlobalLockAddr(module StdModule, block IrBlock, label ByteArray, id
 	return lock
 end 'emitGlobalLockAddr'
 
-export function emitLockWordEnter(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
+function emitLockWordEnter(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
 	emitLockEnterAt(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
 end 'emitLockWordEnter'
 
-export function emitLockWordLeave(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
+function emitLockWordLeave(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
 	emitLockLeaveAt(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
 end 'emitLockWordLeave'
 
@@ -2688,22 +2688,22 @@ function emitLockWordLeaveBeforeMachine(module StdModule, block IrBlock, label B
 	emitLockLeaveBeforeMachine(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
 end 'emitLockWordLeaveBeforeMachine'
 
-export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
+function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
 	emitLockWordEnter(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitSchedLockEnter'
 
-export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
+function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
 	emitLockWordLeave(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitSchedLockLeave'
 
-export function emitSchedLockEnterWhenFree(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter)
+function emitSchedLockEnterWhenFree(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter)
 	match hold 'hold'
 		free then emitSchedLockEnter(module, block: block, ids: ids)
 		held then break
 	end 'hold'
 end 'emitSchedLockEnterWhenFree'
 
-export function emitSchedLockLeaveWhenFree(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter)
+function emitSchedLockLeaveWhenFree(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter)
 	match hold 'hold'
 		free then emitSchedLockLeave(module, block: block, ids: ids)
 		held then break
@@ -2831,7 +2831,7 @@ end 'emitSchedListTakeHead'
 // `__gt_records_carved`, `__sched_lock` for the rest; each count is stepped only inside the doors
 // that mutate its structure or make its decision, so the two cannot drift apart. The prior value
 // has no reader.
-export function emitSchedStepLockedCount(module StdModule, block IrBlock, label ByteArray, delta FullRangeInt, ids ValueMinter)
+function emitSchedStepLockedCount(module StdModule, block IrBlock, label ByteArray, delta FullRangeInt, ids ValueMinter)
 	_ = emitGlobalAccumulate(module, block: block, label: label, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
 end 'emitSchedStepLockedCount'
 
@@ -3030,7 +3030,7 @@ end 'emitSchedMidleUnlinkLocked'
 //     program that readies nothing, and with an idle processor and no spinner it would START a machine for
 //     it — an OS thread that idles for the life of the process, and the `workers` reading
 //     `multicore-stress/pin-matrix.sh` pins at 1 for a coroutine program at one processor.
-export function emitSchedWakeIfOwed(module StdModule, cur IrBlock, owed ValueId, wake IrBlock, cont IrBlock, ids ValueMinter)
+function emitSchedWakeIfOwed(module StdModule, cur IrBlock, owed ValueId, wake IrBlock, cont IrBlock, ids ValueMinter)
 	emitBranchOnCompare(module, block: cur, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, whenTrue: cont, whenFalse: wake, ids: ids)
 	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
 	module.setTerminator(wake, op: StdOp.branch(cont.id))
@@ -3043,7 +3043,7 @@ end 'emitSchedEnqueueLocked'
 
 // Pay a wake — `__sched_wake_or_spawn`, the door every wake debt is paid through. `__sched_lock` released.
 // EXPORTED for the strand runner, whose global puts owe one unconditionally.
-export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
+function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create(0)))
 end 'emitSchedWakeAnIdleM'
 
@@ -3051,7 +3051,7 @@ end 'emitSchedWakeAnIdleM'
 // no lock; an overflow, or a thread with no processor, takes `__sched_lock` unless `hold` says the caller
 // already has it (see `buildSchedRunqPut`). EXPORTED for `GtRuntime.emitGtStrandTokenPublish`, whose
 // callers pay the wake.
-export function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, hold SchedLockHold, ids ValueMinter)
+function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, hold SchedLockHold, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: lockHoldNameOf(hold, whenFree: SchedRunqPutName, whenHeld: SchedRunqPutHeldName), args: argsOf(gt)))
 end 'emitSchedRunqPut'
 
@@ -3263,12 +3263,12 @@ function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, caller 
 	return m
 end 'emitSchedAllocM'
 
-export enum CallerMachine
+enum CallerMachine
 	published
 	notYetPublished
 end 'CallerMachine'
 
-export function emitSchedCarveLocked(module StdModule, block IrBlock, bytes FullRangeInt, caller CallerMachine, ids ValueMinter) returns ValueId
+function emitSchedCarveLocked(module StdModule, block IrBlock, bytes FullRangeInt, caller CallerMachine, ids ValueMinter) returns ValueId
 	let depthRecord = match caller 'depthRecord'
 		published gives emitLoadCurrentM(module, block: block, ids: ids)
 		notYetPublished gives emitLockDepthAddrOrSink(module, block: block, ids: ids)
@@ -3471,7 +3471,7 @@ function emitCStringEqualsLiteral(module StdModule, block IrBlock, cstr ValueId,
 	return emitBin(module, block: block, a: equal, b: terminated, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitCStringEqualsLiteral'
 
-export function emitCStringStartsWithLiteral(module StdModule, block IrBlock, cstr ValueId, literal ByteArray, ids ValueMinter) returns ValueId
+function emitCStringStartsWithLiteral(module StdModule, block IrBlock, cstr ValueId, literal ByteArray, ids ValueMinter) returns ValueId
 	var equal = emitConst(module, block: block, value: 1, ids: ids)
 
 	for (iter, expected) in literal.withIterator() 'eachByte'
@@ -3483,7 +3483,7 @@ export function emitCStringStartsWithLiteral(module StdModule, block IrBlock, cs
 end 'emitCStringStartsWithLiteral'
 
 // 1 when the byte at `cstr[index]` is `expected`, else 0.
-export function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, expected FullRangeInt, ids ValueMinter) returns ValueId
+function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, expected FullRangeInt, ids ValueMinter) returns ValueId
 	let indexConst = emitConst(module, block: block, value: index, ids: ids)
 	let actual = emitLoadByteIndexed(module, block: block, base: cstr, index: indexConst, ids: ids)
 	return emitCompareWithConstant(module, block: block, value: actual, pred: StdCmpPred.eq, against: expected, ids: ids)
@@ -3618,28 +3618,28 @@ end 'emitRunqPublishTail'
 
 // `1` if this CAS lost. `AtomicCasFailed` is the contract's own spelling of the answer (`StdDialect`), not a
 // literal 0 restated at each CAS.
-module function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
+function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
 	return emitCompareWithConstant(module, block: block, value: result, pred: StdCmpPred.eq, against: AtomicCasFailed, ids: ids)
 end 'emitCasLost'
 
-module function emitCasAt(module StdModule, block IrBlock, addr ValueId, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
+function emitCasAt(module StdModule, block IrBlock, addr ValueId, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
 	let result = ids.mint()
 	module.appendOp(block, op: StdOp.atomicCas(result, addrId: addr, expectedId: expected, replacementId: replacement))
 	return result
 end 'emitCasAt'
 
-module function emitCasGlobalWord(module StdModule, block IrBlock, label ByteArray, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
+function emitCasGlobalWord(module StdModule, block IrBlock, label ByteArray, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	return emitCasAt(module, block: block, addr: addr, expected: expected, replacement: replacement, ids: ids)
 end 'emitCasGlobalWord'
 
-module function emitCasField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
+function emitCasField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
 	let addr = emitFieldAddr(module, block: block, record: record, offset: offset, ids: ids)
 	return emitCasAt(module, block: block, addr: addr, expected: expected, replacement: replacement, ids: ids)
 end 'emitCasField'
 
-module function emitBranchOnCasLost(module StdModule, block IrBlock, result ValueId, lost IrBlock, won IrBlock, ids ValueMinter)
+function emitBranchOnCasLost(module StdModule, block IrBlock, result ValueId, lost IrBlock, won IrBlock, ids ValueMinter)
 	let lostFlag = emitCasLost(module, block: block, result: result, ids: ids)
 
 	module.setTerminator(block, op: StdOp.condBranch(lostFlag, thenBlockId: lost.id, elseBlockId: won.id))
@@ -4339,7 +4339,7 @@ end 'runqTaintCarriesValue'
 // The two walks are ordered. Attribution crosses a function boundary only by argument and by return, so it
 // must settle over the whole module before any load is judged; and the second walk collects each function
 // again before refusing anything in it, because the value ids are dropped at every function's start.
-export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex ElementIndex)
+function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex ElementIndex)
 	let taint = RunqRingTaint.create()
 	let funcLimit = module.funcCount()
 	let opIndices = OpIndexArray.create(0)
@@ -5580,7 +5580,7 @@ end 'buildGtFreePut'
 
 // Emitted into `__gt_runner_done`'s body, never built as a function: one more frame in that call
 // chain exceeds x64-linux's unguarded-chain margin and fails the build with E5004.
-export function emitGtFreeStacks(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
+function emitGtFreeStacks(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
 	let walkHdr = module.addBlock(func, label: b"gfswalkhdr", heat: BlockHeat.normal)
 	let walkBody = module.addBlock(func, label: b"gfswalkbody", heat: BlockHeat.normal)
 	let walkStep = module.addBlock(func, label: b"gfswalkstep", heat: BlockHeat.normal)
@@ -5904,14 +5904,14 @@ end 'buildSchedPerProcSum'
 // Step the current processor's `POffPreemptCount` — `__gt_preempt`'s count, from a green thread, whose machine
 // always holds a processor outside a bracketed call. EXPORTED because its one caller is in `GtRuntime` and the
 // processor's layout is this file's.
-export function emitSchedCountPreemption(module StdModule, block IrBlock, ids ValueMinter)
+function emitSchedCountPreemption(module StdModule, block IrBlock, ids ValueMinter)
 	emitSchedProcCountOne(module, block: block, p: emitLoadCurrentP(module, block: block, ids: ids), offset: POffPreemptCount, ids: ids)
 end 'emitSchedCountPreemption'
 
 // Step the current processor's `POffNetpollBlockCount` — `__np_pd_commit`'s count, from a green thread whose
 // machine holds a processor. EXPORTED because its one caller is in `NetpollRuntime` and the processor's layout
 // is this file's.
-export function emitSchedCountNetpollBlock(module StdModule, block IrBlock, ids ValueMinter)
+function emitSchedCountNetpollBlock(module StdModule, block IrBlock, ids ValueMinter)
 	emitSchedProcCountOne(module, block: block, p: emitLoadCurrentP(module, block: block, ids: ids), offset: POffNetpollBlockCount, ids: ids)
 end 'emitSchedCountNetpollBlock'
 
@@ -5983,12 +5983,12 @@ function emitSchedStepMachineWord(module StdModule, block IrBlock, m ValueId, of
 	_ = emitFieldAccumulate(module, block: block, record: m, offset: offset, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
 end 'emitSchedStepMachineWord'
 
-export function emitSchedStepGtLive(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
+function emitSchedStepGtLive(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
 	let m = emitLoadCurrentM(module, block: block, ids: ids)
 	emitSchedStepMachineWord(module, block: block, m: m, offset: MOffGtLive, delta: delta, ids: ids)
 end 'emitSchedStepGtLive'
 
-export function emitSchedGtLiveSum(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitSchedGtLiveSum(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let sum = ids.mint()
 	module.appendOp(block, op: StdOp.call(sum, callee: SchedGtLiveSumName, args: ValueIdArray.create(0)))
 	return sum
@@ -6222,7 +6222,7 @@ function emitSchedSignalMachineLocked(module StdModule, func IrFunction, cur IrB
 	return signal
 end 'emitSchedSignalMachineLocked'
 
-export function emitSchedStartLockedMachine(module StdModule, func IrFunction, cur IrBlock, owner ValueId, strand ValueId, gave IrBlock, declined IrBlock, ids ValueMinter)
+function emitSchedStartLockedMachine(module StdModule, func IrFunction, cur IrBlock, owner ValueId, strand ValueId, gave IrBlock, declined IrBlock, ids ValueMinter)
 	let examineProc = module.addBlock(func, label: b"slmproc", heat: BlockHeat.cold)
 	let giveIt = module.addBlock(func, label: b"slmgive", heat: BlockHeat.cold)
 
@@ -6277,7 +6277,7 @@ function emitSchedLockedParkEndLocked(module StdModule, func IrFunction, cur IrB
 	return ended
 end 'emitSchedLockedParkEndLocked'
 
-export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction, cur IrBlock, owner ValueId, handedOff IrBlock, kept IrBlock, ids ValueMinter)
+function emitSchedHandProcessorToOwner(module StdModule, func IrFunction, cur IrBlock, owner ValueId, handedOff IrBlock, kept IrBlock, ids ValueMinter)
 	let examineOwner = module.addBlock(func, label: b"hpexamine", heat: BlockHeat.cold)
 	let giveIt = module.addBlock(func, label: b"hpgive", heat: BlockHeat.cold)
 	let drainIt = module.addBlock(func, label: b"hpdrain", heat: BlockHeat.cold)
@@ -6327,7 +6327,7 @@ end 'SchedLoopRole'
 
 // ⭐⭐ **WHAT THE MAIN MACHINE RUNS THE SCHEDULER UNTIL**, and the word `__sched_main_loop`'s parameter carries
 // for it. EXPORTED for `GtRuntime`, whose `__gt_run_main` and `__gt_drain_at_exit` are the two callers.
-export enum SchedMainLoopUntil
+enum SchedMainLoopUntil
 	// `main`'s green thread has completed: `__sched_phase` has left `SchedPhase.mainRunning`.
 	mainCompleted = 0
 
@@ -6339,7 +6339,7 @@ end 'SchedMainLoopUntil'
 
 // Run the scheduler on the main machine until `until` is met. It returns holding a processor or not; the
 // next call's entry takes either.
-export function emitSchedMainLoop(module StdModule, block IrBlock, until SchedMainLoopUntil, ids ValueMinter)
+function emitSchedMainLoop(module StdModule, block IrBlock, until SchedMainLoopUntil, ids ValueMinter)
 	let word = emitConst(module, block: block, value: until.rawValue, ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedMainLoopName, args: argsOf(word)))
 end 'emitSchedMainLoop'
@@ -6364,7 +6364,7 @@ end 'emitSchedSignalMainMachine'
 // held. EXPORTED for `GtRuntime.__gt_runner_done`,
 // which moves it when `main` completes; `__sched_checkdead` is the other mover. It terminates `cur` and
 // answers the block to continue in.
-export function emitSchedEnterPhaseLocked(module StdModule, func IrFunction, cur IrBlock, phase SchedPhase, ids ValueMinter) returns IrBlock
+function emitSchedEnterPhaseLocked(module StdModule, func IrFunction, cur IrBlock, phase SchedPhase, ids ValueMinter) returns IrBlock
 	emitStoreReleaseGlobalWord(module, block: cur, label: SchedPhaseLabel, value: emitConst(module, block: cur, value: phase.rawValue, ids: ids), ids: ids)
 	return emitSchedSignalMainMachine(module, func: func, cur: cur, ids: ids)
 end 'emitSchedEnterPhaseLocked'
@@ -6999,7 +6999,7 @@ function emitSchedNobodyPolls(module StdModule, block IrBlock, ids ValueMinter) 
 	return emitCompareWithConstant(module, block: block, value: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitSchedNobodyPolls'
 
-export function emitSchedBreakIdlePoller(module StdModule, block IrBlock, ids ValueMinter)
+function emitSchedBreakIdlePoller(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedBreakIdlePollerName, args: ValueIdArray.create(0)))
 end 'emitSchedBreakIdlePoller'
 
@@ -7179,7 +7179,7 @@ function emitSchedAloneOnTheBox(module StdModule, block IrBlock, ids ValueMinter
 	return emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 1, ids: ids)
 end 'emitSchedAloneOnTheBox'
 
-export function emitSchedNothingElseRuns(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitSchedNothingElseRuns(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let nothingRunnable = emitSchedFindsNoWork(module, block: block, ids: ids)
 	let aloneOnTheBox = emitSchedAloneOnTheBox(module, block: block, ids: ids)
 	return emitBin(module, block: block, a: nothingRunnable, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -8162,7 +8162,7 @@ end 'buildGtAsyncPreemptPark'
 //
 // ⛔ **GATE SITE 2 OF 4 — see `targetBracketsBlockingSyscalls`.** On a lane with no bracket the monitor is not
 // built at all (gate site 1), so there is nothing to start: `cur` falls straight through to `cont`.
-export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, target Target, ids ValueMinter)
+function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, target Target, ids ValueMinter)
 	if not targetBracketsBlockingSyscalls(target) 'noMonitorOnThisLane'
 		module.setTerminator(cur, op: StdOp.branch(cont.id))
 		return

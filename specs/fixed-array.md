@@ -3858,10 +3858,10 @@ reply false true
 ```
 
 <!-- test: error.a-fixed-array-from-head-another-file-keeps-private-is-refused -->
-A `FixedArray` instance alias at the head of `from […]` is a type name, and another file's file-private one is
+A `FixedArray` instance alias at the head of `from […]` is a type name, and another directory's unexported one is
 refused.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 typealias Pair = FixedArray with 2 ExitCode
 
 export function probePair() returns ExitCode
@@ -5325,21 +5325,21 @@ end 'main'
 `Buf.create(4)` in one file and `Buf from [...]` in another each build a `FixedArray with 4 Int` while their bodies are parsed. Both are the one instance the `Vec4` alias names, so each value crosses to a `Vec4` parameter in the other file: `9 4`.
 ```maxon
 // --- file: lib/types.maxon
-module typealias Int = int(i64.min to i64.max)
-module typealias Vec4 = FixedArray with 4 Int
-module typealias Buf = FixedArray with Int
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = FixedArray with 4 Int
+typealias Buf = FixedArray with Int
 
 // --- file: lib/a.maxon
-module function fromA() returns Vec4
+function fromA() returns Vec4
 	return Buf.create(4)
 end 'fromA'
 
-module function lastOf(v Vec4) returns Int
+function lastOf(v Vec4) returns Int
 	return v.get(3)
 end 'lastOf'
 
 // --- file: lib/b.maxon
-module function sumB(v Vec4) returns Int
+function sumB(v Vec4) returns Int
 	let own = Buf from [1, 2, 3, 4]
 
 	return v.get(3) + lastOf(own)

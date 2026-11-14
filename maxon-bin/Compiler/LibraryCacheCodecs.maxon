@@ -1,8 +1,8 @@
-module type ViewEntry
-	module let facts as RawStreamFacts
-	module var view as SharedBuildView
+type ViewEntry
+	let facts as RawStreamFacts
+	var view as SharedBuildView
 
-	module static function create(facts RawStreamFacts, view SharedBuildView) returns ViewEntry
+	static function create(facts RawStreamFacts, view SharedBuildView) returns ViewEntry
 		return Self{facts: facts, view: view}
 	end 'create'
 end 'ViewEntry'
@@ -27,11 +27,36 @@ function decodedSourceSpellings(reader LibraryCacheReader) returns NameRoster th
 	return spellings
 end 'decodedSourceSpellings'
 
-module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns immutable ByteArray
+function encodedSpellingCounts(writer LibraryCacheWriter, counts SpellingCountArray)
+	writer.unsigned(counts.count() as CacheUnsigned)
+
+	for count in counts 'eachCount'
+		writer.unsigned(count as CacheUnsigned)
+	end 'eachCount'
+end 'encodedSpellingCounts'
+
+function decodedSpellingCounts(reader LibraryCacheReader, expected ElementIndex) returns SpellingCountArray throws LibraryCacheDamage
+	let count = try reader.count()
+
+	if count != expected 'notOneCountPerSpelling'
+		throw LibraryCacheDamage.outOfRange
+	end 'notOneCountPerSpelling'
+
+	let counts = SpellingCountArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachCount'
+		counts.push((try reader.unsigned()) as SpellingCount)
+	end 'eachCount'
+
+	return counts
+end 'decodedSpellingCounts'
+
+function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns immutable ByteArray
 	let writer = LibraryCacheWriter.create()
 	encodedSourceSpellings(writer, spellings: facts.declaredTypeNames)
 	encodedSourceSpellings(writer, spellings: facts.reservedSpellings)
-	encodedSourceSpellings(writer, spellings: facts.conditionalSpellings)
+	encodedSourceSpellings(writer, spellings: facts.conditionalSpellings.names)
+	encodedSpellingCounts(writer, counts: facts.conditionalSpellings.rawCounts)
 	writer.flag(view.producerMaskComputed)
 	writer.unsigned(view.producerMask as CacheUnsigned)
 	cacheWriteTokenArray(writer, value: view.activeTokens)
@@ -39,28 +64,29 @@ module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) r
 	return writer.payload()
 end 'encodedViewSection'
 
-module function decodedViewSection(reader LibraryCacheReader, buildKey BuildKey) returns ViewEntry throws LibraryCacheDamage
+function decodedViewSection(reader LibraryCacheReader, buildKey BuildKey) returns ViewEntry throws LibraryCacheDamage
 	let names = try decodedSourceSpellings(reader)
 	let reserved = try decodedSourceSpellings(reader)
 	let conditional = try decodedSourceSpellings(reader)
+	let conditionalCounts = try decodedSpellingCounts(reader, expected: conditional.count())
 	let maskComputed = try reader.flag()
 	let mask = try cacheReadProducerMask(reader)
 	let tokens = try cacheReadTokenArray(reader)
 	try reader.finished()
 
-	return ViewEntry.create(RawStreamFacts.create(names, reservedSpellings: reserved, conditionalSpellings: conditional), view: SharedBuildView.restored(buildKey, activeTokens: tokens, producerMask: mask, producerMaskComputed: maskComputed))
+	return ViewEntry.create(RawStreamFacts.create(names, reservedSpellings: reserved, conditionalSpellings: ConditionalSpellings.create(conditional, rawCounts: conditionalCounts)), view: SharedBuildView.restored(buildKey, activeTokens: tokens, producerMask: mask, producerMaskComputed: maskComputed))
 end 'decodedViewSection'
 
-export function cacheWriteSourceParseError(writer LibraryCacheWriter, value SourceParseError)
+function cacheWriteSourceParseError(writer LibraryCacheWriter, value SourceParseError)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 	writer.refuse()
 end 'cacheWriteSourceParseError'
 
-export function cacheReadSourceParseError(_ LibraryCacheReader) returns SourceParseError throws LibraryCacheDamage
+function cacheReadSourceParseError(_ LibraryCacheReader) returns SourceParseError throws LibraryCacheDamage
 	throw LibraryCacheDamage.unrepresentable
 end 'cacheReadSourceParseError'
 
-module function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns immutable ByteArray throws LibraryCacheDamage
+function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns immutable ByteArray throws LibraryCacheDamage
 	let writer = LibraryCacheWriter.create()
 	writer.unsigned(key as CacheUnsigned)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.deferred)
@@ -75,7 +101,7 @@ module function encodedBaseline(declarations LibraryDeclarations, key HashDigest
 	return writer.sealed()
 end 'encodedBaseline'
 
-module function decodedManifest(reader LibraryCacheReader, key HashDigest) returns LibraryManifest throws LibraryCacheDamage
+function decodedManifest(reader LibraryCacheReader, key HashDigest) returns LibraryManifest throws LibraryCacheDamage
 	try requireKey(reader, expected: key)
 	let deferred = try cacheReadFilePathArray(reader)
 	let streamed = try cacheReadFilePathArray(reader)
@@ -84,7 +110,7 @@ module function decodedManifest(reader LibraryCacheReader, key HashDigest) retur
 	return LibraryManifest.create(deferred, streamed: streamed, templates: templates)
 end 'decodedManifest'
 
-module function decodedHeldBaseline(image immutable ByteArray, start ElementIndex, endIndex ElementIndex, key HashDigest, kind LibraryEntryKind, entryClass LibraryEntryClass) returns HeldBaseline throws LibraryCacheDamage
+function decodedHeldBaseline(image immutable ByteArray, start ElementIndex, endIndex ElementIndex, key HashDigest, kind LibraryEntryKind, entryClass LibraryEntryClass) returns HeldBaseline throws LibraryCacheDamage
 	let reader = LibraryCacheReader.over(image, start: start, endIndex: endIndex)
 	let manifest = try decodedManifest(reader, key: key)
 	let signatures = try decodedSignatures(reader)
@@ -93,7 +119,7 @@ module function decodedHeldBaseline(image immutable ByteArray, start ElementInde
 	return HeldBaseline.create(key, kind: kind, entryClass: entryClass, declarations: LibraryDeclarations.create(signatures, manifest: manifest))
 end 'decodedHeldBaseline'
 
-module function decodedSignatures(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
+function decodedSignatures(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
 	let signatures = try ProgramSignatures.cacheRead(reader)
 	try reader.finished()
 	signatures.shareModuleDirectoriesWithProvenance()
@@ -101,7 +127,7 @@ module function decodedSignatures(reader LibraryCacheReader) returns ProgramSign
 	return signatures
 end 'decodedSignatures'
 
-module function encodedParseSection(held SharedLibraryParse) returns immutable ByteArray throws LibraryCacheDamage
+function encodedParseSection(held SharedLibraryParse) returns immutable ByteArray throws LibraryCacheDamage
 	let writer = LibraryCacheWriter.create()
 	cacheWriteSharedLibraryParse(writer, value: held)
 
@@ -112,7 +138,7 @@ module function encodedParseSection(held SharedLibraryParse) returns immutable B
 	return writer.payload()
 end 'encodedParseSection'
 
-module function decodedParseSection(image immutable ByteArray, start ElementIndex, endIndex ElementIndex, variant HashDigest, key HashDigest) returns SharedLibraryParse throws LibraryCacheDamage
+function decodedParseSection(image immutable ByteArray, start ElementIndex, endIndex ElementIndex, variant HashDigest, key HashDigest) returns SharedLibraryParse throws LibraryCacheDamage
 	let reader = LibraryCacheReader.over(image, start: start, endIndex: endIndex)
 	let held = try cacheReadSharedLibraryParse(reader, variant: variant, key: key)
 	try reader.finished()
@@ -120,13 +146,49 @@ module function decodedParseSection(image immutable ByteArray, start ElementInde
 	return held
 end 'decodedParseSection'
 
-module function decodedStashedParse(payload immutable ByteArray, variant HashDigest, key HashDigest, contentHash HashDigest) returns SharedLibraryParse
+function decodedStashedParse(payload immutable ByteArray, variant HashDigest, key HashDigest, contentHash HashDigest) returns SharedLibraryParse
 	return try decodedParseSection(payload, start: 0, endIndex: payload.count(), variant: variant, key: key) otherwise (damage) 'undecodable'
 		panic("decodedStashedParse: the section this compile encoded for {contentHash} does not decode: {damage.displayReason()}")
 	end 'undecodable'
 end 'decodedStashedParse'
 
-export function cacheWriteTypeNameInterner(writer LibraryCacheWriter, value TypeNameInterner)
+function encodedAuditFindings(findings UnusedFindingArray, key HashDigest) returns immutable ByteArray
+	let writer = LibraryCacheWriter.create()
+	writer.unsigned(key as CacheUnsigned)
+	writer.unsigned(findings.count() as CacheUnsigned)
+
+	for finding in findings 'eachFinding'
+		writer.text(finding.noun)
+		writer.text(finding.name)
+		writer.text(finding.filePath.toString())
+		writer.unsigned(finding.nameLine as CacheUnsigned)
+		writer.unsigned(finding.nameColumn as CacheUnsigned)
+	end 'eachFinding'
+
+	return writer.sealed()
+end 'encodedAuditFindings'
+
+function decodedAuditFindings(reader LibraryCacheReader, key HashDigest) returns UnusedFindingArray throws LibraryCacheDamage
+	try requireKey(reader, expected: key)
+
+	let count = try reader.count()
+	let findings = UnusedFindingArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachFinding'
+		let noun = try reader.text()
+		let name = try reader.text()
+		let filePath = try reader.path()
+		let nameLine = (try reader.unsigned()) as LineNumber
+		let nameColumn = (try reader.unsigned()) as ColumnNumber
+		findings.push(UnusedFinding.create(noun, name: name, filePath: filePath, nameLine: nameLine, nameColumn: nameColumn))
+	end 'eachFinding'
+
+	try reader.finished()
+
+	return findings
+end 'decodedAuditFindings'
+
+function cacheWriteTypeNameInterner(writer LibraryCacheWriter, value TypeNameInterner)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for id in 0 upto value.count() 'eachName'
@@ -134,7 +196,7 @@ export function cacheWriteTypeNameInterner(writer LibraryCacheWriter, value Type
 	end 'eachName'
 end 'cacheWriteTypeNameInterner'
 
-export function cacheReadTypeNameInterner(reader LibraryCacheReader) returns TypeNameInterner throws LibraryCacheDamage
+function cacheReadTypeNameInterner(reader LibraryCacheReader) returns TypeNameInterner throws LibraryCacheDamage
 	let count = try reader.count()
 	let interner = TypeNameInterner.createForSource(0)
 
@@ -149,7 +211,7 @@ export function cacheReadTypeNameInterner(reader LibraryCacheReader) returns Typ
 	return interner
 end 'cacheReadTypeNameInterner'
 
-module function cacheWriteToken(writer LibraryCacheWriter, value Token)
+function cacheWriteToken(writer LibraryCacheWriter, value Token)
 	writer.unsigned(value.kind.ordinal as CacheUnsigned)
 	writer.bytes(value.value)
 	writer.unsigned(value.line as CacheUnsigned)
@@ -158,7 +220,7 @@ module function cacheWriteToken(writer LibraryCacheWriter, value Token)
 	writer.unsigned(value.endByte as CacheUnsigned)
 end 'cacheWriteToken'
 
-module function cacheReadToken(reader LibraryCacheReader) returns Token throws LibraryCacheDamage
+function cacheReadToken(reader LibraryCacheReader) returns Token throws LibraryCacheDamage
 	let kind = try cacheReadTokenKind(reader)
 	let value = try reader.bytes()
 	let line = (try reader.unsigned()) as LineNumber
@@ -186,7 +248,7 @@ function cacheReadSharedLibraryParse(reader LibraryCacheReader, variant HashDige
 	return SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
 end 'cacheReadSharedLibraryParse'
 
-module function cacheWriteFixedElementCountColumn(writer LibraryCacheWriter, value FixedElementCountColumn)
+function cacheWriteFixedElementCountColumn(writer LibraryCacheWriter, value FixedElementCountColumn)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for position in 0 upto value.count() 'eachEntry'
@@ -199,7 +261,7 @@ module function cacheWriteFixedElementCountColumn(writer LibraryCacheWriter, val
 	end 'eachEntry'
 end 'cacheWriteFixedElementCountColumn'
 
-module function cacheReadFixedElementCountColumn(reader LibraryCacheReader) returns FixedElementCountColumn throws LibraryCacheDamage
+function cacheReadFixedElementCountColumn(reader LibraryCacheReader) returns FixedElementCountColumn throws LibraryCacheDamage
 	let count = try reader.count()
 	let column = FixedElementCountColumn.create()
 

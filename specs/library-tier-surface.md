@@ -37,8 +37,8 @@ A surface with no public replacement says `it has no public replacement`. A stat
 is refused at the type it is called on, in the type's form. A body reports its first raw door, and every
 other body and signature of the file reports its own.
 
-`String.fromCString(…)` takes a `cstring`, which only the library tiers can produce, so it is `module`-scoped: a
-program that calls it is refused at the call with E3088, whatever it passes, and it is not part of the E3185 surface.
+`String.fromCString(…)` takes a `cstring`, which only the library tiers can produce, so it is unexported: a
+program that calls it is refused at the call with E3008, whatever it passes, and it is not part of the E3185 surface.
 A program that names `cstring` or calls `.cstr()` is refused at that door first, ahead of the `fromCString` call.
 
 `__Raw` stays runtime-only (E3152), which is narrower: a `stdlib/` file may not name it either.
@@ -355,7 +355,7 @@ end 'main'
 
 <!-- test: error.a-user-call-to-string-from-cstring-is-refused -->
 `String.fromCString` takes a `cstring`, which only the library tiers can produce, so it is declared
-`module`-scoped: a program calling it is refused at the call (E3088), whatever it passes.
+unexported: a program calling it is refused at the call (E3008), whatever it passes.
 ```maxon
 function main() returns ExitCode
 	let back = String.fromCString(0)
@@ -364,7 +364,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:20: function 'String.fromCString' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:20: function 'String.fromCString' is not exported
 ```
 
 <!-- test: error.the-cursor-type-is-refused-outside-the-library-tiers -->
