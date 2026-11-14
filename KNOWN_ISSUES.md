@@ -84,3 +84,20 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   function `sumOf(triple MyTriple) returns MyWord` that destructures and adds, and a `main` that binds
   `let triple = (1, 2, 3) as MyTriple`, calls `sumOf(triple)` twice into locals, prints them (`6 6`) and
   ends `return sumOf(triple) as ExitCode`: it exits 54, not 6. With `return 0` the program is correct.
+
+## A regions-modify spec case pins column 31 where the compiler reports column 25
+- priority: normal
+- status: open
+- where: specs/regions-modify.md (case `one-statement-open-refuses-a-read-through-a-region-beside-a-one-call-open-of-another`)
+- seen: the directory-scoped visibility land; it fails the same way with a compiler built from c8773e3, so
+  either the diagnostic's anchor moved or the pin is stale.
+- repro: `./maxon-bin/.maxon/maxon spec-test --filter=regions-modify/one-statement-open-refuses-a-read-through-a-region-beside-a-one-call-open-of-another`
+
+## Identifiers on `#if` directive lines count as spellings in the unused-declaration audits
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/QueryDatabase.maxon (`rawSpellingCountsIn` counts them; `conditionalSpellingsIn` excludes them)
+- seen: the directory-scoped visibility land's code review; read off the code, not run. An unused
+  declaration named like a directive word escapes E3092/E3219.
+- repro: one file with `#if debug` … `#end`, another in the same directory declaring an unused unmarked
+  `let debug = 1`; expect E3219, observe none
