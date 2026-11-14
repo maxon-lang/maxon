@@ -562,8 +562,12 @@ ready
 A feed the child never reads leaves the owner watching for the pipe to become writable. The watch finishes
 long before the child, which exits without reading, writes its last line. The tail that follows must keep
 reading until both streams end, so the line arrives and the tail reports `drained`: a finished watch is not a
-quiet stream.
+quiet stream. The streams end when the child closes its pipes, which is before the child has ended, and the
+tail releases the child without waiting for it, so the case polls the child's pid until the child has ended.
 ```maxon
+let ChildEndsWithinMs = 30000
+let ChildPollMs = 50
+
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'childMode'
 		sleep(500)
@@ -584,6 +588,7 @@ function main() returns ExitCode
 	end 'fill'
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let pid = try child.processId() otherwise return 5
 	let pump = try ChildPump.of(child) otherwise return 4
 	let feed = StdinFeed.afterLine("anchor", line: builder.build())
 
@@ -591,6 +596,13 @@ function main() returns ExitCode
 
 	let capture = StreamCapture.create()
 	let tail = PumpTail.begin(2000, capMs: 10000).drainAndRelease(pump, child: child, into: capture)
+
+	var waitedMs = 0 as DurationMs
+
+	while Process.isAlive(pid) and waitedMs < ChildEndsWithinMs 'untilEnded'
+		sleep(ChildPollMs)
+		waitedMs = waitedMs + ChildPollMs
+	end 'untilEnded'
 
 	print("{tail.name} {capture.stdout}")
 	return 0
