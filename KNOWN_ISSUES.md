@@ -46,3 +46,21 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 - where: maxon-bin/Testing/SpecWorkerPool.maxon:8
 - seen: the spec-suite speed plan's survey; a lane's suite takes tens of minutes.
 - repro: read the comment against any CI suite job's duration
+
+## ProgramSignatures.reassembled leaves two fields at their defaults on a worker's copy
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/SignatureIndex.maxon:44186
+- seen: the spec-suite speed plan's L3c review, by reading; the constructor omits
+  corpusByRefConventionDigestAnswer and liveSpawnedTypeNames. No wrong answer was found: parse keys are
+  computed on the main thread and the second field is refilled when reach is full.
+- repro: a front-end pool worker that reads either field off its reassembled index gets 0 or an empty set
+
+## The corpus-only function-valued field names classify a type by name, not by declaring file
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/SignatureIndex.maxon:18836
+- seen: the spec-suite speed plan's L3c review, by reading; computedFunctionValuedFieldNames(corpusOnly: true)
+  asks stdlibDeclaredTypeNames, so a scriptlib type landing in that set would have its field names treated
+  as the corpus's own. Not run.
+- repro: a scriptlib package declaring a type with a function-valued field, compiled by a single-file program
