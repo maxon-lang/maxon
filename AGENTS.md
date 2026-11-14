@@ -1,5 +1,10 @@
 You do not care if an issue is pre-existing. Just debug and fix it. One found while a change is in
-progress, and not related to it, is noted and landed right after that change (`/land` §10).
+progress, and not related to it, is recorded in `KNOWN_ISSUES.md` — unless it is already there — and
+drained, one claimed entry at a time, after that change's push (`/land` §10).
+
+**When another agent asks whether your task pushed a commit that turned CI red, answer it.** If the commit
+is yours, claim its `KNOWN_ISSUES.md` entry, reply that you have taken it, and fix the red before your
+next push, ahead of the rest of your task.
 
 A symptom with no mechanism (a one-off hang, a flake that will not reproduce) is the next thing to debug,
 not a risk to record: never ship it described as "unexplained". A hang and a crash in the same subsystem

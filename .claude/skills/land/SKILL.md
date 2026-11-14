@@ -289,7 +289,7 @@ the neighbouring cases in that file look like.
 
 **Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
 
-⚠ **When the ask (an issue, a ledger entry) names failing cases or a failure count, those named cases,
+⚠ **When the ask (an issue, a `KNOWN_ISSUES.md` entry) names failing cases or a failure count, those named cases,
 run, are part of the acceptance.** A hand-built red that reproduces the mechanism may be narrower than the
 class; it supplements the named cases and never replaces them.
 
@@ -445,9 +445,8 @@ missing or something changed after it.
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
   not the suite is green over it. **When it is RELATED to this change it is fixed NOW, and the
-  reproduction that found it becomes a case in the set; when it is not, it goes on the FOLLOW-UP LEDGER
-  and is landed in the follow-up land right after this change (§10)** — fixed all the same, without
-  slowing this one. Inside that follow-up land, everything found is fixed in it. A
+  reproduction that found it becomes a case in the set; when it is not, it is recorded in
+  `KNOWN_ISSUES.md` and drained after the push (§10)** — fixed all the same, without slowing this one. A
   hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the CI lanes a
   spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
 - **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
@@ -491,11 +490,11 @@ situation:
   and no branch, and the landing gates are YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
   standalone-only and it must skip them.
 - **Tell it that a finding NOT RELATED to this change (§10's test) is REPORTED, not fixed** — the
-  skill's "fix what you find even if it is pre-existing" is satisfied by the follow-up /land, not by
-  this diff.
+  skill's "fix what you find even if it is pre-existing" is satisfied by the `KNOWN_ISSUES.md` drain,
+  not by this diff.
 - **Anything it leaves for triage arrives in its REPORT, and you decide it here**, by §10's test: a
-  related defect is fixed now; an unrelated one goes on the follow-up ledger and is landed in the single
-  follow-up `/land` right after this one. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
+  related defect is fixed now; an unrelated one is recorded in `KNOWN_ISSUES.md` and drained after the
+  push. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
   (AGENTS.md, "No skipped work").
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
@@ -678,9 +677,10 @@ the specs on disk, so a peer's uncommitted spec edit lands in the pin.
 
 **Glance at the last COMPLETED CI run before pushing, as its own step:**
 `gh run list --branch main --workflow ci --limit 3`, read it, and only then make the push in a separate
-command. Chained in one command, the push goes out before anyone reads the answer. A completed red is fixed
-first, in its own commit, because a red lane hides later failures behind it. A run still in progress never
-blocks a push.
+command. Chained in one command, the push goes out before anyone reads the answer. A completed red goes
+through §10's CI-red check: claimed by someone else, it is theirs; otherwise record it and ask the
+culprit. Then push — the red is the first thing your drain takes if it falls to you, because a red lane
+hides later failures behind it. A run still in progress never blocks a push.
 
 **Stage and commit with git's stderr in view — never suppress it.** `git add` with any pathspec that
 matches nothing stages NOTHING, so stage only paths `git status --porcelain` lists, and read
@@ -708,18 +708,19 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 > CI hosts the four native targets on their own architecture, runs the full suite, the tree corpora,
 > and the two-stage seed build, none of which your landing gates do, so a lane
 > can still go red after you have reported — that is why the report names every lane and gate your
-> landing gates did not run. CI also runs the wasm32-wasi suite, on its x64-linux lane. When a red lane is reported to you, it is yours to fix whether or not
+> landing gates did not run. CI also runs the wasm32-wasi suite, on its x64-linux lane. A red lane
+> reported to you goes through §10's CI-red check; one that falls to you is yours to fix whether or not
 > you caused it (AGENTS.md), in its own commit, reproduced on that platform's own host — never on the
 > cross lane that missed it.
 
 Then report in a few lines: the change, the cases that went red → green, each gate's number, and
-anything skipped with the reason — including the lanes only CI runs. **Then go straight to §10** — that
-report is not the end of the task while the ledger has an entry.
+anything skipped with the reason — including the lanes only CI runs. **Then drain `KNOWN_ISSUES.md`
+(§10)** — that report is not the end of the task while the file holds a claimable entry.
 
-## 10. The follow-up ledger — unrelated defects land AFTER the change, all in one follow-up land
+## 10. Known issues — record unrelated defects, drain the file after the push
 
-**Every defect found during the change gets fixed. Only the ones the change does not need wait — and they
-wait for the push, not longer.**
+**Every defect found during the change gets fixed. Only the ones the change does not need wait — in
+`KNOWN_ISSUES.md`, where whichever agent finishes first takes them.**
 
 > ### ⭐ RELATED — fixed now, in this change
 > - the acceptance set, or a gate in §8, **cannot go green** without it — including a red you did not
@@ -735,32 +736,67 @@ wait for the push, not longer.**
 > a missed diagnostic you happened to see. ⚠ "It is in a file I am editing anyway" does not make it
 > related; "it blocks a case" does.
 
-**The ledger is a file OUTSIDE the checkout** — under `/plan-and-land`, the plan file's §10; otherwise
-`C:\Users\Eric\.claude\plans\<slug>-followups.md`. In the checkout it would be dirt for §0 or be swept into
-§9's commit. An entry is written **the moment the finding arrives**, from whoever reported it: what is
-wrong, `file:line`, how it was seen, and **a program that reproduces it** — that program is the seed of
-the follow-up's red set.
+### Recording — `KNOWN_ISSUES.md`, shared by every agent
 
-> ### ⭐ THE FOLLOW-UPS ARE ONE `/land`, AND IT ABSORBS WHAT IT FINDS
-> **After the push, the WHOLE ledger is landed as ONE follow-up `/land`, in ONE commit** — never a
-> `/land` per entry. Its red set is the union of every entry's reproducing program; its review, its
-> documenter pass and its landing gates run once, over all of them.
->
-> **A defect found WHILE landing the follow-ups is part of that same land** — related or not, it is
-> added to the follow-up's red set and fixed in the follow-up's commit. It is never appended to the
-> ledger for another round, and §10's related/unrelated test does not apply inside the follow-up land:
-> its scope is "everything found", so everything found is in scope.
+**An UNRELATED defect goes in `KNOWN_ISSUES.md` at the repo root** — one file every session in the
+checkout reads, so two agents that find the same defect record it once and fix it once. Its header gives
+the entry format: symptom, `priority`, `status`, `where` (`file:line`), `seen`, and **a program that
+reproduces it** — the seed of the red set of the land that fixes it.
 
-Strike every entry with the follow-up's sha when it lands. An entry whose red will not go red was fixed
-on the way — strike it with the sha that fixed it.
+- **Read it before writing.** An entry with the same `where:` or symptom already records it: add at
+  most a `seen:` line, never a second entry.
+- **You, the coordinator, write it** — the moment a finding arrives. Implementers and reviewers report
+  to you; they do not touch the file.
+- **Commit every edit to it at once, alone:** `git commit -F <msg> -- KNOWN_ISSUES.md`. Left
+  uncommitted it is dirt for the next session's §0, or swept into a §9 commit. The commit goes out with
+  your next push; do not push it separately — a dirty tree cannot rebase without a stash (§8).
+- Then go on with the change. Recording is the whole of what an unrelated defect costs it.
 
-- ⛔ **The task is done when the ledger is EMPTY, not when the first push lands.** Do not stop to
-  report between the change and its follow-up land; one report at the end names both shas.
-- ⛔ **The ledger is not `todo.md` and not a memory note** — it is a work queue this session drains.
+### CI reds — `ci-red` entries, and the culprit takes its own
+
+**A red lane on main is a `ci-red` entry**, kept above every `normal` one. Its `repro:` is the run URL,
+the lane and the failing case; its `suspects:` are the commits between the last green run and the first
+red one (`gh run list`, then `git log <green>..<red>`).
+
+**Whenever you meet a red — §9's glance, or one reported to you — look in the file first:**
+
+- **Claimed by someone else:** it is theirs. Do not fix it; push.
+- **Not recorded:** record it, then ask the culprit (below) before claiming it.
+- **Recorded and open:** ask the culprit (below) before claiming it.
+
+**Ask the culprit.** `ListAgents`, then one `SendMessage` to every session that can answer (cloud
+sessions cannot — skip them): the lane, the failing case, the run URL and the suspect shas, and *"Did your
+current task push one of these? If so, take this entry."* An agent whose commit it is claims the entry,
+answers that it has, and fixes the red before its next push (AGENTS.md). Read answers with
+`ReadNotifications` while you go on with your own work — at §9's glance, that work is your push. **When
+every answer is "not mine", or none has come after 10 minutes, claim it yourself** — unless someone's
+claim is in the file by then — and land it before anything else in the drain.
+
+### Draining — after the push, ONE entry at a time
+
+**Once your push has landed, drain the file:**
+
+1. **Re-read it and pick ONE entry:** the first open `ci-red`, else the oldest open `normal`. An entry
+   `claimed` more than 24 hours ago is abandoned, and as good as open.
+2. **Claim it** — set `status: claimed <session> <ISO date>` with Edit, and commit at once. Edit refuses
+   a file that changed since you read it: if it does, someone else moved first — go back to 1. A
+   `ci-red` entry is claimed only after asking the culprit.
+3. **Land it as its own `/land`**, its repro the red set. That land's commit deletes the entry. A
+   defect found while landing it takes the same RELATED test as any other: related to this entry, fixed
+   in this land; unrelated, recorded.
+4. **Repeat until nothing is claimable.** Then the task is done; one report names every sha.
+
+**Hold one claim at a time**: an entry that turns out to be slow then blocks only itself, and every
+other one stays open for an agent that finishes sooner.
+
+- An entry whose repro will not go red was fixed on the way — delete it, naming the sha that fixed it
+  in the commit message.
+- ⛔ **The file is not `todo.md` and not a memory note** — it is a work queue, and draining it is part
+  of the task.
 - **An entry that needs a design ruling is a question** to the user, asked when its turn comes — never
   a skipped entry.
 
-> ### ⛔ AN ENTRY THAT REPEATS A LANDED FIX IS A DESIGN QUESTION, NOT A FOLLOW-UP
+> ### ⛔ AN ENTRY THAT REPEATS A LANDED FIX IS A DESIGN QUESTION, NOT ANOTHER ENTRY
 > Before writing an entry, and again before landing one, ask: **has a fix of this same kind already
 > landed, or does another entry name the same question at a different site?** Examples: "the async
 > path does not consult X", after "the spawn path did not consult X"; or a second consumer that
@@ -781,7 +817,7 @@ Everything above runs unattended. Stop and report, without landing, when:
 - **A case would have to be removed or excluded**, or **an existing `specs` expectation rewritten**. The first
   is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
   change and belongs to whoever owns that behaviour.
-- **A finding or ledger entry repeats a fix already landed, at another consumer of the same fact** (§10).
+- **A finding or `KNOWN_ISSUES.md` entry repeats a fix already landed, at another consumer of the same fact** (§10).
 - **A change would make the compiler accept a program an approved design refuses** — a checker rule
   relaxed, a pin dropped, a refusal narrowed, against a ruling or sample of the plan the change implements.
   That is an amendment of a model-checked design, never an implementation choice. The agent stops and

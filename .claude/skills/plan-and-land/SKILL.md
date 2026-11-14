@@ -130,7 +130,6 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 | 7 | Staging — `ONE /land` (default), or N stages with justification | §6 |
 | 8 | Open questions — what approval is actually being asked for | §5 |
 | 9 | **Amendments** — a dated line per amended fact; per re-design, what refuted the last approach | §5; a fresh session |
-| 10 | **Follow-up ledger** — every UNRELATED defect found while landing, with `file:line`, how seen and a reproducing program; landed together in one follow-up `/land`, struck with its sha | `/land` §10; §7 |
 
 > ### RESUMING FROM A PLAN FILE
 > `BASE` + §2a + §2b + §3 + §4 + §6 are the resume token — exactly `/land`'s inputs. ⚠ **A resume
@@ -214,9 +213,9 @@ is outside the repo; this is never a commit.
 ⛔ **Do not wait for CI** — not after the last stage, and not between stages: the next stage starts from
 the pushed commit (`/land` §9's ruling).
 
-**Then drain the plan file's §10 ledger** — ONE follow-up `/land` for every entry, after the LAST stage
-(never between stages), which also fixes whatever it finds on the way; each entry is struck with its sha
-(`/land` §10). The plan is closed when the ledger is empty.
+Unrelated defects found while landing go in `KNOWN_ISSUES.md`, not the plan file. **Drain it after the
+LAST stage** (never between stages), one claimed entry at a time (`/land` §10). The plan is closed when
+the file holds no claimable entry.
 
 ---
 
@@ -236,8 +235,8 @@ agent; the reviewer counts, since `/land` §5 is often where a design flaw is fi
 > ⛔ **NOT a design-flaw halt, and each will be offered as one:** it is bigger than the plan said · it
 > touches more files than §4 listed · a cleaner design occurred to me · the plan did not mention X · this
 > wants a refactor first · a pre-existing defect is in the way (`/land`: *"a defect ANYONE finds on the
-> way is FIXED, not filed"* — now if it blocks the acceptance, after the push via the ledger if it does
-> not). Each of those is **carry on and say so in the report**.
+> way is FIXED, not filed"* — now if it blocks the acceptance, after the push via `KNOWN_ISSUES.md` if it
+> does not). Each of those is **carry on and say so in the report**.
 
 **This is not escalation.** `/land`'s *"THERE IS NO ESCALATION"* forbids the **coordinator** rerouting to
 a heavier process, opening a worktree, or landing half. An agent reporting to its coordinator is the
