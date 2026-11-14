@@ -141,16 +141,6 @@ typealias CompileRunSlot = Slot with CompileRun
 typealias BuildTailSlot = Slot with BuildTail
 typealias DriverOutcomeSlot = Slot with DriverOutcome
 
-enum JobPlace
-	attributing
-	compiling
-	writing
-	sidecar
-	publishing
-	totaling
-	finished
-end 'JobPlace'
-
 type BuildTail
 	module let outputPath as FilePath
 	module let writerTools as ExecutableWriterTools
@@ -175,19 +165,18 @@ module type JobRun
 	let bases as GenerationBases
 	let spans as TraceNameArray
 	var unit as TraceUnit
-	var place as JobPlace
+	let logFence as ServiceFence
 	let projects as ProjectSlot
 	let machines as CompileRunSlot
 	let sweeps as LexSweepRunSlot
 	let wholeProbes as PhaseProbeSlot
-	let brackets as PhaseProbeSlot
 	let tails as BuildTailSlot
 	let outcomes as DriverOutcomeSlot
 
 	module static function create(request immutable CompileRequest, memos SharedFileMemoMap, bench WarmBench, bases GenerationBases) returns JobRun
 		let session = CompileSession.create(DiagnosticSink.to(request.sink), fileMemos: memos, treeLock: LockHold.resuming(request.lock.clone()))
 
-		return Self{spec: request, session: session, bench: bench, bases: bases, spans: TraceNameArray.create(0), unit: 0, place: JobPlace.attributing, projects: ProjectSlot.create("JobRun.projects"), machines: CompileRunSlot.create("JobRun.machines"), sweeps: LexSweepRunSlot.create("JobRun.sweeps"), wholeProbes: PhaseProbeSlot.create("JobRun.wholeProbes"), brackets: PhaseProbeSlot.create("JobRun.brackets"), tails: BuildTailSlot.create("JobRun.tails"), outcomes: DriverOutcomeSlot.create("JobRun.outcomes")}
+		return Self{spec: request, session: session, bench: bench, bases: bases, spans: TraceNameArray.create(0), unit: 0, logFence: compilerLogFence(), projects: ProjectSlot.create("JobRun.projects"), machines: CompileRunSlot.create("JobRun.machines"), sweeps: LexSweepRunSlot.create("JobRun.sweeps"), wholeProbes: PhaseProbeSlot.create("JobRun.wholeProbes"), tails: BuildTailSlot.create("JobRun.tails"), outcomes: DriverOutcomeSlot.create("JobRun.outcomes")}
 	end 'create'
 
 	module function begin(receiver CompileReceiver.handle) returns CompileStep
@@ -211,7 +200,7 @@ module type JobRun
 			return self.compileFailed(failure)
 		end 'failed'
 
-		return self.compiled(step, receiver: receiver)
+		return self.compiled(step)
 	end 'frontEndAnswered'
 
 	module function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep
@@ -221,7 +210,7 @@ module type JobRun
 			return self.compileFailed(failure)
 		end 'failed'
 
-		return self.compiled(step, receiver: receiver)
+		return self.compiled(step)
 	end 'stdPassAnswered'
 
 	module function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep
@@ -231,23 +220,8 @@ module type JobRun
 			return self.compileFailed(failure)
 		end 'failed'
 
-		return self.compiled(step, receiver: receiver)
+		return self.compiled(step)
 	end 'backendAnswered'
-
-	module function logFlushed(receiver CompileReceiver.handle) returns CompileStep
-		self.resumeWhole()
-		self.resumeBracket()
-
-		match self.place 'place'
-			attributing then return self.afterAttribution(receiver)
-			writing then return self.afterWrite(receiver)
-			sidecar then return self.afterSidecar(receiver)
-			publishing then return self.afterPublish(receiver)
-			totaling then return self.afterTotals()
-			compiling or
-			finished then panic("JobRun.logFlushed: the log acknowledged a flush nothing was waiting for")
-		end 'place'
-	end 'logFlushed'
 
 	module function answer() returns isolated DriverAnswer
 		return DriverAnswer.of(self.outcomes.held().clone(), lines: self.session.diagnostics.capturedLines.clone(), lock: self.session.treeLock.holdings().clone())
@@ -262,15 +236,15 @@ module type JobRun
 			return self.failed(failure)
 		end 'noRoot'
 
-		attributeCompilerLogThen(self.unit, receiver: receiver.clone())
+		attributeCompilerLog(self.unit)
+		self.logFence.settle()
 
-		return CompileStep.awaiting
+		return self.afterAttribution(receiver)
 	end 'beginBuild'
 
 	function afterAttribution(receiver CompileReceiver.handle) returns CompileStep
 		let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: self.unit, spans: self.spans, treeLock: self.session.treeLock)
 		self.wholeProbes.fill(whole)
-		self.place = JobPlace.compiling
 
 		let project = try self.loadedBuildProject() otherwise (failure) 'unloaded'
 			return self.failed(failure)
@@ -348,7 +322,6 @@ module type JobRun
 		end 'uncreated'
 
 		self.projects.fill(project)
-		self.place = JobPlace.compiling
 
 		return self.startMachine(CompileGoal.codeResult, receiver: receiver)
 	end 'beginCheck'
@@ -369,14 +342,12 @@ module type JobRun
 		end 'refused'
 
 		self.outcomes.fill(DriverOutcome.warmed(reading))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'beginWarm'
 
 	function beginWarmCompile(slot String, goal WarmGoal, receiver CompileReceiver.handle) returns CompileStep
 		self.projects.fill(self.bench.projectIn(slot))
-		self.place = JobPlace.compiling
 
 		return self.startMachine(goalOfWarm(goal), receiver: receiver)
 	end 'beginWarmCompile'
@@ -411,7 +382,6 @@ module type JobRun
 		self.projects.fill(project)
 		let run = LexSweepRun.create(project, generationBase: self.bases.take())
 		self.sweeps.fill(run)
-		self.place = JobPlace.compiling
 
 		let step = try run.begin(receiver) otherwise (failure) 'refused'
 			run.abandon()
@@ -449,7 +419,6 @@ module type JobRun
 		end 'step'
 
 		self.outcomes.fill(DriverOutcome.swept(self.sweeps.held().landed))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'sweepStepped'
@@ -463,7 +432,6 @@ module type JobRun
 		end 'refused'
 
 		self.outcomes.fill(DriverOutcome.claimed(claims))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'beginClaims'
@@ -517,13 +485,13 @@ module type JobRun
 			return self.compileFailed(failure)
 		end 'failed'
 
-		return self.compiled(step, receiver: receiver)
+		return self.compiled(step)
 	end 'startMachine'
 
-	function compiled(step CompileStep, receiver CompileReceiver.handle) returns CompileStep
+	function compiled(step CompileStep) returns CompileStep
 		match step 'step'
 			awaiting then break
-			finished then return self.machineFinished(receiver)
+			finished then return self.machineFinished()
 		end 'step'
 
 		self.suspendWhole()
@@ -531,9 +499,9 @@ module type JobRun
 		return CompileStep.awaiting
 	end 'compiled'
 
-	function machineFinished(receiver CompileReceiver.handle) returns CompileStep
+	function machineFinished() returns CompileStep
 		match self.spec.work 'work'
-			build then return self.writeImage(receiver)
+			build then return self.writeImage()
 			check then return self.checkFinished()
 			warm then return self.warmFinished()
 			lexSweep or
@@ -557,7 +525,6 @@ module type JobRun
 		project.retiredWorkers.release()
 
 		self.outcomes.fill(DriverOutcome.warmed(self.bench.compiled(slot, image: self.warmImageOf(goal))))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'warmFinished'
@@ -581,7 +548,6 @@ module type JobRun
 		end 'failure'
 
 		self.outcomes.fill(DriverOutcome.warmed(self.bench.refused(slot)))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'warmFailed'
@@ -624,7 +590,6 @@ module type JobRun
 	function checkedOutcome(compiled bool, irText String) returns CompileStep
 		let standing = self.standingDiagnostics(compiled)
 		self.outcomes.fill(DriverOutcome.checked(compiled, diagnostics: standing, irText: irText))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'checkedOutcome'
@@ -651,18 +616,14 @@ module type JobRun
 		return project.diagnostics.clone()
 	end 'readStanding'
 
-	function writeImage(receiver CompileReceiver.handle) returns CompileStep
+	function writeImage() returns CompileStep
 		let written = try self.wroteImage() otherwise (failure) 'failed'
 			return self.buildFailed(failure)
 		end 'failed'
 
-		self.brackets.fill(written)
-		self.place = JobPlace.writing
-		self.suspendBracket()
-		self.suspendWhole()
-		flushCompilerLogThen(receiver.clone())
+		self.logFence.settle()
 
-		return CompileStep.awaiting
+		return self.afterWrite(written)
 	end 'writeImage'
 
 	function wroteImage() returns PhaseProbe throws CompileError
@@ -690,38 +651,27 @@ module type JobRun
 		return writeProbe
 	end 'wroteImage'
 
-	function afterWrite(receiver CompileReceiver.handle) returns CompileStep
+	function afterWrite(written PhaseProbe) returns CompileStep
 		let project = self.projects.held()
 		let tail = self.tails.held()
-		recordPhase(project, phase: CompilePhase.writeExe, probe: self.brackets.take())
+		recordPhase(project, phase: CompilePhase.writeExe, probe: written)
 
 		try requireOutputWritten(project, staged: tail.staging.image, outputPath: tail.outputPath) otherwise (failure) 'unwritten'
 			return self.buildFailed(failure)
 		end 'unwritten'
 
-		if not self.spec.debugInfo 'noSidecar'
-			return self.publishImage(receiver)
-		end 'noSidecar'
+		if self.spec.debugInfo 'withSidecar'
+			let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
+			tail.sidecar = writeDebugInfoSidecar(project, codeResult: self.machines.held().result.held(), outputPath: tail.staging.image)
 
-		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
-		tail.sidecar = writeDebugInfoSidecar(project, codeResult: self.machines.held().result.held(), outputPath: tail.staging.image)
+			self.logFence.settle()
+			recordPhase(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
+		end 'withSidecar'
 
-		self.brackets.fill(debugProbe)
-		self.place = JobPlace.sidecar
-		self.suspendBracket()
-		self.suspendWhole()
-		flushCompilerLogThen(receiver.clone())
-
-		return CompileStep.awaiting
+		return self.publishImage()
 	end 'afterWrite'
 
-	function afterSidecar(receiver CompileReceiver.handle) returns CompileStep
-		recordPhase(self.projects.held(), phase: CompilePhase.writeDebugInfo, probe: self.brackets.take())
-
-		return self.publishImage(receiver)
-	end 'afterSidecar'
-
-	function publishImage(receiver CompileReceiver.handle) returns CompileStep
+	function publishImage() returns CompileStep
 		let project = self.projects.held()
 		let tail = self.tails.held()
 		let publishProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
@@ -730,23 +680,12 @@ module type JobRun
 			return self.failed(failure)
 		end 'unpublished'
 
-		self.brackets.fill(publishProbe)
-		self.place = JobPlace.publishing
-		self.suspendBracket()
-		self.suspendWhole()
-		flushCompilerLogThen(receiver.clone())
+		self.logFence.settle()
+		recordPhase(project, phase: CompilePhase.prepareOutput, probe: publishProbe)
+		self.logFence.settle()
 
-		return CompileStep.awaiting
+		return self.afterTotals()
 	end 'publishImage'
-
-	function afterPublish(receiver CompileReceiver.handle) returns CompileStep
-		recordPhase(self.projects.held(), phase: CompilePhase.prepareOutput, probe: self.brackets.take())
-		self.place = JobPlace.totaling
-		self.suspendWhole()
-		flushCompilerLogThen(receiver.clone())
-
-		return CompileStep.awaiting
-	end 'afterPublish'
 
 	function afterTotals() returns CompileStep
 		let project = self.projects.held()
@@ -773,7 +712,6 @@ module type JobRun
 		compilerLogger(CompilerLogGroup.compiler).info("Wrote {tail.codeBytes} bytes of code to {tail.outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
 
 		self.outcomes.fill(DriverOutcome.built(CompileProduct.create(tail.outputPath, irText: tail.irText, codeBytes: tail.codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: tail.sidecar, drivesOtherProcesses: tail.drivesOtherProcesses)))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'afterTotals'
@@ -781,7 +719,6 @@ module type JobRun
 	function failed(failure CompileError) returns CompileStep
 		closeOpenPhaseSpans(self.spans, unit: self.unit)
 		self.outcomes.fill(DriverOutcome.failed(failure))
-		self.place = JobPlace.finished
 
 		return CompileStep.finished
 	end 'failed'
@@ -797,18 +734,6 @@ module type JobRun
 			self.wholeProbes.held().resume()
 		end 'opened'
 	end 'resumeWhole'
-
-	function suspendBracket()
-		if self.brackets.isFull() 'opened'
-			self.brackets.held().suspend()
-		end 'opened'
-	end 'suspendBracket'
-
-	function resumeBracket()
-		if self.brackets.isFull() 'opened'
-			self.brackets.held().resume()
-		end 'opened'
-	end 'resumeBracket'
 end 'JobRun'
 
 // `maxon.exe` -> `maxon<infix>.exe`; `maxon` -> `maxon<infix>`.
@@ -2119,7 +2044,6 @@ export interface CompileReceiver
 	function frontEndAnswered(mutable self, generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle)
 	function stdPassAnswered(mutable self, job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle)
 	function backendAnswered(mutable self, job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle)
-	function logFlushed(mutable self, receiver CompileReceiver.handle)
 end 'CompileReceiver'
 
 module let AnswerMailboxCapacity = InstrumentationMailboxCapacity
