@@ -512,11 +512,16 @@ many times a `sysmon` actually took a processor away from a machine stuck in the
 better order.** It is a `> 0` test rather than a fixed count deliberately: how many retakes a run needs is
 a scheduling detail, and pinning the number would make the case a hostage to the sysmon polling interval.
 
-⚠ **THE SENTINEL CAN ONLY RUN BY A RETAKE HERE, SO `retaken=no` IS A PROCESSOR THAT WAS NEVER HANDED OFF.** The
-read is released by the sentinel's own line, and at one processor the sentinel sits in the only processor's
-ring while the reader holds it inside the kernel. The line therefore appears only after a sysmon took the
-processor from the blocked machine, and `retaken=no` beside it would mean the order was bought some other
-way.
+⚠ **THE SENTINEL WAITS FOR THE READ, BECAUSE A PREEMPTED READER LETS IT RUN WITHOUT ANY RETAKE.** The monitor
+runs at one processor too: a host that holds the process off a core for 10 ms between the send and the read has
+`__sysmon` preempt the reader there, `__gt_preempt` puts the reader behind the sentinel, and an unconditional
+sentinel prints, the harness feeds the line, and the read returns at once — every line right, `retaken=no`,
+nothing handed off. So `ping` carries `Scheduler.counters().syscalls` as the reader saw it after `R: reading`,
+and the sentinel yields until the count has moved: the reader has entered a bracketed kernel call since the send,
+and the read is the only one there. A yielding sentinel gives the processor back to the reader, which enters the
+read; from then on the sentinel sits in the only processor's ring while the reader holds it inside the kernel, so
+its line appears only after a sysmon took the processor from the blocked machine, and `retaken=yes` names that.
+A processor that is never handed off leaves the sentinel unrun and the case times out.
 ```maxon
 function textOf(read LineOrEnd) returns String
 	return match read 'read'
@@ -536,7 +541,8 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
+		let entered = Scheduler.counters().syscalls
+		try sentinel.ping(entered) otherwise panic("an open mailbox with room takes the send")
 		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
 		print("R: read returned\n")
 
@@ -554,7 +560,11 @@ type Sentinel
 		return Self{n: 0}
 	end 'create'
 
-	export function ping()
+	export function ping(entered SchedulerEventCount)
+		while Scheduler.counters().syscalls <= entered 'readerOutsideTheKernel'
+			Scheduler.yield()
+		end 'readerOutsideTheKernel'
+
 		print("S: sentinel ran\n")
 	end 'ping'
 end 'Sentinel'
