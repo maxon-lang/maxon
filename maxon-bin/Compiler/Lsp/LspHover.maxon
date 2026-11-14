@@ -242,6 +242,7 @@ end 'HoverDeclarationSite'
 enum HoverDeclarationScope
 	everyDeclaration
 	visibleToAnotherFile
+	withoutMemberRoutines
 end 'HoverDeclarationScope'
 
 union HoverMemberOwner
@@ -564,16 +565,30 @@ module type HoverDocument
 	// --- Resolving a name ---------------------------------------------------------------------
 
 	function nameRendering(index ElementIndex) returns HoverRendering
-		let declared = declarationOf(tokenAt(index).value, near: index, scope: HoverDeclarationScope.everyDeclaration)
+		return renderingOfDeclaration(self.bareNameDeclaration(tokenAt(index).value, near: index))
+	end 'nameRendering'
 
-		match declared 'declared'
-			routine then return renderingOfDeclaration(self.preferringTheEnclosingTypesMember(declared, near: index))
+	function bareNameDeclaration(name ByteArray, near ElementIndex) returns HoverDeclaration
+		let nearest = declarationOf(name, near: near, scope: HoverDeclarationScope.everyDeclaration)
+
+		match nearest 'nearest'
+			routine then break
 			binding or
 			parameter or
 			typeName or
-			none then return renderingOfDeclaration(declared)
-		end 'declared'
-	end 'nameRendering'
+			none then return nearest
+		end 'nearest'
+
+		let free = declarationOf(name, near: near, scope: HoverDeclarationScope.withoutMemberRoutines)
+
+		match free 'free'
+			routine then return self.preferringTheEnclosingTypesMember(free, near: near)
+			binding or
+			parameter or
+			typeName or
+			none then return self.preferringTheEnclosingTypesMember(nearest, near: near)
+		end 'free'
+	end 'bareNameDeclaration'
 
 	// A bare call inside a type binds to the type's own method before a free function of that name. Any
 	// other declaration keeps the nearest-name answer: a local or parameter of that name shadows the method.
@@ -684,7 +699,8 @@ module type HoverDocument
 
 	function bindingDeclaredAt(index ElementIndex, scope HoverDeclarationScope) returns HoverDeclaration
 		match scope 'reach'
-			everyDeclaration then return HoverDeclaration.binding(index)
+			everyDeclaration or
+			withoutMemberRoutines then return HoverDeclaration.binding(index)
 			visibleToAnotherFile then return moduleLevelBindingAt(index)
 		end 'reach'
 	end 'bindingDeclaredAt'
@@ -705,15 +721,24 @@ module type HoverDocument
 	// Whether the `function` at `functionIndex` declares `name` — as the function itself, or as one of
 	// its parameters.
 	function functionDeclaring(functionIndex ElementIndex, name ByteArray, scope HoverDeclarationScope) returns HoverDeclaration
-		if signatureDeclares(functionIndex, name: name) 'thisFunction'
+		if signatureDeclares(functionIndex, name: name) and routineMayBeNamedIn(functionIndex, scope: scope) 'thisFunction'
 			return HoverDeclaration.routine(functionIndex)
 		end 'thisFunction'
 
 		match scope 'reach'
-			everyDeclaration then return parameterDeclaring(functionIndex, name: name)
+			everyDeclaration or
+			withoutMemberRoutines then return parameterDeclaring(functionIndex, name: name)
 			visibleToAnotherFile then return HoverDeclaration.none
 		end 'reach'
 	end 'functionDeclaring'
+
+	function routineMayBeNamedIn(functionIndex ElementIndex, scope HoverDeclarationScope) returns bool
+		return match scope 'reach'
+			everyDeclaration or
+			visibleToAnotherFile gives true
+			withoutMemberRoutines gives tokenAt(declarationStart(functionIndex)).column == TopLevelColumn
+		end 'reach'
+	end 'routineMayBeNamedIn'
 
 	function parameterDeclaring(functionIndex ElementIndex, name ByteArray) returns HoverDeclaration
 		let openIndex = try signatureListIndex(functionIndex) otherwise return HoverDeclaration.none
@@ -1232,7 +1257,7 @@ module type HoverDocument
 
 		match mathBuiltinNamed(name) 'reserved'
 			found(builtin) then return mathBuiltinReturnType(builtin)
-			absent then return returnTypeOfDeclaration(declarationOf(name, near: nameIndex, scope: HoverDeclarationScope.everyDeclaration))
+			absent then return returnTypeOfDeclaration(self.bareNameDeclaration(name, near: nameIndex))
 		end 'reserved'
 	end 'bareCalleeReturnType'
 
