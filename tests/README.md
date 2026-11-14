@@ -134,7 +134,10 @@ tests/
     refusals/<case>.maxtest      one malformed spec `spec-test` must REFUSE, found through `__file__`
     refusals/<case>/             refusal.md  expected-refusal.txt
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
-    gates/<case>/                the gate's one or two `.md`, or the program it runs as `main.maxon.fixture` (stored name only - see rule 1)
+    gates/<case>/                the gate's one or two `.md`
+    fedRun/FedRunProbe.maxon     the shared half of the fed-run cases: the probe's staging beside `maxon-bin/Testing/SpecFedRun.maxon`, its `execute` spawn, the verdict check
+    fedRun/<case>.maxtest        one or more probe scenarios whose printed verdict the case pins
+    fedRun/probe/main.maxon.fixture   the probe program every fed-run case runs, one scenario per argument - stored name only, see rule 1
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics, `buildRecordedProject` builds it again, and `expectBreakingChangeNotices` checks those diagnostics carry the record's notices
     RelayHarness.maxon           the shared half of the `relay-*` cases: a checkout staged around a fake slot compiler, and the swap, crash, flood and oversize triggers it obeys
@@ -766,7 +769,7 @@ import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/Dap
 `coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
 `cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
 `examples/ExamplesHarness.maxon`, `warmRebuild/WarmRebuildHarness.maxon`,
-`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon` and `mcp/McpHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
+`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon`, `specHarness/fedRun/FedRunProbe.maxon` and `mcp/McpHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
 as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and
 these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte literals inside its test files,
 `examples/`'s are string constants inside its case files, and the rest assert properties. A helper that
@@ -931,15 +934,23 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
-  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, a fed run
-  whose child leaves a process holding its pipes ending at its deadline with that process ended while a clean
-  child's run returns promptly with its whole output, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
+  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
   and a refused shard naming the live-network cases the whole directory left out, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.
-- **`corpus.maxtest`** holds the pairing: every fixture directory has its `<case>.maxtest` beside
-  it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.
+- **`fedRun/`** gates the harness's fed run (`maxon-bin/Testing/SpecFedRun.maxon`) and the standard
+  library's `runChildFedAfterLine` without `spec-test`: each case runs the one probe program in
+  `fedRun/probe/`, staged beside `SpecFedRun.maxon` and run through `execute`, and pins the line a scenario
+  prints. A child that leaves a process holding its pipes ends at the deadline with that process ended, a
+  clean child's run returns promptly with its whole output, a child that never reads its feed is judged by
+  its own exit, one that sleeps without reading a large feed ends at the deadline, and a run that ends at
+  its child's exit sees that exit while a process the child started writes without pause. The cases share
+  one fixture and keep a file each for the per-file deadline, so they are not gates: `corpus.maxtest` does
+  not pair them.
+- **`corpus.maxtest`** holds the pairing of `refusals/` and `gates/`: every fixture directory has its
+  `<case>.maxtest` beside it, every test file its fixture, and every refusal fixture exactly one spec and
+  its expectation.
 
 ⭐ **A TEST FILE FINDS ITS FIXTURE THROUGH `__file__`.** `refusals/<case>.maxtest` is one call to
 `requireRefusalFires()`, whose defaulted argument is the calling file's path, so a test file cannot name
