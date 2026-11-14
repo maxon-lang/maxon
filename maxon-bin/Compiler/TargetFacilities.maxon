@@ -5,9 +5,10 @@
 // *"x64-windows only"* there is no seam to land a family through: one family landing on a second target
 // makes the answer wrong for every other family at once. They are separated here:
 //
-//   • `calleeHostFacility(callee)` — the callee's requirement, and the door to E3104. One `HostFacility` or
-//     `none`; the per-family predicates it consults still live with their runtimes, so a band added to one
-//     of them is still gated by construction rather than by memory.
+//   • `calleeHostFacility(callee)` — the callee's requirement, and the door to E3104. One
+//     `HostFacility`, the sampling shape that builds the entry, or `none`; the per-family
+//     predicates it consults still live with their runtimes, so a band added to one of them is
+//     still gated by construction rather than by memory.
 //   • `targetProvidesFacility(target, facility)` — the target's capability. The table a BACKEND writes into
 //     when it lands a family, and the ONE place a lane's progress is recorded.
 //
@@ -233,11 +234,6 @@ export enum HostFacility
 	// wasm32-wasi installs none: its store through address 0 lands in linear memory and traps nothing.
 	faultHandler
 
-	// Reaching another process through Mach task ports (`__prof_mach_*`): `task_for_pid`, thread ports and
-	// their state. Its own facility because the services are Darwin's alone, and a lane that samples without
-	// them (Win32 handles, ptrace) must refuse a call that names one.
-	machTaskPorts
-
 	// Blocking the calling OS thread for a stated number of microseconds (`__prof_sleep_us`). Withheld where
 	// the host's shortest honourable wait is not that call: Windows quantises a waitable timer and its
 	// `shortSleep` yields the quantum instead, so a caller asking for microseconds would not get them.
@@ -248,6 +244,7 @@ end 'HostFacility'
 // needs nothing" is a case the caller must handle, not a sentinel it can forget to test.
 union CalleeFacility
 	needs(facility HostFacility)
+	samplesThrough(shape ProfileHostShape)
 	none
 end 'CalleeFacility'
 
@@ -425,14 +422,16 @@ end 'CalleeFacility'
 // which therefore reaches `checkCalls` with no name to key on. `awaitAny` is an ordinary named `call` op, so
 // it arrives there carrying the very name this predicate keys on and needs no second door.
 //
-// The PROCESS-SAMPLING band joins on the same terms and by the same PREFIX test. Its own reason is the
-// SHAPE argument in its sharpest form, and it is about a CPU as well as an OS: the sampled register file
-// arrives as the host's per-CPU record, so a lane claiming this row on the strength of its OS alone would not
-// fail — it would read unrelated words as a program counter and a frame chain, and hand back a confident
-// profile of nothing. Win32 thread handles, Mach task ports and `ptrace` are three mechanisms with three stop
-// protocols, and each is a body of its own (`ProfileRuntime.profileHostShapeOf`); none is a lowering. The
-// Mach-only entries (`__prof_mach_`) and the microsecond sleep are named ahead of the band, each for a
-// facility of its own, because a prefix band must not swallow a member that answers a different facility.
+// The PROCESS-SAMPLING band joins on the same terms and by the same PREFIX test. Its own reason is
+// the SHAPE argument in its sharpest form, and it is about a CPU as well as an OS: the sampled
+// register file arrives as the host's per-CPU record, so a lane claiming this row on the strength
+// of its OS alone would not fail — it would read unrelated words as a program counter and a frame
+// chain, and hand back a confident profile of nothing. Win32 thread handles, Mach task ports and
+// `ptrace` are three mechanisms with three stop protocols, and each is a body of its own
+// (`ProfileRuntime.profileHostShapeOf`); none is a lowering. The microsecond sleep is named ahead
+// of the band, for a facility of its own, because a prefix band must not swallow a member that
+// answers a different facility. Inside the band an entry that only one shape builds answers that
+// shape, because every native lane provides `processSampling` and builds only its own shape's.
 //
 function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	// The scheduler entries named individually: their bands hold calls the compiler inserts, so a
@@ -508,15 +507,15 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.pageMemory)
 	end 'theScratchRegion'
 
-	if isMachHostRuntimeCallee(callee) 'machTaskPortBand'
-		return CalleeFacility.needs(HostFacility.machTaskPorts)
-	end 'machTaskPortBand'
-
 	if callee.equals(ProfileSleepName) 'microsecondSleepBand'
 		return CalleeFacility.needs(HostFacility.microsecondSleep)
 	end 'microsecondSleepBand'
 
 	if isProfileRuntimeCallee(callee) 'processSamplingBand'
+		if let shape = try profileEntryShape(callee) 'builtForOneShape'
+			return CalleeFacility.samplesThrough(shape)
+		end 'builtForOneShape'
+
 		return CalleeFacility.needs(HostFacility.processSampling)
 	end 'processSamplingBand'
 
@@ -643,9 +642,16 @@ end 'isServiceOpEntry'
 export function calleeNeedsFacilityTargetLacks(target Target, callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'
 		needs(facility) gives not targetProvidesFacility(target, facility: facility)
+		samplesThrough(shape) gives not targetSamplesThrough(target, shape: shape)
 		none gives false
 	end 'f'
 end 'calleeNeedsFacilityTargetLacks'
+
+function targetSamplesThrough(target Target, shape ProfileHostShape) returns bool
+	let served = try profileHostShapeOf(target) otherwise return false
+
+	return served == shape
+end 'targetSamplesThrough'
 
 module function targetParksOnIo(target Target) returns bool
 	return targetProvidesFacility(target, facility: HostFacility.greenThreads)
@@ -661,7 +667,8 @@ end 'pinDestructIsInert'
 
 export function calleeHasHostFacility(callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'
-		needs gives true
+		needs or
+		samplesThrough gives true
 		none gives false
 	end 'f'
 end 'calleeHasHostFacility'
@@ -716,7 +723,6 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processSampling or
 			processDebug gives true
 
-			machTaskPorts or
 			microsecondSleep gives false
 		end 'f'
 	end 'windowsX64'
@@ -777,7 +783,6 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			faultHandler or
 			uptimeClock or
 			processSampling or
-			machTaskPorts or
 			microsecondSleep gives true
 
 			// ⛔ `processDebug`: debugging another process here is the `mach_port`/`task_for_pid` protocol and a
@@ -855,7 +860,6 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			processDebug gives true
 
-			machTaskPorts or
 			trustStore gives false
 		end 'f'
 	end 'linuxArm64'
@@ -920,7 +924,6 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			processDebug gives true
 
-			machTaskPorts or
 			trustStore gives false
 		end 'f'
 	end 'linuxX64'
@@ -970,7 +973,6 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			terminalDetection or
 			sharedMemory or
 			processSampling or
-			machTaskPorts or
 			microsecondSleep or
 			processDebug or
 			trustStore or
@@ -1031,16 +1033,3 @@ module function machineModel(target Target) returns MachineModel
 
 	panic("machineModel: no machine model is stated for target {targetToString(target)}")
 end 'machineModel'
-
-// The per-function short-circuit `SemanticCheck.checkCalls` settles once and hands to every call
-// op. A walk over `allCases` rather than `x64 and windows`, so a lane that completes the table
-// becomes true here without anyone widening a hard-coded pair.
-export function targetProvidesEveryFacility(target Target) returns bool
-	for facility in HostFacility.allCases 'each'
-		if not targetProvidesFacility(target, facility: facility) 'missing'
-			return false
-		end 'missing'
-	end 'each'
-
-	return true
-end 'targetProvidesEveryFacility'

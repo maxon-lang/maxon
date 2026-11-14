@@ -788,7 +788,7 @@ module type WitnessEvidenceLedger
 			return
 		end 'nothingToCredit'
 
-		let callResults = self.callResultsOf(func, module: module, project: project, stdlib: stdlib)
+		let callResults = self.callResultsOf(func, module: module, stdlib: stdlib)
 
 		for position in 0 upto callResults.values.count() 'eachCallResult'
 			self.mentions.gatherValue(func, value: try callResults.values.get(position) otherwise panic("WitnessEvidenceLedger.noteMentionsOf: values.get OOB at {position}"), project: project, signatures: signatures)
@@ -799,8 +799,8 @@ module type WitnessEvidenceLedger
 		self.noteMentionCredits(WitnessBlame.functionName, project: project, signatures: signatures)
 	end 'noteMentionsOf'
 
-	function callResultsOf(func IrFunction, module MaxonModule, project Project, stdlib FunctionNameSet) returns LibraryCallResults
-		if targetProvidesEveryFacility(project.target) or stdlib.contains(func.name) 'noOpIsBlamed'
+	function callResultsOf(func IrFunction, module MaxonModule, stdlib FunctionNameSet) returns LibraryCallResults
+		if stdlib.contains(func.name) 'noOpIsBlamed'
 			return self.noCallResults
 		end 'noOpIsBlamed'
 

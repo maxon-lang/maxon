@@ -940,6 +940,26 @@ ended 137
 0
 ```
 
+<!-- test: a-seized-table-is-opened-and-dropped-where-the-lane-has-one -->
+<!-- tier: stdlib -->
+The seized table is the Linux lanes': a table opened with no pin maps its pages, and dropping it frees them. A lane
+with no seized table has no implementation for the entries that open one, and refuses the program with E3104.
+
+```maxon
+function main() returns ExitCode
+	let table = __ManagedHandle.adopting(__Builtins.profileSeizedOpen(1, 0))
+	print("held {table.handle() != 0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+held true
+```
+```exitcode
+0
+```
+
 <!-- test: a-dropped-machine-pin-unpins-its-green-thread -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->

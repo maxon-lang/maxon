@@ -2443,16 +2443,6 @@ end 'pushSuccessorPair'
 // flat op array) so each call's diagnostic can name its declaring file (`func.sourceFilePath`);
 // the flat op INDEX still keys the call-site span in `project.opRanges`. Calls are body
 // ops (never terminators), so only `block.opRefs` is scanned.
-// ⭐ **WHO IS BLAMED FOR A TARGET-UNSUPPORTED CONSTRUCT — the rule, once, for the two passes that ask it.**
-// Both conditions are constant for a whole function: the target must be one that can refuse anything at all
-// (on x64-windows nothing is, and the short-circuit spares every other program the name hash), and the
-// function must be USER source, because a stdlib body's substrate requirement is reported at the user call
-// that crossed INTO stdlib and repeating it here would position a second diagnostic in a file the user never
-// opened.
-function blameTargetErrorsIn(project Project, func IrFunction) returns bool
-	return not targetProvidesEveryFacility(project.target) and not isLibraryFunction(project, func: func)
-end 'blameTargetErrorsIn'
-
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, facts CapabilityFacts, calls CallSummaryIndex) throws CompileError
 	let witnessSlots = WitnessSlotsByDeclIndex.create()
 
@@ -2471,19 +2461,10 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 			continue
 		end 'notInTheProgram'
 
-		// ⭐ **WHO IS BLAMED FOR A TARGET-UNSUPPORTED CALLEE, DECIDED ONCE PER FUNCTION.** Two conditions,
-		// both constant for a whole function, so both are settled here rather than at every call op:
-		//
-		//   • the TARGET must be one that can refuse anything at all. On x64-windows nothing is, and the
-		//     second question below costs a hash of the function's name — once per function of the whole
-		//     program — so the `and` short-circuits it away on the default target.
-		//   • the function must be USER source. A stdlib body is checked like any other EXCEPT for the
-		//     E3104 target gate: its substrate requirement is reported at the USER call that crossed INTO
-		//     stdlib (`requireTargetSupportsCallee`), and repeating it here would position a second
-		//     diagnostic at `stdlib/Clock.maxon:L:C` — a file the user never opened and cannot change.
-		//     Keyed on stdlib-vs-user source, the fact that stays true as stdlib grows from one module to
-		//     all of it.
-		let blameTargetErrorsHere = blameTargetErrorsIn(project, func: func)
+		// A library body's substrate requirement is reported at the user call that crossed into it
+		// (`requireTargetSupportsCallee`); blaming it here too would position a second diagnostic in a
+		// file the user never opened.
+		let blameTargetErrorsHere = not isLibraryFunction(project, func: func)
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
@@ -3831,7 +3812,7 @@ function reportSpawnOfNonYielding(project Project, callee ByteArray, opIndex Ele
 	let calleeYieldsSomewhere = try yields.get(calleeIndex) otherwise panic("reportSpawnOfNonYielding: yields.get({calleeIndex}) OOB below count {yields.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")
 
 	if calleeYieldsSomewhere 'itCanSuspend'
-		requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: blameTargetErrorsIn(project, func: func))
+		requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: not isLibraryFunction(project, func: func))
 		return
 	end 'itCanSuspend'
 
@@ -4773,10 +4754,6 @@ end 'opIsTheCompilersOwn'
 // the two part company for a primitive-static mint, and the caller has already resolved which is which
 // (`callDiagnosticNoun`). They are the same bytes for every other callee, at no cost.
 function requireTargetSupportsCallee(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray, noun ByteArray, blameTargetErrorsHere bool)
-	// ⚠ `blameTargetErrorsHere` already carries BOTH preconditions — the target can refuse something, and
-	// this function is where such a refusal belongs — because both are constant per function and this runs
-	// at every call op of the program. Do not re-ask the target here: that would be one fact tested in two
-	// places, and the cheap one is the one the caller already settled.
 	if not blameTargetErrorsHere or opIsTheCompilersOwn(project, func: func, opIndex: opIndex) 'nothingRefusableHere'
 		return
 	end 'nothingRefusableHere'
@@ -4795,7 +4772,7 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex E
 end 'requireTargetSupportsCallee'
 
 function requireTargetSupportsLiveWitnesses(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
-	if targetProvidesEveryFacility(project.target) or project.libraryFacts.substrateEntries.count() == 0 'nothingRefusableHere'
+	if project.libraryFacts.substrateEntries.count() == 0 'nothingRefusableHere'
 		return
 	end 'nothingRefusableHere'
 
@@ -4803,7 +4780,7 @@ function requireTargetSupportsLiveWitnesses(project Project, module MaxonModule,
 		try requireStillWanted(project)
 		let func = try module.functions.get(funcIndex) otherwise panic("requireTargetSupportsLiveWitnesses: functions.get OOB at {funcIndex} below its own count")
 
-		if not blameTargetErrorsIn(project, func: func) 'notUserSource'
+		if isLibraryFunction(project, func: func) 'notUserSource'
 			continue
 		end 'notUserSource'
 
@@ -4894,9 +4871,6 @@ end 'reportSubstrateCrossing'
 // whether the name needs the substrate; this one is handed an OP whose entry is already known, and
 // only the TARGET is in question. Both end at `reportTargetUnsupportedCallee`, which is the one
 // wire format.
-//
-// ⚠ `blameTargetErrorsHere` carries both preconditions for `requireTargetSupportsCallee`'s stated reason —
-// it is constant per function and the caller has already settled it — so the target is not re-asked here.
 function requireTargetSupportsServiceEntry(project Project, func IrFunction, opIndex ElementIndex, subject String, entry ByteArray, blameTargetErrorsHere bool)
 	if not blameTargetErrorsHere or opIsTheCompilersOwn(project, func: func, opIndex: opIndex) 'nothingRefusableHere'
 		return

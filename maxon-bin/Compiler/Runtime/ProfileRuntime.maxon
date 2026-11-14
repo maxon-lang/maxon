@@ -9,10 +9,13 @@
 // ABOVE these entries — the tick schedule, the thread table, the frame walk, the aggregation, the report —
 // is plain Maxon, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
 //
-// ⚠ **THE LANES THAT SERVE THIS ARE `TargetFacilities.processSampling`'s, and a call site on any other is
-// refused** with E3104, matched on the `__prof_` PREFIX — so an entry point added here later is gated by
-// construction rather than by memory. That row names a CPU as well as an OS: the register file arrives in
-// the host's per-CPU record, whose program-counter, stack and frame displacements are that CPU's.
+// ⚠ **THE LANES THAT SERVE THIS ARE `TargetFacilities.processSampling`'s, and a call site on any
+// other is refused** with E3104, matched on the `__prof_` PREFIX. An entry that only one host shape
+// builds is also refused on the other shapes' lanes, by its shape's roster (`profileEntryShape`),
+// and an installer that builds a name no roster assigns to its shape panics
+// (`requireOnShapeRoster`) — so an entry point added here later is gated by construction rather
+// than by memory. That row names a CPU as well as an OS: the register file arrives in the host's
+// per-CPU record, whose program-counter, stack and frame displacements are that CPU's.
 //
 // ⭐⭐ **THE SCRATCH REGIONS ARE PAGES, NOT MANAGED BUFFERS, AND THAT IS WHAT MAKES WIN32'S
 // `GetThreadContext` WORK.** A `CONTEXT` carries XMM state and the API REJECTS a pointer that is not
@@ -22,7 +25,7 @@
 // reservation.
 
 // The `__prof_` prefix that identifies EVERY sampling entry point — the one test `scanRuntimeUsage` reads to
-// set `usesProcessSampling`, and the one `TargetFacilities` reads for E3104.
+// set `usesProcessSampling`, and the band `TargetFacilities` reads for E3104.
 let ProfileRuntimePrefix = b"__prof_"
 let ProfilePagesPrefix = b"__prof_pages_"
 
@@ -150,18 +153,88 @@ export function isProfileRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProfileRuntimePrefix)
 end 'isProfileRuntimeCallee'
 
-export union ProfileHostShape
+export enum ProfileHostShape
 	win32
 	mach
 	ptrace
 end 'ProfileHostShape'
 
-export function profileHostShapeOf(target Target) returns ProfileHostShape
+enum Win32SamplingEntry
+	openTarget
+	nextThread
+	threadId
+	threadCycles
+	sample
+	timerCreate
+	timerWait
+	timerOpen
+	moduleSnapshot
+	moduleFirst
+	moduleNext
+	queryProcess
+	readRemote
+end 'Win32SamplingEntry'
+
+function win32SamplingEntryName(entry Win32SamplingEntry) returns immutable ByteArray
+	return match entry 'named'
+		openTarget gives ProfileOpenTargetName
+		nextThread gives ProfileNextThreadName
+		threadId gives ProfileThreadIdName
+		threadCycles gives ProfileThreadCyclesName
+		sample gives ProfileSampleName
+		timerCreate gives ProfileTimerCreateName
+		timerWait gives ProfileTimerWaitName
+		timerOpen gives ProfileTimerOpenName
+		moduleSnapshot gives ProfileModuleSnapshotName
+		moduleFirst gives ProfileModuleFirstName
+		moduleNext gives ProfileModuleNextName
+		queryProcess gives ProfileQueryProcessName
+		readRemote gives ProfileReadRemoteName
+	end 'named'
+end 'win32SamplingEntryName'
+
+export function profileEntryShape(callee ByteArray) returns ProfileHostShape throws AbsentError
+	if isMachHostRuntimeCallee(callee) 'machEntry'
+		return ProfileHostShape.mach
+	end 'machEntry'
+
+	for entry in Win32SamplingEntry.allCases 'eachWin32Entry'
+		if callee.equals(win32SamplingEntryName(entry)) 'aWin32Entry'
+			return ProfileHostShape.win32
+		end 'aWin32Entry'
+	end 'eachWin32Entry'
+
+	for entry in PtraceSamplingEntry.allCases 'eachPtraceEntry'
+		if callee.equals(ptraceSamplingEntryName(entry)) 'aPtraceEntry'
+			return ProfileHostShape.ptrace
+		end 'aPtraceEntry'
+	end 'eachPtraceEntry'
+
+	throw AbsentError.absent
+end 'profileEntryShape'
+
+function requireOnShapeRoster(name ByteArray, shape ProfileHostShape)
+	if name.equals(ProfileSleepName) 'theMicrosecondSleep'
+		return
+	end 'theMicrosecondSleep'
+
+	let owner = try profileEntryShape(name) otherwise panic("installProfileRuntime: the {shape.name} installer built '{String.from(name)}', which no sampling roster names — `TargetFacilities.calleeHostFacility` would answer it `processSampling`, so a lane sampling through another shape would accept a call to it and reach its backend with no such function")
+
+	if owner != shape 'anotherShapesEntry'
+		panic("installProfileRuntime: the {shape.name} installer built '{String.from(name)}', which `profileEntryShape` assigns to {owner.name}")
+	end 'anotherShapesEntry'
+end 'requireOnShapeRoster'
+
+export function profileHostShapeOf(target Target) returns ProfileHostShape throws AbsentError
+	if not targetProvidesFacility(target, facility: HostFacility.processSampling) 'noSampler'
+		throw AbsentError.absent
+	end 'noSampler'
+
 	return match target.os 'os'
 		windows gives ProfileHostShape.win32
 		macos gives ProfileHostShape.mach
 		linux gives ProfileHostShape.ptrace
-		wasi panic("profileHostShapeOf: {targetToString(target)} provides no way to sample another process, and `targetProvidesFacility` answers `processSampling` false for it — a program reaching here would be built asking for entries this lane lays out no chunk for")
+		wasi panic("profileHostShapeOf: {targetToString(target)} provides no way to sample another process, yet `targetProvidesFacility` answers `processSampling` true for it")
 	end 'os'
 end 'profileHostShapeOf'
 
@@ -804,18 +877,23 @@ export function installProfileRuntime(module StdModule, usage RuntimeUsage, cont
 	// The helpers above need only `pageMemory` (`isHostScratchRuntimeCallee`), which wasm32-wasi
 	// provides, so they are built on every lane; the host entries below only where the target samples
 	// processes.
-	if not targetProvidesFacility(target, facility: HostFacility.processSampling) 'noSamplingSubstrate'
+	let shape = try profileHostShapeOf(target) otherwise 'noSamplingSubstrate'
 		buildInertHandleDestruct(module, name: ProfileHandleDestructName)
 		return
 	end 'noSamplingSubstrate'
 
-	let shape = profileHostShapeOf(target)
+	let shapeEntriesStart = module.functions.count()
 
 	match shape 'shape'
 		win32 then installWin32SamplingEntries(module, layout: context)
 		mach then installMachSamplingEntries(module, layout: context)
 		ptrace then installPtraceSamplingEntries(module, layout: context, schedulerPresent: usage.usesGt)
 	end 'shape'
+
+	for index in shapeEntriesStart upto module.functions.count() 'eachShapeEntry'
+		let built = try module.functions.get(index) otherwise panic("installProfileRuntime: functions.get OOB at {index} below its own count")
+		requireOnShapeRoster(built.name, shape: shape)
+	end 'eachShapeEntry'
 
 	buildProfileClose(module, shape: shape)
 	buildProfileHandleAdopt(module)
@@ -825,22 +903,26 @@ export function installProfileRuntime(module StdModule, usage RuntimeUsage, cont
 end 'installProfileRuntime'
 
 function installWin32SamplingEntries(module StdModule, layout HostContextLayout)
-	buildProfileOpenTarget(module)
-	buildProfileNextThread(module)
-	buildHostProcessEntry(module, name: ProfileThreadIdName, words: HostProcessOneWord, service: HostProcessCall.threadId)
-	buildProfileThreadCycles(module)
-	buildProfileSample(module, layout: layout)
-	buildProfileTimerCreate(module)
-	buildProfileTimerWait(module)
-	buildProfileTimerOpen(module)
-	buildProfileModuleSnapshot(module)
+	for entry in Win32SamplingEntry.allCases 'eachEntry'
+		match entry 'builder'
+			openTarget then buildProfileOpenTarget(module)
+			nextThread then buildProfileNextThread(module)
+			threadId then buildHostProcessEntry(module, name: ProfileThreadIdName, words: HostProcessOneWord, service: HostProcessCall.threadId)
+			threadCycles then buildProfileThreadCycles(module)
+			sample then buildProfileSample(module, layout: layout)
+			timerCreate then buildProfileTimerCreate(module)
+			timerWait then buildProfileTimerWait(module)
+			timerOpen then buildProfileTimerOpen(module)
+			moduleSnapshot then buildProfileModuleSnapshot(module)
 
-	// The entries leave MODULEENTRY32's `dwSize` to the caller, which reserved the record: an unsized
-	// record is refused (`stdlib/Sampler.maxon`'s `ModuleEntryBytes`).
-	buildHostProcessEntry(module, name: ProfileModuleFirstName, words: HostProcessTwoWords, service: HostProcessCall.moduleFirst)
-	buildHostProcessEntry(module, name: ProfileModuleNextName, words: HostProcessTwoWords, service: HostProcessCall.moduleNext)
-	buildHostProcessEntry(module, name: ProfileQueryProcessName, words: HostProcessFourWords, service: HostProcessCall.queryProcessInformation)
-	buildHostProcessEntry(module, name: ProfileReadRemoteName, words: HostProcessFourWords, service: HostProcessCall.readProcessMemory)
+			// The entries leave MODULEENTRY32's `dwSize` to the caller, which reserved the record:
+			// an unsized record is refused (`Sampler`'s `ModuleEntryBytes`).
+			moduleFirst then buildHostProcessEntry(module, name: ProfileModuleFirstName, words: HostProcessTwoWords, service: HostProcessCall.moduleFirst)
+			moduleNext then buildHostProcessEntry(module, name: ProfileModuleNextName, words: HostProcessTwoWords, service: HostProcessCall.moduleNext)
+			queryProcess then buildHostProcessEntry(module, name: ProfileQueryProcessName, words: HostProcessFourWords, service: HostProcessCall.queryProcessInformation)
+			readRemote then buildHostProcessEntry(module, name: ProfileReadRemoteName, words: HostProcessFourWords, service: HostProcessCall.readProcessMemory)
+		end 'builder'
+	end 'eachEntry'
 end 'installWin32SamplingEntries'
 
 function installPtraceSamplingEntries(module StdModule, layout HostContextLayout, schedulerPresent bool)

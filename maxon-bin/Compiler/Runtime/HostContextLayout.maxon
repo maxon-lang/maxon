@@ -145,13 +145,13 @@ export type HostContextLayout
 		layout.contextRbpOffset = rbpOffset
 		layout.suspendThreadFailed = signatures.integerConstantIn(SuspendThreadFailedName, filePath: debuggee)
 
-		if not targetProvidesFacility(target, facility: HostFacility.processSampling) 'noSampler'
+		let shape = try profileHostShapeOf(target) otherwise 'noSampler'
 			return layout
 		end 'noSampler'
 
 		let sampler = librarySourcePath(project, fileName: SamplerStdlibFileName)
 
-		match profileHostShapeOf(target) 'shape'
+		match shape 'shape'
 			win32 then layout.readWin32Sampler(signatures, sampler: sampler, debuggeeRip: ripOffset, debuggeeRsp: rspOffset, debuggeeRbp: rbpOffset)
 			mach then layout.readMachSampler(signatures, sampler: sampler)
 			ptrace then layout.readPtraceSampler(signatures, sampler: sampler, debuggee: debuggee)

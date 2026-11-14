@@ -176,13 +176,14 @@ are the gate.
 The answer is closed over tier-to-tier calls, because tier bodies are in the merged Maxon module and
 `markMaxonCalleeEdge` filters no callee by provenance.
 
-⚠ The two errors are not alike. A tier name credited reached that is then swept costs bytes: its calls set
-`RuntimeUsage` bits for code the program does not contain, and no diagnostic results because
-`SemanticCheck.blameTargetErrorsIn` is false inside library code. A name filed unreached whose body ships
-calls into a floor, a host chunk or an import nothing installed — a link failure. So a name is filed
-unreached only on the walk's positive evidence, every unmodelled edge resolves to reached, and
-`DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics by name if elimination keeps a body
-filed unreached.
+⚠ The two errors are not alike. A tier name credited reached that is then swept costs bytes: its
+calls set `RuntimeUsage` bits for code the program does not contain, and no diagnostic results
+because a target error is blamed only in user source, at the call that crosses into library code. A
+name filed unreached whose body ships calls into a floor, a host chunk or an import nothing
+installed — a link failure. So a name is filed unreached only on the walk's positive evidence, every
+unmodelled edge resolves to reached, and
+`DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics by name if elimination keeps a
+body filed unreached.
 
 ### The compiler-called roster
 

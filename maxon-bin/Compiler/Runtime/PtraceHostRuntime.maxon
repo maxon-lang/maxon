@@ -16,10 +16,28 @@ let SeizedKillWordBytes = 8
 let SeizedKillByteBits = 8
 let SeizedKilled = 1
 
+export enum PtraceSamplingEntry
+	seizedOpen
+	seizedRelease
+	seizedKill
+end 'PtraceSamplingEntry'
+
+export function ptraceSamplingEntryName(entry PtraceSamplingEntry) returns immutable ByteArray
+	return match entry 'named'
+		seizedOpen gives ProfileSeizedOpenName
+		seizedRelease gives ProfileSeizedReleaseName
+		seizedKill gives ProfileSeizedKillName
+	end 'named'
+end 'ptraceSamplingEntryName'
+
 export function installPtraceHostRuntime(module StdModule, layout HostContextLayout, schedulerPresent bool)
-	buildSeizedOpen(module, layout: layout, schedulerPresent: schedulerPresent)
-	buildSeizedRelease(module, layout: layout, schedulerPresent: schedulerPresent)
-	buildSeizedKill(module, layout: layout)
+	for entry in PtraceSamplingEntry.allCases 'eachEntry'
+		match entry 'builder'
+			seizedOpen then buildSeizedOpen(module, layout: layout, schedulerPresent: schedulerPresent)
+			seizedRelease then buildSeizedRelease(module, layout: layout, schedulerPresent: schedulerPresent)
+			seizedKill then buildSeizedKill(module, layout: layout)
+		end 'builder'
+	end 'eachEntry'
 end 'installPtraceHostRuntime'
 
 function emitSeizedUnpin(module StdModule, func IrFunction, block IrBlock, pinToken ValueId, whenDone IrBlock, schedulerPresent bool, ids ValueMinter)

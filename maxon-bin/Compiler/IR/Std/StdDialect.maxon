@@ -3193,12 +3193,13 @@ export union StdOp
 	// region query, a memory copy, a thread list), so the op must order against every load and store around
 	// it. Full call-barrier metadata otherwise: it IS an indirect call once lowered.
 	//
-	// ⭐ Gated by `HostFacility.processSampling` and `HostFacility.machTaskPorts` for the sampler's services
-	// and `HostFacility.processDebug` for the debugger's — and the gates name the CPU as well as the OS,
-	// because the register file each reads is a per-CPU record. A backend lowers the services its lane
-	// serves (Win32 imports on x64-windows, the Mach calls on arm64-macOS, the `ptrace` chunks on Linux) and
-	// panics on the rest rather than stubbing them: a stub would symbolize unrelated words as a program
-	// counter and a frame chain and hand back a confident profile of nothing.
+	// ⭐ Gated by `HostFacility.processSampling` and the shape that builds each entry for the
+	// sampler's services and `HostFacility.processDebug` for the debugger's — and the gates name
+	// the CPU as well as the OS, because the register file each reads is a per-CPU record. A
+	// backend lowers the services its lane serves (Win32 imports on x64-windows, the Mach calls on
+	// arm64-macOS, the `ptrace` chunks on Linux) and panics on the rest rather than stubbing them:
+	// a stub would symbolize unrelated words as a program counter and a frame chain and hand back a
+	// confident profile of nothing.
 	osHostProcess(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// ⭐⭐ **THE SCHEDULER'S POLLER AND ITS CLOCK, AS ONE FAMILY OP** — `osNetpoll(result, verb, a0…a4) -> the
