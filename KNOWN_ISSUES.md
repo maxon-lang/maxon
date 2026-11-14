@@ -50,7 +50,7 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 ## ProgramSignatures.reassembled leaves two fields at their defaults on a worker's copy
 - priority: normal
 - status: open
-- where: maxon-bin/Compiler/SignatureIndex.maxon:44186
+- where: maxon-bin/Compiler/SignatureIndex.maxon:8975
 - seen: the spec-suite speed plan's L3c review, by reading; the constructor omits
   corpusByRefConventionDigestAnswer and liveSpawnedTypeNames. No wrong answer was found: parse keys are
   computed on the main thread and the second field is refilled when reach is full.
@@ -59,7 +59,7 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 ## The corpus-only function-valued field names classify a type by name, not by declaring file
 - priority: normal
 - status: open
-- where: maxon-bin/Compiler/SignatureIndex.maxon:18836
+- where: maxon-bin/Compiler/SignatureIndexSettle.maxon:1696
 - seen: the spec-suite speed plan's L3c review, by reading; computedFunctionValuedFieldNames(corpusOnly: true)
   asks stdlibDeclaredTypeNames, so a scriptlib type landing in that set would have its field names treated
   as the corpus's own. Not run.
@@ -68,7 +68,7 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 ## Two signature hash marks hold the same value
 - priority: normal
 - status: open
-- where: maxon-bin/Compiler/SignatureIndex.maxon:46239
+- where: maxon-bin/Compiler/SignatureIndex.maxon:9396
 - seen: the spec-suite speed plan's L3c documenter pass, by reading; DeclShapeGenericInstances and
   LivenessMutableFunctionValues are both 0x3C6EF372FE94F82B, and the comment above the marks says a new
   one is checked against all of them by hand. They feed different chains and no wrong answer was found.
