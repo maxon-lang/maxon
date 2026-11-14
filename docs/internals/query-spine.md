@@ -121,9 +121,11 @@ the library's tokens, `#if` views and producer masks, keyed by content hash. Eac
 library baselines and the opened disk packs live in the `SharedLibraryCache`, one frozen store for the process,
 held as a registry `default`: every compile reads that one store, and a change publishes a whole successor in
 its place, retried until it lands (`publishToSharedLibrary`). It holds at most 512 files (`MostSharedFiles`) with
-at most 6 parse variants of one file (`MostKeysPerLibraryParse`), 8 baselines and 24 packs, and past a bound it
-drops the entry published longest ago. Only a miss publishes, so a hit changes neither the store nor the order
-of eviction. A parse embeds
+at most 6 parse variants of one file (`MostKeysPerLibraryParse`, one of them from a staged tier), 4 baselines of the
+installed tiers and 2 of a staged tier, and 24 packs, and past a bound it drops the entry of that kind or tier
+published longest ago. A staged tier is a `stdlib/` and `runtime/` copy other than the compiler's own, which only the
+project staged over it asks for again, so its entries never displace an installed tier's. Only a miss publishes,
+so a hit changes neither the store nor the order of eviction. A parse embeds
 index-numbered facts the asking program's own declarations shift (type-name ids, generic-instance ids, the
 interface indexes witness dispatches carry), so a held parse records a footprint of them, taken while its
 names are still file-local, and a hit is rebased onto the current program; a row or a told answer that moved
@@ -170,7 +172,8 @@ The codecs are generated into the compiler's sources by `scripts/library-cache/g
 the generator runs again.
 
 The tier is bounded: each kind keeps its 4 newest entries (16 for parses), a process holds at most 4
-baselines, and the 16 most recently written compiler lineages (one per compiler path and target) are kept.
+baselines of the installed tiers and 2 of a staged one, and the 16 most recently written compiler lineages (one
+per compiler path and target) are kept.
 The sweep that enforces the lineage bound, and removes builds of the same lineage and cache formats a
 newer compiler superseded, runs when a compiler build first creates its own directory in the cache, so a
 compile in steady state does not walk the host's shared cache directories and its allocation counts do not

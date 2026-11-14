@@ -509,7 +509,7 @@ function sharedParseFor(project Project, contentHash HashDigest, variant HashDig
 	end 'fileShared'
 
 	let shared = freeze (try decodedParseFor(project, contentHash: contentHash, variant: variant, key: key, libraryHash: libraryHash)).clone()
-	publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: shared))
+	publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: shared, entryClass: project.session.fileMemos.library.entryClassOf(project)))
 
 	return shared
 end 'sharedParseFor'
@@ -659,11 +659,12 @@ end 'persistedCanonicalParse'
 export function publishStandingParses(project Project)
 	let pending = project.db.pendingSharedParses
 	var published = 0 as QueryCount
+	let entryClass = project.session.fileMemos.library.entryClassOf(project)
 
 	project.db.pendingSharedParses = PendingSharedParseMap.create()
 
 	for (contentHash, standing) in pending 'eachPending'
-		publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: freeze standing.clone()))
+		publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: freeze standing.clone(), entryClass: entryClass))
 		published = published + 1
 	end 'eachPending'
 

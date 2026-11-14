@@ -1,4 +1,4 @@
-module typealias FrozenParseArray = Array with immutable SharedLibraryParse
+module typealias FrozenParseArray = Array with immutable HeldParse
 module typealias FrozenFileParseMap = Map with (HashDigest, immutable FileParses)
 module typealias FrozenBaselineArray = Array with immutable HeldBaseline
 module typealias FrozenPackMap = Map with (String, immutable LibraryPack)
@@ -6,9 +6,20 @@ module typealias RecentDigestArray = Array with HashDigest
 module typealias RecentNameArray = Array with String
 
 let MostSharedFiles = 512
-let MostSharedBaselines = 8
+let MostSharedInstalledBaselines = 4
+let MostSharedStagedBaselines = 2
 let MostSharedPacks = 24
 module let MostKeysPerLibraryParse = 6
+let MostStagedKeysPerLibraryParse = 1
+
+module type HeldParse
+	module let entryClass as LibraryEntryClass
+	module let parse as immutable SharedLibraryParse
+
+	module static function of(entryClass LibraryEntryClass, parse immutable SharedLibraryParse) returns HeldParse
+		return Self{entryClass: entryClass, parse: parse}
+	end 'of'
+end 'HeldParse'
 
 module type FileParses
 	let parses as FrozenParseArray
@@ -19,8 +30,8 @@ module type FileParses
 
 	module function answering(variant HashDigest, key HashDigest) returns immutable SharedLibraryParse throws SharedMemoMiss
 		for held in self.parses 'eachHeld'
-			if held.answers(variant, wantedKey: key) 'thisParse'
-				return held
+			if held.parse.answers(variant, wantedKey: key) 'thisParse'
+				return held.parse
 			end 'thisParse'
 		end 'eachHeld'
 
@@ -30,8 +41,8 @@ module type FileParses
 	module function countOf(variants HashDigestSet) returns ElementIndex
 		var held = 0 as ElementIndex
 
-		for parse in self.parses 'eachParse'
-			if variants.contains(parse.variantOf()) 'aVariantOfTheAsker'
+		for entry in self.parses 'eachParse'
+			if variants.contains(entry.parse.variantOf()) 'aVariantOfTheAsker'
 				held = held + 1
 			end 'aVariantOfTheAsker'
 		end 'eachParse'
@@ -39,17 +50,40 @@ module type FileParses
 		return held
 	end 'countOf'
 
-	module static function adding(existing FileParses, parse immutable SharedLibraryParse) returns immutable FileParses
+	module static function adding(existing FileParses, parse immutable SharedLibraryParse, entryClass LibraryEntryClass) returns immutable FileParses
 		let next = FileParses.none() as isolated FileParses
 
 		modify next 'fill'
+			var staged = 0 as ElementIndex
+
 			for held in existing.parses 'eachHeld'
-				if not held.isOfVariant(parse.variantOf()) 'anotherVariant'
+				if not held.parse.isOfVariant(parse.variantOf()) 'anotherVariant'
 					next.parses.push(held)
+
+					if held.entryClass == LibraryEntryClass.staged 'aStagedParse'
+						staged = staged + 1
+					end 'aStagedParse'
 				end 'anotherVariant'
 			end 'eachHeld'
 
-			next.parses.push(parse)
+			next.parses.push(HeldParse.of(entryClass, parse: parse))
+
+			if entryClass == LibraryEntryClass.staged 'newestIsStaged'
+				staged = staged + 1
+			end 'newestIsStaged'
+
+			var position = 0 as ElementIndex
+
+			while staged > MostStagedKeysPerLibraryParse 'stagedOverTheCap'
+				let held = try next.parses.get(position) otherwise panic("FileParses.adding: get({position}) of {next.parses.count()} held variants while {staged} are staged")
+
+				if held.entryClass == LibraryEntryClass.staged 'oldestStaged'
+					_ = try next.parses.remove(position) otherwise panic("FileParses.adding: remove({position}) of {next.parses.count()} held variants")
+					staged = staged - 1
+				end 'oldestStaged' else 'keptInPlace'
+					position = position + 1
+				end 'keptInPlace'
+			end 'stagedOverTheCap'
 
 			while next.parses.count() > MostKeysPerLibraryParse 'overTheCap'
 				_ = try next.parses.remove(0) otherwise panic("FileParses.adding: remove(0) of {next.parses.count()} held variants")
@@ -72,7 +106,7 @@ module type FileParseTable
 		return try self.parses.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 	end 'holding'
 
-	module function adding(contentHash HashDigest, parse immutable SharedLibraryParse) returns FileParseTable
+	module function adding(contentHash HashDigest, parse immutable SharedLibraryParse, entryClass LibraryEntryClass) returns FileParseTable
 		let nextParses = FrozenFileParseMap.create()
 		let nextRecency = RecentDigestArray.create(0)
 
@@ -87,7 +121,7 @@ module type FileParseTable
 		end 'eachRecent'
 
 		nextRecency.push(contentHash)
-		nextParses.upsert(contentHash, value: FileParses.adding(try self.parses.get(contentHash) otherwise FileParses.none(), parse: parse))
+		nextParses.upsert(contentHash, value: FileParses.adding(try self.parses.get(contentHash) otherwise FileParses.none(), parse: parse, entryClass: entryClass))
 
 		while nextRecency.count() > MostSharedFiles 'overTheCap'
 			let evicted = try nextRecency.remove(0) otherwise panic("FileParseTable.adding: remove(0) of {nextRecency.count()} recent files")
@@ -97,6 +131,13 @@ module type FileParseTable
 		return Self{parses: nextParses, recency: nextRecency}
 	end 'adding'
 end 'FileParseTable'
+
+function mostSharedBaselinesOf(entryClass LibraryEntryClass) returns ElementIndex
+	return match entryClass 'class'
+		installed gives MostSharedInstalledBaselines
+		staged gives MostSharedStagedBaselines
+	end 'class'
+end 'mostSharedBaselinesOf'
 
 module type BaselineTable
 	let held as FrozenBaselineArray
@@ -126,19 +167,40 @@ module type BaselineTable
 	end 'manifestFor'
 
 	module function keeping(newest immutable HeldBaseline) returns BaselineTable
-		let next = FrozenBaselineArray.create(0)
+		let kept = FrozenBaselineArray.create(0)
+		var ofClass = 1 as ElementIndex
 
 		for earlier in self.held 'eachHeld'
-			if not (earlier.key == newest.key and earlier.kind == newest.kind) 'anotherLibrary'
-				next.push(earlier)
-			end 'anotherLibrary'
+			if earlier.key == newest.key and earlier.kind == newest.kind 'replaced'
+				continue
+			end 'replaced'
+
+			kept.push(earlier)
+
+			if earlier.entryClass == newest.entryClass 'sameClass'
+				ofClass = ofClass + 1
+			end 'sameClass'
 		end 'eachHeld'
 
-		next.push(newest)
+		let most = mostSharedBaselinesOf(newest.entryClass)
+		var surplus = 0 as ElementIndex
 
-		while next.count() > MostSharedBaselines 'overTheCap'
-			_ = try next.remove(0) otherwise panic("BaselineTable.keeping: remove(0) of {next.count()} held baselines")
+		if ofClass > most 'overTheCap'
+			surplus = ofClass - most
 		end 'overTheCap'
+
+		let next = FrozenBaselineArray.create(0)
+
+		for candidate in kept 'eachKept'
+			if surplus > 0 and candidate.entryClass == newest.entryClass 'oldestOfTheClass'
+				surplus = surplus - 1
+				continue
+			end 'oldestOfTheClass'
+
+			next.push(candidate)
+		end 'eachKept'
+
+		next.push(newest)
 
 		return Self{held: next}
 	end 'keeping'
@@ -202,7 +264,7 @@ module type PackTable
 end 'PackTable'
 
 module union SharedLibraryChange
-	parse(contentHash HashDigest, held immutable SharedLibraryParse)
+	parse(contentHash HashDigest, held immutable SharedLibraryParse, entryClass LibraryEntryClass)
 	baseline(held immutable HeldBaseline)
 	pack(name String, opened immutable LibraryPack)
 	withoutPack(name String)
@@ -223,7 +285,7 @@ module type SharedLibraryCache
 
 	module function applying(change SharedLibraryChange) returns SharedLibraryCache
 		return match change 'change'
-			parse(contentHash, held) gives SharedLibraryCache.over(freeze self.files.adding(contentHash, parse: held), baselines: self.baselines, packs: self.packs)
+			parse(contentHash, held, entryClass) gives SharedLibraryCache.over(freeze self.files.adding(contentHash, parse: held, entryClass: entryClass), baselines: self.baselines, packs: self.packs)
 			baseline(held) gives SharedLibraryCache.over(self.files, baselines: freeze self.baselines.keeping(held), packs: self.packs)
 			pack(name, opened) gives SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.keeping(name, pack: opened))
 			withoutPack(name) gives SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.without(name))
