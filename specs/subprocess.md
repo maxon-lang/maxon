@@ -4199,3 +4199,117 @@ refused ioFailed
 ```exitcode
 0
 ```
+
+<!-- test: subprocess-a-write-to-a-child-that-has-exited-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+A write to the stdin of a child that has exited is refused as `ioFailed`: the pipe has lost its reader, and
+the writing program carries on rather than being killed by the broken pipe.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 0"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 0"]
+	#endif
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let output = try child.takeStdout() otherwise return 4
+	_ = try output.readToEnd() otherwise return 5
+
+	try child.writeStdinLine("late") otherwise (e) 'refused'
+		print("refused {e.name}\n")
+	end 'refused'
+
+	_ = try child.wait() otherwise return 6
+	child.release()
+
+	return 0
+end 'main'
+```
+```stdout
+refused ioFailed
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-program-whose-stdout-reader-is-gone-dies-of-the-broken-pipe -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A program writing to a stdout whose reader has gone is killed by `SIGPIPE`, as a POSIX program at the head
+of a pipeline is expected to be. The case runs itself as the writer, at the head of a shell pipeline whose
+reader takes one line and leaves, and the shell reports how the writer ended: status 141 is death by signal
+13. Windows has no `SIGPIPE`.
+```maxon
+let WriterLines = 200000
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let mode = try args.get(1) otherwise ""
+
+	if mode == "writer" 'writer'
+		for _ in 0 upto WriterLines 'flood'
+			print("tick\n")
+		end 'flood'
+
+		return 0
+	end 'writer'
+
+	let me = try Process.executablePath() otherwise return 2
+	let sh = Executable.path(try FilePath.from("/bin/sh") otherwise return 3)
+	let argv = StringArray from ["-c", "\{ \"$0\" writer; echo \"writer status $?\" >&2; \} | head -n 1", me.path]
+	let collected = try Subprocess.run(sh, arguments: argv) otherwise return 4
+
+	print("reader took {collected.stdout.trim()}\n")
+	print("{collected.stderr.trim()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+reader took tick
+writer status 141
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-program-started-with-the-broken-pipe-ignored-carries-on -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A program started with `SIGPIPE` ignored keeps that disposition: a write to a stdout whose reader has gone
+ends quietly and the program runs to its own exit. The shell's `trap '' PIPE` passes the ignored signal to
+the writer, which prints well past a pipe's buffer after its reader took one line and left. Windows has no
+`SIGPIPE`.
+```maxon
+let WriterLines = 200000
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let mode = try args.get(1) otherwise ""
+
+	if mode == "writer" 'writer'
+		for _ in 0 upto WriterLines 'flood'
+			print("tick\n")
+		end 'flood'
+
+		return 0
+	end 'writer'
+
+	let me = try Process.executablePath() otherwise return 2
+	let sh = Executable.path(try FilePath.from("/bin/sh") otherwise return 3)
+	let argv = StringArray from ["-c", "trap '' PIPE; \{ \"$0\" writer; echo \"writer status $?\" >&2; \} | head -n 1", me.path]
+	let collected = try Subprocess.run(sh, arguments: argv) otherwise return 4
+
+	print("reader took {collected.stdout.trim()}\n")
+	print("{collected.stderr.trim()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+reader took tick
+writer status 0
+```
+```exitcode
+0
+```

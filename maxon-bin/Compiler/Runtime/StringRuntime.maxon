@@ -569,13 +569,13 @@ end 'registerStringLiteralRecord'
 // pipeline (like `installMmRuntime`), so these are appended already-lowered — what runs over that appended
 // band is stated once, in `afterPipeline`'s install block.
 // Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
-export function installStringRuntime(module StdModule, usage RuntimeUsage)
+export function installStringRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if usage.usesWriteStdout 'writestdout'
-		buildStreamWrite(module, name: StreamWriteStdoutName, stream: OsOutputStream.standardOutput)
+		buildStreamWrite(module, name: StreamWriteStdoutName, stream: OsOutputStream.standardOutput, target: target)
 	end 'writestdout'
 
 	if usage.usesWriteStderr 'writestderr'
-		buildStreamWrite(module, name: StreamWriteStderrName, stream: OsOutputStream.standardError)
+		buildStreamWrite(module, name: StreamWriteStderrName, stream: OsOutputStream.standardError, target: target)
 	end 'writestderr'
 
 	if usage.usesStrEq 'streq'
@@ -664,7 +664,7 @@ end 'installStringRuntime'
 // receiver's own record; the two shapes agree on
 // `buffer@0`/`length@8`, which is all this reads. The bytes are BORROWED: this reads through them and
 // never frees, so a literal argument needs no decref.
-function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStream)
+function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStream, target Target)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
@@ -704,7 +704,8 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 
 	emitBranchCarrying(module, from: reissue, to: header, values: argsOf(done))
 
-	emitBranchOnCompare(module, block: answered, value: written, pred: StdCmpPred.gt, against: 0, whenTrue: advance, whenFalse: finished, ids: ids)
+	let classifying = emitStreamWriteReaderGoneExit(module, func: func, answered: answered, written: written, done: done, target: target, ids: ids)
+	emitBranchOnCompare(module, block: classifying, value: written, pred: StdCmpPred.gt, against: 0, whenTrue: advance, whenFalse: finished, ids: ids)
 
 	let doneAfter = emitBin(module, block: advance, a: done, b: written, opcode: StdBinOpcode.add, ids: ids)
 	emitBranchCarrying(module, from: advance, to: header, values: argsOf(doneAfter))
@@ -713,6 +714,21 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 
 	module.functions.push(func)
 end 'buildStreamWrite'
+
+function emitStreamWriteReaderGoneExit(module StdModule, func IrFunction, answered IrBlock, written ValueId, done ValueId, target Target, ids ValueMinter) returns IrBlock
+	if not targetRaisesSigpipe(target) 'noSuchSignal'
+		return answered
+	end 'noSuchSignal'
+
+	let broken = module.addBlock(func, label: b"wrbroken", heat: BlockHeat.cold)
+	let classified = module.addBlock(func, label: b"wrclassify", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: answered, value: written, pred: StdCmpPred.eq, against: 0 - PosixErrno.brokenPipe.rawValue, whenTrue: broken, whenFalse: classified, ids: ids)
+	module.appendOp(broken, op: StdOp.call(ids.mint(), callee: SigpipeRaiseName, args: ValueIdArray.create(0)))
+	module.setTerminator(broken, op: StdOp.ret(done))
+
+	return classified
+end 'emitStreamWriteReaderGoneExit'
 
 // `<name>(a, b) -> i64(bool)` — content equality: equal LENGTHS and equal BYTES. BOTH String operands are
 // BORROWED (read through, never freed), so this allocation-free body is the equality both the `==` operator

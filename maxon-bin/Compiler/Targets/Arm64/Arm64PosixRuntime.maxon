@@ -172,6 +172,27 @@ export function arm64EmitZeroSlots(asm Arm64RuntimeAsm, firstSlot StackSize, slo
 	asm.placeLabel(zeroed)
 end 'arm64EmitZeroSlots'
 
+export function arm64EmitSigsetSizeOnSyscallRoute(asm Arm64RuntimeAsm, os Os)
+	match arm64OsCallKind(os) 'route'
+		importCall then break
+		syscall then arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSigsetBytes)
+	end 'route'
+end 'arm64EmitSigsetSizeOnSyscallRoute'
+
+export function arm64EmitSigset(asm Arm64RuntimeAsm, signalBit MachineWord, slot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: signalBit)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
+end 'arm64EmitSigset'
+
+export function arm64EmitSigprocmask(asm Arm64RuntimeAsm, os Os, how MachineWord, signalBit MachineWord, slot StackSize)
+	arm64EmitSigset(asm, signalBit: signalBit, slot: slot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: how)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: slot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitSigsetSizeOnSyscallRoute(asm, os: os)
+	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.pthreadSigmask, syscallNumber: Arm64LinuxSyscallRtSigprocmask)
+end 'arm64EmitSigprocmask'
+
 // ==========================================================================
 // Shared emit fragments
 // ==========================================================================
@@ -195,88 +216,20 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 //
 // ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
 // both 2. A cleared errno answers `ERROR_NO_MORE_FILES` — see `PosixErrno.cleared`.
-//
-// ⭐⭐ **`EWOULDBLOCK` AND `ENOTEMPTY` ARE THE TWO ARMS WITH A LANE IN THEM, AND THEY ARE THE ONES THE READER
-// FORKS ON.** Linux numbers them 11 and 39, Darwin 35 and 66, so the caller supplies its own pair; every
-// other row is the same on both. `EWOULDBLOCK` answers `ERROR_IO_PENDING` because that is what it MEANS — a
-// non-blocking read that could not be served yet is an operation still in flight, which is exactly the arm
-// `__gt_subp_yield_read` parks on. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which is what tells a
-// `Directory.delete` caller that the directory is occupied rather than missing.
-//
-// `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
-// busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
 export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock FullRangeInt, dirNotEmpty FullRangeInt)
-	let notFound = asm.newLabel()
-	let pathNotFound = asm.newLabel()
-	let denied = asm.newLabel()
-	let exists = asm.newLabel()
-	let busy = asm.newLabel()
-	let notEmpty = asm.newLabel()
-	let noMoreFiles = asm.newLabel()
-	let stillInFlight = asm.newLabel()
-	let tooManyOpen = asm.newLabel()
 	let answered = asm.newLabel()
 
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noMoreFiles)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: wouldBlock as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: stillInFlight)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: dirNotEmpty as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notEmpty)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.noSuchFileOrDirectory.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notFound)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.notADirectory.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: pathNotFound)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.permissionDenied.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: denied)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.operationNotPermitted.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: denied)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.fileExists.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: exists)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.deviceBusy.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: busy)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.textFileBusy.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: busy)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.tooManyOpenFiles.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooManyOpen)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.fileTableOverflow.rawValue as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooManyOpen)
+	for row in posixErrnoRows(wouldBlock, directoryNotEmpty: dirNotEmpty) 'rows'
+		let notThisRow = asm.newLabel()
+
+		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: row.errno as Imm32)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: notThisRow)
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: row.win32 as MachineWord)
+		arm64EmitBranchTo(asm, label: answered)
+		asm.placeLabel(notThisRow)
+	end 'rows'
+
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorGenericFailure as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(notFound)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorFileNotFound as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(pathNotFound)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorPathNotFound as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(denied)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorAccessDenied as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(exists)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorFileExists as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(busy)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorSharingViolation as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(notEmpty)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorDirNotEmpty as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(stillInFlight)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorIoPending as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(tooManyOpen)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorTooManyOpenFiles as MachineWord)
-	arm64EmitBranchTo(asm, label: answered)
-
-	asm.placeLabel(noMoreFiles)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorNoMoreFiles as MachineWord)
 
 	asm.placeLabel(answered)
 end 'arm64EmitErrnoToWin32'

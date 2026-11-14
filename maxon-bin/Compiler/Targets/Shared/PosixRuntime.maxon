@@ -407,12 +407,73 @@ export enum PosixErrno
 	badDescriptor = 9
 	badAddress = 14
 	invalidArgument = 22
+	brokenPipe = 32
 end 'PosixErrno'
+
+export let PosixSignalPipe = 13
+export let PosixSigsetSigpipe = 1 shl (PosixSignalPipe - 1)
+let PosixSignalExitStatusBase = 128
+export let SigpipeExitStatus = PosixSignalExitStatusBase + PosixSignalPipe
+
+export enum PosixSignalDisposition
+	systemDefault = 0
+	ignore = 1
+end 'PosixSignalDisposition'
+
+export enum PosixSigactionPointer
+	none = 0
+end 'PosixSigactionPointer'
+
+export function targetRaisesSigpipe(target Target) returns bool
+	return match target.os 'os'
+		linux or
+		macos gives true
+		windows or
+		wasi gives false
+	end 'os'
+end 'targetRaisesSigpipe'
 
 // The catch-all an errno with no Win32 twin becomes — `ERROR_GEN_FAILURE`. It deliberately is not one of the
 // three the Std classifier tests, so every unmapped failure takes that classification's per-operation
 // fallback (`openFailed`, `readFailed`, …) instead of impersonating one of the three named variants.
 export let ErrorGenericFailure = 31
+
+export type PosixErrnoRow
+	export let errno as FullRangeInt
+	export let win32 as FullRangeInt
+
+	static function create(errno FullRangeInt, win32 FullRangeInt) returns Self
+		return Self{errno: errno, win32: win32}
+	end 'create'
+end 'PosixErrnoRow'
+
+export typealias PosixErrnoRowArray = Array with PosixErrnoRow
+
+// `EWOULDBLOCK` and `ENOTEMPTY` are the two rows whose numbers differ per OS, so the caller supplies its own
+// pair. `EWOULDBLOCK` answers `ERROR_IO_PENDING`: a non-blocking read that could not be served yet is an
+// operation still in flight, the arm `__gt_subp_yield_read` parks on rather than classifying as a fault.
+//
+// `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
+// busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
+export function posixErrnoRows(wouldBlock FullRangeInt, directoryNotEmpty FullRangeInt) returns PosixErrnoRowArray
+	let rows = PosixErrnoRowArray.create(0)
+
+	rows.push(PosixErrnoRow.create(PosixErrno.cleared.rawValue, win32: ErrorNoMoreFiles))
+	rows.push(PosixErrnoRow.create(wouldBlock, win32: ErrorIoPending))
+	rows.push(PosixErrnoRow.create(directoryNotEmpty, win32: ErrorDirNotEmpty))
+	rows.push(PosixErrnoRow.create(PosixErrno.noSuchFileOrDirectory.rawValue, win32: ErrorFileNotFound))
+	rows.push(PosixErrnoRow.create(PosixErrno.notADirectory.rawValue, win32: ErrorPathNotFound))
+	rows.push(PosixErrnoRow.create(PosixErrno.permissionDenied.rawValue, win32: ErrorAccessDenied))
+	rows.push(PosixErrnoRow.create(PosixErrno.operationNotPermitted.rawValue, win32: ErrorAccessDenied))
+	rows.push(PosixErrnoRow.create(PosixErrno.fileExists.rawValue, win32: ErrorFileExists))
+	rows.push(PosixErrnoRow.create(PosixErrno.deviceBusy.rawValue, win32: ErrorSharingViolation))
+	rows.push(PosixErrnoRow.create(PosixErrno.textFileBusy.rawValue, win32: ErrorSharingViolation))
+	rows.push(PosixErrnoRow.create(PosixErrno.tooManyOpenFiles.rawValue, win32: ErrorTooManyOpenFiles))
+	rows.push(PosixErrnoRow.create(PosixErrno.fileTableOverflow.rawValue, win32: ErrorTooManyOpenFiles))
+	rows.push(PosixErrnoRow.create(PosixErrno.brokenPipe.rawValue, win32: ErrorBrokenPipe))
+
+	return rows
+end 'posixErrnoRows'
 
 // ⭐ **HOW MANY NANOSECONDS A SECOND HAS.** Every POSIX lane reads clocks whose unit is the nanosecond, and
 // the Linux thread-CPU chunk needs this outright: `clock_gettime` answers a `timespec` while

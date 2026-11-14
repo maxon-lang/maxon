@@ -221,8 +221,7 @@ let DarwinSignalChld = 20
 // socket urgent-data notion for a stray one to collide with.
 export let DarwinSignalUrg = 16 as Imm32
 
-// The `oldact`/`oss` out-parameter, declined: neither install reads back a previous disposition.
-let PosixDeclinePrevious = 0
+let DarwinSigUnblock = 2
 
 // `siginfo_t.si_addr` — six C `int`s (`si_signo`, `si_errno`, `si_code`, `si_pid`, `si_uid`, `si_status`),
 // then the pointer. For SIGSEGV and SIGBUS it is the address the access faulted on.
@@ -395,7 +394,7 @@ function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
 
 	// sigaltstack(&ss, NULL)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x9)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixDeclinePrevious)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigactionPointer.none.rawValue as MachineWord)
 	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.sigaltstack, syscallNumber: Arm64LinuxSyscallSigaltstack)
 
 	asm.placeLabel(done)
@@ -528,8 +527,9 @@ function arm64SigstackLayout(os Os) returns Arm64SigstackLayout
 	end 'os'
 end 'arm64SigstackLayout'
 
-// mrt_runtime_init (DARWIN) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE. `mrt_start` calls
-// it before `main`, so the very first instruction of user code is already covered.
+// mrt_runtime_init (DARWIN) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE, and
+// `SigpipeHandlerName` unless SIGPIPE arrived ignored. `mrt_start` calls it before `main`, so the very
+// first instruction of user code is already covered.
 //
 // ⚠ **THE MAIN THREAD's ALTERNATE STACK IS REGISTERED BEFORE THE HANDLER, AND THAT IS THE ONLY ORDER WITH NO
 // WINDOW IN IT.** `SA_ONSTACK` is a promise that a stack exists to switch to, so making the handler reachable
@@ -540,10 +540,13 @@ end 'arm64SigstackLayout'
 // Slots: 0..2 = the `struct sigaction`.
 function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
-	let asm = Arm64RuntimeAsm.beginFunction(DarwinSigactionBytes / SpillSlotBytes)
+	let SlotInheritedPipe = arm64SigactionLayout(Os.macos).slots
+	let asm = Arm64RuntimeAsm.beginFunction(SlotInheritedPipe + 1)
 
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
+
+	arm64EmitSigpipeRecordInherited(asm, os: Os.macos, actSlot: SlotSigaction, inheritedSlot: SlotInheritedPipe)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigaction)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
@@ -551,55 +554,164 @@ function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns Fu
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinSaSiginfo or DarwinSaOnstack or DarwinSaRestart)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffFlags)
 
-	arm64EmitDarwinSigactionInstall(asm, handlerName: FaultHandlerName, signal: DarwinSignalSegv, actSlot: SlotSigaction)
-	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalBus, actSlot: SlotSigaction)
-	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalFpe, actSlot: SlotSigaction)
+	arm64EmitSigactionInstall(asm, os: Os.macos, handlerName: FaultHandlerName, signal: DarwinSignalSegv, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: Os.macos, signal: DarwinSignalBus, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: Os.macos, signal: DarwinSignalFpe, actSlot: SlotSigaction)
 
 	// ⭐ **THE PREEMPTION SIGNAL SHARES THE STRUCT AND DIFFERS ONLY IN ITS HANDLER**, so the one field that
 	// differs is stored again rather than a second struct being built.
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
-		arm64EmitDarwinSigactionInstall(asm, handlerName: PreemptHandlerName, signal: DarwinSignalUrg, actSlot: SlotSigaction)
+		arm64EmitSigactionInstall(asm, os: Os.macos, handlerName: PreemptHandlerName, signal: DarwinSignalUrg as MachineWord, actSlot: SlotSigaction)
 	end 'itCanStopAThread'
 
-	arm64EmitSigactionDefault(asm, actSlot: SlotSigaction, handlerOffset: DarwinSigactionOffHandler)
-	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalChld, actSlot: SlotSigaction)
+	arm64EmitSigpipeInstallUnlessIgnored(asm, os: Os.macos, actSlot: SlotSigaction, inheritedSlot: SlotInheritedPipe)
+
+	arm64EmitSigactionDefault(asm, os: Os.macos, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: Os.macos, signal: DarwinSignalChld, actSlot: SlotSigaction)
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildArm64DarwinRuntimeInitChunk'
 
-function arm64EmitSigactionDefault(asm Arm64RuntimeAsm, actSlot StackSize, handlerOffset MachineWord)
+function buildArm64SigpipeHandlerChunk() returns FunctionCodeChunk
+	let asm = Arm64RuntimeAsm.beginFunction(0)
+	return asm.finishFunction(SigpipeHandlerName)
+end 'buildArm64SigpipeHandlerChunk'
+
+type Arm64SigactionLayout
+	export let slots as StackSize
+	export let handler as MachineWord
+	export let unblockHow as MachineWord
+
+	static function create(slots StackSize, handler MachineWord, unblockHow MachineWord) returns Self
+		return Self{slots: slots, handler: handler, unblockHow: unblockHow}
+	end 'create'
+end 'Arm64SigactionLayout'
+
+function arm64SigactionLayout(os Os) returns Arm64SigactionLayout
+	return match os 'os'
+		macos gives Arm64SigactionLayout.create(DarwinSigactionBytes / SpillSlotBytes, handler: DarwinSigactionOffHandler as MachineWord, unblockHow: DarwinSigUnblock as MachineWord)
+		linux gives Arm64SigactionLayout.create(LinuxSigactionSlots, handler: LinuxSigactionOffHandler as MachineWord, unblockHow: LinuxSigUnblock as MachineWord)
+		windows panic("arm64SigactionLayout: there is no arm64-Windows lane, and Windows has no `struct sigaction`")
+		wasi panic("arm64SigactionLayout: `wasm32-wasi` is not an arm64 lane and takes no signal")
+	end 'os'
+end 'arm64SigactionLayout'
+
+function buildArm64SigpipeRaiseChunk(os Os) returns FunctionCodeChunk
+	let SlotSigaction = 0
+	let layout = arm64SigactionLayout(os)
+	let SlotSigset = layout.slots
+	let asm = Arm64RuntimeAsm.beginFunction(SlotSigset + 1)
+	let handlerNotOurs = asm.newLabel()
+	let alreadyDefault = asm.newLabel()
+
+	arm64EmitSigpipeQuery(asm, os: os, actSlot: SlotSigaction)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixSignalDisposition.systemDefault.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: alreadyDefault)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x1, funcName: SigpipeHandlerName)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: handlerNotOurs)
+
+	arm64EmitSigactionDefault(asm, os: os, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: os, signal: PosixSignalPipe, actSlot: SlotSigaction)
+
+	asm.placeLabel(alreadyDefault)
+	arm64EmitSigprocmask(asm, os: os, how: layout.unblockHow, signalBit: PosixSigsetSigpipe as MachineWord, slot: SlotSigset)
+
+	match arm64OsCallKind(os) 'thread'
+		importCall then arm64EmitDarwinRaiseAtThisThread(asm)
+		syscall then arm64EmitLinuxRaiseAtThisThread(asm)
+	end 'thread'
+
+	arm64EmitProcessExit(asm, os: os, exitCode: SigpipeExitStatus as MachineWord)
+
+	asm.placeLabel(handlerNotOurs)
+	return asm.finishFunction(SigpipeRaiseName)
+end 'buildArm64SigpipeRaiseChunk'
+
+function arm64EmitDarwinRaiseAtThisThread(asm Arm64RuntimeAsm)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.pthreadSelf)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSignalPipe)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.pthreadKill)
+end 'arm64EmitDarwinRaiseAtThisThread'
+
+function arm64EmitLinuxRaiseAtThisThread(asm Arm64RuntimeAsm)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGettid)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSignalPipe)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallTgkill)
+end 'arm64EmitLinuxRaiseAtThisThread'
+
+function arm64EmitSigpipeQuery(asm Arm64RuntimeAsm, os Os, actSlot StackSize)
+	let layout = arm64SigactionLayout(os)
+	arm64EmitZeroSlots(asm, firstSlot: actSlot, slotCount: layout.slots)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixSignalPipe)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigactionPointer.none.rawValue as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: actSlot)
+	arm64EmitSigactionPrimitive(asm, os: os)
+
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: actSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: handlerOffset)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x9, byteOffset: layout.handler)
+end 'arm64EmitSigpipeQuery'
+
+function arm64EmitSigpipeRecordInherited(asm Arm64RuntimeAsm, os Os, actSlot StackSize, inheritedSlot StackSize)
+	arm64EmitSigpipeQuery(asm, os: os, actSlot: actSlot)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: inheritedSlot)
+end 'arm64EmitSigpipeRecordInherited'
+
+function arm64EmitSigpipeInstallUnlessIgnored(asm Arm64RuntimeAsm, os Os, actSlot StackSize, inheritedSlot StackSize)
+	let inheritedIgnored = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: inheritedSlot)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixSignalDisposition.ignore.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: inheritedIgnored)
+	arm64EmitSigactionInstall(asm, os: os, handlerName: SigpipeHandlerName, signal: PosixSignalPipe, actSlot: actSlot)
+
+	asm.placeLabel(inheritedIgnored)
+end 'arm64EmitSigpipeInstallUnlessIgnored'
+
+function arm64EmitSigactionDefault(asm Arm64RuntimeAsm, os Os, actSlot StackSize)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: actSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixSignalDisposition.systemDefault.rawValue as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: arm64SigactionLayout(os).handler)
 end 'arm64EmitSigactionDefault'
 
 // Publish `handlerName` for `signal` through the struct already standing in `actSlot`.
-function arm64EmitDarwinSigactionInstall(asm Arm64RuntimeAsm, handlerName ByteArray, signal Imm32, actSlot StackSize)
+function arm64EmitSigactionInstall(asm Arm64RuntimeAsm, os Os, handlerName ByteArray, signal MachineWord, actSlot StackSize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: actSlot)
 	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: handlerName)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffHandler)
-	arm64EmitDarwinSigactionCall(asm, signal: signal, actSlot: actSlot)
-end 'arm64EmitDarwinSigactionInstall'
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: arm64SigactionLayout(os).handler)
+	arm64EmitSigactionCall(asm, os: os, signal: signal, actSlot: actSlot)
+end 'arm64EmitSigactionInstall'
 
 // `sigaction(signal, &act, NULL)`.
 //
 // ⚠ **`&act` IS RE-DERIVED PER CALL RATHER THAN HELD.** AAPCS64 makes x9..x15 caller-saved temporaries,
 // so libSystem is free to clobber whatever register the address was parked in; an `add` off x29 costs
 // one instruction and cannot be wrong.
-function arm64EmitDarwinSigactionCall(asm Arm64RuntimeAsm, signal Imm32, actSlot StackSize)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: signal as MachineWord)
+function arm64EmitSigactionCall(asm Arm64RuntimeAsm, os Os, signal MachineWord, actSlot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: signal)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: actSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixDeclinePrevious)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.sigaction)
-end 'arm64EmitDarwinSigactionCall'
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSigactionPointer.none.rawValue as MachineWord)
+	arm64EmitSigactionPrimitive(asm, os: os)
+end 'arm64EmitSigactionCall'
+
+// Linux's rt_sigaction takes a fourth argument, sizeof(kernel sigset_t), which the kernel checks even when
+// the old disposition is declined.
+function arm64EmitSigactionPrimitive(asm Arm64RuntimeAsm, os Os)
+	arm64EmitSigsetSizeOnSyscallRoute(asm, os: os)
+	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.sigaction, syscallNumber: Arm64LinuxSyscallRtSigaction)
+end 'arm64EmitSigactionPrimitive'
 
 // ==========================================================================
 // The Linux install
 // ==========================================================================
 
-// mrt_runtime_init (LINUX) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE, and on a program that
-// stops threads the preemption signal's handler beside it. `mrt_start` calls it before `main`, so the very
-// first instruction of user code is already covered.
+// mrt_runtime_init (LINUX) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE, on a program that
+// stops threads the preemption signal's handler beside it, and `SigpipeHandlerName` unless SIGPIPE arrived
+// ignored. `mrt_start` calls it before `main`, so the very first instruction of user code is already
+// covered.
 //
 // ⚠ The main thread's alternate stack is sized and registered before the handler, the only order
 // with no window in it: `SA_ONSTACK` is a promise that a stack exists to switch to. The standard
@@ -609,7 +721,8 @@ end 'arm64EmitDarwinSigactionCall'
 // ascending from slot 0, so `&act` is slot 0's address.
 function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
-	let asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
+	let SlotInheritedPipe = arm64SigactionLayout(Os.linux).slots
+	let asm = Arm64RuntimeAsm.beginFunction(SlotInheritedPipe + 1)
 
 	if carriesHostLock 'ownsABlock'
 		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)
@@ -620,43 +733,29 @@ function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, targ
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
+	arm64EmitSigpipeRecordInherited(asm, os: Os.linux, actSlot: SlotSigaction, inheritedSlot: SlotInheritedPipe)
+
 	arm64EmitZeroSlots(asm, firstSlot: SlotSigaction, slotCount: LinuxSigactionSlots)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigaction)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Arm64LinuxSigactionFlags)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: LinuxSigactionOffFlags as MachineWord)
 
-	arm64EmitLinuxSigactionInstall(asm, handlerName: FaultHandlerName, signal: LinuxSignalSegv, actSlot: SlotSigaction)
-	arm64EmitLinuxSigactionCall(asm, signal: LinuxSignalBus, actSlot: SlotSigaction)
-	arm64EmitLinuxSigactionCall(asm, signal: LinuxSignalFpe, actSlot: SlotSigaction)
+	arm64EmitSigactionInstall(asm, os: Os.linux, handlerName: FaultHandlerName, signal: LinuxSignalSegv, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: Os.linux, signal: LinuxSignalBus, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: Os.linux, signal: LinuxSignalFpe, actSlot: SlotSigaction)
 
 	// The preemption signal shares the struct and differs only in its handler, as on Darwin.
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
-		arm64EmitLinuxSigactionInstall(asm, handlerName: PreemptHandlerName, signal: LinuxSignalUrg, actSlot: SlotSigaction)
+		arm64EmitSigactionInstall(asm, os: Os.linux, handlerName: PreemptHandlerName, signal: LinuxSignalUrg, actSlot: SlotSigaction)
 	end 'itCanStopAThread'
 
-	arm64EmitSigactionDefault(asm, actSlot: SlotSigaction, handlerOffset: LinuxSigactionOffHandler as MachineWord)
-	arm64EmitLinuxSigactionCall(asm, signal: LinuxSignalChld, actSlot: SlotSigaction)
+	arm64EmitSigpipeInstallUnlessIgnored(asm, os: Os.linux, actSlot: SlotSigaction, inheritedSlot: SlotInheritedPipe)
+
+	arm64EmitSigactionDefault(asm, os: Os.linux, actSlot: SlotSigaction)
+	arm64EmitSigactionCall(asm, os: Os.linux, signal: LinuxSignalChld, actSlot: SlotSigaction)
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildArm64LinuxRuntimeInitChunk'
-
-// Publish `handlerName` for `signal` through the struct already standing in `actSlot`.
-function arm64EmitLinuxSigactionInstall(asm Arm64RuntimeAsm, handlerName ByteArray, signal MachineWord, actSlot StackSize)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: actSlot)
-	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x0, funcName: handlerName)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: LinuxSigactionOffHandler as MachineWord)
-	arm64EmitLinuxSigactionCall(asm, signal: signal, actSlot: actSlot)
-end 'arm64EmitLinuxSigactionInstall'
-
-// rt_sigaction(signal, &act, NULL, sizeof(kernel sigset_t)) — the kernel checks the size even when the old
-// disposition is declined.
-function arm64EmitLinuxSigactionCall(asm Arm64RuntimeAsm, signal MachineWord, actSlot StackSize)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: signal)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: actSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixDeclinePrevious)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSigsetBytes)
-	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRtSigaction)
-end 'arm64EmitLinuxSigactionCall'
 
 // ==========================================================================
 // Assembly
@@ -683,6 +782,8 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 
 	chunks.push(buildArm64CheckStdFdsChunk(globalData, os: target.os, errnoHome: errnoHome))
 	chunks.push(buildArm64SignalStackInstallChunk(target.os))
+	chunks.push(buildArm64SigpipeHandlerChunk())
+	chunks.push(buildArm64SigpipeRaiseChunk(target.os))
 
 	if target.os == Os.linux 'sizedFromTheAuxiliaryVector'
 		chunks.push(buildArm64LinuxSignalStackSizeChunk())

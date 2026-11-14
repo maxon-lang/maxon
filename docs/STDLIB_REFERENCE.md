@@ -255,6 +255,11 @@ These are free functions and compiler builtins available everywhere.
 
 To print something that is not a `String`, interpolate it: `print("{count}\n")`.
 
+On Linux and macOS, a `print` or `printError` whose stream's reader has gone ends the program by SIGPIPE,
+as a C program's write does. A program started with SIGPIPE ignored keeps running, and that write ends
+where the reader went. Every other write to a pipe whose reader has gone, such as a child's stdin or a
+`File`, throws.
+
 ### Numeric builtins
 
 | Function | Returns | Description |

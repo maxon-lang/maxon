@@ -934,12 +934,10 @@ export let LinuxExecFailedExitCode = 127
 // ==========================================================================
 
 // ⭐⭐ **`MSG_NOSIGNAL` ON LINUX. ⚠ IT IS 0x4000 HERE AND 0x80000 ON DARWIN, AND MISTAKING ONE FOR THE
-// OTHER KILLS THE PROCESS.** A `sendto` on a stream socket whose peer has gone raises SIGPIPE, whose
-// default disposition is TERMINATE, and this backend installs no signal handler for it — so without the
-// flag the program dies by signal instead of reporting `__ManagedSocketError.sendFailed`. MEASURED on an
-// aarch64 Linux guest with a `socketpair` whose read end was closed: with 0x4000 the raw `sendto` answered
-// `-EPIPE` and the probe exited 0; with a flag word of 0 the identical probe died with exit 141.
-// `StdToArm64Conversion.DarwinMsgNoSignal` carries the other value and the same measurement.
+// OTHER RAISES SIGPIPE.** A `sendto` on a stream socket whose peer has gone raises SIGPIPE without the
+// flag, so `__ManagedSocketError.sendFailed` would rest on that signal's disposition at that moment; with
+// it the call answers `-EPIPE` and raises nothing. `StdToArm64Conversion.DarwinMsgNoSignal` carries the
+// other value.
 export let LinuxMsgNoSignal = 0x4000
 
 // `sendto`/`recvfrom`'s peer address and its length. A CONNECTED stream socket has neither to give, and a

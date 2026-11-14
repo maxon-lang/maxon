@@ -609,88 +609,22 @@ end 'x64LinuxEmitZeroSlots'
 // `mrt_host_last_error` except for where the errno came from. The mapping is not the identity (see
 // `PosixErrno`), and a cleared errno answers `ERROR_NO_MORE_FILES` (`PosixErrno.cleared`).
 //
-// `EWOULDBLOCK` and `ENOTEMPTY` are the two arms whose numbers differ per OS; this backend serves
-// Linux alone, so it reads `LinuxErrno` outright where the arm64 twin takes both as parameters.
-// `EWOULDBLOCK` answers `ERROR_IO_PENDING`: a non-blocking read that could not be served yet is an
-// operation still in flight, the arm `__gt_subp_yield_read` parks on rather than classifying as a
-// fault. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which tells a `Directory.delete` caller the
-// directory is occupied, not missing.
-//
-// `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
-// busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
+// This backend serves Linux alone, so it reads `LinuxErrno` outright where the arm64 twin takes the
+// per-OS pair as parameters.
 function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
-	let notFound = asm.newLabel()
-	let pathNotFound = asm.newLabel()
-	let denied = asm.newLabel()
-	let exists = asm.newLabel()
-	let busy = asm.newLabel()
-	let notEmpty = asm.newLabel()
-	let noMoreFiles = asm.newLabel()
-	let stillInFlight = asm.newLabel()
-	let tooManyOpen = asm.newLabel()
 	let answered = asm.newLabel()
 
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noMoreFiles)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrno.wouldBlock.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stillInFlight)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrno.directoryNotEmpty.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notEmpty)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.noSuchFileOrDirectory.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notFound)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.notADirectory.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: pathNotFound)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.permissionDenied.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.operationNotPermitted.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.fileExists.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: exists)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.deviceBusy.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: busy)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.textFileBusy.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: busy)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.tooManyOpenFiles.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooManyOpen)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.fileTableOverflow.rawValue as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooManyOpen)
+	for row in posixErrnoRows(LinuxErrno.wouldBlock.rawValue, directoryNotEmpty: LinuxErrno.directoryNotEmpty.rawValue) 'rows'
+		let notThisRow = asm.newLabel()
+
+		emitCmpRegImm(asm, reg: X64Register.rax, imm: row.errno as Imm32)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notThisRow)
+		encodeMovRegImm32(asm.code, dest: X64Register.rax, value: row.win32 as MachineWord)
+		encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+		asm.placeLabel(notThisRow)
+	end 'rows'
+
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorGenericFailure as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(notFound)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorFileNotFound as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(pathNotFound)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorPathNotFound as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(denied)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorAccessDenied as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(exists)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorFileExists as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(busy)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorSharingViolation as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(notEmpty)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorDirNotEmpty as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(stillInFlight)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorIoPending as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(tooManyOpen)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorTooManyOpenFiles as MachineWord)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
-
-	asm.placeLabel(noMoreFiles)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorNoMoreFiles as MachineWord)
 
 	asm.placeLabel(answered)
 end 'x64LinuxEmitErrnoToWin32'
@@ -4827,7 +4761,7 @@ function buildX64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCodeC
 
 	// Signal mode blocks SIGCHLD in every machine, and `execve` keeps the mask, so the program run
 	// would start with it blocked; an unblock where the mode is pidfd changes nothing.
-	x64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigUnblock as MachineWord, slot: SlotChildSigset)
+	x64LinuxEmitSigprocmask(asm, how: LinuxSigUnblock as MachineWord, signalBit: LinuxSigChldBit as MachineWord, slot: SlotChildSigset)
 	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdInputOffset as Imm32, childDescriptor: PosixChildStdinFd)
 	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdOutputOffset as Imm32, childDescriptor: PosixChildStdoutFd)
 	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdErrorOffset as Imm32, childDescriptor: PosixChildStderrFd)
@@ -5647,19 +5581,19 @@ function buildX64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollChildOpenName)
 end 'buildX64LinuxNetpollChildOpenChunk'
 
-function x64LinuxEmitSigChldSet(asm X64RuntimeAsm, slot StackSize)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxSigChldBit as MachineWord)
+function x64LinuxEmitSigset(asm X64RuntimeAsm, signalBit MachineWord, slot StackSize)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: signalBit)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(slot), srcReg: X64Register.rax, wide: true)
-end 'x64LinuxEmitSigChldSet'
+end 'x64LinuxEmitSigset'
 
-function x64LinuxEmitSigprocmaskSigChld(asm X64RuntimeAsm, how MachineWord, slot StackSize)
-	x64LinuxEmitSigChldSet(asm, slot: slot)
+export function x64LinuxEmitSigprocmask(asm X64RuntimeAsm, how MachineWord, signalBit MachineWord, slot StackSize)
+	x64LinuxEmitSigset(asm, signalBit: signalBit, slot: slot)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: how)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(slot))
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSigsetBytes as MachineWord)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigprocmask)
-end 'x64LinuxEmitSigprocmaskSigChld'
+end 'x64LinuxEmitSigprocmask'
 
 function buildX64LinuxNetpollChildProbeChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(0)
@@ -5673,14 +5607,14 @@ end 'buildX64LinuxNetpollChildProbeChunk'
 function buildX64LinuxNetpollSignalBlockChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(1)
 
-	x64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigBlock as MachineWord, slot: 0)
+	x64LinuxEmitSigprocmask(asm, how: LinuxSigBlock as MachineWord, signalBit: LinuxSigChldBit as MachineWord, slot: 0)
 	return asm.finishFunction(HostNetpollSignalBlockName)
 end 'buildX64LinuxNetpollSignalBlockChunk'
 
 function buildX64LinuxNetpollSignalOpenChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(1)
 
-	x64LinuxEmitSigChldSet(asm, slot: 0)
+	x64LinuxEmitSigset(asm, signalBit: LinuxSigChldBit as MachineWord, slot: 0)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxNoDescriptor)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(0))
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxSigsetBytes as MachineWord)

@@ -90,12 +90,9 @@ let DarwinScNprocessorsOnln = 58
 // NOT IN `PosixRuntime`.** Darwin's is **0x80000** (`MacOSX.sdk/usr/include/sys/socket.h:594`) and Linux's
 // is 0x4000 (`LinuxMsgNoSignal`); the flag word is a lowering's argument on both, so each names its own.
 //
-// ⛔⛔ **WITHOUT IT A SEND ON A CLOSED PEER KILLS THE PROCESS, AND THAT IS MEASURED ON BOTH LANES.** A
-// `send` to a socket whose peer has gone raises SIGPIPE, whose default disposition is TERMINATE — and this
-// backend installs no signal handlers, so the program dies by signal instead of reporting
-// `__ManagedSocketError.sendFailed`. MEASURED with a `socketpair` whose read end was closed: with the flag
-// the call answers -1/`EPIPE` and the probe exits 0; without it the probe dies with exit 141 on Darwin and
-// on an aarch64 Linux guest alike, and flag 0x4000 on Darwin dies the same way — the value is not shared.
+// ⛔⛔ **WITHOUT IT A SEND ON A CLOSED PEER RAISES SIGPIPE**, so `__ManagedSocketError.sendFailed` would rest
+// on that signal's disposition at that moment; with the flag the call answers -1/`EPIPE` and raises
+// nothing. Flag 0x4000 on Darwin is not this flag — the value is not shared.
 // Windows needs no counterpart: there is no SIGPIPE to suppress, which is why `SendRecvNoFlags` stands
 // unqualified on that lane.
 let DarwinMsgNoSignal = 0x80000

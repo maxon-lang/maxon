@@ -3818,10 +3818,9 @@ export type StdToX64Lowering
 	end 'lowerOsSocketTransfer'
 
 	// ⛔⛔ **`MSG_NOSIGNAL` IS NOT OPTIONAL ON THE SEND SIDE.** A `sendto` on a stream socket whose peer has
-	// gone raises SIGPIPE, whose default disposition is TERMINATE, and this lane installs no handler for it —
-	// so without the flag the program dies by signal instead of reporting `sendFailed` (MEASURED: exit 141
-	// with a flag word of 0, `-EPIPE` and a clean exit with `LinuxMsgNoSignal`). It is a SEND-only flag, so
-	// the receive direction passes the same `SendRecvNoFlags` zero Windows passes for both.
+	// gone raises SIGPIPE without it, so `sendFailed` would rest on that signal's disposition at that moment;
+	// with it the call answers `-EPIPE` and raises nothing. It is a SEND-only flag, so the receive direction
+	// passes the same `SendRecvNoFlags` zero Windows passes for both.
 	function emitLinuxSocketTransfer(syscallNumber MachineWord, resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, suppressSigpipe bool, dstBlock IrBlock)
 		let flags = LinuxMsgNoSignal if suppressSigpipe else SendRecvNoFlags as MachineWord
 

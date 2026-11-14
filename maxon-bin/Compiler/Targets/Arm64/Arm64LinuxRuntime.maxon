@@ -176,7 +176,7 @@ let Arm64LinuxSyscallEpollPwait = 22
 // exited. The number is the SAME on both Linux CPUs: it was added to every architecture's table at once.
 let Arm64LinuxSyscallPidfdOpen = 434
 
-let Arm64LinuxSyscallRtSigprocmask = 135
+export let Arm64LinuxSyscallRtSigprocmask = 135
 let Arm64LinuxSyscallSignalfd4 = 74
 let Arm64LinuxSyscallWaitid = 95
 
@@ -2709,7 +2709,7 @@ function buildArm64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCod
 
 	// Signal mode blocks SIGCHLD in every machine, and `execve` keeps the mask, so the program run
 	// would start with it blocked; an unblock where the mode is pidfd changes nothing.
-	arm64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigUnblock as MachineWord, slot: SlotChildSigset)
+	arm64EmitSigprocmask(asm, os: Os.linux, how: LinuxSigUnblock as MachineWord, signalBit: LinuxSigChldBit as MachineWord, slot: SlotChildSigset)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdInputOffset as MachineWord, childDescriptor: PosixChildStdinFd)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdOutputOffset as MachineWord, childDescriptor: PosixChildStdoutFd)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdErrorOffset as MachineWord, childDescriptor: PosixChildStderrFd)
@@ -3469,20 +3469,6 @@ function buildArm64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollChildOpenName)
 end 'buildArm64LinuxNetpollChildOpenChunk'
 
-function arm64LinuxEmitSigChldSet(asm Arm64RuntimeAsm, slot StackSize)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxSigChldBit as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
-end 'arm64LinuxEmitSigChldSet'
-
-function arm64LinuxEmitSigprocmaskSigChld(asm Arm64RuntimeAsm, how MachineWord, slot StackSize)
-	arm64LinuxEmitSigChldSet(asm, slot: slot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: how)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: slot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSigsetBytes as MachineWord)
-	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRtSigprocmask)
-end 'arm64LinuxEmitSigprocmaskSigChld'
-
 function buildArm64LinuxNetpollChildProbeChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 
@@ -3494,14 +3480,14 @@ end 'buildArm64LinuxNetpollChildProbeChunk'
 function buildArm64LinuxNetpollSignalBlockChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(1)
 
-	arm64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigBlock as MachineWord, slot: 0)
+	arm64EmitSigprocmask(asm, os: Os.linux, how: LinuxSigBlock as MachineWord, signalBit: LinuxSigChldBit as MachineWord, slot: 0)
 	return asm.finishFunction(HostNetpollSignalBlockName)
 end 'buildArm64LinuxNetpollSignalBlockChunk'
 
 function buildArm64LinuxNetpollSignalOpenChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(1)
 
-	arm64LinuxEmitSigChldSet(asm, slot: 0)
+	arm64EmitSigset(asm, signalBit: LinuxSigChldBit as MachineWord, slot: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxNoDescriptor)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxSigsetBytes as MachineWord)
