@@ -27,13 +27,16 @@ enum LogSpecRefusal implements Error
 	unknownLevel
 end 'LogSpecRefusal'
 
+typealias AcknowledgedReceiverSlot = Slot with CompileReceiver.handle
+
 // The trace unit is the handler's own state, so `compilerLogger` reads no module storage. `attribute` arrives through the same mailbox as the records, so the unit
 // it sets precedes every later record from that sender; across senders the last `attribute` wins.
 type CompilerLogHandler implements LogHandler
 	var unit as TraceUnit
+	let acknowledged as AcknowledgedReceiverSlot
 
 	static function create() returns CompilerLogHandler
-		return Self{unit: UnattributedTraceUnit}
+		return Self{unit: UnattributedTraceUnit, acknowledged: AcknowledgedReceiverSlot.create("CompilerLogHandler.acknowledged")}
 	end 'create'
 
 	export function attribute(traceUnit TraceUnit)
@@ -44,9 +47,19 @@ type CompilerLogHandler implements LogHandler
 		return true
 	end 'flush'
 
+	// The acknowledgement is sent through the stored handle so this thread frees nothing after the send: a
+	// free landing after the run reads its counters moves between phase rows
+	// (`identical-cold-compiles-report-identical-memory`).
 	export function flushThen(receiver CompileReceiver.handle)
-		try receiver.logFlushed(receiver.clone()) otherwise panic("CompilerLogHandler.flushThen: the run waiting for its log to drain refused the acknowledgement — it holds its handle until the acknowledgement arrives")
+		self.acknowledged.replace(receiver)
+		let target = self.acknowledged.held()
+
+		try target.logFlushed(target.clone()) otherwise panic("CompilerLogHandler.flushThen: the run waiting for its log to drain refused the acknowledgement — it holds its handle until the acknowledgement arrives")
 	end 'flushThen'
+
+	export function releaseAcknowledged()
+		self.acknowledged.clear()
+	end 'releaseAcknowledged'
 
 	export function handle(record immutable LogRecord) returns bool
 		let group = recordGroupOf(record)
@@ -101,6 +114,15 @@ module function flushCompilerLogThen(receiver CompileReceiver.handle)
 		end 'why'
 	end 'refused'
 end 'flushCompilerLogThen'
+
+module function releaseAcknowledgedCompilerLog()
+	try CompilerLogRoute.current().handler.releaseAcknowledged() otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then break
+			serviceStopped then panic("releaseAcknowledgedCompilerLog: the compiler's log handler stopped while the process still held its handle")
+		end 'why'
+	end 'refused'
+end 'releaseAcknowledgedCompilerLog'
 
 function recordGroupOf(record LogRecord) returns CompilerLogGroup
 	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")
