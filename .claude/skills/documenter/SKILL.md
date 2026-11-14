@@ -40,8 +40,8 @@ judging the code, **not material to transcribe**: the commit message records the
 1. **Ordering:** X must run before Y, and what silently breaks otherwise.
 2. **A non-local invariant:** correctness rests on a fact outside this function that its signature
    cannot state (a cache key that omits the target, sound only because a `Project` has one target).
-3. **A gate that will fail:** wording pinned byte-for-byte by a named spec file, output compared by a
-   named pin. Name the gate.
+3. **A gate that will fail:** wording pinned byte-for-byte by a named spec, output compared by a
+   named pin. Name the gate, by its name and not its path.
 4. **A deliberate asymmetry** that invites a wrong "fix": two nearby sites differing on purpose.
 
 A guard's reason, a cost argument, a pointer elsewhere, a summary, a restated signature, a narrated
@@ -55,7 +55,16 @@ block: not written. When one declaration has two candidates, keep the worse cons
   matching the code.
 - **No history and no provenance:** no "used to", "previously", "renamed", "ported from", "split out
   of", no measurements, dates or past bugs. State the constraint that binds now.
-- Every name a comment cites is grepped first. No counts of lines, cases or callers.
+- Every name a comment cites is grepped first.
+- **No exact counts and no locations.** A comment that says how many (files, cases, callers, passes,
+  functions, bytes) or where (a file path, a directory, a line number) goes stale the day the count
+  moves or the file is renamed, while the code is still right. Leave both out.
+  - **A size that matters is approximate:** `~100`, "a few thousand". Never `103`.
+  - **An exact figure is written only when the figure is itself the constraint** — a width or a slot
+    count another site must match — and then by naming the constant that holds it where one exists.
+  - **A pointer is written only when pointing is the comment's whole job** (category 3's gate), and
+    then as the shortest stable name: the spec's or the case's name, a type, a function. Never a path
+    with its directories, never a file extension, never a line number.
 - A fact lives at one site.
 
 ```maxon
@@ -76,7 +85,9 @@ For each block, sentence by sentence:
   delete it. Verify a claimed difference from another path in both directions first.
 - **History, provenance, a measurement, a date, a past bug** → delete it. Where it carries a live
   constraint (a wording pinned by a spec), keep the constraint and name the gate:
-  `Pinned byte-for-byte by specs/top-level-let.md.`
+  `Pinned byte-for-byte by the top-level-let spec.`
+- **An exact count, a file path or a line number** the sentence does not rest on → drop it, or round a
+  size that matters (`~100`); cut a pointer that is the point to a stable name (*Shape*).
 - **Restates the code** (signature, guard condition, narrated block, constant's name) → delete it.
 - **Outside the four categories and nothing goes wrong if nobody knows it** → delete it.
 - **Two sites stating one fact** → keep one.
@@ -112,7 +123,10 @@ documentation in the same commit.
 6. If `vscode-extension/syntaxes/maxon.tmLanguage.json` changed, copy it to `website/src/grammars/`.
 7. Docs state what the software does: no "no longer", "now", "used to", "instead of", and no negatives
    ("never shows", "is not reported", "rather than X"). Grep the paragraphs you touched for them.
-8. A change that can break existing code, scripts or workflows adds a bullet under `## Unreleased` ›
+8. Docs prose carries no exact count of anything that grows with the code (files, functions, cases,
+   passes), no line number, and a source path only where the reader has to open or type it. A size
+   that matters is approximate (`~100`).
+9. A change that can break existing code, scripts or workflows adds a bullet under `## Unreleased` ›
    `### Breaking changes` in `RELEASE_NOTES.md` with an indented `Fix: …` line (`docs/RELEASING.md`).
    Nothing else goes there per change.
 

@@ -130,6 +130,10 @@ every comment anyone touches:
   unsorted list"), never the edit that introduced it. *(Documentation follows the same rule: it states what
   the software does — not what it used to do, and not what it doesn't do. Commit messages, `docs/optimization-log.md` and a
   release's release notes entry are where a measurement, an incident and a correction get recorded.)*
+- **No exact counts, file paths or line numbers.** A comment must survive a count moving from 103 to
+  104 and a file being renamed. A size that matters is approximate (`~100`); a figure or a place is
+  spelled exactly only when it is itself the constraint, and a place then by its shortest stable name
+  (a spec's name, a type, a function), never a path or a line.
 - **Edit an existing comment only when its CONTENT must change** — a fact made false, history, a fact
   that does not belong. Rewrite the sentences that carry it, or delete them. Formatting alone (bold,
   capitals, wrap width, wording) is never a reason to touch a comment whose content is right.
