@@ -126,6 +126,130 @@ end 'main'
 21
 ```
 
+<!-- test: a-reply-parameter-answered-on-each-branch-is-answered-once -->
+`Clerk.look` receives the `Reply` as a parameter and answers it in one arm of an `if` or in the other, so each path answers it once.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Clerk
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function look(waiting TallyReply, large bool)
+		if large 'big'
+			waiting.answer(100)
+		end 'big' else 'small'
+			waiting.answer(1)
+		end 'small'
+	end 'look'
+end 'Clerk'
+
+type Desk
+	let clerk as Clerk.handle
+
+	static function create(clerk Clerk.handle) returns Self
+		return Self{clerk: clerk}
+	end 'create'
+
+	export function ask(large bool) returns Tally throws ReplyStopped
+		let pending = reply.later()
+		try self.clerk.look(pending, large: large) otherwise ignore
+		return
+	end 'ask'
+end 'Desk'
+
+function main() returns ExitCode
+	let clerk = spawn Clerk.create()
+	let desk = spawn Desk.create(clerk.clone())
+	let first = try await desk.ask(true) otherwise panic("the clerk answered")
+	let second = try await desk.ask(false) otherwise panic("the clerk answered")
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```stdout
+100 1
+```
+
+<!-- test: a-reply-parameter-answered-in-a-loop-that-returns-is-answered-once -->
+The loop answers the `Reply` parameter and returns in the same arm, so no path reaches an answer after one was made; the answer after the loop is reached only when the loop ran out.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Clerk
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function look(waiting TallyReply, limit Tally)
+		for step in 0 upto limit 'each'
+			if step == 3 'hit'
+				waiting.answer(step)
+				return
+			end 'hit'
+		end 'each'
+
+		waiting.answer(limit)
+	end 'look'
+end 'Clerk'
+
+type Desk
+	let clerk as Clerk.handle
+
+	static function create(clerk Clerk.handle) returns Self
+		return Self{clerk: clerk}
+	end 'create'
+
+	export function ask(limit Tally) returns Tally throws ReplyStopped
+		let pending = reply.later()
+		try self.clerk.look(pending, limit: limit) otherwise ignore
+		return
+	end 'ask'
+end 'Desk'
+
+function main() returns ExitCode
+	let clerk = spawn Clerk.create()
+	let desk = spawn Desk.create(clerk.clone())
+	let hit = try await desk.ask(10) otherwise panic("the clerk answered")
+	let ran = try await desk.ask(2) otherwise panic("the clerk answered")
+	print("{hit} {ran}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 2
+```
+
+<!-- test: error.a-reply-parameter-answered-in-a-loop-is-moved-in-an-earlier-lap -->
+A `Reply` parameter answered inside a loop that goes round again is answered once per lap.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Sink
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function take(parked TallyReply, laps Tally)
+		for lap in 0 upto laps 'each'
+			parked.answer(lap)
+		end 'each'
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let sink = spawn Sink.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:12:21: use of moved value 'parked': it was moved in an earlier iteration of this loop
+```
+
 <!-- test: a-reply-dropped-with-its-holder-fails-the-await-with-service-stopped -->
 `Parker` keeps its `Reply` in its state and `main` shuts the service down without anything answering it. The service's
 state is dropped when it finishes, the `Reply` inside it is dropped unanswered, and the caller's `await` receives
@@ -233,6 +357,144 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:12:3: use of moved value 'pending': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-reply-message-parameter-answered-twice-is-refused -->
+A `Reply` a message receives is as unique as one it makes, so a second `answer` on the parameter reads a moved value.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Sink
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function take(parked TallyReply)
+		parked.answer(1)
+		parked.answer(2)
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let sink = spawn Sink.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:12:3: use of moved value 'parked': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-reply-function-parameter-answered-twice-is-refused -->
+A `Reply` a helper function receives is answered at most once there too.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+function answerTwice(waiting TallyReply)
+	waiting.answer(1)
+	waiting.answer(2)
+end 'answerTwice'
+
+type Gate
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		answerTwice(pending)
+		return
+	end 'ask'
+end 'Gate'
+
+function main() returns ExitCode
+	let gate = spawn Gate.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:7:2: use of moved value 'waiting': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-reply-parameter-answered-then-passed-on-is-refused -->
+A function that answers its `Reply` parameter has no `Reply` left to hand to another function.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+function answerNow(waiting TallyReply)
+	waiting.answer(3)
+end 'answerNow'
+
+function relay(waiting TallyReply)
+	waiting.answer(1)
+	answerNow(waiting)
+end 'relay'
+
+type Gate
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		relay(pending)
+		return
+	end 'ask'
+end 'Gate'
+
+function main() returns ExitCode
+	let gate = spawn Gate.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:11:12: use of moved value 'waiting': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-union-parameter-holding-a-reply-matched-twice-is-refused -->
+A union parameter that carries a `Reply` is consumed by the `match` that answers its payload, so a second `match` reads a moved value.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+union Slot
+	held(waiting TallyReply)
+	empty
+end 'Slot'
+
+function drain(slot Slot)
+	match slot 'first'
+		held(q) then q.answer(1)
+		empty then print("empty\n")
+	end 'first'
+
+	match slot 'second'
+		held(q) then q.answer(2)
+		empty then print("empty\n")
+	end 'second'
+end 'drain'
+
+type Gate
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		drain(Slot.held(pending))
+		return
+	end 'ask'
+end 'Gate'
+
+function main() returns ExitCode
+	let gate = spawn Gate.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:8: use of moved value 'slot': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: a-reply-cannot-be-awaited -->

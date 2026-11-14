@@ -683,13 +683,14 @@ export type CapabilityNotes
 	export var keptArgColumns as ColumnNumberArray
 	export var keptArgOrigins as UniqueOriginArray
 	export var keptNextLap as BoolArray
+	export var keptByMove as BoolArray
 	export var keptReadSites as FuncIndexArray
 	export var keptReadLines as LineNumberArray
 	export var keptReadColumns as ColumnNumberArray
 	export var keptReadBlocks as FuncIndexArray
 
 	export static function create() returns CapabilityNotes
-		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), windowReceiverOps: FuncIndexArray.create(0), windowReceiverLabels: NameRoster.create(0), windowReceiverLines: LineNumberArray.create(0), windowReceiverColumns: ColumnNumberArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedOwned: DroppedOwnedArray.create(0), liveLinearCallOps: FuncIndexArray.create(0), liveLinearCallNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0), keptArgOps: FuncIndexArray.create(0), keptArgPositions: ParamCountArray.create(0), keptArgNames: NameRoster.create(0), keptArgLines: LineNumberArray.create(0), keptArgColumns: ColumnNumberArray.create(0), keptArgOrigins: UniqueOriginArray.create(0), keptNextLap: BoolArray.create(0), keptReadSites: FuncIndexArray.create(0), keptReadLines: LineNumberArray.create(0), keptReadColumns: ColumnNumberArray.create(0), keptReadBlocks: FuncIndexArray.create(0)}
+		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), windowReceiverOps: FuncIndexArray.create(0), windowReceiverLabels: NameRoster.create(0), windowReceiverLines: LineNumberArray.create(0), windowReceiverColumns: ColumnNumberArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedOwned: DroppedOwnedArray.create(0), liveLinearCallOps: FuncIndexArray.create(0), liveLinearCallNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0), keptArgOps: FuncIndexArray.create(0), keptArgPositions: ParamCountArray.create(0), keptArgNames: NameRoster.create(0), keptArgLines: LineNumberArray.create(0), keptArgColumns: ColumnNumberArray.create(0), keptArgOrigins: UniqueOriginArray.create(0), keptNextLap: BoolArray.create(0), keptByMove: BoolArray.create(0), keptReadSites: FuncIndexArray.create(0), keptReadLines: LineNumberArray.create(0), keptReadColumns: ColumnNumberArray.create(0), keptReadBlocks: FuncIndexArray.create(0)}
 	end 'create'
 
 	export function noteArgumentName(op ElementIndex, position ParamCount, name immutable ByteArray)
@@ -791,6 +792,7 @@ export type CapabilityNotes
 		shifted.keptArgColumns = self.keptArgColumns.clone()
 		shifted.keptArgOrigins = self.keptArgOrigins.clone()
 		shifted.keptNextLap = self.keptNextLap.clone()
+		shifted.keptByMove = self.keptByMove.clone()
 		shifted.keptReadSites = self.keptReadSites.clone()
 		shifted.keptReadLines = self.keptReadLines.clone()
 		shifted.keptReadColumns = self.keptReadColumns.clone()
@@ -890,6 +892,7 @@ export type CapabilityNotes
 		cacheWriteColumnNumberArray(writer, value: self.keptArgColumns)
 		cacheWriteUniqueOriginArray(writer, value: self.keptArgOrigins)
 		cacheWriteBoolArray(writer, value: self.keptNextLap)
+		cacheWriteBoolArray(writer, value: self.keptByMove)
 		cacheWriteFuncIndexArray(writer, value: self.keptReadSites)
 		cacheWriteLineNumberArray(writer, value: self.keptReadLines)
 		cacheWriteColumnNumberArray(writer, value: self.keptReadColumns)
@@ -941,16 +944,17 @@ export type CapabilityNotes
 		let f_keptArgColumns = try cacheReadColumnNumberArray(reader)
 		let f_keptArgOrigins = try cacheReadUniqueOriginArray(reader)
 		let f_keptNextLap = try cacheReadBoolArray(reader)
+		let f_keptByMove = try cacheReadBoolArray(reader)
 		let f_keptReadSites = try cacheReadFuncIndexArray(reader)
 		let f_keptReadLines = try cacheReadLineNumberArray(reader)
 		let f_keptReadColumns = try cacheReadColumnNumberArray(reader)
 		let f_keptReadBlocks = try cacheReadFuncIndexArray(reader)
 
-		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, windowReceiverOps: f_windowReceiverOps, windowReceiverLabels: f_windowReceiverLabels, windowReceiverLines: f_windowReceiverLines, windowReceiverColumns: f_windowReceiverColumns, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedOwned: f_droppedOwned, liveLinearCallOps: f_liveLinearCallOps, liveLinearCallNames: f_liveLinearCallNames, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps, keptArgOps: f_keptArgOps, keptArgPositions: f_keptArgPositions, keptArgNames: f_keptArgNames, keptArgLines: f_keptArgLines, keptArgColumns: f_keptArgColumns, keptArgOrigins: f_keptArgOrigins, keptNextLap: f_keptNextLap, keptReadSites: f_keptReadSites, keptReadLines: f_keptReadLines, keptReadColumns: f_keptReadColumns, keptReadBlocks: f_keptReadBlocks}
+		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, windowReceiverOps: f_windowReceiverOps, windowReceiverLabels: f_windowReceiverLabels, windowReceiverLines: f_windowReceiverLines, windowReceiverColumns: f_windowReceiverColumns, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedOwned: f_droppedOwned, liveLinearCallOps: f_liveLinearCallOps, liveLinearCallNames: f_liveLinearCallNames, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps, keptArgOps: f_keptArgOps, keptArgPositions: f_keptArgPositions, keptArgNames: f_keptArgNames, keptArgLines: f_keptArgLines, keptArgColumns: f_keptArgColumns, keptArgOrigins: f_keptArgOrigins, keptNextLap: f_keptNextLap, keptByMove: f_keptByMove, keptReadSites: f_keptReadSites, keptReadLines: f_keptReadLines, keptReadColumns: f_keptReadColumns, keptReadBlocks: f_keptReadBlocks}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize384
-		return sizeof(CapabilityNotes) as CacheSize384
+	static function cacheLayoutBytes() returns CacheSize392
+		return sizeof(CapabilityNotes) as CacheSize392
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

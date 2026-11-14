@@ -266,6 +266,133 @@ end 'main'
 error E3102: <fragment>:24:17: use of moved value 'token': its ownership moved to the parameter 'token' of 'keep', which keeps it
 ```
 
+<!-- test: a-unique-parameter-pushed-twice-is-refused -->
+A parameter the function itself keeps is moved by the first `push`, so the second reads a moved value.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+typealias TokenArray = Array with Token
+
+function keepTwice(token Token, shelf TokenArray)
+	shelf.push(token)
+	shelf.push(token)
+end 'keepTwice'
+
+function main() returns ExitCode
+	let shelf = TokenArray.create(0)
+	keepTwice(Token.create(1), shelf: shelf)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:13: use of moved value 'token': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-unique-parameter-bound-to-a-second-name-twice-is-refused -->
+`let first = token` moves a unique parameter exactly as it moves a local, so `let second = token` reads a moved value.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+function rebind(token Token) returns Tally
+	let first = token
+	let second = token
+
+	return 1
+end 'rebind'
+
+function main() returns ExitCode
+	let total = rebind(Token.create(1))
+	print("{total}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:15: use of moved value 'token': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-unique-parameter-handed-to-a-mutable-parameter-stays-readable -->
+Handing a unique parameter to a `mutable` parameter lends it for the call, so the parameter is read again afterwards, including in the handler of the `try` that made the call.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+end 'Token'
+
+enum Fault implements Error
+	broken
+end 'Fault'
+
+interface Handler
+	function handle(token mutable Token) throws Fault
+end 'Handler'
+
+type Quiet implements Handler
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function handle(token mutable Token) throws Fault
+		print("{token.peek()}\n")
+	end 'handle'
+end 'Quiet'
+
+function report(token Token, fault Fault) returns Tally
+	print("{fault.name}\n")
+
+	return token.peek()
+end 'report'
+
+function dispatch(token Token, handler Handler) returns Tally
+	try handler.handle(token) otherwise (fault) 'threw'
+		return report(token, fault: fault)
+	end 'threw'
+
+	return token.peek()
+end 'dispatch'
+
+function main() returns ExitCode
+	let quiet = Quiet.create()
+	let total = dispatch(Token.create(3), handler: quiet)
+	print("{total}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+3
+3
+```
+
 <!-- test: a-unique-local-kept-by-a-call-in-a-loop-is-refused-on-the-next-lap -->
 The second lap hands `ticket` over again after the first lap moved it.
 

@@ -926,6 +926,42 @@ end 'main'
 error E3102: <fragment>:24:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: a-finalizer-called-twice-on-a-parameter-is-refused -->
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function peek() returns Code
+		return self.code
+	end 'peek'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function settle(r Resp)
+	r.fin()
+	r.fin()
+end 'settle'
+
+function main() returns ExitCode
+	settle(Resp.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:23:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- test: a-linear-value-consumed-in-a-loop-body-is-refused -->
 
 ```maxon

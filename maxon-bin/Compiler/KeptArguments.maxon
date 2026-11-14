@@ -12,6 +12,14 @@ module function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonM
 
 	for site in 0 upto notes.keptArgOps.count() 'eachKeptArgument'
 		let opIdx = try notes.keptArgOps.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgOps.get OOB at {site} below its own count")
+
+		let movedByThisFunction = try notes.keptByMove.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptByMove.get OOB at {site} — the columns are pushed together")
+
+		if movedByThisFunction 'aMoveOfAParameter'
+			checkMovedParameterIsNotReadAgain(project, func: func, notes: notes, flow: flow, readsBySite: readsBySite, site: site)
+			continue
+		end 'aMoveOfAParameter'
+
 		let argIndex = try notes.keptArgPositions.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgPositions.get OOB at {site} — the columns are pushed together")
 		let target = try keptParameterAt(project, module: module, funcNames: funcNames, facts: facts, opIdx: opIdx, argIndex: argIndex) otherwise continue
 		let name = String.from(try notes.keptArgNames.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgNames.get OOB at {site} — the columns are pushed together"))
@@ -39,6 +47,24 @@ module function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonM
 		reportPositioned(project, code: ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: read.0, column: read.1, filePath: filePath)
 	end 'eachKeptArgument'
 end 'checkKeptArgumentsAreNotReadAgain'
+
+function checkMovedParameterIsNotReadAgain(project Project, func IrFunction, notes CapabilityNotes, flow BlockFlow, readsBySite KeptReadRowsBySite, site ElementIndex)
+	let opIdx = try notes.keptArgOps.get(site) otherwise panic("checkMovedParameterIsNotReadAgain: keptArgOps.get OOB at {site}")
+	let name = String.from(try notes.keptArgNames.get(site) otherwise panic("checkMovedParameterIsNotReadAgain: keptArgNames.get OOB at {site} — the columns are pushed together"))
+	let filePath = authoredFileOf(project, func: func, opIndex: opIdx)
+	let moveBlock = flow.blockPositionOfOp(opIdx)
+
+	if flow.blockReaches(moveBlock, to: moveBlock) 'movedInAnEarlierLap'
+		let moveLine = try notes.keptArgLines.get(site) otherwise panic("checkMovedParameterIsNotReadAgain: keptArgLines.get OOB at {site} — the columns are pushed together")
+		let moveColumn = try notes.keptArgColumns.get(site) otherwise panic("checkMovedParameterIsNotReadAgain: keptArgColumns.get OOB at {site} — the columns are pushed together")
+		reportPositioned(project, code: ErrorCode.useAfterMove, message: movedInAnEarlierIterationMessage(name), line: moveLine, column: moveColumn, filePath: filePath)
+		return
+	end 'movedInAnEarlierLap'
+
+	let reads = try readsBySite.get(site) otherwise return
+	let read = try firstReadAfterTheCall(notes, flow: flow, reads: reads, opIdx: opIdx) otherwise return
+	reportPositioned(project, code: ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: read.0, column: read.1, filePath: filePath)
+end 'checkMovedParameterIsNotReadAgain'
 
 function keptReadsBySite(notes CapabilityNotes) returns KeptReadRowsBySite
 	let rows = KeptReadRowsBySite.create()

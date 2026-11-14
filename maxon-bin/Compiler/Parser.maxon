@@ -19103,6 +19103,8 @@ type FunctionBodyState
 	export var capturedMoveValues as ValueMarkColumn
 	export var movedIntoCalls as MovedIntoCallMap
 	export var openKeptSites as OpenKeptSiteArray
+	export var lentUniqueParams as ValueIdArray
+	export var lentUniqueParamNames as NameRoster
 	export var capturedPromiseReads as ValueMarkColumn
 	export var letFieldPromiseReads as LetFieldPromiseNameMap
 	export var loopHeldBindings as NameRoster
@@ -19470,6 +19472,8 @@ type FunctionBodyState
 			capturedMoveValues: noValueMarks,
 			movedIntoCalls: MovedIntoCallMap.create(),
 			openKeptSites: OpenKeptSiteArray.create(0),
+			lentUniqueParams: ValueIdArray.create(0),
+			lentUniqueParamNames: NameRoster.create(0),
 			capturedPromiseReads: noValueMarks,
 			letFieldPromiseReads: LetFieldPromiseNameMap.create(),
 			loopHeldBindings: NameRoster.create(0),
@@ -36036,6 +36040,11 @@ export type Parser
 					self.bodyState.constructorFeedParams = withValueMarked(self.bodyState.constructorFeedParams, value: paramId)
 				end 'settledByTheCaller'
 			end 'opaqueFeed'
+
+			if not paramIsByRef and not binding.isEnrolled and self.valueHoldsAUniqueRecord(paramValue) 'aLentUnique'
+				self.bodyState.lentUniqueParams.push(paramValue)
+				self.bodyState.lentUniqueParamNames.push(paramName)
+			end 'aLentUnique'
 		end 'eachParam'
 	end 'bindParameters'
 
@@ -38935,7 +38944,11 @@ export type Parser
 				// is what moves its drop from statement-end to scope-exit.
 				self.removeFromPendingTemps(boundValue)
 			end 'takeOwnership'
-		end 'trackOwned'
+		end 'trackOwned' else 'aBorrowedValue'
+			if boundBareLocal 'rebindsABorrowedName'
+				self.noteLentUniqueMoved(boundValue)
+			end 'rebindsABorrowedName'
+		end 'aBorrowedValue'
 
 		// ⭐ **A PROMISE BINDING OWNS A GREEN THREAD, the dual of the E3100 linear-await check.**
 		// `let/var p = async f()` enrols the spawn as an owned value, so the SAME scope-exit / re-arm / branch-
@@ -50259,6 +50272,8 @@ export type Parser
 	end 'threadNameAliasedBy'
 
 	function poisonMoveSource(value ValueId)
+		self.noteLentUniqueMoved(value)
+
 		// The OWNER first, and the aliases only once it has been found: `liveOwnerIndexOf` skips a
 		// poisoned owner — so marking the names first would hide the owner from its own lookup, and with
 		// it the loop-escape refusal below.
@@ -64283,6 +64298,7 @@ export type Parser
 		notes.keptArgColumns.push(anchorTok.column)
 		notes.keptArgOrigins.push(origin)
 		notes.keptNextLap.push(false)
+		notes.keptByMove.push(false)
 	end 'fileLentKeptArgument'
 
 	function keptArgumentTokenAt(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg, anchor Token) returns Token throws AbsentError
@@ -64310,6 +64326,7 @@ export type Parser
 		notes.keptArgColumns.push(anchor.column)
 		notes.keptArgOrigins.push(UniqueOrigin.owned)
 		notes.keptNextLap.push(self.moveOfValueEscapesLoop(argValue) and not self.valueIsCarried(argValue))
+		notes.keptByMove.push(false)
 
 		for later in (position + 1) upto argAnchors.count() 'eachLaterArgument'
 			self.fileReadsInArgument(notes, site: site, value: argValue, holder: holder, argStart: try argAnchors.get(later) otherwise panic("fileKeptArgumentSite: argAnchors.get OOB at {later} below its own count"))
@@ -64348,6 +64365,46 @@ export type Parser
 		notes.keptReadColumns.push(tok.column)
 		notes.keptReadBlocks.push(self.bodyState.currentBlock.id as ElementIndex)
 	end 'fileKeptRead'
+
+	function noteLentUniqueMoved(value ValueId)
+		if self.bodyState.lentUniqueParams.isEmpty() 'noLentUniqueHere'
+			return
+		end 'noLentUniqueHere'
+
+		let holders = self.uniquePayloadSubjectsOf(value)
+		holders.push(value)
+
+		for holder in holders 'eachHolder'
+			for index in 0 upto self.bodyState.lentUniqueParams.count() 'eachLentParameter'
+				if (try self.bodyState.lentUniqueParams.get(index) otherwise panic("noteLentUniqueMoved: lentUniqueParams.get OOB at {index} below its own count")) != holder 'anotherParameter'
+					continue
+				end 'anotherParameter'
+
+				let name = try self.bodyState.lentUniqueParamNames.get(index) otherwise panic("noteLentUniqueMoved: lentUniqueParamNames.get OOB at {index} — the columns are pushed together")
+				self.fileMovedLentUniqueSite(value, holder: holder, name: name)
+				return
+			end 'eachLentParameter'
+		end 'eachHolder'
+	end 'noteLentUniqueMoved'
+
+	function fileMovedLentUniqueSite(value ValueId, holder ValueId, name immutable ByteArray)
+		let notes = self.notesForWrite(self.bodyFunction())
+		let anchorTok = self.tokenAt(self.pos - 1)
+		let site = notes.keptArgOps.count() as ElementIndex
+
+		// The site is the next op to be emitted, never the last one: the last op can lie in a predecessor
+		// block that also reaches a sibling branch, which would flag a read on a path that never moved.
+
+		notes.keptArgOps.push(self.artifact.module.ops.count())
+		notes.keptArgPositions.push(holder as ParamCount)
+		notes.keptArgNames.push(name)
+		notes.keptArgLines.push(anchorTok.line)
+		notes.keptArgColumns.push(anchorTok.column)
+		notes.keptArgOrigins.push(UniqueOrigin.owned)
+		notes.keptNextLap.push(false)
+		notes.keptByMove.push(true)
+		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: value, holder: holder))
+	end 'fileMovedLentUniqueSite'
 
 	function noteReadOfKeptArgument(binding VarInfo, nameTok Token)
 		if self.bodyState.openKeptSites.isEmpty() 'nothingKept'
@@ -74625,6 +74682,7 @@ export type Parser
 			return arg
 		end 'scalar'
 
+		self.noteLentUniqueMoved(arg)
 		let moved = try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), range: range)
 		return self.unsharedStoredByteRecord(moved, range: range)
 	end 'moveInPayload'
@@ -74635,6 +74693,8 @@ export type Parser
 		if not self.valueIsManagedHeap(arg) 'ownsNoHeap'
 			return arg
 		end 'ownsNoHeap'
+
+		self.noteLentUniqueMoved(arg)
 
 		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), range: range)
 	end 'moveConcreteValueInto'
@@ -88777,6 +88837,8 @@ export type Parser
 		if self.signatures.containerElementIsFrozen(giid) and not isString and not self.valueIsOwnedHeap(value) and self.tagOf(value) != ValueTypeTag.interfaceRef 'sharesTheReadOnlyRecord'
 			return try self.shareReadOnlyRecordInto(value, range: SourceRange.ofToken(anchor))
 		end 'sharesTheReadOnlyRecord'
+
+		self.noteLentUniqueMoved(value)
 
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
 	end 'moveElementIn'

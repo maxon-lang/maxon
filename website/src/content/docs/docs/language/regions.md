@@ -385,7 +385,9 @@ An `isolated` field filled in `modify`, written by a one-call open and taken out
 
 `type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`,
 whether `a` is a `let` or a `var` (**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
-callee that keeps its parameter takes the caller's variable. `clone()` is **E3214** (`'Ticket' is unique and
+callee that keeps its parameter takes the caller's variable. A parameter moves as a local does: after the
+function binds it to a second name, stores it, or answers it (`Reply`), a later read of it on a path that
+follows, or the same move on the next lap of a loop, is **E3102**. `clone()` is **E3214** (`'Ticket' is unique and
 cannot be cloned`):
 
 ```maxon

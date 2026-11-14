@@ -15,6 +15,13 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A unique parameter (a `unique` type, a type holding a unique field, a `Reply`) is moved by the function that
+  keeps it, as a local is: after `parked.answer(1)`, `shelf.push(token)`, `let first = token` or a field or payload
+  store of a parameter, any later read of that parameter on a path that follows is E3102, and so is the same move
+  inside a loop that goes round again. A second `answer` on a `Reply` parameter compiled until now.
+  Fix: move the parameter once on each path; answer a `Reply` parameter in one arm of each branch, or answer it
+  once and return.
+
 - `let b = a` moves a unique value from a `let` source as it does from a `var`: after `let second = first` with
   `let first = Ticket.create(1)` (a `unique` type, a type holding a unique field, a `Reply`), reading `first` is
   E3102. Until now a `let` source stayed readable beside its `let` alias.
