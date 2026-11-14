@@ -25,7 +25,7 @@ end 'Sink'
 function deliver(sink Sink.handle, value Count)
 	try sink.receive(value, sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull then panic("fan-in: a producer runs on its service's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			mailboxFull then panic("fan-in: a producer is a coroutine whose promise main awaits, and a send given ForeverMs waits for room — mailboxFull cannot occur")
 			serviceStopped then panic("fan-in: the sink stopped while a producer was sending")
 		end 'why'
 	end 'refused'
@@ -40,24 +40,15 @@ function readTotal(sink Sink.handle) returns Count
 	end 'refused'
 end 'readTotal'
 
-type Producer
-	var index as ProducerIndex
-	var sink as Sink.handle
+function produce(sink Sink.handle, index ProducerIndex, perProducer Count) returns Count
+	let base = (index as Count) * perProducer
 
-	static function create(index ProducerIndex, sink Sink.handle) returns Self
-		return Self{index: index, sink: sink}
-	end 'create'
+	for offset in 0 upto perProducer 'eachValue'
+		deliver(sink, value: base + offset)
+	end 'eachValue'
 
-	export function produce(perProducer Count) returns Count
-		let base = (self.index as Count) * perProducer
-
-		for offset in 0 upto perProducer 'eachValue'
-			deliver(self.sink, value: base + offset)
-		end 'eachValue'
-
-		return perProducer
-	end 'produce'
-end 'Producer'
+	return perProducer
+end 'produce'
 
 function main() returns ExitCode
 	let perProducer = try CommandLine.readOptionalIntArgument(1, otherwise: defaultPerProducer) otherwise 'badArgument'
@@ -68,13 +59,12 @@ function main() returns ExitCode
 	let sink = spawn Sink.create()
 	let sent = SentPromiseArray.create(0)
 
-	for index in 0 upto producerCount 'spawnProducers'
-		let producer = spawn Producer.create(index as ProducerIndex, sink: sink.clone())
-		sent.push(try producer.produce(perProducer) otherwise panic("fan-in: a fresh producer refused its only message"))
-	end 'spawnProducers'
+	for index in 0 upto producerCount 'startProducers'
+		sent.push(async produce(sink, index: index as ProducerIndex, perProducer: perProducer))
+	end 'startProducers'
 
-	// A producer replies only after its last send, and the sink's mailbox is FIFO, so once every reply
-	// is in, every value is queued ahead of the read below.
+	// A producer's promise resolves after its last send is queued, and the sink's mailbox is FIFO, so
+	// the read below must follow every await or the total comes up short.
 	for completion in sent 'awaitProducers'
 		_ = await completion
 	end 'awaitProducers'

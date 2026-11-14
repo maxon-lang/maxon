@@ -33,42 +33,39 @@ type Reporter
 	end 'whoHolds'
 end 'Reporter'
 
-union Successor
-	unlinked
-	linked(next RingNode.handle)
-end 'Successor'
+typealias RingNodeArray = Array with RingNode.handle
 
 type RingNode
 	var label as RingLabel
-	var successor as Successor
 	var reporter as Reporter.handle
 
 	static function create(label RingLabel, reporter Reporter.handle) returns Self
-		return Self{label: label, successor: Successor.unlinked, reporter: reporter}
+		return Self{label: label, reporter: reporter}
 	end 'create'
 
-	export function link(next RingNode.handle)
-		self.successor = Successor.linked(next)
-	end 'link'
-
-	export function pass(remaining Count)
+	export function pass(ring immutable RingNodeArray, remaining Count)
 		if remaining == 0 'holdsZero'
 			try self.reporter.report(self.label) otherwise panic("RingNode.pass: the reporter refused the only report")
 			return
 		end 'holdsZero'
 
-		match self.successor 'forward'
-			linked(next) then try next.pass(remaining - 1) otherwise panic("RingNode.pass: the only token in the ring was refused")
-			unlinked then panic("RingNode.pass: the ring was never linked")
-		end 'forward'
+		let following = (self.label mod ringSize) as RingSlot
+		let next = try ring.get(following) otherwise panic("RingNode.pass: every slot lies inside the ring")
+		try next.pass(ring, remaining: remaining - 1) otherwise panic("RingNode.pass: the only token in the ring was refused")
 	end 'pass'
 end 'RingNode'
 
-typealias RingNodeArray = Array with RingNode.handle
+function spawnRing(reporter Reporter.handle) returns immutable RingNodeArray
+	let nodes = RingNodeArray.create(0) as isolated RingNodeArray
 
-function ringNodeAt(nodes RingNodeArray, slot RingSlot) returns RingNode.handle
-	return try nodes.get(slot) otherwise panic("ringNodeAt: every slot lies inside the ring")
-end 'ringNodeAt'
+	modify nodes 'fill'
+		for slot in 0 upto ringSize 'spawnNodes'
+			nodes.push(spawn RingNode.create((slot + 1) as RingLabel, reporter: reporter.clone()))
+		end 'spawnNodes'
+	end 'fill'
+
+	return freeze nodes
+end 'spawnRing'
 
 function main() returns ExitCode
 	let passes = try CommandLine.readOptionalIntArgument(1, otherwise: defaultPasses) otherwise 'badArgument'
@@ -77,28 +74,14 @@ function main() returns ExitCode
 	end 'badArgument'
 
 	let reporter = spawn Reporter.create()
-	let nodes = RingNodeArray.create(0)
+	let ring = spawnRing(reporter)
+	let first = try ring.get(0) otherwise panic("thread-ring: the ring holds a first node")
 
-	for slot in 0 upto ringSize 'spawnNodes'
-		nodes.push(spawn RingNode.create((slot + 1) as RingLabel, reporter: reporter.clone()))
-	end 'spawnNodes'
+	try first.pass(ring, remaining: passes) otherwise panic("thread-ring: the first node refused the token")
 
-	for slot in 0 upto ringSize 'linkNodes'
-		let following = ((slot + 1) mod ringSize) as RingSlot
-		try ringNodeAt(nodes, slot: slot as RingSlot).link(ringNodeAt(nodes, slot: following).clone()) otherwise panic("thread-ring: a fresh node refused its link")
-	end 'linkNodes'
-
-	try ringNodeAt(nodes, slot: 0).pass(passes) otherwise panic("thread-ring: the first node refused the token")
-
-	// The holder at zero reports fire-and-forget, because a node awaiting a reply waits while holding its
-	// service, which is E3221; only an idle ring guarantees the report has landed.
+	// The report is a reply-less send, so only an idle ring guarantees it has landed before the read.
 	_ = Scheduler.quiesce()
 	let holder = try await reporter.whoHolds() otherwise panic("thread-ring: the token never reached zero")
-
-	// The ring's handles form a cycle that keeps every node alive until it is shut down.
-	for node in nodes 'shutDown'
-		node.shutdown()
-	end 'shutDown'
 
 	print("thread-ring {holder}\n")
 	return 0

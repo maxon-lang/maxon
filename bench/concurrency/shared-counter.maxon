@@ -24,7 +24,7 @@ end 'Counter'
 function deliverIncrement(counter Counter.handle)
 	try counter.inc(sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull then panic("shared-counter: an incrementer runs on its service's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			mailboxFull then panic("shared-counter: an incrementer is a coroutine whose promise main awaits, and a send given ForeverMs waits for room — mailboxFull cannot occur")
 			serviceStopped then panic("shared-counter: the counter stopped while an incrementer was sending")
 		end 'why'
 	end 'refused'
@@ -39,21 +39,13 @@ function readCount(counter Counter.handle) returns Count
 	end 'refused'
 end 'readCount'
 
-type Incrementer
-	var counter as Counter.handle
+function increment(counter Counter.handle, perIncrementer Count) returns Count
+	for _ in 0 upto perIncrementer 'eachIncrement'
+		deliverIncrement(counter)
+	end 'eachIncrement'
 
-	static function create(counter Counter.handle) returns Self
-		return Self{counter: counter}
-	end 'create'
-
-	export function increment(perIncrementer Count) returns Count
-		for _ in 0 upto perIncrementer 'eachIncrement'
-			deliverIncrement(self.counter)
-		end 'eachIncrement'
-
-		return perIncrementer
-	end 'increment'
-end 'Incrementer'
+	return perIncrementer
+end 'increment'
 
 function main() returns ExitCode
 	let perIncrementer = try CommandLine.readOptionalIntArgument(1, otherwise: defaultPerIncrementer) otherwise 'badArgument'
@@ -64,13 +56,12 @@ function main() returns ExitCode
 	let counter = spawn Counter.create()
 	let finished = IncrementedPromiseArray.create(0)
 
-	for _ in 0 upto incrementerCount 'spawnIncrementers'
-		let incrementer = spawn Incrementer.create(counter.clone())
-		finished.push(try incrementer.increment(perIncrementer) otherwise panic("shared-counter: a fresh incrementer refused its only message"))
-	end 'spawnIncrementers'
+	for _ in 0 upto incrementerCount 'startIncrementers'
+		finished.push(async increment(counter, perIncrementer: perIncrementer))
+	end 'startIncrementers'
 
-	// An incrementer replies only after its last `inc()`, and the counter's mailbox is FIFO, so once
-	// every reply is in, every increment is queued ahead of the read below.
+	// An incrementer's promise resolves after its last `inc()` is queued, and the counter's mailbox is
+	// FIFO, so the read below must follow every await or the count comes up short.
 	for completion in finished 'awaitIncrementers'
 		_ = await completion
 	end 'awaitIncrementers'

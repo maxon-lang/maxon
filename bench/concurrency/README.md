@@ -36,13 +36,13 @@ definition.
 
 | Workload | Arguments (default) | Output | Go | Maxon | Exercises |
 |---|---|---|---|---|---|
-| thread-ring | `N` (1000) | the 1-based label of the thread holding the token when it reaches 0, with 503 threads | 503 goroutines, each blocked on its own `sync.Mutex`; the token is handed on by unlocking the next | 503 services; `pass(remaining)` is a reply-less message to the successor; the holder at 0 reports to a `Reporter` service | send, park, wake |
+| thread-ring | `N` (1000) | the 1-based label of the thread holding the token when it reaches 0, with 503 threads | 503 goroutines, each blocked on its own `sync.Mutex`; the token is handed on by unlocking the next | 503 services; `pass(ring, remaining)` is a reply-less message to the successor, which the node reads out of the frozen ring array the message carries; the holder at 0 reports to a `Reporter` service | send, park, wake |
 | ping-pong | `N` (1000000) | the sum of `i+1` over the rounds | two goroutines on unbuffered channels | `main` and one `Partner` service; `try await partner.ping(i)` each round | the reply path: cell, await, completion |
-| fan-in | `M` (100000) | the total of `p*M+j` over 64 producers | 64 producer goroutines send to one consumer on a channel of capacity 1024 | 64 `Producer` services send reply-less messages to one `Sink` (capacity 1024) with `sendTimeout: ForeverMs`, waiting on its sender queue when it is full; each producer answers a completion reply; then one awaited total | one mailbox under contention, the global lock |
+| fan-in | `M` (100000) | the total of `p*M+j` over 64 producers | 64 producer goroutines send to one consumer on a channel of capacity 1024 | 64 `async` producer coroutines of `main` send reply-less messages to one `Sink` (capacity 1024) with `sendTimeout: ForeverMs`, waiting on its sender queue when it is full; each coroutine's promise resolves with its count; then one awaited total | one mailbox under contention, the global lock |
 | worker-pool | `T K` (4096 250000) | the sum of the xorshift kernel's results over `T` tasks | `GOMAXPROCS` workers range over a buffered job channel and write a buffered result channel | `Scheduler.processorCount()` `Worker` services; task `t` goes to worker `t mod count`; every reply is awaited and summed | parallel scaling |
 | spawn-many | `S` (100000) | the sum of `i*2` over `S` threads | `S` goroutines write into a slice behind a `WaitGroup` | `S` `Doubler` services, one reply method each, all awaited and summed | spawn cost, the stack pool, peak memory |
 | coroutine-churn | `N` (100000) | the sum of `i` over `N` coroutines that each yield once | `N` goroutines, each `runtime.Gosched()` once, at `GOMAXPROCS=1` | `N` `async` calls, each `Scheduler.yield()` once; all awaited | `async` spawn, park, await, with no parallelism |
-| shared-counter | `M` (100000) | the number of increments, `64*M` | 64 incrementer goroutines send `M` increments each to one counter goroutine that owns the count, on a channel of capacity 1024; each incrementer signals its own `done` channel; then one read request carrying a reply channel | 64 `Incrementer` services send `M` reply-less `inc()` to one `Counter` service (capacity 1024) with `sendTimeout: ForeverMs`, waiting on its sender queue when it is full; each incrementer answers a completion reply; then one awaited `read()` | state owned by one thread, one mailbox under contention |
+| shared-counter | `M` (100000) | the number of increments, `64*M` | 64 incrementer goroutines send `M` increments each to one counter goroutine that owns the count, on a channel of capacity 1024; each incrementer signals its own `done` channel; then one read request carrying a reply channel | 64 `async` incrementer coroutines of `main` send `M` reply-less `inc()` to one `Counter` service (capacity 1024) with `sendTimeout: ForeverMs`, waiting on its sender queue when it is full; each coroutine's promise resolves with its count; then one awaited `read()` | state owned by one thread, one mailbox under contention |
 
 The worker-pool kernel, identical in both languages:
 
@@ -66,12 +66,17 @@ is NOT bent to dodge a runtime cost, because the cost is what the instrument exi
   and the receive that frees a slot moves the first waiting sender's message into it and wakes that
   sender, as a Go sender parks on the full channel's `sendq` until the receiver makes room. Both bound the
   backlog at 1024 messages, so peak memory compares directly.
+- **The senders are coroutines of `main`.** A message that sends with a positive `sendTimeout:` waits while
+  holding its service, which is E3221, so the 64 senders are `async` calls that hold no service. They
+  share `main`'s strand, where Go's 64 sender goroutines spread over every processor.
 - **spawn-many** pays a message and a reply round trip per Maxon service, where each goroutine writes
   one slice slot, so its ratio is skewed against Maxon by the messaging on top of the spawn.
 - **thread-ring** cannot await its successor: a message that awaits a reply waits while holding its
   service, which is E3221. The holder at 0 therefore sends a reply-less report to a `Reporter` service,
   `main` parks in `Scheduler.quiesce()` until the ring is idle and then asks the reporter who holds the
-  token, and every node is shut down at the end. The Go program reports over a channel.
+  token. A service's state may not reach a handle to its own type (E4014), so no node holds its
+  successor: every message carries the ring as a frozen array of handles and the node looks its successor
+  up in it. The Go program reports over a channel.
 - **worker-pool** distributes tasks round-robin by `t mod count` at the send. Go's workers pull tasks
   from a channel as they finish; Maxon has no multi-consumer queue, so the load balance is static. The
   tasks are uniform, so the balance is equal. Each worker is spawned with `spawn(capacity: n)` for `n` its
