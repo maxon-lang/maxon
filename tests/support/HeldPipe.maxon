@@ -14,7 +14,6 @@ let HeldPipeTickPrefix = "heldpipe: tick "
 let HeldPipeTickCount = 8
 let HeldPipeStopFileName = "heldpipe.stop"
 let HeldPipeHolderEndMs = 10000 as DurationMs
-let HeldPipeHolderPollMs = 20
 
 public function stagedHeldPipe(caseLabel String) returns FilePath
 	return stagedFixtureTree(HeldPipeFixturesDirName, caseLabel: caseLabel, fixture: HeldPipeFixtureName)
@@ -59,13 +58,7 @@ end 'endHeldPipeHolder'
 function stopHeldPipeHolder(staged FilePath, holder Pid)
 	writeStagedFile(staged.join(HeldPipeStopFileName), content: "stop")
 
-	let begun = Clock.nowMs()
-
-	while Process.isAlive(holder) and Clock.elapsedMs(begun) < HeldPipeHolderEndMs 'waiting'
-		sleep(HeldPipeHolderPollMs)
-	end 'waiting'
-
-	if Process.isAlive(holder) 'stillThere'
+	if not endedWithin(holder, boundMs: HeldPipeHolderEndMs) 'stillThere'
 		panic("the gate could not clean up — the process the held-pipe program started ({holder}) is still alive {HeldPipeHolderEndMs} ms after it was told to stop, and a later run cannot clear the staging directory it runs in.")
 	end 'stillThere'
 end 'stopHeldPipeHolder'

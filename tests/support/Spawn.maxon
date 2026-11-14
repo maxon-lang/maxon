@@ -7,6 +7,7 @@ let WindowsShellCommandFlag = "-Command"
 let PosixTouchName = "touch"
 let PosixTouchTimeFlag = "-t"
 let PosixYear2000Stamp = "200001010000"
+let ProcessEndPollMs = 20
 
 #if os(Windows)
 	let WindowsLinkToolName = "cmd"
@@ -151,6 +152,16 @@ public function endedProcessId() returns Pid
 
 	return finished.pid
 end 'endedProcessId'
+
+public function endedWithin(process Pid, boundMs DurationMs) returns bool
+	let begun = Clock.nowMs()
+
+	while Process.isAlive(process) and Clock.elapsedMs(begun) < boundMs 'untilItEnds'
+		sleep(ProcessEndPollMs)
+	end 'untilItEnds'
+
+	return not Process.isAlive(process)
+end 'endedWithin'
 
 public function requireBuiltOrPanic(build CollectedOutput, output FilePath, what String)
 	if build.exitCode() != 0 'didNotBuild'

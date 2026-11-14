@@ -9,6 +9,7 @@ let CommandsAfterTheDetach = 2
 
 let WatchLookGapMs = 50
 let WatchDeadlineMs = 40000
+let ProgramEndBoundMs = 10000
 let TrackDescendantsVariable = "MAXON_TRACK_DESCENDANTS"
 let ArmedMark = "A"
 let DescendantFrameWord = "maxon-spec"
@@ -159,6 +160,11 @@ test 'a command that needs the program held is refused once the session has deta
 
 		Expect.fail("⭐ A DETACHED PROGRAM RUNS TO ITS OWN END. The fixture writes {FinishedMarkerName} as its last act, and it never appeared: something the session did after letting the program go, a command or its close, ended it, or left it stopped. The session ran {session.durationMs} ms from the moment it was started and exited {session.exitCode()}. The program's state and any debug stub's, one listing every {WatchLookGapMs} ms plus the time the listing takes, from before the session started, as the changes of `pid ppid pgid stat`:{timeline}{LineFeed}{trackingNote(session)}{LineFeed}The program was {program}{LineFeed}Its events were: {listedLines(kinds)}. The program's own processes now: {processSnapshot(staged.toString())}. {said}")
 	end 'neverAppeared'
+
+	match recordedPid(staged.join(OutlivesPidFileName)) 'recorded'
+		written(pid) then Expect.isTrue(endedWithin(pid, boundMs: ProgramEndBoundMs), message: "the released program wrote {FinishedMarkerName} and was still running {ProgramEndBoundMs} ms later: {stateRowOf(pid)}. {said}")
+		unwritten then panic("the gate could not run — {OutlivesPidFileName} is gone though {FinishedMarkerName} was written")
+	end 'recorded'
 
 	discardStagedDir(staged)
 end 'a command that needs the program held is refused once the session has detached from it, and the program runs on to its own end'
