@@ -499,9 +499,14 @@ end 'rebasedHeldParse'
 function sharedParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns immutable SharedLibraryParse throws SharedMemoMiss
 	let store = SharedLibraryCache.current()
 
-	if let held = try (try store.files.holding(contentHash)).answering(variant, key: key) 'alreadyShared'
-		return held
-	end 'alreadyShared'
+	// A `try` nested in the condition of another propagates out of this function instead of falling
+	// through, so a file absent from the store would never reach the pack. Gate:
+	// tests/specHarness/gates/spec-workers-start-from-the-library-cache.maxtest.
+	if let file = try store.files.holding(contentHash) 'fileShared'
+		if let held = try file.answering(variant, key: key) 'alreadyShared'
+			return held
+		end 'alreadyShared'
+	end 'fileShared'
 
 	let shared = freeze (try decodedParseFor(project, contentHash: contentHash, variant: variant, key: key, libraryHash: libraryHash)).clone()
 	publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: shared))
