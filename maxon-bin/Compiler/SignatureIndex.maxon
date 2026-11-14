@@ -5234,6 +5234,87 @@ end 'cacheReadBareNameSet'
 
 // @generated library-cache end
 
+module typealias HandOffPositionsByArity = Map with (ParamCount, ParamPositionMask)
+
+// @generated library-cache begin
+function cacheWriteHandOffPositionsByArity(writer LibraryCacheWriter, value HandOffPositionsByArity)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		writer.unsigned(entry as CacheUnsigned)
+	end 'eachEntry'
+end 'cacheWriteHandOffPositionsByArity'
+
+function cacheReadHandOffPositionsByArity(reader LibraryCacheReader) returns HandOffPositionsByArity throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = HandOffPositionsByArity.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ParamCount
+		let entry = (try reader.unsigned()) as ParamPositionMask
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadHandOffPositionsByArity'
+
+// @generated library-cache end
+
+module typealias HandOffsByCallee = Map with (ByteArray, HandOffPositionsByArity)
+
+// @generated library-cache begin
+function cacheWriteHandOffsByCallee(writer LibraryCacheWriter, value HandOffsByCallee)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteHandOffPositionsByArity(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteHandOffsByCallee'
+
+function cacheReadHandOffsByCallee(reader LibraryCacheReader) returns HandOffsByCallee throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = HandOffsByCallee.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadHandOffPositionsByArity(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadHandOffsByCallee'
+
+// @generated library-cache end
+
+module type CorpusHandOffs
+	module var byCallee as HandOffsByCallee
+	module var indirect as HandOffPositionsByArity
+
+	module static function create() returns CorpusHandOffs
+		return Self{byCallee: HandOffsByCallee.create(), indirect: HandOffPositionsByArity.create()}
+	end 'create'
+end 'CorpusHandOffs'
+
+module function fileIsInTheSharedCorpus(isLibrary bool, isScriptlib bool) returns bool
+	return isLibrary and not isScriptlib
+end 'fileIsInTheSharedCorpus'
+
+module function notedHandOffSlot(positions HandOffPositionsByArity, slot FunctionValueSlot)
+	if slot.position >= MaxAbiArgs 'pastTheMask'
+		return
+	end 'pastTheMask'
+
+	positions.upsert(slot.arity, value: maskWithParam(try positions.get(slot.arity) otherwise NoParamPositions, param: slot.position))
+end 'notedHandOffSlot'
+
+function mergedHandOffPositions(into HandOffPositionsByArity, added HandOffPositionsByArity)
+	for (arity, positions) in added 'eachArity'
+		into.upsert(arity, value: (try into.get(arity) otherwise NoParamPositions) or positions)
+	end 'eachArity'
+end 'mergedHandOffPositions'
+
 // Aggregate name -> `aggregateSupportsDeepClone`'s answer for it. See that function for why one compile may
 // hold the answer at all.
 module typealias DeepCloneAnswerMap = Map with (ByteArray, bool)
@@ -16163,6 +16244,9 @@ export type SettledDeclarations
 	// a legal home for any value, so an unrelated same-named callee costs an allocation and nothing else.
 	module var byRefBareNames as BareNameSet
 	module var opaqueByRefBareNames as BareNameSet
+	module var corpusHandOffsByCallee = HandOffsByCallee.create()
+	module var corpusIndirectHandOffs = HandOffPositionsByArity.create()
+	module var freeFunctionByRefPositions = HandOffPositionsByArity.create()
 	module let genericInstanceNameMarker as immutable ByteArray
 
 	// ⭐ Function name -> its `throws E` clause. `throwsOf(callee)` is the door a call site asks
@@ -16649,6 +16733,9 @@ export type SettledDeclarations
 		cacheWriteGlobalAliasReturnKeySet(writer, value: self.globalAliasReturnKeys)
 		cacheWriteBareNameSet(writer, value: self.byRefBareNames)
 		cacheWriteBareNameSet(writer, value: self.opaqueByRefBareNames)
+		cacheWriteHandOffsByCallee(writer, value: self.corpusHandOffsByCallee)
+		cacheWriteHandOffPositionsByArity(writer, value: self.corpusIndirectHandOffs)
+		cacheWriteHandOffPositionsByArity(writer, value: self.freeFunctionByRefPositions)
 		cacheWriteFuncThrowsMap(writer, value: self.funcThrows)
 		cacheWriteDeclaredBodyFactNameSet(writer, value: self.funcDiverges)
 		cacheWriteDeclaredBodyFactNameSet(writer, value: self.funcAlwaysThrows)
@@ -16798,6 +16885,9 @@ export type SettledDeclarations
 		let f_globalAliasReturnKeys = try cacheReadGlobalAliasReturnKeySet(reader)
 		let f_byRefBareNames = try cacheReadBareNameSet(reader)
 		let f_opaqueByRefBareNames = try cacheReadBareNameSet(reader)
+		let f_corpusHandOffsByCallee = try cacheReadHandOffsByCallee(reader)
+		let f_corpusIndirectHandOffs = try cacheReadHandOffPositionsByArity(reader)
+		let f_freeFunctionByRefPositions = try cacheReadHandOffPositionsByArity(reader)
 		let f_funcThrows = try cacheReadFuncThrowsMap(reader)
 		let f_funcDiverges = try cacheReadDeclaredBodyFactNameSet(reader)
 		let f_funcAlwaysThrows = try cacheReadDeclaredBodyFactNameSet(reader)
@@ -16872,11 +16962,11 @@ export type SettledDeclarations
 		let f_genericInstancesBySite = try cacheReadGenericFunctionInstancesBySite(reader)
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, genericWithSites: f_genericWithSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, typeExtensionConformances: f_typeExtensionConformances, extensionMethodConstraints: f_extensionMethodConstraints, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, sawMutableMarker: f_sawMutableMarker, sawMutableFunctionValue: f_sawMutableFunctionValue, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, funcDiverges: f_funcDiverges, funcAlwaysThrows: f_funcAlwaysThrows, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcConstructsFromParams: f_funcConstructsFromParams, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReturnsParameter: f_funcReturnsParameter, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, sweptDeclarations: f_sweptDeclarations, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionHeldArguments: f_extensionHeldArguments, extensionMethodDeclFiles: f_extensionMethodDeclFiles, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, initializerClosureShapes: f_initializerClosureShapes, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, authorMints: f_authorMints, contestedNominalClaims: f_contestedNominalClaims, contestedBindingNames: f_contestedBindingNames, contestedClaimHolders: f_contestedClaimHolders, bindingSiteHolders: f_bindingSiteHolders, sweptGenericSites: f_sweptGenericSites, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, functionDirectoryHolders: f_functionDirectoryHolders, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, genericWithSites: f_genericWithSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, typeExtensionConformances: f_typeExtensionConformances, extensionMethodConstraints: f_extensionMethodConstraints, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, sawMutableMarker: f_sawMutableMarker, sawMutableFunctionValue: f_sawMutableFunctionValue, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, corpusHandOffsByCallee: f_corpusHandOffsByCallee, corpusIndirectHandOffs: f_corpusIndirectHandOffs, freeFunctionByRefPositions: f_freeFunctionByRefPositions, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, funcDiverges: f_funcDiverges, funcAlwaysThrows: f_funcAlwaysThrows, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcConstructsFromParams: f_funcConstructsFromParams, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReturnsParameter: f_funcReturnsParameter, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, sweptDeclarations: f_sweptDeclarations, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionHeldArguments: f_extensionHeldArguments, extensionMethodDeclFiles: f_extensionMethodDeclFiles, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, initializerClosureShapes: f_initializerClosureShapes, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, authorMints: f_authorMints, contestedNominalClaims: f_contestedNominalClaims, contestedBindingNames: f_contestedBindingNames, contestedClaimHolders: f_contestedClaimHolders, bindingSiteHolders: f_bindingSiteHolders, sweptGenericSites: f_sweptGenericSites, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, functionDirectoryHolders: f_functionDirectoryHolders, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1184
-		return sizeof(SettledDeclarations) as CacheSize1184
+	static function cacheLayoutBytes() returns CacheSize1208
+		return sizeof(SettledDeclarations) as CacheSize1208
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -18762,7 +18852,7 @@ export type ProgramSignatures
 	function byRefConventionDigestParsedBy(declFilePath FilePath) returns HashDigest
 		self.requireByRefMasksSettled()
 
-		if self.declaredByTheCorpus(declFilePath) and not self.declaredInTheScriptlib(declFilePath) 'aCorpusFile'
+		if self.declaredByTheSharedCorpusAt(declFilePath.toString()) 'aCorpusFile'
 			return self.corpusByRefConventionDigestAnswer
 		end 'aCorpusFile'
 
@@ -18789,21 +18879,25 @@ export type ProgramSignatures
 			digest = Hasher.combined(digest, value: LivenessTakesAParamByRef)
 			digest = Hasher.combined(digest, value: nameSetDigest(self.settledDeclarations().byRefBareNames))
 			corpusDigest = Hasher.combined(corpusDigest, value: LivenessTakesAParamByRef)
-			corpusDigest = Hasher.combined(corpusDigest, value: nameSetDigestBeyond(self.settledDeclarations().byRefBareNames, excluded: self.corpusByRefBareNames()))
+			let handedOffCallees = self.corpusHandOffCallees()
+			corpusDigest = Hasher.combined(corpusDigest, value: nameSetDigestBeyond(self.settledDeclarations().byRefBareNames, excluded: self.corpusByRefBareNames(), among: handedOffCallees))
 
 			if self.programHasMutableFunctionValues() 'aFunctionValueIsMutable'
 				digest = Hasher.combined(digest, value: LivenessMutableFunctionValues)
 				corpusDigest = Hasher.combined(corpusDigest, value: LivenessMutableFunctionValues)
 			end 'aFunctionValueIsMutable'
 
-			let witnessMasks = self.computedWitnessByRefMasks()
+			let witnessMasks = self.computedWitnessByRefMasks(false)
 			digest = Hasher.combined(digest, value: witnessByRefMasksDigest(witnessMasks))
-			corpusDigest = Hasher.combined(corpusDigest, value: witnessByRefMasksDigest(witnessMasks))
+			corpusDigest = Hasher.combined(corpusDigest, value: witnessByRefMasksDigest(self.computedWitnessByRefMasks(true)))
 			self.witnessByRefMasks = witnessMasks
-			self.functionValuedFieldNames = self.computedFunctionValuedFieldNames(false)
+			let fieldNames = self.computedFunctionValuedFieldNames(false)
+			self.functionValuedFieldNames = fieldNames
 
-			digest = Hasher.combined(Hasher.combined(digest, value: LivenessFunctionValuedField), value: nameSetDigest(self.functionValuedFieldNames))
-			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessFunctionValuedField), value: nameSetDigestBeyond(self.functionValuedFieldNames, excluded: self.computedFunctionValuedFieldNames(true)))
+			digest = Hasher.combined(Hasher.combined(digest, value: LivenessFunctionValuedField), value: nameSetDigest(fieldNames))
+			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessFunctionValuedField), value: nameSetDigestBeyond(fieldNames, excluded: self.computedFunctionValuedFieldNames(true), among: handedOffCallees))
+			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessHandedOffSlots), value: self.corpusHandOffSlotsDigest(fieldNames))
+			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessAuthorConformerConventions), value: self.authorConformerConventionsDigest(self.corpusInterfaceCalleeNames()))
 		end 'someFunctionTakesOne'
 
 		self.byRefConventionDigestAnswer = digest
@@ -18818,7 +18912,7 @@ export type ProgramSignatures
 			for site in sites 'eachDeclaration'
 				let declaringFile = declaringFileOfSite(site)
 
-				if not declaredInTheCorpus(self.settledDeclarations().libraryFilePaths, declPath: declaringFile) or self.settledDeclarations().scriptlibFilePaths.contains(declaringFile) 'anAuthorsDeclaration'
+				if not self.declaredByTheSharedCorpusAt(declaringFile) 'anAuthorsDeclaration'
 					continue
 				end 'anAuthorsDeclaration'
 
@@ -18832,6 +18926,117 @@ export type ProgramSignatures
 
 		return names
 	end 'corpusByRefBareNames'
+
+	module function noteCorpusHandOffs(facts CorpusHandOffs)
+		let ownDeclarations = self.mainThreadSettled()
+		mergedHandOffPositions(ownDeclarations.corpusIndirectHandOffs, added: facts.indirect)
+
+		for (callee, positions) in facts.byCallee 'eachCallee'
+			let held = try ownDeclarations.corpusHandOffsByCallee.get(callee) otherwise HandOffPositionsByArity.create()
+			mergedHandOffPositions(held, added: positions)
+			ownDeclarations.corpusHandOffsByCallee.upsert(callee, value: held)
+		end 'eachCallee'
+	end 'noteCorpusHandOffs'
+
+	function corpusHandOffCallees() returns BareNameSet
+		let callees = BareNameSet.create()
+
+		for (callee, _) in self.settledDeclarations().corpusHandOffsByCallee 'eachCallee'
+			callees.insert(callee)
+		end 'eachCallee'
+
+		return callees
+	end 'corpusHandOffCallees'
+
+	function corpusHandOffSlotsDigest(fieldNames BareNameSet) returns HashDigest
+		var members = Hasher.empty()
+		var counted = 0 as Count
+
+		for (arity, positions) in self.corpusHandOffSlotsRead(fieldNames) 'eachArity'
+			let taken = positions and (try self.settledDeclarations().freeFunctionByRefPositions.get(arity) otherwise NoParamPositions)
+
+			if taken == NoParamPositions 'noReadSlotIsByReference'
+				continue
+			end 'noReadSlotIsByReference'
+
+			members = members xor Hasher.combined(Hasher.combined(Hasher.empty(), value: arity as HashDigest), value: taken as HashDigest)
+			counted = counted + 1
+		end 'eachArity'
+
+		return Hasher.combined(members, value: counted as HashDigest)
+	end 'corpusHandOffSlotsDigest'
+
+	function corpusHandOffSlotsRead(fieldNames BareNameSet) returns HandOffPositionsByArity
+		let read = HandOffPositionsByArity.create()
+		mergedHandOffPositions(read, added: self.settledDeclarations().corpusIndirectHandOffs)
+
+		for (callee, positions) in self.settledDeclarations().corpusHandOffsByCallee 'eachCallee'
+			if fieldNames.contains(callee) 'aCalleeThatMayBeAFieldValue'
+				mergedHandOffPositions(read, added: positions)
+			end 'aCalleeThatMayBeAFieldValue'
+		end 'eachCallee'
+
+		return read
+	end 'corpusHandOffSlotsRead'
+
+	function corpusInterfaceCalleeNames() returns BareNameSet
+		let names = BareNameSet.create()
+		let interfaces = BareNameSet.create()
+
+		for interfaceName in self.settledDeclarations().interfaceNamesInDeclOrder 'eachInterface'
+			match lookupInterface(self.settledDeclarations().interfaces, name: interfaceName) 'declared'
+				found(iface) then self.noteCorpusInterface(iface, names: names, interfaces: interfaces)
+				notFound then continue
+			end 'declared'
+		end 'eachInterface'
+
+		for (qualified, member) in self.settledDeclarations().interfaceExtensionMembers 'eachExtensionMember'
+			if not interfaces.contains(member.interfaceName) 'notACorpusInterface'
+				continue
+			end 'notACorpusInterface'
+
+			match splitQualifiedName(qualified) 'qualified'
+				parts(_, memberName) then names.insert(memberName)
+				notQualified then continue
+			end 'qualified'
+		end 'eachExtensionMember'
+
+		return names
+	end 'corpusInterfaceCalleeNames'
+
+	function noteCorpusInterface(iface IrInterface, names BareNameSet, interfaces BareNameSet)
+		if not self.declaredByTheSharedCorpusAt(iface.declFilePath.toString()) 'anAuthorsInterface'
+			return
+		end 'anAuthorsInterface'
+
+		interfaces.insert(iface.name)
+
+		for method in iface.methods 'eachRequirement'
+			names.insert(method.name)
+		end 'eachRequirement'
+	end 'noteCorpusInterface'
+
+	function authorConformerConventionsDigest(requirementNames BareNameSet) returns HashDigest
+		var members = Hasher.empty()
+		var counted = 0 as Count
+
+		for (site, info) in self.settledDeclarations().funcParamReassigns 'eachRecorded'
+			if info.isAFreeFunction() or not requirementNames.contains(info.bareName) or self.declaredByTheSharedCorpusAt(declaringFileOfSite(site)) 'notAnAuthorsConformerMethod'
+				continue
+			end 'notAnAuthorsConformerMethod'
+
+			var state = foldCallability(mixBytes(Hasher.empty(), bytes: info.bareName), callability: info.callability)
+
+			for paramName in info.paramNames 'eachParam'
+				state = mixBytes(state, bytes: paramName)
+			end 'eachParam'
+
+			members = members xor Hasher.combined(state, value: info.mutableParams as HashDigest)
+			counted = counted + 1
+		end 'eachRecorded'
+
+		return Hasher.combined(members, value: counted as HashDigest)
+	end 'authorConformerConventionsDigest'
 
 	function computedFunctionValuedFieldNames(corpusOnly bool) returns BareNameSet
 		let names = BareNameSet.create()
@@ -20318,9 +20523,7 @@ export type ProgramSignatures
 			return true
 		end 'synthesized'
 
-		let file = self.declaringFileOf(callee)
-
-		return self.declaredByTheCorpus(file) and not self.declaredInTheScriptlib(file)
+		return self.declaredByTheSharedCorpusAt(self.declaringFileOf(callee).toString())
 	end 'cloneIsACompilerCopy'
 
 	export function declaredMethodTakesReceiver(qualified ByteArray) returns bool
@@ -21236,15 +21439,9 @@ export type ProgramSignatures
 	end 'programHasMutableFunctionValues'
 
 	export function aFreeFunctionTakesByRefAt(arity ParamCount, position ParamCount) returns bool
-		for (_, info) in self.settledDeclarations().funcParamReassigns 'eachRecorded'
-			if not info.isAFreeFunction() or info.paramNames.count() != arity or not info.isByRef(position) 'notThisSlot'
-				continue
-			end 'notThisSlot'
+		self.publishByRefNames()
 
-			return true
-		end 'eachRecorded'
-
-		return false
+		return maskHasParam(try self.settledDeclarations().freeFunctionByRefPositions.get(arity) otherwise NoParamPositions, param: position)
 	end 'aFreeFunctionTakesByRefAt'
 
 	function publishByRefNames()
@@ -21265,22 +21462,35 @@ export type ProgramSignatures
 				if self.takesATypeParameterByRef(name, info: info) 'anOpaqueParameterByReference'
 					self.mainThreadSettled().opaqueByRefBareNames.insert(info.bareName)
 				end 'anOpaqueParameterByReference'
+
+				if info.isAFreeFunction() 'aFreeFunction'
+					let arity = info.paramNames.count() as ParamCount
+					self.mainThreadSettled().freeFunctionByRefPositions.upsert(arity, value: (try self.settledDeclarations().freeFunctionByRefPositions.get(arity) otherwise NoParamPositions) or info.mutableParams)
+				end 'aFreeFunction'
 			end 'eachDeclaration'
 		end 'publishNames'
 	end 'publishByRefNames'
 
-	function computedWitnessByRefMasks() returns WitnessByRefMaskMap
+	function computedWitnessByRefMasks(corpusOnly bool) returns WitnessByRefMaskMap
 		let masks = WitnessByRefMaskMap.create()
 
 		for interfaceName in self.settledDeclarations().interfaceNamesInDeclOrder 'eachInterface'
 			match lookupInterface(self.settledDeclarations().interfaces, name: interfaceName) 'declared'
-				found(iface) then noteRequirementByRefMasks(iface, signatures: self, into: masks)
+				found(iface) then self.noteWitnessMasksOf(iface, corpusOnly: corpusOnly, into: masks)
 				notFound then continue
 			end 'declared'
 		end 'eachInterface'
 
 		return masks
 	end 'computedWitnessByRefMasks'
+
+	function noteWitnessMasksOf(iface IrInterface, corpusOnly bool, into WitnessByRefMaskMap)
+		if corpusOnly and not self.declaredByTheSharedCorpusAt(iface.declFilePath.toString()) 'anAuthorsInterface'
+			return
+		end 'anAuthorsInterface'
+
+		noteRequirementByRefMasks(iface, signatures: self, into: into)
+	end 'noteWitnessMasksOf'
 
 	export function witnessRequirementByRefMask(interfaceName ByteArray, methodName ByteArray) returns ParamPositionMask
 		self.requireByRefMasksSettled()
@@ -26879,6 +27089,10 @@ export type ProgramSignatures
 	export function declaredByTheCorpus(declFilePath FilePath) returns bool
 		return declaredInTheCorpus(self.settledDeclarations().libraryFilePaths, declPath: declFilePath.toString())
 	end 'declaredByTheCorpus'
+
+	export function declaredByTheSharedCorpusAt(declPath String) returns bool
+		return declaredInTheCorpus(self.settledDeclarations().libraryFilePaths, declPath: declPath) and not self.settledDeclarations().scriptlibFilePaths.contains(declPath)
+	end 'declaredByTheSharedCorpusAt'
 
 	export function rawSurfaceIsRefusedIn(readerFilePath FilePath) returns bool
 		return tierRefusesTheRawSurface(self.declaredInTheStdlib(readerFilePath) or self.rootIsUnderStdlibDirectory, isRuntimeSource: self.declaredInTheRuntimeTier(readerFilePath))
@@ -44538,11 +44752,11 @@ export type ProgramSignatures
 
 		// Which methods carry the hidden descriptor and count parameters is decided by scanning BODIES, so an edit
 		// that leaves every declaration alone can still change the ABI a caller's parse emits against.
-		self.hash = self.mixBodyScanFacts(self.hash, excluding: noExcludedNames)
+		self.hash = self.mixBodyScanFacts(self.hash, excluding: noExcludedNames, instances: self.genericInstancesDigest)
 		self.hash = self.mixTypeNameTable(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeTypeNameTable), upTo: self.typeNames.count())
 
 		self.attributeHashEventsTo(HashEventSource.whole)
-		self.hash = self.mixBodyScanFacts(self.hash, excluding: self.settledDeclarations().authorDeclaredNames)
+		self.hash = self.mixBodyScanFacts(self.hash, excluding: self.settledDeclarations().authorDeclaredNames, instances: self.libraryTemplateInstancesDigest())
 		self.finishHashChains()
 
 		self.genericInstances.settleBaseline()
@@ -44552,11 +44766,23 @@ export type ProgramSignatures
 		self.baseline = IndexBaseline.create(self.crossFileConstantReads.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.recordsHoldingAnInterfaceValueCounted, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
 	end 'settleBaseline'
 
-	function mixBodyScanFacts(state HashDigest, excluding HashDigestSet) returns HashDigest
+	function mixBodyScanFacts(state HashDigest, excluding HashDigestSet, instances HashDigest) returns HashDigest
 		var out = mixNameSet(Hasher.combined(state, value: DeclShapeFixedElementCountNeeds), names: self.settledDeclarations().fixedElementCountNeeds, excluding: excluding)
 		out = Hasher.combined(Hasher.combined(out, value: DeclShapeInstantiatedByAParse), value: self.instantiatedDigestExcluding(excluding))
-		return Hasher.combined(self.mixGenericTemplates(Hasher.combined(out, value: DeclShapeGenericInstances), excluding: excluding), value: self.genericInstancesDigest)
+		return Hasher.combined(self.mixGenericTemplates(Hasher.combined(out, value: DeclShapeGenericInstances), excluding: excluding), value: instances)
 	end 'mixBodyScanFacts'
+
+	function libraryTemplateInstancesDigest() returns HashDigest
+		var members = Hasher.empty()
+
+		for (name, instance) in self.settledDeclarations().genericInstancesByName 'eachInstance'
+			if self.declaredByTheSharedCorpusAt(declaringFileOfSite(instance.siteKey)) 'anInstanceOfALibraryTemplate'
+				members = members xor mixBytes(Hasher.empty(), bytes: name)
+			end 'anInstanceOfALibraryTemplate'
+		end 'eachInstance'
+
+		return members
+	end 'libraryTemplateInstancesDigest'
 
 	// Before any declaration is folded: every whole-program answer computed from here on counts these types as
 	// instantiated, and the settled hash carries them, so a parse memo keyed on it moves when they do.
@@ -45493,6 +45719,9 @@ export type ProgramSignatures
 		fingerprint.note("globalAliasReturnKeys", value: declarations.globalAliasReturnKeys.count())
 		fingerprint.noteFlag("globalAliasReturnsClosed", flag: self.globalAliasReturnsClosed)
 		fingerprint.note("byRefBareNames", value: declarations.byRefBareNames.count())
+		fingerprint.note("corpusHandOffsByCallee", value: declarations.corpusHandOffsByCallee.count())
+		fingerprint.note("corpusIndirectHandOffs", value: declarations.corpusIndirectHandOffs.count())
+		fingerprint.note("freeFunctionByRefPositions", value: declarations.freeFunctionByRefPositions.count())
 		fingerprint.note("deepCloneAnswers", value: self.deepCloneAnswers.count())
 		fingerprint.note("interfaceCloneAnswers", value: self.interfaceCloneAnswers.count())
 		fingerprint.note("uniqueTypeAnswers", value: self.uniqueTypeAnswers.count())
@@ -46010,6 +46239,8 @@ let LivenessTakesAParamByRef = 0x5BE0CD19137E2179
 let LivenessMutableFunctionValues = 0x3C6EF372FE94F82B
 
 let LivenessFunctionValuedField = 0x1F83D9AB5BE0CD19
+let LivenessHandedOffSlots = 0xBB67AE8584CAA73B as HashDigest
+let LivenessAuthorConformerConventions = 0x6A09E667F3BCC908
 
 function nameIsExcluded(name ByteArray, excluded HashDigestSet) returns bool
 	if excluded.contains(mixBytes(Hasher.empty(), bytes: name)) 'itself'
@@ -46033,14 +46264,14 @@ function nameSetDigest(names BareNameSet) returns HashDigest
 	return Hasher.combined(members, value: names.count() as HashDigest)
 end 'nameSetDigest'
 
-function nameSetDigestBeyond(names BareNameSet, excluded BareNameSet) returns HashDigest
+function nameSetDigestBeyond(names BareNameSet, excluded BareNameSet, among BareNameSet) returns HashDigest
 	var members = Hasher.empty()
 	var counted = 0 as Count
 
 	for name in names 'eachName'
-		if excluded.contains(name) 'anExcludedName'
+		if excluded.contains(name) or not among.contains(name) 'aNameNoCorpusParseReads'
 			continue
-		end 'anExcludedName'
+		end 'aNameNoCorpusParseReads'
 
 		members = members xor mixBytes(Hasher.empty(), bytes: name)
 		counted = counted + 1

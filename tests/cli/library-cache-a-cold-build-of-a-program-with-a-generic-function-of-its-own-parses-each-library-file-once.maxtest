@@ -1,0 +1,30 @@
+let LibraryCacheAColdBuildWithAnOwnGenericFunctionCaseDirName = "library-cache-cold-own-generic-function"
+let WithoutAGenericFunctionProgramDirName = "plain"
+let WithAGenericFunctionProgramDirName = "generic"
+let WithoutAGenericFunctionOutputName = "plain-program"
+let WithAGenericFunctionOutputName = "generic-program"
+let WithoutAGenericFunctionCacheRootDirName = "plain-cache"
+let WithAGenericFunctionCacheRootDirName = "generic-cache"
+
+test 'a cold build of a program that adds a generic function of its own parses the library as often as the program without it'
+	requireHeldOutsideCheckout(LibraryCacheAColdBuildWithAnOwnGenericFunctionCaseDirName, check: ColdOwnGenericFunctionParsesTheLibraryOnce.create())
+end 'a cold build of a program that adds a generic function of its own parses the library as often as the program without it'
+
+type ColdOwnGenericFunctionParsesTheLibraryOnce implements OutsideCheckoutCase
+	static function create() returns ColdOwnGenericFunctionParsesTheLibraryOnce
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: WithoutAGenericFunctionProgramDirName, source: LibraryReachingProgramSource)
+		stageProgram(dir, name: WithAGenericFunctionProgramDirName, source: OwnGenericFunctionProgramSource)
+
+		let plain = try requireColdLibraryCacheBuild(dir, cacheRootDirName: WithoutAGenericFunctionCacheRootDirName, program: WithoutAGenericFunctionProgramDirName, output: WithoutAGenericFunctionOutputName, which: "the cold build of a program that declares no generic function")
+		let generic = try requireColdLibraryCacheBuild(dir, cacheRootDirName: WithAGenericFunctionCacheRootDirName, program: WithAGenericFunctionProgramDirName, output: WithAGenericFunctionOutputName, which: "the cold build of a program that adds a generic function of its own")
+
+		let ran = spawnCompiler(StringArray.create(0), binary: dir.join("{WithAGenericFunctionOutputName}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: OwnGenericFunctionProgramExitCode, message: "the program that adds a generic function of its own, built cold, did not exit {OwnGenericFunctionProgramExitCode}. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+
+		try Expect.equal(generic.parsed, expected: plain.parsed, message: "a program that requests an instance of its own generic function was parsing the library a second time, although it reaches the library bodies the program without that function reaches. Its cold build wrote: {generic.line}. The cold build of the program without the generic function wrote: {plain.line}")
+	end 'requireHeldIn'
+end 'ColdOwnGenericFunctionParsesTheLibraryOnce'

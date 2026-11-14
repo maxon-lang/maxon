@@ -1,0 +1,7 @@
+let LibraryCacheAddsAFunctionValuedFieldCaseDirName = "library-cache-adds-function-valued-field"
+let AddsAFunctionValuedFieldProgramSource = "typealias Tally = int(0 to 1000)\ntypealias Rescaling = function(Tally) returns Tally\n\ntype Gauge\n\tvar rescale as Rescaling\n\n\tstatic function create(rescale Rescaling) returns Gauge\n\t\treturn Gauge\{rescale: rescale\}\n\tend 'create'\n\n\tfunction reading(amount Tally) returns Tally\n\t\treturn self.rescale(amount)\n\tend 'reading'\nend 'Gauge'\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\tlet gauge = Gauge.create(function(n Tally) gives n * 9)\n\treturn (gauge.reading(length) + seed) as ExitCode\nend 'main'\n"
+let AddsAFunctionValuedFieldProgramExitCode = 39
+
+test 'a program that adds a type with a function-valued field is served the library parses of the program before it'
+	requireHeldOutsideCheckout(LibraryCacheAddsAFunctionValuedFieldCaseDirName, check: AddedFactIsServedTheLibrary.create(AddsAFunctionValuedFieldProgramSource, exitCode: AddsAFunctionValuedFieldProgramExitCode, fact: "a type with a function-valued field, set and called"))
+end 'a program that adds a type with a function-valued field is served the library parses of the program before it'

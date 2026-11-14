@@ -130,7 +130,14 @@ index-numbered facts the asking program's own declarations shift (type-name ids,
 interface indexes witness dispatches carry), so a held parse records a footprint of them, taken while its
 names are still file-local, and a hit is rebased onto the current program; a row or a told answer that moved
 is a miss. Its key is a signature hash over the library alone, since the whole-program hash moves with every
-user declaration. A held parse is frozen and deep-cloned at every hit, because the merge renumbers an
+user declaration, mixed with the facts of the asking program that a library file's parse reads: the answers
+the file is parsed with, the instances the program requests of the library's generic functions, whether the
+program spawns a service, which of the file's `default`s it builds, and the by-reference conventions the
+library's own call sites meet. Those conventions are a program function taking a `mutable` parameter, or a
+program field holding a function value, under a name a library call hands a `var` to; a free function taking
+a `mutable` parameter at a position where a library call through a function value hands a `var`; and a
+program type's method named like a method of a library interface. Two programs that agree on those facts
+share every library parse, whatever else each declares. A held parse is frozen and deep-cloned at every hit, because the merge renumbers an
 artifact in place; the store of a one-shot `maxon build` hands the decoded parse over instead, since that
 compile is its last. A program that shadows a library name, declares one the library
 means, or is rooted inside `stdlib/` parses the library cold. One file's swept declarations stay with their
@@ -164,7 +171,7 @@ respells a diagnostic exactly as a cold one. Every entry carries a schema finger
 codecs that wrote it, and a reader rejects, deletes and rewrites an entry that is damaged, was written
 under another schema or holds a number outside the range it is read into, and the compile goes on as a
 cold one. A compile that writes an entry goes on with the decoded copy, so a warm and a cold compile emit
-the same bytes.
+the same bytes, and a later fold round of that compile is served the parses an earlier round encoded.
 
 The codecs are generated into the compiler's sources by `scripts/library-cache/generate-codecs.py`, between
 `// @generated library-cache` markers; the hand-written ones live in `LibraryCacheCodecs.maxon`,

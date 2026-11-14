@@ -1114,6 +1114,10 @@ export function libraryCacheDirIn(dir FilePath) returns FilePath
 end 'libraryCacheDirIn'
 
 export function runLibraryCacheBuild(dir FilePath, program String, output String, options StringArray) returns CollectedOutput
+	return runLibraryCacheBuildUnder(cacheRootIn(dir), dir: dir, program: program, output: output, options: options)
+end 'runLibraryCacheBuild'
+
+function runLibraryCacheBuildUnder(cacheRoot FilePath, dir FilePath, program String, output String, options StringArray) returns CollectedOutput
 	let logged = StringArray.create(0)
 	logged.push(CompilerDebugLogFlag)
 
@@ -1121,8 +1125,8 @@ export function runLibraryCacheBuild(dir FilePath, program String, output String
 		logged.push(option)
 	end 'eachOption'
 
-	return runRecordedBuild(dir, program: program, output: output, options: logged)
-end 'runLibraryCacheBuild'
+	return runBuildUnder(cacheRoot, dir: dir, program: program, output: output, options: logged, binary: testedCompilerPath())
+end 'runLibraryCacheBuildUnder'
 
 export let RebuildFlag = "--rebuild"
 export let FirstBuildReason = "no record of a previous build"
@@ -1144,6 +1148,10 @@ let ClockPollLimit = 100 as ClockPollTally
 export let SettledProgramDirName = "app"
 
 export function runRecordedBuild(dir FilePath, program String, output String, options StringArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
+	return runBuildUnder(cacheRootIn(dir), dir: dir, program: program, output: output, options: options, binary: binary)
+end 'runRecordedBuild'
+
+function runBuildUnder(cacheRoot FilePath, dir FilePath, program String, output String, options StringArray, binary FilePath) returns CollectedOutput
 	let arguments = StringArray.create(0)
 	arguments.push(BuildCommandWord)
 	arguments.push(program)
@@ -1153,8 +1161,8 @@ export function runRecordedBuild(dir FilePath, program String, output String, op
 		arguments.push(option)
 	end 'eachOption'
 
-	return runWithCacheRoot(arguments, cacheRoot: cacheRootIn(dir), workingDirectory: dir, binary: binary)
-end 'runRecordedBuild'
+	return runWithCacheRoot(arguments, cacheRoot: cacheRoot, workingDirectory: dir, binary: binary)
+end 'runBuildUnder'
 
 export function requireBuilt(build CollectedOutput, which String) throws TestFailure
 	try Expect.equal(build.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {build.stdout} and to stderr: {build.stderr}")
@@ -1310,11 +1318,95 @@ export function requireWarmBuildMatchesCold(dir FilePath, program String, output
 	try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the warm build of {subject} did not load the library baseline the cold build wrote, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
 	try Expect.greaterThan(warm.loaded, than: 0, message: "the warm build of {subject} loaded no library cache entry, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
 
-	try requireSameBytes(coldImage, second: image, why: "the warm build's executable of {subject} is not the cold build's, so loading the library from the cache changed the program.")
-	try requireSameBytes(coldSidecar, second: sidecar, why: "the warm build's debug sidecar of {subject} is not the cold build's, so loading the library from the cache changed what the debugger is told.")
+	try requireWarmBytesAreTheColdOnes(coldImage, warmImage: image, coldSidecar: coldSidecar, warmSidecar: sidecar, subject: subject)
 
 	return ColdAndWarmBuilds.create(cold, warm: warm)
 end 'requireWarmBuildMatchesCold'
+
+function requireWarmBytesAreTheColdOnes(coldImage FilePath, warmImage FilePath, coldSidecar FilePath, warmSidecar FilePath, subject String) throws TestFailure
+	try requireSameBytes(coldImage, second: warmImage, why: "the warm build's executable of {subject} is not the cold build's, so loading the library from the cache changed the program.")
+	try requireSameBytes(coldSidecar, second: warmSidecar, why: "the warm build's debug sidecar of {subject} is not the cold build's, so loading the library from the cache changed what the debugger is told.")
+end 'requireWarmBytesAreTheColdOnes'
+
+export let LibraryReachingProgramSource = "typealias Tally = int(0 to 1000)\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\treturn (length + seed) as ExitCode\nend 'main'\n"
+export let OwnGenericFunctionProgramSource = "typealias Tally = int(0 to 1000)\n\nfunction preferred(first T, second T, takeFirst bool) uses T returns T\n\treturn first if takeFirst else second\nend 'preferred'\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\tlet pick = preferred(length, second: 40, takeFirst: false)\n\treturn (pick + seed) as ExitCode\nend 'main'\n"
+export let OwnGenericFunctionProgramExitCode = 61
+
+let ProgramBeforeDirName = "before"
+let ProgramAfterDirName = "after"
+let ProgramBeforeOutputName = "program-before"
+let ProgramAfterOutputName = "program-after"
+let WarmImageName = "warm-image"
+let WarmSidecarName = "warm-sidecar"
+let ColdCacheRootDirName = "cold-cache"
+
+export function requireColdLibraryCacheBuild(dir FilePath, cacheRootDirName String, program String, output String, which String) returns LibraryCacheReport throws TestFailure
+	let cacheRoot = stagingDir(dir.join(cacheRootDirName).toString())
+	let cold = try libraryCacheReportOf(runLibraryCacheBuildUnder(cacheRoot, dir: dir, program: program, output: output, options: StringArray.create(0)), which: which)
+	try Expect.equal(cold.baseline, expected: LibraryBaseline.built, message: "{which} did not build the library baseline itself, so the cache root it was given was not empty and the build was not a cold one. It wrote: {cold.line}")
+
+	return cold
+end 'requireColdLibraryCacheBuild'
+
+function requireBuiltAfterAnotherMatchesCold(dir FilePath, before String, source String, exitCode ExitInt, subject String) returns LibraryCacheReport throws TestFailure
+	stageProgram(dir, name: ProgramBeforeDirName, source: before)
+	stageProgram(dir, name: ProgramAfterDirName, source: source)
+
+	_ = try requireLibraryCacheBuild(dir, program: ProgramBeforeDirName, output: ProgramBeforeOutputName, which: "the build of the program before {subject}, which fills the library cache")
+
+	let image = dir.join("{ProgramAfterOutputName}{executableSuffix()}")
+	let sidecar = dir.join("{ProgramAfterOutputName}{executableSuffix()}{SidecarSuffix}")
+
+	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramAfterDirName, output: ProgramAfterOutputName, options: StringArray.create(0)), which: "the warm build of {subject}")
+	try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the warm build of {subject} did not load the library baseline the program before it wrote, so the program declares a name the library means and no build of it is served the library. It wrote: {warm.line}")
+
+	let ran = spawnCompiler(StringArray.create(0), binary: image, staged: dir)
+	try Expect.equal(ran.exitCode(), expected: exitCode, message: "{subject}, built warm, did not exit {exitCode}. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+
+	let warmImage = retainedAside(image, aside: dir.join(WarmImageName))
+	let warmSidecar = retainedAside(sidecar, aside: dir.join(WarmSidecarName))
+
+	_ = try requireColdLibraryCacheBuild(dir, cacheRootDirName: ColdCacheRootDirName, program: ProgramAfterDirName, output: ProgramAfterOutputName, which: "the cold build of {subject}")
+
+	try requireWarmBytesAreTheColdOnes(image, warmImage: warmImage, coldSidecar: sidecar, warmSidecar: warmSidecar, subject: subject)
+
+	return warm
+end 'requireBuiltAfterAnotherMatchesCold'
+
+export type BuiltAfterAnotherMatchesCold implements OutsideCheckoutCase
+	let before as String
+	let source as String
+	let exitCode as ExitInt
+	let subject as String
+
+	export static function create(source String, exitCode ExitInt, subject String, before String = LibraryReachingProgramSource) returns BuiltAfterAnotherMatchesCold
+		return Self{before: before, source: source, exitCode: exitCode, subject: subject}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let warm = try requireBuiltAfterAnotherMatchesCold(dir, before: self.before, source: self.source, exitCode: self.exitCode, subject: self.subject)
+
+		try Expect.greaterThan(warm.parsed, than: 0, message: "the warm build of {self.subject} parsed no library file itself, so the fact it adds moved no library file's key and its bytes agreeing with the cold build's shows nothing about a key that moves. It wrote: {warm.line}")
+	end 'requireHeldIn'
+end 'BuiltAfterAnotherMatchesCold'
+
+export type AddedFactIsServedTheLibrary implements OutsideCheckoutCase
+	let source as String
+	let exitCode as ExitInt
+	let fact as String
+
+	export static function create(source String, exitCode ExitInt, fact String) returns AddedFactIsServedTheLibrary
+		return Self{source: source, exitCode: exitCode, fact: fact}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let subject = "a program that adds {self.fact}"
+		let warm = try requireBuiltAfterAnotherMatchesCold(dir, before: LibraryReachingProgramSource, source: self.source, exitCode: self.exitCode, subject: subject)
+
+		try Expect.equal(warm.rejected, expected: 0, message: "the warm build of {subject} rejected library cache entries the program before it had just written. It wrote: {warm.line}")
+		try Expect.equal(warm.parsed, expected: 0, message: "a program was re-parsing library files, although the program before it had cached every parse it needs and it differs from that program only by {self.fact}. It wrote: {warm.line}")
+	end 'requireHeldIn'
+end 'AddedFactIsServedTheLibrary'
 
 export function libraryCacheReportOf(build CollectedOutput, which String) returns LibraryCacheReport throws TestFailure
 	try Expect.equal(build.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {build.stdout} and to stderr: {build.stderr}")

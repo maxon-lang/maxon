@@ -385,6 +385,10 @@ function rowPositionIn(rows PackRowKeyArray, key PackRowKey) returns ElementInde
 	throw LibraryEntryMiss.absent
 end 'rowPositionIn'
 
+function sectionRowIn(rows PackRowKeyArray, first HashDigest, second HashDigest, third HashDigest) returns ElementIndex throws LibraryEntryMiss
+	return try rowPositionIn(rows, key: PackRowKey.create(first, second: second, third: third))
+end 'sectionRowIn'
+
 // One file per kind and library state, rather than one per entry, because per-file I/O dominates
 // the cost of a load on Windows.
 export type LibraryPackBuilder
@@ -412,6 +416,12 @@ export type LibraryPackBuilder
 	function holdsRow(key PackRowKey) returns bool
 		return self.rows.contains(key)
 	end 'holdsRow'
+
+	export function sectionSpan(first HashDigest, second HashDigest, third HashDigest) returns PackSection throws LibraryEntryMiss
+		let payload = try self.sections.get(try sectionRowIn(self.rows, first: first, second: second, third: third)) otherwise panic("LibraryPackBuilder.sectionSpan: sections.get OOB at a row's own position, which is index-parallel to the sections")
+
+		return PackSection.create(payload, start: 0, endIndex: payload.count())
+	end 'sectionSpan'
 
 	function countInGroupOf(key PackRowKey) returns ElementIndex
 		var found = 0 as ElementIndex
@@ -522,6 +532,6 @@ export type LibraryPack
 	end 'section'
 
 	export function sectionSpan(first HashDigest, second HashDigest, third HashDigest) returns PackSection throws LibraryEntryMiss
-		return self.sectionAt(try rowPositionIn(self.rows, key: PackRowKey.create(first, second: second, third: third)))
+		return self.sectionAt(try sectionRowIn(self.rows, first: first, second: second, third: third))
 	end 'sectionSpan'
 end 'LibraryPack'

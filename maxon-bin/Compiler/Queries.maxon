@@ -1397,14 +1397,27 @@ function noteOtherTierDeclarations(signatures ProgramSignatures, headers TopLeve
 	end 'eachBinding'
 end 'noteOtherTierDeclarations'
 
+union FileHandOffs
+	none
+	held(handOffs CorpusHandOffs)
+
+	function isHeld() returns bool
+		return match self 'handOffs'
+			none gives false
+			held gives true
+		end 'handOffs'
+	end 'isHeld'
+end 'FileHandOffs'
+
 type FileTokenFacts
 	let moduleDirectory as String
 	let declarations as FileDeclarationHeaders
 	let events as TokenFactEventArray
 	let isScriptlibSource as bool
+	let handOffs as FileHandOffs
 
-	static function create(moduleDirectory String, declarations FileDeclarationHeaders, events TokenFactEventArray, isScriptlibSource bool) returns FileTokenFacts
-		return Self{moduleDirectory: moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource}
+	static function create(moduleDirectory String, declarations FileDeclarationHeaders, events TokenFactEventArray, isScriptlibSource bool, handOffs FileHandOffs) returns FileTokenFacts
+		return Self{moduleDirectory: moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource, handOffs: handOffs}
 	end 'create'
 
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath)
@@ -1416,6 +1429,15 @@ type FileTokenFacts
 		for event in self.events 'eachEvent'
 			event.noteInto(signatures, path: path, isStdlibSource: isStdlibSource)
 		end 'eachEvent'
+
+		match self.handOffs 'handOffs'
+			none then break
+			held(facts) then signatures.noteCorpusHandOffs(facts)
+		end 'handOffs'
+
+		if self.handOffs.isHeld() != signatures.declaredByTheSharedCorpusAt(path.toString()) 'theTwoSpellingsDisagree'
+			panic("FileTokenFacts.noteInto: '{path.toString()}' is walked for the corpus's hand-offs exactly when the index records it as the shared corpus, and the two disagree — `fileIsInTheSharedCorpus` and `recordFileModuleDirectory` must agree")
+		end 'theTwoSpellingsDisagree'
 	end 'noteInto'
 end 'FileTokenFacts'
 
@@ -1476,7 +1498,14 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 		events.push(TokenFactEvent.arrayLiteralConformer(nameTok.value))
 	end 'eachToken'
 
-	return FileTokenFacts.create(moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSourceFile(project, path: path))
+	let isScriptlibSource = isScriptlibSourceFile(project, path: path)
+	var handOffs = FileHandOffs.none
+
+	if fileIsInTheSharedCorpus(isStdlibSource or isRuntimeSource, isScriptlib: isScriptlibSource) 'aSharedCorpusFile'
+		handOffs = FileHandOffs.held(reader.corpusHandOffs())
+	end 'aSharedCorpusFile'
+
+	return FileTokenFacts.create(moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource, handOffs: handOffs)
 end 'discoveredTokenFactsOf'
 
 // Matches the already-matched `spawn` keyword at `index`, its optional `(capacity: …)` group

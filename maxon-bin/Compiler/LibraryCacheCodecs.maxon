@@ -120,6 +120,12 @@ module function decodedParseSection(image immutable ByteArray, start ElementInde
 	return held
 end 'decodedParseSection'
 
+module function decodedStashedParse(payload immutable ByteArray, variant HashDigest, key HashDigest, contentHash HashDigest) returns SharedLibraryParse
+	return try decodedParseSection(payload, start: 0, endIndex: payload.count(), variant: variant, key: key) otherwise (damage) 'undecodable'
+		panic("decodedStashedParse: the section this compile encoded for {contentHash} does not decode: {damage.displayReason()}")
+	end 'undecodable'
+end 'decodedStashedParse'
+
 export function cacheWriteTypeNameInterner(writer LibraryCacheWriter, value TypeNameInterner)
 	writer.unsigned(value.count() as CacheUnsigned)
 

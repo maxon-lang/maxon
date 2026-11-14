@@ -514,8 +514,7 @@ function sharedParseFor(project Project, contentHash HashDigest, variant HashDig
 	let endIndex = found.section.endIndex
 
 	let shared = freeze try decodedParseSection(image, start: start, endIndex: endIndex, variant: variant, key: key) otherwise (damage) 'damaged'
-		project.session.fileMemos.library.rejectDecoded(project.target, name: found.packName, damage: damage, tally: project.db.libraryTally)
-		throw SharedMemoMiss.notHeld
+		throw found.damagedMiss(project, damage: damage)
 	end 'damaged'
 
 	publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: shared, entryClass: project.session.fileMemos.library.entryClassOf(project)))
@@ -531,21 +530,41 @@ function parsesPackName(project Project, libraryHash HashDigest) returns String 
 	return libraryEntryName(LibraryEntryKind.parses, entryClass: entryClass, parts: [state, libraryHash])
 end 'parsesPackName'
 
+union ParseSectionOrigin
+	stashed
+	onDisk(packName String)
+end 'ParseSectionOrigin'
+
 type ParseSectionInPack
-	export let packName as String
+	export let origin as ParseSectionOrigin
 	export let section as PackSection
 
-	static function create(packName String, section PackSection) returns ParseSectionInPack
-		return Self{packName: packName, section: section}
+	static function create(origin ParseSectionOrigin, section PackSection) returns ParseSectionInPack
+		return Self{origin: origin, section: section}
 	end 'create'
+
+	function damagedMiss(project Project, damage LibraryCacheDamage) returns SharedMemoMiss
+		match self.origin 'origin'
+			stashed then panic("ParseSectionInPack.damagedMiss: a section this compile encoded does not decode: {damage.displayReason()}")
+			onDisk(packName) then project.session.fileMemos.library.rejectDecoded(project.target, name: packName, damage: damage, tally: project.db.libraryTally)
+		end 'origin'
+
+		return SharedMemoMiss.notHeld
+	end 'damagedMiss'
 end 'ParseSectionInPack'
 
 function parseSectionIn(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns ParseSectionInPack throws SharedMemoMiss
+	if let stashed = try project.db.stashedParsePacks.get(libraryHash) 'stashedByThisCompile'
+		if let section = try stashed.sectionSpan(contentHash, second: variant, third: key) 'parsedByAnEarlierRound'
+			return ParseSectionInPack.create(ParseSectionOrigin.stashed, section: section)
+		end 'parsedByAnEarlierRound'
+	end 'stashedByThisCompile'
+
 	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise throw SharedMemoMiss.notHeld
 	let pack = try project.session.fileMemos.library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise throw SharedMemoMiss.notHeld
 	let section = try pack.sectionSpan(contentHash, second: variant, third: key) otherwise throw SharedMemoMiss.notHeld
 
-	return ParseSectionInPack.create(name, section: section)
+	return ParseSectionInPack.create(ParseSectionOrigin.onDisk(name), section: section)
 end 'parseSectionIn'
 
 function decodedParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws SharedMemoMiss
@@ -555,8 +574,7 @@ function decodedParseFor(project Project, contentHash HashDigest, variant HashDi
 	let endIndex = found.section.endIndex
 
 	return try decodedParseSection(image, start: start, endIndex: endIndex, variant: variant, key: key) otherwise (damage) 'damaged'
-		project.session.fileMemos.library.rejectDecoded(project.target, name: found.packName, damage: damage, tally: project.db.libraryTally)
-		throw SharedMemoMiss.notHeld
+		throw found.damagedMiss(project, damage: damage)
 	end 'damaged'
 end 'decodedParseFor'
 
@@ -659,21 +677,14 @@ function stashShareableParse(project Project, contentHash HashDigest, variant Ha
 	end 'notPersistable'
 
 	if retains 'aLaterCompileMayAsk'
-		let stored = freeze try decodedParseSection(payload, start: 0, endIndex: payload.count(), variant: held.variantOf(), key: held.keyOf()) otherwise (damage) 'undecodableForTheStore'
-			panic("stashShareableParse: the section just encoded for {contentHash} does not decode: {damage.displayReason()}")
-		end 'undecodableForTheStore'
-
+		let stored = freeze decodedStashedParse(payload, variant: held.variantOf(), key: held.keyOf(), contentHash: contentHash)
 		let working = stored.artifact.clone()
 		project.db.pendingSharedParses.upsert(contentHash, value: stored)
 
 		return working
 	end 'aLaterCompileMayAsk'
 
-	let canonical = try decodedParseSection(payload, start: 0, endIndex: payload.count(), variant: held.variantOf(), key: held.keyOf()) otherwise (damage) 'undecodableForTheCompile'
-		panic("stashShareableParse: the section just encoded for {contentHash} does not decode: {damage.displayReason()}")
-	end 'undecodableForTheCompile'
-
-	return canonical.artifact
+	return decodedStashedParse(payload, variant: held.variantOf(), key: held.keyOf(), contentHash: contentHash).artifact
 end 'stashShareableParse'
 
 function persistedParsePayload(project Project, held SharedLibraryParse, contentHash HashDigest, libraryHash HashDigest) returns immutable ByteArray throws LibraryEntryMiss

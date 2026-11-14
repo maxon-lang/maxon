@@ -4133,6 +4133,13 @@ enum ByRefHandOff
 	typeParameterValue
 end 'ByRefHandOff'
 
+union CallOpening
+	notACall
+	callResult
+	throughReceiver(name immutable ByteArray)
+	bare(name immutable ByteArray)
+end 'CallOpening'
+
 type BodyWalk
 	export var braceStack as BoolArray
 	export var openBrackets as TokenIndexArray
@@ -19738,6 +19745,8 @@ export type Parser
 
 	var fileNonCallNames as NonCallNameIndex
 	var bodyNonCallNames as NonCallNameIndex
+	var fileVarNames = BareNameSet.create()
+	var fileVarNamesCollected = false
 
 	// ⭐ **THE FILE'S KEYWORD TOKENS THAT ARE DECLARED NAMES, ASCENDING** — a function's own name and each of
 	// its parameters' names, kept only where the source spelled a KEYWORD there. It exists for exactly
@@ -38905,6 +38914,7 @@ export type Parser
 		// be reassigned by its own frame, and passing one to a parameter a callee reassigns is E3207 — so a
 		// cell for it would be storage nothing could ever legally write.
 		if mutable and self.nameLivesInACell(nameTok.value) 'livesInACell'
+			self.requireTheHandOffWalkKeysTheCell(nameTok)
 			try self.declareCellLocal(nameTok, boundValue: boundValue, rhsWasBareLocal: boundBareLocal)
 			return
 		end 'livesInACell'
@@ -105458,6 +105468,102 @@ export type Parser
 		return CellLocalNameRoster.entries(handedOverByReference)
 	end 'cellLocalNamesIn'
 
+	// Must cover every program fact `cellLocalNamesIn` reads in a shared-corpus file: a hand-off that
+	// prescan decides and this walk leaves out serves a library parse to a program needing another.
+	module function corpusHandOffs() returns CorpusHandOffs
+		let handOffs = CorpusHandOffs.create()
+		let declaredVars = self.namesDeclaredByVar()
+		let valueNames = self.namesSpelledAsValues()
+		let walk = BodyWalk.create()
+		var q = 0 as ElementIndex
+
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if not walk.insideASubscript() and self.bareCallArgumentAt(q, braceStack: walk.braceStack) and declaredVars.contains(self.tokenAt(q).value) 'aVarIsHandedToACall'
+				self.noteHandOffAt(q, walk: walk, valueNames: valueNames, into: handOffs)
+			end 'aVarIsHandedToACall'
+
+			self.stepBodyWalk(walk, q: q)
+			q = q + 1
+		end 'walk'
+
+		return handOffs
+	end 'corpusHandOffs'
+
+	function noteHandOffAt(q ElementIndex, walk BodyWalk, valueNames BareNameSet, into CorpusHandOffs)
+		let opener = try walk.openBrackets.last() otherwise panic("noteHandOffAt: openBrackets is empty inside a call argument — the caller has just established an open `(`")
+
+		let slot = self.functionValueSlotAt(opener, argument: q)
+
+		if let callee = try self.calleeNameOpeningAt(opener) 'aNamedCallee'
+			let held = try into.byCallee.get(callee) otherwise HandOffPositionsByArity.create()
+			notedHandOffSlot(held, slot: slot)
+			into.byCallee.upsert(callee, value: held)
+		end 'aNamedCallee'
+
+		let indirectWhateverTheProgram = match self.callOpeningAt(opener) 'opening'
+			notACall gives false
+			callResult gives true
+			throughReceiver gives false
+			bare(name) gives valueNames.contains(name)
+		end 'opening'
+
+		if indirectWhateverTheProgram 'aCallThroughAValue'
+			notedHandOffSlot(into.indirect, slot: slot)
+		end 'aCallThroughAValue'
+	end 'noteHandOffAt'
+
+	function namesDeclaredByVar() returns BareNameSet
+		if self.fileVarNamesCollected 'collectedAlready'
+			return self.fileVarNames
+		end 'collectedAlready'
+
+		for q in 0 upto self.tokens.count() 'eachToken'
+			if self.kindAt(q) != TokenKind.var 'notAVarKeyword'
+				continue
+			end 'notAVarKeyword'
+
+			if self.kindAt(q + 1) == TokenKind.leftParen 'aDestructuredPattern'
+				for named in q + 2 upto self.parenGroups.closeOf(self.tokens, open: q + 1) 'eachPatternToken'
+					if tokenCanBeAName(self.tokenAt(named)) 'aBoundName'
+						self.fileVarNames.insert(self.tokenAt(named).value)
+					end 'aBoundName'
+				end 'eachPatternToken'
+
+				continue
+			end 'aDestructuredPattern'
+
+			if tokenCanBeAName(self.tokenAt(q + 1)) 'aBoundName'
+				self.fileVarNames.insert(self.tokenAt(q + 1).value)
+			end 'aBoundName'
+		end 'eachToken'
+
+		self.fileVarNamesCollected = true
+
+		return self.fileVarNames
+	end 'namesDeclaredByVar'
+
+	function requireTheHandOffWalkKeysTheCell(nameTok Token)
+		if not self.namesDeclaredByVar().contains(nameTok.value) 'aCellTheWalkWouldNotKey'
+			panic("Parser.requireTheHandOffWalkKeysTheCell: '{String.from(nameTok.value)}' lives in a cell, but no `var` spells it, so `corpusHandOffs` did not key the by-reference reads that decided it — a binding form that reaches a cell is spelled `var <name>` or is taught to `namesDeclaredByVar`")
+		end 'aCellTheWalkWouldNotKey'
+	end 'requireTheHandOffWalkKeysTheCell'
+
+	function namesSpelledAsValues() returns BareNameSet
+		let names = BareNameSet.create()
+
+		for q in 0 upto self.tokens.count() 'eachToken'
+			if self.spellsANameAsAValueAt(q) 'aNameNotCalledNorAMember'
+				names.insert(self.tokenAt(q).value)
+			end 'aNameNotCalledNorAMember'
+		end 'eachToken'
+
+		return names
+	end 'namesSpelledAsValues'
+
+	function spellsANameAsAValueAt(index ElementIndex) returns bool
+		return tokenCanBeAName(self.tokenAt(index)) and self.kindAt(index + 1) != TokenKind.leftParen and (index == 0 or self.kindAt(index - 1) != TokenKind.dot)
+	end 'spellsANameAsAValueAt'
+
 	function stepBodyWalk(walk BodyWalk, q ElementIndex)
 		let kind = self.kindAt(q)
 
@@ -105595,28 +105701,37 @@ export type Parser
 		return self.signatures.programHasMutableFunctionValues() or self.signatures.aFreeFunctionTakesByRefAt(slot.arity, position: slot.position)
 	end 'handsToAFunctionValueByReferenceAt'
 
-	function openingMayBeAnIndirectCall(opener ElementIndex, scan IndirectCallScan) returns bool
+	function callOpeningAt(opener ElementIndex) returns CallOpening
 		if self.kindAt(opener) != TokenKind.leftParen or opener == 0 or self.callOpeningAtIsSpawned(opener) 'cannotBeACallThroughAValue'
-			return false
+			return CallOpening.notACall
 		end 'cannotBeACallThroughAValue'
 
 		let before = self.kindAt(opener - 1)
 
 		if before == TokenKind.rightParen or before == TokenKind.rightBracket 'aCallResultIsCalled'
-			return true
+			return CallOpening.callResult
 		end 'aCallResultIsCalled'
 
 		if before != TokenKind.identifier 'notACallee'
-			return false
+			return CallOpening.notACall
 		end 'notACallee'
 
 		let name = self.tokenAt(opener - 1).value
 
 		if opener >= 2 and self.kindAt(opener - 2) == TokenKind.dot 'throughAReceiver'
-			return self.signatures.bareNameIsAFunctionValuedFieldName(name)
+			return CallOpening.throughReceiver(name)
 		end 'throughAReceiver'
 
-		return scan.boundNames.contains(name) or self.enclosingTypeHasAFunctionValuedFieldNamed(name) or self.nameOccursAsAValueBefore(name, upTo: opener, scan: scan)
+		return CallOpening.bare(name)
+	end 'callOpeningAt'
+
+	function openingMayBeAnIndirectCall(opener ElementIndex, scan IndirectCallScan) returns bool
+		return match self.callOpeningAt(opener) 'opening'
+			notACall gives false
+			callResult gives true
+			throughReceiver(name) gives self.signatures.bareNameIsAFunctionValuedFieldName(name)
+			bare(name) gives scan.boundNames.contains(name) or self.enclosingTypeHasAFunctionValuedFieldNamed(name) or self.nameOccursAsAValueBefore(name, upTo: opener, scan: scan)
+		end 'opening'
 	end 'openingMayBeAnIndirectCall'
 
 	function enclosingTypeHasAFunctionValuedFieldNamed(name ByteArray) returns bool
@@ -105632,7 +105747,7 @@ export type Parser
 		while scan.nonCallNames.scannedTo < upTo 'extend'
 			let i = scan.nonCallNames.scannedTo
 
-			if tokenCanBeAName(self.tokenAt(i)) and self.kindAt(i + 1) != TokenKind.leftParen and (i == 0 or self.kindAt(i - 1) != TokenKind.dot) and not scan.nonCallNames.firstSites.contains(self.tokenAt(i).value) 'aFirstNameNotCalledNorAMember'
+			if self.spellsANameAsAValueAt(i) and not scan.nonCallNames.firstSites.contains(self.tokenAt(i).value) 'aFirstNameNotCalledNorAMember'
 				scan.nonCallNames.firstSites.upsert(self.tokenAt(i).value, value: i)
 			end 'aFirstNameNotCalledNorAMember'
 
