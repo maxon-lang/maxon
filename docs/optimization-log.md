@@ -278,6 +278,7 @@ ragged.
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The signature index no longer records which functions return a name or a call: the fact had no reader, and its second walk of each such body is gone | 10,284,138 | 14,335,453 | 22,407,124 | 38,572,170 | 71,048,509 | 136,609,121 |
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 10,370,804 | 14,435,830 | 22,534,881 | 38,754,645 | 71,340,378 | 137,119,736 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 10,469,413 | 14,555,746 | 22,697,436 | 39,002,472 | 71,758,773 | 137,878,391 |
+| 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 14,626,494 | 19,107,038 | 28,055,214 | 45,979,705 | 81,961,833 | 154,547,142 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -365,6 +366,7 @@ ragged.
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The signature index no longer records which functions return a name or a call: the fact had no reader, and its second walk of each such body is gone | 1,095,447,120 | 1,595,444,672 | 2,597,388,608 | 4,625,913,360 | 8,742,257,776 | 17,001,165,040 |
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 1,101,829,024 | 1,602,748,160 | 2,606,533,680 | 4,638,740,016 | 8,762,446,016 | 17,036,074,864 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 1,107,872,432 | 1,609,875,216 | 2,615,829,648 | 4,652,378,928 | 8,784,771,584 | 17,075,723,456 |
+| 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 1,402,204,336 | 1,935,298,288 | 3,002,651,296 | 5,165,089,920 | 9,547,507,088 | 18,341,147,696 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -495,6 +497,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The signature index no longer records which functions return a name or a call: the fact had no reader, and its second walk of each such body is gone | 1,634,449,273 | 2,175,131,042 | 3,225,628,008 | 5,554,119,961 | 10,364,940,068 | 20,539,964,345 |
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 1,713,300,507 | 2,440,862,462 | 3,637,198,662 | 5,889,140,558 | 12,088,468,798 | 21,344,903,217 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 1,593,731,909 | 2,198,554,228 | 3,530,302,749 | 5,706,880,362 | 10,567,712,559 | 20,256,949,477 |
+| 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 5,678,014,421 | 7,352,085,686 | 10,656,406,205 | 17,527,837,540 | 31,153,548,494 | 59,034,916,098 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -2408,3 +2411,98 @@ Read on `tests/ladders/genshare.sh <N> <mode> <out>`, since the `scale-test` cor
 | `phantom` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 421,064 / 545,698 / 794,945 / 1,293,393 |
 
 `doors` also reads a doors × fields term in `parse` (×2.94, ×3.27 here; ×3.6, ×3.8 at N = 400 / 800 / 1600), and a compiler built from the parent commit reads the same ×3.6, ×3.8.
+### Result — 2026-11-13, where a clean self-compile spends its time: one serial thread
+
+Taken at `fc56ce958` on an i7-8700 (6 cores, 12 threads, 16 GB), the self-built compiler building the tree
+(`build maxon-bin --output=<path> --metrics=<path>`), output deleted between runs.
+
+| processors (`MAXON_MAX_PROCS`) | wall |
+|---|---|
+| 12 | 110.0 s, 107.9 s, 108.6 s |
+| 6 | 109.3 s |
+| 3 | 119.2 s |
+| 1 | 180.4 s |
+
+Twelve processors save 72 s over one and six do as well as twelve: the compile is about 92% serial. Each pool is
+bounded by the compiling thread, not by its workers: `frontEndPool` reads 15.5 s and `stdFanOut` 6.3 s at 6 and at
+12 processors alike, and `semanticCheck` 30 s at every count. The compile makes 542 M allocations, peaks at 4.76 GB
+committed and emits 27.5 MB of code. Its front end folds 8 rounds and parses the library cold (251 library parses),
+because the compiler's source declares a name the library means.
+
+A sampling profile of one such compile (`maxon profile run --folded --rate=200`, 58,574 samples of 5 ms CPU each)
+puts 30% of all CPU on the compiling thread, about 89 s of the wall time:
+
+| on the compiling thread | CPU-seconds |
+|---|---|
+| Maxon-tier passes | 34 |
+| of which `resolveHoldMarkers` | 6.8 |
+| of which `checkCapabilityCalls` (`checkReplyDeferrals` 4.4) | 5.7 |
+| of which `checkCalls` (`validatePlainCall` 4.9) | 5.5 |
+| of which `checkDiscardedResults` and its effect summary | 5.2 |
+| of which `collectCallParamEdges` | 5.2 |
+| of which `checkUnusedExports` and `checkUnusedFilePrivate` | 2.3 |
+| front-end stages (signature sweep 5.8, the reach check 4.7, row-set answers 3.9, merge 2.8) | 18 |
+| lowering and `inlineLeaves` | 13 |
+| handing functions to the Std and backend pools and splicing them back | 19.5 |
+
+By kind of work across every thread: reference-count traffic 22% of samples, the allocator 23% (10 points of it, 30
+CPU-seconds, waiting on the slab's one lock in `__slab_refill` and `__slab_free_tracked`, almost all on backend
+workers), hashing and map probes 8%. Walks asking whether a type holds a unique value, is linear or holds a reply
+were 10.5% (30.6 CPU-seconds). `parseGenericTemplate` has no samples and the sweep's `scanBodyFacts` 0.3%.
+
+### Result — 2026-11-14, a type's unique, linear and reply-holding answer is settled once per type
+
+The three questions (`valueHoldsAUnique` and its cause, `valueIsLinear`, `typeHoldsAReply`) re-walked the type's
+structure at every use: the one memo there was, for the unique bool, lived for a single file's parse, and the
+linear and reply walks kept none. `settleBaseline` now walks every declared struct and union once and records the
+unique and linear answers in two tables the parse workers read frozen; the reply walk remembers the names it found
+reply-free; and an entry point creates its visited set only when a walk is needed. An answering walk still runs for
+a type that holds a unique value, because its cause names the field. No diagnostic, accepted program or emitted
+byte moves: `regions-unique`, `linear-types`, `deferred-reply`, `regions-bounds`, `http-responder`, `slot` and
+`shared-memory-builtins` read 223 passed, 0 failed.
+
+Both arms below were built by one compiler, the base arm from the base commit's `maxon-bin` and the other from this
+tree's, and run from sibling directories on the same input.
+
+The self-compile (both arms compiling this tree's `maxon-bin`, three interleaved rounds):
+
+| | base | this change | |
+|---|---|---|---|
+| wall | 110.3 s, 110.5 s, 110.4 s | 99.2 s, 99.1 s, 99.4 s | −10.1% |
+| CPU ticks | 272.5 G, 273.1 G, 272.8 G | 250.9 G, 250.0 G, 250.6 G | −8.2% |
+| allocations | 540,821,549 | 518,865,942 | −4.06% |
+| `parse` allocations, and wall summed over workers | 105,753,943, 61.9 s | 90,046,757, 40.3 s | −14.9% |
+| `semanticCheck` allocations, and wall | 86,883,928, 30.3 s | 81,115,175, 23.6 s | −6.6% |
+| `signatures` allocations, and wall | 20,502,255, 4.8 s | 20,444,270, 4.7 s | −0.3% |
+| `frontEndPool` wall | 14.8 s | 10.8 s | |
+
+The allocation counts are the same in all three rounds of an arm. The two arms' output images are byte-identical
+when written under one file name.
+
+The standing ladder, allocations by rung (rung 0 to 5): total −0.09%, −0.06%, −0.03%, +0.00%, +0.02%, +0.03%;
+`signatures` +0.86% to +1.08%, which is the settle; `parse` −0.52% to −0.12%; `semanticCheck` −0.21% to −0.28%. Growth
+per doubling is the same in both arms, the code bytes are equal and the six images are byte-identical. The corpus
+declares no unique or linear type and no deferring service, so it prices the settle and cannot show the saving.
+
+`tests/ladders/gentypeprops.sh` can. At N = 250 with chains 16, 32, 64 and 128 types deep:
+
+| mode, phase | base, G ticks | this change, G ticks | base, allocations at 128 | this change |
+|---|---|---|---|---|
+| `control`, `parse` | 4.14, 6.43, 17.70, 83.46 | 3.69, 4.66, 6.82, 12.39 | 20,286,755 | 13,936,040 |
+| `linear`, `parse` | 4.38, 6.64, 15.68, 56.02 | 3.44, 3.75, 5.56, 9.92 | 22,153,636 | 12,617,851 |
+| `unique`, `parse` | 3.87, 4.93, 8.23, 18.82 | 3.64, 4.61, 6.83, 12.41 | 15,581,983 | 13,929,646 |
+| `linear`, `signatures` | 1.40, 1.79, 2.80, 5.75 | 1.37, 1.72, 2.44, 3.86 | 7,088,077 | 6,907,009 |
+| `unique`, `signatures` | 1.48, 1.93, 2.84, 4.72 | 1.49, 1.96, 2.93, 4.84 | 6,790,329 | 6,916,719 |
+
+The base's `parse` grew by ×4.71 over the last doubling in `control` and ×3.57 in `linear`, each walk scanning a
+visited list that held the whole chain; this change reads ×1.82 and ×1.78 on a program that itself grows by less
+than two. `control` costs the base more than `unique` does because a walk that finds nothing visits everything. At
+the default depth of 8 and N = 250 to 2000 `signatures`, `parse` and the total of every mode grow by at most ×1.76 per doubling in both
+arms, and at N = 2000 `parse` allocations fall by 2.9% (`unique`), 12.1% (`linear`), 5.3% (`reply`) and 5.0%
+(`control`). All 29 ladder programs compile to byte-identical images in both arms and exit 0.
+
+Along the way: the settle as first written re-walked a chain from every root that holds a unique value (`unique`
+`signatures` at depth 128 read 10.94 G ticks against 4.93 G once a settling walk stopped at a settled holder), and
+`closeLinearParamConsumes` asked the linear question of every parameter before any answer was settled, which is
+why the linear settle runs first. `tests/parallelCompile` reads 15 pass, 0 fail, and `verify-recheck` passes on a
+reply, a unique and a linear program.

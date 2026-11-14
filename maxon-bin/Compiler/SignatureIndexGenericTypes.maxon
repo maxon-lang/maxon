@@ -1414,15 +1414,43 @@ extension ProgramSignatures
 		return try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 	end 'layoutFieldType'
 
-	// The DECLARED type of struct field `index`.
-	//
-	// ⚠ **THIS DOOR IS READER-FREE AND ITS CALLERS MUST NOT ASK A MANAGEDNESS QUESTION THROUGH IT** — the
-	// two that did are `structFieldIsManaged`/`structFieldOwesDrop` above, which now read the layout
-	// themselves so they can name the reader. A caller that only wants the TAG (existential, opaque) is
-	// unaffected: a tag is not contestable.
 	export function uniqueCauseOf(structName ByteArray) returns UniqueCause
-		return self.aggregateUniqueCause(structName, visited: NameRoster.create(0))
+		if let answered = try self.aggregateUniqueWithoutWalk(structName, walk: HoldingWalk.answering) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedAggregateUniqueCause(structName, visited: BareNameSet.create(), walk: HoldingWalk.answering)
 	end 'uniqueCauseOf'
+
+	// An answering walk stops only at a settled false: stopping at a settled true would change the field
+	// and held type its cause names, which E3214 prints and the regions-unique spec pins.
+	function settledUniqueCause(name ByteArray, walk HoldingWalk) returns UniqueCause throws AbsentError
+		let holds = try self.settledDeclarations().settledUniqueHoldings.get(name) otherwise throw AbsentError.absent
+
+		if not holds 'settledNone'
+			return UniqueCause.none
+		end 'settledNone'
+
+		if walk == HoldingWalk.settling 'aSettledHolder'
+			return UniqueCause.declared
+		end 'aSettledHolder'
+
+		throw AbsentError.absent
+	end 'settledUniqueCause'
+
+	function noteSettledHolding(name ByteArray, family SettledHolding, holds bool, walk HoldingWalk) returns bool
+		if walk == HoldingWalk.settling and holds 'aSettledHolder'
+			holdingTableOf(self.mainThreadSettled(), family: family).upsert(name, value: true)
+		end 'aSettledHolder'
+
+		return holds
+	end 'noteSettledHolding'
+
+	function settlingUniqueCause(name ByteArray, cause UniqueCause, walk HoldingWalk) returns UniqueCause
+		_ = self.noteSettledHolding(name, family: SettledHolding.unique, holds: cause.holdsAUnique(), walk: walk)
+
+		return cause
+	end 'settlingUniqueCause'
 
 	function uniqueHeldName(fieldType MaxonType) returns immutable ByteArray
 		let tag = maxonTypeTag(fieldType)
@@ -1435,28 +1463,32 @@ extension ProgramSignatures
 	end 'uniqueHeldName'
 
 	export function typeNameHoldsAUnique(name ByteArray) returns bool
-		let key = self.uniqueHoldingKeyOf(name)
+		if let known = try self.knownUniqueHolding(name) 'alreadyKnown'
+			return known
+		end 'alreadyKnown'
 
-		if let answered = try self.uniqueAnswerFor(key) 'alreadyAnswered'
-			return answered
-		end 'alreadyAnswered'
-
-		let answer = self.aggregateUniqueCause(name, visited: NameRoster.create(0)).holdsAUnique()
-		self.rememberUniqueHolding(key, answer: answer)
+		let answer = self.unsettledAggregateUniqueCause(name).holdsAUnique()
+		self.rememberUniqueHolding(name, answer: answer)
 
 		return answer
 	end 'typeNameHoldsAUnique'
 
 	export function valueUniqueCause(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner) returns UniqueCause
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceUniqueCause(nameId as GenericInstanceId, visited: NameRoster.create(0))
+			let id = nameId as GenericInstanceId
+
+			if let answered = try self.instanceUniqueWithoutWalk(id, walk: HoldingWalk.answering) 'answeredWithoutWalking'
+				return answered
+			end 'answeredWithoutWalking'
+
+			return self.walkedInstanceUniqueCause(id, visited: BareNameSet.create(), walk: HoldingWalk.answering)
 		end 'anInstance'
 
 		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
 			return UniqueCause.none
 		end 'notAnAggregate'
 
-		return self.aggregateUniqueCause(try from.nameOf(nameId) otherwise panic("ProgramSignatures.valueUniqueCause: type-name id {nameId} is not in the interner the caller named"), visited: NameRoster.create(0))
+		return self.uniqueCauseOf(try from.nameOf(nameId) otherwise panic("ProgramSignatures.valueUniqueCause: type-name id {nameId} is not in the interner the caller named"))
 	end 'valueUniqueCause'
 
 	export function valueHoldsAUnique(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner) returns bool
@@ -1472,23 +1504,32 @@ extension ProgramSignatures
 	end 'valueHoldsAUnique'
 
 	export function instanceHoldsAUniqueValue(id GenericInstanceId) returns bool
-		let key = self.uniqueHoldingKeyOf(self.mangleGenericInstance(id))
+		let mangled = self.mangleGenericInstance(id)
 
-		if let answered = try self.uniqueAnswerFor(key) 'alreadyAnswered'
-			return answered
-		end 'alreadyAnswered'
+		if let known = try self.knownUniqueHolding(mangled) 'alreadyKnown'
+			return known
+		end 'alreadyKnown'
 
-		let answer = self.instanceUniqueCause(id, visited: NameRoster.create(0)).holdsAUnique()
-		self.rememberUniqueHolding(key, answer: answer)
+		let answer = self.unsettledInstanceUniqueCause(id).holdsAUnique()
+		self.rememberUniqueHolding(mangled, answer: answer)
 
 		return answer
 	end 'instanceHoldsAUniqueValue'
 
-	function rememberUniqueHolding(key ByteArray, answer bool)
+	function knownUniqueHolding(name immutable ByteArray) returns bool throws AbsentError
+		if let settled = try self.settledDeclarations().settledUniqueHoldings.get(name) 'alreadySettled'
+			return settled
+		end 'alreadySettled'
+
+		return try self.uniqueAnswerFor(self.uniqueHoldingKeyOf(name)) otherwise throw AbsentError.absent
+	end 'knownUniqueHolding'
+
+	function rememberUniqueHolding(name immutable ByteArray, answer bool)
 		if not self.allFilesFolded 'declarationsAreIncomplete'
 			return
 		end 'declarationsAreIncomplete'
 
+		let key = self.uniqueHoldingKeyOf(name)
 		self.uniqueTypeAnswers.upsert(key, value: answer)
 
 		if self.baseline.settled 'pastTheBaseline'
@@ -1513,14 +1554,32 @@ extension ProgramSignatures
 			return false
 		end 'notAnAggregate'
 
-		return self.aggregateIsLinear(try from.nameOf(nameId) otherwise panic("ProgramSignatures.valueIsLinear: type-name id {nameId} is not in the interner the caller named"), visited: NameRoster.create(0))
+		let name = try from.nameOf(nameId) otherwise panic("ProgramSignatures.valueIsLinear: type-name id {nameId} is not in the interner the caller named")
+
+		if let answered = try self.aggregateLinearityWithoutWalk(name) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedAggregateIsLinear(name, visited: BareNameSet.create(), walk: HoldingWalk.answering)
 	end 'valueIsLinear'
 
 	export function typeIsLinear(type MaxonType) returns bool
-		return self.typeIsLinearWalking(type, visited: NameRoster.create(0))
+		if let answered = try self.typeLinearityWithoutWalk(type) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedAggregateIsLinear(self.denotedSlotAggregateName(type), visited: BareNameSet.create(), walk: HoldingWalk.answering)
 	end 'typeIsLinear'
 
-	function typeIsLinearWalking(type MaxonType, visited NameRoster) returns bool
+	function typeIsLinearWalking(type MaxonType, visited BareNameSet, walk HoldingWalk) returns bool
+		if let answered = try self.typeLinearityWithoutWalk(type) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedAggregateIsLinear(self.denotedSlotAggregateName(type), visited: visited, walk: walk)
+	end 'typeIsLinearWalking'
+
+	function typeLinearityWithoutWalk(type MaxonType) returns bool throws AbsentError
 		let tag = maxonTypeTag(type)
 
 		if tag == ValueTypeTag.genericInstance 'anInstance'
@@ -1542,8 +1601,8 @@ extension ProgramSignatures
 			return self.instanceIsLinear(live)
 		end 'genericAlias'
 
-		return self.aggregateIsLinear(name, visited: visited)
-	end 'typeIsLinearWalking'
+		return try self.aggregateLinearityWithoutWalk(name)
+	end 'typeLinearityWithoutWalk'
 
 	function instanceIsLinear(id GenericInstanceId) returns bool
 		if self.instanceIsPromiseHandle(id) or self.isElementBearingRecordInstance(id) or not self.genericInstanceHasBaseLayout(id) 'neverLinear'
@@ -1553,7 +1612,19 @@ extension ProgramSignatures
 		return self.baseLayoutOf(id).isLinear
 	end 'instanceIsLinear'
 
-	function aggregateIsLinear(name ByteArray, visited NameRoster) returns bool
+	function aggregateIsLinear(name ByteArray, visited BareNameSet, walk HoldingWalk) returns bool
+		if let answered = try self.aggregateLinearityWithoutWalk(name) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedAggregateIsLinear(name, visited: visited, walk: walk)
+	end 'aggregateIsLinear'
+
+	function aggregateLinearityWithoutWalk(name ByteArray) returns bool throws AbsentError
+		if let settled = try self.settledDeclarations().settledLinearTypes.get(name) 'alreadySettled'
+			return settled
+		end 'alreadySettled'
+
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
 			managedDirectory or
@@ -1566,30 +1637,34 @@ extension ProgramSignatures
 			userDeclared then break
 		end 'compilerOwned'
 
-		if visited.contains(name) 'alreadyWalked'
-			return false
-		end 'alreadyWalked'
-
-		visited.push(name)
-
 		if self.containsStructInAnyFile(name) 'aStruct'
 			return self.structLayoutOf(name).isLinear
 		end 'aStruct'
 
+		throw AbsentError.absent
+	end 'aggregateLinearityWithoutWalk'
+
+	function walkedAggregateIsLinear(name ByteArray, visited BareNameSet, walk HoldingWalk) returns bool
+		if visited.contains(name) 'alreadyWalked'
+			return false
+		end 'alreadyWalked'
+
+		visited.insert(name)
+
 		match self.enumInAnyFile(name) 'union'
-			declared(layout) then return self.unionPayloadsAreLinear(layout, visited: visited)
+			declared(layout) then return self.noteSettledHolding(name, family: SettledHolding.linear, holds: self.unionPayloadsAreLinear(layout, visited: visited, walk: walk), walk: walk)
 			undeclared then return false
 		end 'union'
-	end 'aggregateIsLinear'
+	end 'walkedAggregateIsLinear'
 
-	function unionPayloadsAreLinear(layout EnumLayout, visited NameRoster) returns bool
+	function unionPayloadsAreLinear(layout EnumLayout, visited BareNameSet, walk HoldingWalk) returns bool
 		for ci in 0 upto layout.caseCount() 'eachCase'
 			let payloads = layout.payloadsAt(ci)
 
 			for fi in 0 upto payloads.count() 'eachPayload'
 				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsAreLinear: payloadsAt count disagrees with get at {fi}")
 
-				if self.typeIsLinearWalking(field.declaredType, visited: visited) 'aLinearPayload'
+				if self.typeIsLinearWalking(field.declaredType, visited: visited, walk: walk) 'aLinearPayload'
 					return true
 				end 'aLinearPayload'
 			end 'eachPayload'
@@ -1598,11 +1673,21 @@ extension ProgramSignatures
 		return false
 	end 'unionPayloadsAreLinear'
 
-	function typeUniqueCause(type MaxonType, visited NameRoster) returns UniqueCause
+	function typeUniqueCause(type MaxonType, visited BareNameSet, walk HoldingWalk) returns UniqueCause
+		if let answered = try self.typeUniqueWithoutWalk(type, walk: walk) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedTypeUniqueCause(type, visited: visited, walk: walk)
+	end 'typeUniqueCause'
+
+	// Throws absent only from the arms walkedTypeUniqueCause repeats; a shape that throws from
+	// anywhere else falls into that walk's aggregate arm and answers none.
+	function typeUniqueWithoutWalk(type MaxonType, walk HoldingWalk) returns UniqueCause throws AbsentError
 		let tag = maxonTypeTag(type)
 
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceUniqueCause(genericInstanceIdOf(type), visited: visited)
+			return try self.instanceUniqueWithoutWalk(genericInstanceIdOf(type), walk: walk)
 		end 'anInstance'
 
 		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
@@ -1617,13 +1702,43 @@ extension ProgramSignatures
 
 		if self.isGenericAliasInAnyFile(name) 'genericAlias'
 			let live = try self.liveGenericAliasInstance(name) otherwise return UniqueCause.none
-			return self.instanceUniqueCause(live, visited: visited)
+			return try self.instanceUniqueWithoutWalk(live, walk: walk)
 		end 'genericAlias'
 
-		return self.aggregateUniqueCause(name, visited: visited)
-	end 'typeUniqueCause'
+		return try self.aggregateUniqueWithoutWalk(name, walk: walk)
+	end 'typeUniqueWithoutWalk'
 
-	function aggregateUniqueCause(name ByteArray, visited NameRoster) returns UniqueCause
+	function walkedTypeUniqueCause(type MaxonType, visited BareNameSet, walk HoldingWalk) returns UniqueCause
+		if maxonTypeTag(type) == ValueTypeTag.genericInstance 'anInstance'
+			return self.walkedInstanceUniqueCause(genericInstanceIdOf(type), visited: visited, walk: walk)
+		end 'anInstance'
+
+		let name = self.denotedSlotAggregateName(type)
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			return self.walkedInstanceUniqueCause(try self.liveGenericAliasInstance(name) otherwise panic("walkedTypeUniqueCause: the generic alias `{String.from(name)}` names no live instance, which typeUniqueWithoutWalk answers before a walk"), visited: visited, walk: walk)
+		end 'genericAlias'
+
+		return self.walkedAggregateUniqueCause(name, visited: visited, walk: walk)
+	end 'walkedTypeUniqueCause'
+
+	function aggregateUniqueCause(name ByteArray, visited BareNameSet, walk HoldingWalk) returns UniqueCause
+		if let answered = try self.aggregateUniqueWithoutWalk(name, walk: walk) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedAggregateUniqueCause(name, visited: visited, walk: walk)
+	end 'aggregateUniqueCause'
+
+	function aggregateUniqueWithoutWalk(name ByteArray, walk HoldingWalk) returns UniqueCause throws AbsentError
+		if let settled = try self.settledUniqueCause(name, walk: walk) 'alreadySettled'
+			return settled
+		end 'alreadySettled'
+
+		return try self.compilerOwnedUniqueCause(name)
+	end 'aggregateUniqueWithoutWalk'
+
+	function compilerOwnedUniqueCause(name ByteArray) returns UniqueCause throws AbsentError
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
 			managedDirectory or
@@ -1633,15 +1748,29 @@ extension ProgramSignatures
 			managedPin then return UniqueCause.declared
 
 			serviceHandle then return UniqueCause.none
-			userDeclared then break
+			userDeclared then throw AbsentError.absent
+		end 'compilerOwned'
+	end 'compilerOwnedUniqueCause'
+
+	function unsettledAggregateUniqueCause(name ByteArray) returns UniqueCause
+		if let owned = try self.compilerOwnedUniqueCause(name) 'compilerOwned'
+			return owned
 		end 'compilerOwned'
 
+		return self.walkedAggregateUniqueCause(name, visited: BareNameSet.create(), walk: HoldingWalk.answering)
+	end 'unsettledAggregateUniqueCause'
+
+	function walkedAggregateUniqueCause(name ByteArray, visited BareNameSet, walk HoldingWalk) returns UniqueCause
 		if visited.contains(name) 'alreadyWalked'
 			return UniqueCause.none
 		end 'alreadyWalked'
 
-		visited.push(name)
+		visited.insert(name)
 
+		return self.settlingUniqueCause(name, cause: self.declaredAggregateUniqueCause(name, visited: visited, walk: walk), walk: walk)
+	end 'walkedAggregateUniqueCause'
+
+	function declaredAggregateUniqueCause(name ByteArray, visited BareNameSet, walk HoldingWalk) returns UniqueCause
 		if self.containsStructInAnyFile(name) 'aStruct'
 			let layout = self.structLayoutOf(name)
 
@@ -1652,7 +1781,7 @@ extension ProgramSignatures
 			for i in 0 upto layout.fieldCount() 'eachField'
 				let fieldType = self.layoutFieldType(layout, structName: name, index: i)
 
-				if self.typeUniqueCause(fieldType, visited: visited).holdsAUnique() 'aUniqueField'
+				if self.typeUniqueCause(fieldType, visited: visited, walk: walk).holdsAUnique() 'aUniqueField'
 					return UniqueCause.holds(try layout.fieldNames.get(i) otherwise panic("aggregateUniqueCause: fieldNames.get OOB at {i}"), held: self.uniqueHeldName(fieldType))
 				end 'aUniqueField'
 			end 'eachField'
@@ -1661,28 +1790,52 @@ extension ProgramSignatures
 		end 'aStruct'
 
 		match self.enumInAnyFile(name) 'union'
-			declared(layout) then return self.unionPayloadsUniqueCause(layout, visited: visited)
+			declared(layout) then return self.unionPayloadsUniqueCause(layout, visited: visited, walk: walk)
 			undeclared then return UniqueCause.none
 		end 'union'
-	end 'aggregateUniqueCause'
+	end 'declaredAggregateUniqueCause'
 
-	function instanceUniqueCause(id GenericInstanceId, visited NameRoster) returns UniqueCause
+	function instanceUniqueWithoutWalk(id GenericInstanceId, walk HoldingWalk) returns UniqueCause throws AbsentError
+		if let handled = try self.promiseHandleUniqueCause(id) 'aPromise'
+			return handled
+		end 'aPromise'
+
+		return try self.settledUniqueCause(self.mangleGenericInstance(id), walk: walk)
+	end 'instanceUniqueWithoutWalk'
+
+	function promiseHandleUniqueCause(id GenericInstanceId) returns UniqueCause throws AbsentError
 		if self.instanceIsPromiseHandle(id) 'aPromise'
 			return UniqueCause.none
 		end 'aPromise'
 
+		throw AbsentError.absent
+	end 'promiseHandleUniqueCause'
+
+	function unsettledInstanceUniqueCause(id GenericInstanceId) returns UniqueCause
+		if let handled = try self.promiseHandleUniqueCause(id) 'aPromise'
+			return handled
+		end 'aPromise'
+
+		return self.walkedInstanceUniqueCause(id, visited: BareNameSet.create(), walk: HoldingWalk.answering)
+	end 'unsettledInstanceUniqueCause'
+
+	function walkedInstanceUniqueCause(id GenericInstanceId, visited BareNameSet, walk HoldingWalk) returns UniqueCause
 		let mangled = self.mangleGenericInstance(id)
 
 		if visited.contains(mangled) 'alreadyWalked'
 			return UniqueCause.none
 		end 'alreadyWalked'
 
-		visited.push(mangled)
+		visited.insert(mangled)
 
+		return self.settlingUniqueCause(mangled, cause: self.instanceMembersUniqueCause(id, visited: visited, walk: walk), walk: walk)
+	end 'walkedInstanceUniqueCause'
+
+	function instanceMembersUniqueCause(id GenericInstanceId, visited BareNameSet, walk HoldingWalk) returns UniqueCause
 		if self.isElementBearingRecordInstance(id) 'anElementRecord'
 			let element = self.containerElementType(id)
 
-			if self.typeUniqueCause(element, visited: visited).holdsAUnique() 'aUniqueElement'
+			if self.typeUniqueCause(element, visited: visited, walk: walk).holdsAUnique() 'aUniqueElement'
 				return UniqueCause.holds(ElementCauseField, held: self.uniqueHeldName(element))
 			end 'aUniqueElement'
 
@@ -1700,22 +1853,22 @@ extension ProgramSignatures
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			let fieldType = self.substituteInstanceFieldType(id, index: i)
 
-			if self.typeUniqueCause(fieldType, visited: visited).holdsAUnique() 'aUniqueField'
+			if self.typeUniqueCause(fieldType, visited: visited, walk: walk).holdsAUnique() 'aUniqueField'
 				return UniqueCause.holds(try self.baseLayoutOf(id).fieldNames.get(i) otherwise panic("instanceUniqueCause: fieldNames.get OOB at {i}"), held: self.uniqueHeldName(fieldType))
 			end 'aUniqueField'
 		end 'eachField'
 
 		return UniqueCause.none
-	end 'instanceUniqueCause'
+	end 'instanceMembersUniqueCause'
 
-	function unionPayloadsUniqueCause(layout EnumLayout, visited NameRoster) returns UniqueCause
+	function unionPayloadsUniqueCause(layout EnumLayout, visited BareNameSet, walk HoldingWalk) returns UniqueCause
 		for ci in 0 upto layout.caseCount() 'eachCase'
 			let payloads = layout.payloadsAt(ci)
 
 			for fi in 0 upto payloads.count() 'eachPayload'
 				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsUniqueCause: payloadsAt count disagrees with get at {fi}")
 
-				if self.typeUniqueCause(field.declaredType, visited: visited).holdsAUnique() 'aUniquePayload'
+				if self.typeUniqueCause(field.declaredType, visited: visited, walk: walk).holdsAUnique() 'aUniquePayload'
 					return UniqueCause.holds(field.name, held: self.uniqueHeldName(field.declaredType))
 				end 'aUniquePayload'
 			end 'eachPayload'
@@ -1744,7 +1897,13 @@ extension ProgramSignatures
 	end 'instanceArgIsLinear'
 
 	export function instanceArgIsUnique(gid GenericInstanceId, position ElementIndex) returns bool
-		return self.typeUniqueCause(self.substitutedInstanceArg(gid, position: position), visited: NameRoster.create(0)).holdsAUnique()
+		let argument = self.substitutedInstanceArg(gid, position: position)
+
+		if let answered = try self.typeUniqueWithoutWalk(argument, walk: HoldingWalk.answering) 'answeredWithoutWalking'
+			return answered.holdsAUnique()
+		end 'answeredWithoutWalking'
+
+		return self.walkedTypeUniqueCause(argument, visited: BareNameSet.create(), walk: HoldingWalk.answering).holdsAUnique()
 	end 'instanceArgIsUnique'
 
 	function typeIsAValueOrHandle(type MaxonType) returns bool
@@ -6217,6 +6376,7 @@ extension ProgramSignatures
 		self.closeFreshReturnForwards()
 		self.closeForwardedStores()
 		self.closeIsolatedParamConsumes()
+		self.settleHoldings(SettledHolding.linear)
 		self.closeLinearParamConsumes()
 		_ = self.sweptConformanceIndex()
 		_ = self.conformerIndexWithExtensions()
@@ -6244,7 +6404,51 @@ extension ProgramSignatures
 		self.requireInlineRecordMemoIsWithinTheBaseline()
 		self.journal = IndexJournal.create()
 		self.baseline = IndexBaseline.create(self.crossFileConstantReads.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.recordsHoldingAnInterfaceValueCounted, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
+		self.settleUniqueHoldings()
 	end 'settleBaseline'
+
+	function settleUniqueHoldings()
+		self.openParseBand(RowSetOverrideTable.create())
+		self.settleHoldings(SettledHolding.unique)
+		_ = self.closeParseBand(CompilerOwnedDeclFilePath)
+	end 'settleUniqueHoldings'
+
+	function settleHoldings(family SettledHolding)
+		let table = holdingTableOf(self.mainThreadSettled(), family: family)
+
+		for name in self.declaredAggregateNames() 'eachAggregate'
+			if table.contains(name) 'alreadySettled'
+				continue
+			end 'alreadySettled'
+
+			let walked = BareNameSet.create()
+			let holds = self.settlingWalkHolds(name, family: family, walked: walked)
+			settleWalkedAnswer(table, name: name, answer: holds, walked: walked)
+		end 'eachAggregate'
+	end 'settleHoldings'
+
+	function settlingWalkHolds(name ByteArray, family SettledHolding, walked BareNameSet) returns bool
+		return match family 'family'
+			unique gives self.aggregateUniqueCause(name, visited: walked, walk: HoldingWalk.settling).holdsAUnique()
+			linear gives self.aggregateIsLinear(name, visited: walked, walk: HoldingWalk.settling)
+		end 'family'
+	end 'settlingWalkHolds'
+
+	function declaredAggregateNames() returns NameRoster
+		let structs = self.settledDeclarations().structNamesInDeclOrder
+		let enums = self.declaredEnumNames()
+		let names = NameRoster.create(structs.count() + enums.count(), zeroed: false)
+
+		for name in structs 'eachStruct'
+			names.push(name)
+		end 'eachStruct'
+
+		for name in enums 'eachEnum'
+			names.push(name)
+		end 'eachEnum'
+
+		return names
+	end 'declaredAggregateNames'
 
 	function everyAuthorNameDigests() returns HashDigestSet
 		let excluded = HashDigestSet.create()
@@ -6808,6 +7012,7 @@ extension ProgramSignatures
 	export function restoreBaseline()
 		self.genericInstances.restoreBaseline()
 		self.rewindJournaledWrites(self.baselineBandMark())
+		self.replyFreeTypes = BareNameSet.create()
 		self.holdsAMerge = false
 		self.requireAtBaseline("the start of a fold")
 	end 'restoreBaseline'

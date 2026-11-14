@@ -1911,33 +1911,68 @@ extension ProgramSignatures
 	end 'isReplyInstanceAt'
 
 	export function typeHoldsAReply(type MaxonType) returns bool
-		return self.typeReplyHolding(type, visited: NameRoster.create(0))
+		if let answered = try self.typeReplyWithoutWalk(type) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		let visited = BareNameSet.create()
+
+		return self.rememberedReplyWalk(self.walkedTypeReplyHolding(type, visited: visited), visited: visited)
 	end 'typeHoldsAReply'
 
 	export function valueHoldsAReply(t MaxonType, idsFrom TypeNameInterner) returns bool
 		let tag = maxonTypeTag(t)
 
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.typeReplyHolding(t, visited: NameRoster.create(0))
+			return self.typeHoldsAReply(t)
 		end 'anInstance'
 
 		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
 			return false
 		end 'notAnAggregate'
 
-		let name = try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("valueHoldsAReply: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in")
-		return self.aggregateReplyHolding(self.denotedAggregateName(name), visited: NameRoster.create(0))
+		let name = self.denotedAggregateName(try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("valueHoldsAReply: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in"))
+
+		if let answered = try self.aggregateReplyWithoutWalk(name) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		let visited = BareNameSet.create()
+
+		return self.rememberedReplyWalk(self.walkedAggregateReplyHolding(name, visited: visited), visited: visited)
 	end 'valueHoldsAReply'
+
+	function rememberedReplyWalk(holds bool, visited BareNameSet) returns bool
+		if holds or self.baseline.overlaid or not self.allFilesFolded 'nothingToKeep'
+			return holds
+		end 'nothingToKeep'
+
+		for walked in visited 'eachWalked'
+			self.replyFreeTypes.insert(walked)
+		end 'eachWalked'
+
+		return false
+	end 'rememberedReplyWalk'
 
 	export function declaredSlotHoldsAReply(declared MaxonType, declFilePath FilePath) returns bool
 		return self.typeHoldsAReply(self.declaredSlotType(declared, into: self.typeNames, slotScopeFilePath: declFilePath))
 	end 'declaredSlotHoldsAReply'
 
-	function typeReplyHolding(type MaxonType, visited NameRoster) returns bool
+	function typeReplyHolding(type MaxonType, visited BareNameSet) returns bool
+		if let answered = try self.typeReplyWithoutWalk(type) 'answeredWithoutWalking'
+			return answered
+		end 'answeredWithoutWalking'
+
+		return self.walkedTypeReplyHolding(type, visited: visited)
+	end 'typeReplyHolding'
+
+	// Throws absent only from the arms walkedTypeReplyHolding repeats; a shape that throws from
+	// anywhere else falls into that walk's aggregate arm and answers false.
+	function typeReplyWithoutWalk(type MaxonType) returns bool throws AbsentError
 		let tag = maxonTypeTag(type)
 
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceReplyHolding(genericInstanceIdOf(type), visited: visited)
+			return try self.instanceReplyWithoutWalk(genericInstanceIdOf(type))
 		end 'anInstance'
 
 		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
@@ -1952,28 +1987,54 @@ extension ProgramSignatures
 
 		if self.isGenericAliasInAnyFile(name) 'genericAlias'
 			let live = try self.liveGenericAliasInstance(name) otherwise return false
-			return self.instanceReplyHolding(live, visited: visited)
+			return try self.instanceReplyWithoutWalk(live)
 		end 'genericAlias'
 
-		return self.aggregateReplyHolding(name, visited: visited)
-	end 'typeReplyHolding'
+		return try self.aggregateReplyWithoutWalk(name)
+	end 'typeReplyWithoutWalk'
 
-	function instanceReplyHolding(id GenericInstanceId, visited NameRoster) returns bool
+	function walkedTypeReplyHolding(type MaxonType, visited BareNameSet) returns bool
+		if maxonTypeTag(type) == ValueTypeTag.genericInstance 'anInstance'
+			return self.walkedInstanceReplyHolding(genericInstanceIdOf(type), visited: visited)
+		end 'anInstance'
+
+		let name = self.denotedSlotAggregateName(type)
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			return self.walkedInstanceReplyHolding(try self.liveGenericAliasInstance(name) otherwise panic("walkedTypeReplyHolding: the generic alias `{String.from(name)}` names no live instance, which typeReplyWithoutWalk answers before a walk"), visited: visited)
+		end 'genericAlias'
+
+		return self.walkedAggregateReplyHolding(name, visited: visited)
+	end 'walkedTypeReplyHolding'
+
+	function instanceReplyWithoutWalk(id GenericInstanceId) returns bool throws AbsentError
 		if self.instanceBaseIsReply(id) 'aReply'
 			return true
 		end 'aReply'
 
+		if self.instanceIsPromiseHandle(id) 'aPromise'
+			throw AbsentError.absent
+		end 'aPromise'
+
+		if self.replyFreeTypes.contains(self.mangleGenericInstance(id)) or self.nameIsAServiceType(self.genericInstanceBaseName(id)) 'answeredOrHeldByACown'
+			return false
+		end 'answeredOrHeldByACown'
+
+		throw AbsentError.absent
+	end 'instanceReplyWithoutWalk'
+
+	function walkedInstanceReplyHolding(id GenericInstanceId, visited BareNameSet) returns bool
 		if self.instanceIsPromiseHandle(id) 'aPromise'
 			return self.typeReplyHolding(self.substitutedInstanceArg(id, position: ContainerElementArgPosition), visited: visited)
 		end 'aPromise'
 
 		let mangled = self.mangleGenericInstance(id)
 
-		if visited.contains(mangled) or self.nameIsAServiceType(self.genericInstanceBaseName(id)) 'alreadyWalkedOrHeldByACown'
+		if visited.contains(mangled) 'alreadyWalked'
 			return false
-		end 'alreadyWalkedOrHeldByACown'
+		end 'alreadyWalked'
 
-		visited.push(mangled)
+		visited.insert(mangled)
 
 		if self.isElementBearingRecordInstance(id) 'anElementRecord'
 			return self.typeReplyHolding(self.containerElementType(id), visited: visited)
@@ -1990,7 +2051,7 @@ extension ProgramSignatures
 		end 'eachField'
 
 		return false
-	end 'instanceReplyHolding'
+	end 'walkedInstanceReplyHolding'
 
 	function nameIsAServiceType(name ByteArray) returns bool
 		for candidate in self.serviceSpawnCandidates() 'eachCandidate'
@@ -2002,12 +2063,20 @@ extension ProgramSignatures
 		return false
 	end 'nameIsAServiceType'
 
-	function aggregateReplyHolding(name ByteArray, visited NameRoster) returns bool
-		if visited.contains(name) or self.nameIsAServiceType(name) 'alreadyWalkedOrHeldByACown'
+	function aggregateReplyWithoutWalk(name ByteArray) returns bool throws AbsentError
+		if self.replyFreeTypes.contains(name) or self.nameIsAServiceType(name) 'answeredOrHeldByACown'
 			return false
-		end 'alreadyWalkedOrHeldByACown'
+		end 'answeredOrHeldByACown'
 
-		visited.push(name)
+		throw AbsentError.absent
+	end 'aggregateReplyWithoutWalk'
+
+	function walkedAggregateReplyHolding(name ByteArray, visited BareNameSet) returns bool
+		if visited.contains(name) 'alreadyWalked'
+			return false
+		end 'alreadyWalked'
+
+		visited.insert(name)
 
 		if self.containsStructInAnyFile(name) 'aStruct'
 			let layout = self.structLayoutOf(name)
@@ -2025,9 +2094,9 @@ extension ProgramSignatures
 			declared(layout) then return self.unionPayloadsHoldAReply(layout, visited: visited)
 			undeclared then return false
 		end 'union'
-	end 'aggregateReplyHolding'
+	end 'walkedAggregateReplyHolding'
 
-	function unionPayloadsHoldAReply(layout EnumLayout, visited NameRoster) returns bool
+	function unionPayloadsHoldAReply(layout EnumLayout, visited BareNameSet) returns bool
 		for ci in 0 upto layout.caseCount() 'eachCase'
 			let payloads = layout.payloadsAt(ci)
 
