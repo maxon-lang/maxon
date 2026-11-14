@@ -174,7 +174,9 @@ export enum MultiMSharing
 	// retake rule (`rtrule`) and `__sched_handoffp`'s spinning arm (`hopspin`), each of which chooses between two
 	// arms that are both correct, as Go's reading of the same pair does. One reads `__sched_midle`'s head:
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
-	// machine, and whose stale "empty" that function argues.
+	// machine, and whose stale "empty" that function argues. One reads `__sched_regain_head`:
+	// `emitSchedRegainWaiterQueued`'s peek, which chooses whether a yield's strand goes behind everyone, and
+	// whose stale "yes" the locked hand-off answers none to and whose stale "no" the next yield corrects.
 	//
 	// ⭐ **THREE MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**:
 	// `__sched_idle_processor_count` answers `__sched_npidle`, `__sched_timer_start_count` answers
@@ -6307,6 +6309,33 @@ export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction,
 	emitSchedLockLeave(module, block: keepSignalled, ids: ids)
 	module.setTerminator(keepSignalled, op: StdOp.branch(kept.id))
 end 'emitSchedHandProcessorToOwner'
+
+export function emitSchedRegainWaiterQueued(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitCompareWithConstant(module, block: block, value: emitLoadGlobalWord(module, block: block, label: SchedRegainHeadLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
+end 'emitSchedRegainWaiterQueued'
+
+export function emitSchedHandProcessorToRegainWaiterLocked(module StdModule, func IrFunction, cur IrBlock, handedOff IrBlock, kept IrBlock, ids ValueMinter)
+	let examineProc = module.addBlock(func, label: b"hrexamine", heat: BlockHeat.cold)
+	let drainIt = module.addBlock(func, label: b"hrdrain", heat: BlockHeat.cold)
+	let releaseIt = module.addBlock(func, label: b"hrrelease", heat: BlockHeat.cold)
+	let keepIt = module.addBlock(func, label: b"hrkeep", heat: BlockHeat.cold)
+
+	let waiter = emitSchedListLoadHead(module, block: cur, head: SchedListHead.lockedWord(SchedRegainHeadLabel), ids: ids)
+	emitBranchOnCompare(module, block: cur, value: waiter, pred: StdCmpPred.eq, against: 0, whenTrue: keepIt, whenFalse: examineProc, ids: ids)
+
+	let m = emitLoadCurrentM(module, block: examineProc, ids: ids)
+	let p = emitLoadField(module, block: examineProc, record: m, offset: MOffCurrentP, ids: ids)
+	emitBranchOnCompare(module, block: examineProc, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: keepIt, whenFalse: drainIt, ids: ids)
+
+	emitSchedDrainRunqLocked(module, block: drainIt, p: p, cont: releaseIt, ids: ids)
+
+	let released = emitSchedReleaseProcLocked(module, func: func, cur: releaseIt, m: m, p: p, holdsWorkLabel: b"hrheldwork", emptyLabel: b"hrhanded", ids: ids)
+	emitSchedLockLeave(module, block: released, ids: ids)
+	module.setTerminator(released, op: StdOp.branch(handedOff.id))
+
+	emitSchedLockLeave(module, block: keepIt, ids: ids)
+	module.setTerminator(keepIt, op: StdOp.branch(kept.id))
+end 'emitSchedHandProcessorToRegainWaiterLocked'
 
 // ==========================================================================
 // The scheduler loop — `__sched_worker_loop` and `__sched_main_loop`

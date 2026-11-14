@@ -46,6 +46,10 @@ Such a loop is a busy wait that **makes progress**: each yield lets other green 
 runtime notice work that has become due, so whatever the loop is waiting for can actually happen. It is not a
 substitute for `await` or `sleep`, which are the *blocking* waits and which cost no CPU while they wait.
 
+That holds on one processor when the awaited answer is a service's, and the service is a machine back from a
+kernel call whose processor the monitor took: it waits to be handed a processor, and a yield — or a preemption,
+for a wait that never yields — hands it the one the waiting strand holds.
+
 ### It is not `sleep(0)`
 
 `sleep(ms)` parks the calling green thread on a timer and resumes it once the deadline passes, so even
@@ -239,4 +243,224 @@ end 'main'
 ```
 ```exitcode
 10
+```
+
+<!-- test: scheduler-yield.spin-wait-hands-its-processor-to-a-machine-regaining-one -->
+<!-- procs: 1 -->
+<!-- stdin: after "S: reader is in the kernel" -->
+**A SPIN-WAIT THAT YIELDS GIVES ITS PROCESSOR TO A MACHINE WAITING TO REGAIN ONE.** At one processor `reader`
+enters a blocking `stdin` read, the monitor takes its processor and a second machine runs `main`. `main` prints
+`S: reader is in the kernel` only once `reader` has published that it is about to read, and the harness feeds the
+line only after that print, so the read cannot return before `main` is running on the taken processor. When it
+does return, `reader`'s machine holds a green thread and no processor: it waits to be handed one, and the only
+processor belongs to `main`, which spins on `Scheduler.yield()` until `reader` has answered.
+
+⇒ **A yield that came straight back to the same processor would starve `reader` for ever**, because `main` never
+parks and the answer it waits for is `reader`'s to publish: the case would read a timeout, never a wrong number.
+`Scheduler.yield()` therefore hands the processor over, and `main`'s next turn comes round after `reader` has
+published `answered`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias StageCell = SharedValue with Integer
+
+let reading = 1 as Integer
+let answered = 2 as Integer
+
+function textOf(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives ""
+	end 'read'
+end 'textOf'
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read(stage StageCell) returns Integer
+		stage.publish(reading)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
+		stage.publish(answered)
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let stage = StageCell.create(0 as Integer)
+	let reader = spawn Reader.create()
+	let answer = try reader.read(stage.clone()) otherwise panic("an open mailbox with room takes the send")
+
+	while stage.current() < reading 'untilReading'
+		Scheduler.yield()
+	end 'untilReading'
+
+	print("S: reader is in the kernel\n")
+
+	while stage.current() < answered 'untilAnswered'
+		Scheduler.yield()
+	end 'untilAnswered'
+
+	let n = await answer
+	print("answered {n}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+S: reader is in the kernel
+answered 5
+```
+```exitcode
+0
+```
+
+<!-- test: scheduler-yield.spin-wait-with-a-sibling-hands-its-processor-over -->
+<!-- procs: 1 -->
+<!-- stdin: after "S: reader is in the kernel" -->
+The previous case with a sibling in the spinner's strand: `main` and the coroutine it starts both spin on
+`Scheduler.yield()`, so each yield finds a runnable sibling and would keep the processor within the strand
+for as long as the pair keeps yielding. A machine waiting to regain a processor takes it at the next yield all
+the same, and `reader` answers.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias StageCell = SharedValue with Integer
+
+let reading = 1 as Integer
+let answered = 2 as Integer
+
+function textOf(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives ""
+	end 'read'
+end 'textOf'
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read(stage StageCell) returns Integer
+		stage.publish(reading)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
+		stage.publish(answered)
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+function spinner(stage StageCell) returns Integer
+	while stage.current() < answered 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return stage.current()
+end 'spinner'
+
+function main() returns ExitCode
+	let stage = StageCell.create(0 as Integer)
+	let reader = spawn Reader.create()
+	let answer = try reader.read(stage.clone()) otherwise panic("an open mailbox with room takes the send")
+	let sibling = async spinner(stage.clone())
+
+	while stage.current() < reading 'untilReading'
+		Scheduler.yield()
+	end 'untilReading'
+
+	print("S: reader is in the kernel\n")
+
+	while stage.current() < answered 'untilAnswered'
+		Scheduler.yield()
+	end 'untilAnswered'
+
+	let seen = await sibling
+	let n = await answer
+	print("answered {n} seen {seen}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+S: reader is in the kernel
+answered 5 seen 2
+```
+```exitcode
+0
+```
+
+<!-- test: scheduler-yield.a-preempted-spin-hands-its-processor-to-a-machine-regaining-one -->
+<!-- procs: 1 -->
+<!-- stdin: after "S: reader is in the kernel" -->
+The same shape with no yield in the wait at all: `main` busy-waits on the cell, and the monitor's preemption is what
+takes its processor, so it is a preemption that has to hand the processor to the machine regaining one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias StageCell = SharedValue with Integer
+
+let reading = 1 as Integer
+let answered = 2 as Integer
+
+function textOf(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives ""
+	end 'read'
+end 'textOf'
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read(stage StageCell) returns Integer
+		stage.publish(reading)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
+		stage.publish(answered)
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+function busyUntil(stage StageCell, target Integer) returns Integer
+	var polls = 0 as Integer
+
+	while stage.current() < target 'busy'
+		polls = polls + 1
+	end 'busy'
+
+	return polls
+end 'busyUntil'
+
+function main() returns ExitCode
+	let stage = StageCell.create(0 as Integer)
+	let reader = spawn Reader.create()
+	let answer = try reader.read(stage.clone()) otherwise panic("an open mailbox with room takes the send")
+
+	let firstPolls = busyUntil(stage, target: reading)
+	print("S: reader is in the kernel\n")
+
+	let secondPolls = busyUntil(stage, target: answered)
+	let n = await answer
+	print("answered {n} polled {firstPolls > 0 and secondPolls > 0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+S: reader is in the kernel
+answered 5 polled true
+```
+```exitcode
+0
 ```

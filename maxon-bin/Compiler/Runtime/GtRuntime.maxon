@@ -7397,6 +7397,9 @@ end 'emitGtPollStores'
 // (`sched-runqueue.a-yield-goes-behind-the-global-queue`). Due timers and exited children are fired first
 // whenever either store holds anything, so a spin-wait on either makes progress.
 //
+// A yield or a preemption with a machine queued in `__sched_syscall_regain` hands that machine this processor
+// and goes behind everyone: it can run nowhere else, and a strand taking its own processor back starves it.
+//
 // ⭐⭐ **A PREEMPTION TAKES THE PROCESSOR, NEVER THE TURN.** The preempted member becomes the next member its
 // strand runs, ahead of the owner and every sibling (`GtOffStrandResume`), and the strand goes behind everyone
 // on the global queue, always — Go's `gopreempt_m`. Placed as a yield is, a strand with a runnable sibling would
@@ -7430,6 +7433,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	let place = module.addBlock(func, label: b"strandplace", heat: BlockHeat.normal)
 	let behindSiblings = module.addBlock(func, label: b"strandbehindsiblings", heat: BlockHeat.normal)
 	let behindEveryone = module.addBlock(func, label: b"strandbehindeveryone", heat: BlockHeat.normal)
+	let handedToWaiter = module.addBlock(func, label: b"strandhandedtowaiter", heat: BlockHeat.normal)
+	let keptProcessor = module.addBlock(func, label: b"strandkeptprocessor", heat: BlockHeat.normal)
 	let released = module.addBlock(func, label: b"strandreleased", heat: BlockHeat.normal)
 	let sortMember = module.addBlock(func, label: b"strandsort", heat: BlockHeat.normal)
 	let handedOffProc = module.addBlock(func, label: b"strandhandedoff", heat: BlockHeat.cold)
@@ -7528,7 +7533,9 @@ function buildGtRunStrand(module StdModule, target Target)
 	let nothingElse = emitCmp(module, block: place, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.appendOp(place, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(member)))
 	emitGtRecordLockLeave(module, block: place, record: owner, ids: ids)
-	module.setTerminator(place, op: StdOp.condBranch(nothingElse, thenBlockId: behindEveryone.id, elseBlockId: behindSiblings.id))
+	let waiterQueued = emitSchedRegainWaiterQueued(module, block: place, ids: ids)
+	let goesBehindEveryone = emitBin(module, block: place, a: nothingElse, b: waiterQueued, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(place, op: StdOp.condBranch(goesBehindEveryone, thenBlockId: behindEveryone.id, elseBlockId: behindSiblings.id))
 
 	emitBranchCarrying(module, from: behindSiblings, to: next, values: argsOf(zero))
 
@@ -7539,9 +7546,13 @@ function buildGtRunStrand(module StdModule, target Target)
 	// after its global put: this machine searches next, but another may be idle with nobody to tell it.
 	emitSchedLockEnter(module, block: behindEveryone, ids: ids)
 	module.appendOp(behindEveryone, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(owner)))
-	emitSchedLockLeave(module, block: behindEveryone, ids: ids)
-	emitSchedWakeAnIdleM(module, block: behindEveryone, ids: ids)
-	emitStrandRunReturn(module, block: behindEveryone, m: m, value: 0, ids: ids)
+	emitSchedHandProcessorToRegainWaiterLocked(module, func: func, cur: behindEveryone, handedOff: handedToWaiter, kept: keptProcessor, ids: ids)
+
+	// No wake is owed: a machine queued to regain a processor means every processor is held.
+	emitStrandRunReturn(module, block: handedToWaiter, m: m, value: GtProcessorHandedOff, ids: ids)
+
+	emitSchedWakeAnIdleM(module, block: keptProcessor, ids: ids)
+	emitStrandRunReturn(module, block: keptProcessor, m: m, value: 0, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtRunStrand'
