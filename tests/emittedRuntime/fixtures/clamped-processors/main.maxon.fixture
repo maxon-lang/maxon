@@ -1,0 +1,84 @@
+typealias Tally = int(0 to u64.max)
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let Services = 300
+let Rounds = 400
+let PerRound = 64
+let Pad = 1000
+let MailboxCapacity = 4
+let StrandedBound = 8388608 as Tally
+
+function makePad(length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append("p")
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+type Churn
+	var pad as String
+
+	static function create() returns Self
+		return Self{pad: makePad(Pad)}
+	end 'create'
+
+	export function run() returns Tally
+		var checksum = 0 as Tally
+
+		for index in 0 upto Rounds 'eachRound'
+			let held = StringArray.create(0)
+
+			for k in 0 upto PerRound 'make'
+				held.push("{index}:{k}:{self.pad}")
+			end 'make'
+
+			for s in held 'sum'
+				checksum = checksum + (s.byteLength() as Tally)
+			end 'sum'
+		end 'eachRound'
+
+		return checksum
+	end 'run'
+end 'Churn'
+
+function main() returns ExitCode
+	let handles = ChurnHandleArray.create(0)
+
+	for _ in 0 upto Services 'spawnEach'
+		handles.push(spawn(capacity: MailboxCapacity) Churn.create())
+	end 'spawnEach'
+
+	let replies = TallyPromiseArray.create(0)
+
+	for h in handles 'sendEach'
+		replies.push(try h.run() otherwise panic("a fresh service's mailbox holds its one message"))
+	end 'sendEach'
+
+	var checksum = 0 as Tally
+
+	for p in replies 'join'
+		checksum = checksum + (await p)
+	end 'join'
+
+	_ = HeapStats.scavenge()
+	_ = HeapStats.scavenge()
+
+	let usage = HeapStats.slab()
+	let unreachable = (usage.free - usage.cachedFree) as Tally
+
+	if unreachable > StrandedBound 'stranded'
+		print("spans stranded {unreachable} processors {Scheduler.processorCount()} checksum {checksum}")
+		return 1
+	end 'stranded'
+
+	print("spans ok processors {Scheduler.processorCount()}")
+	return 0
+end 'main'

@@ -365,7 +365,7 @@ function finishX64Backend(stdModule StdModule, target Target, globalData GlobalD
 	// at `.text` offset 0 where the backtrace needs it.
 	match target.os 'panicRuntime'
 		windows or
-		linux then appendX64RuntimeChunks(chunks, target: target, dumpCoverage: usage.usesCoverage, usesGt: usage.usesGt, carriesHostLock: posixUsesHostLock(usage), probesCpuFeatures: cpuFeaturesAreProbed(usage, target: target), emitsHardwareAes: hardwareAesChunksAreEmitted(usage, target: target), context: project.hostContext)
+		linux then appendX64RuntimeChunks(chunks, target: target, dumpCoverage: usage.usesCoverage, usesGt: usage.usesGt, probesCpuFeatures: cpuFeaturesAreProbed(usage, target: target), emitsHardwareAes: hardwareAesChunksAreEmitted(usage, target: target), context: project.hostContext)
 		macos or
 		wasi then panic("finishX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
@@ -381,6 +381,10 @@ function finishX64Backend(stdModule StdModule, target Target, globalData GlobalD
 		macos or
 		wasi then panic("finishX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'hostSurface'
+
+	if spinPauseChunkIsEmitted(usage, target: target) 'spinPause'
+		chunks.push(buildGtSpinPauseChunk())
+	end 'spinPause'
 
 	// The hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
 	// `__gt_morestack`) are part of the GT runtime's installation, so they ride the bit

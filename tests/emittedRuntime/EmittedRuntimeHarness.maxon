@@ -3,6 +3,10 @@ let SpawnFixtureName = "spawn"
 let PinnedMachineFixtureName = "pinned-machine"
 let HeapFixtureName = "heap"
 let PinnedMachineBlockedFixtureName = "pinned-machine-blocked"
+let ClampedProcessorsFixtureName = "clamped-processors"
+let CensusDuringRelistsFixtureName = "census-during-relists"
+let CensusDuringScavengeFixtureName = "census-during-scavenge"
+let CensusDuringRemoteFreesFixtureName = "census-during-remote-frees"
 
 let TargetOptionPrefix = "--target="
 let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
@@ -13,6 +17,8 @@ let IrFileSuffix = ".ir"
 
 let MacosTargetName = "arm64-macos"
 let LinuxTargetName = "arm64-linux"
+let X64LinuxTargetName = "x64-linux"
+let X64WindowsTargetName = "x64-windows"
 
 let FunctionHeaderPrefix = "func @"
 let FunctionHeaderSuffix = " \{"
@@ -23,7 +29,10 @@ let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
 let AcquireLoadMnemonic = "arm64.ldar.word64"
 let ReleaseStoreMnemonic = "arm64.stlr.word64"
 let AtomicClaimMnemonic = "arm64.arm64AtomicCas"
-let RegisterMovePrefix = "arm64.movRegReg "
+let X64InstructionPrefix = "x64."
+let Arm64InstructionPrefix = "arm64."
+let RegisterMoveMnemonic = "movRegReg "
+let RegisterMovePrefix = "{Arm64InstructionPrefix}{RegisterMoveMnemonic}"
 let GlobalAddressPrefix = "arm64.leaGlobal "
 let ArgumentSeparator = ", "
 let NoFurtherDemand = ""
@@ -32,6 +41,7 @@ let OperandSeparator = ","
 let LineSeparator = "\n"
 let DisplacedAddressInfix = " + "
 let DestinationWordIndex = 1
+let CopySourceIndex = 1
 
 typealias ProcessorCount = int(1 to 1024)
 
@@ -100,8 +110,24 @@ type WordAccesses
 end 'WordAccesses'
 
 function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns FilePath
+	let ir = stagedIrPath(staged, caseLabel: caseLabel, target: target)
+	let build = spawnStagedIrBuild(staged, caseLabel: caseLabel, target: target, functionName: functionName, debugStream: debugStream, poisonFreed: poisonFreed)
+
+	requireBuiltOrPanic(build, output: ir, what: "{stagedIrBuildSpelling(target, functionName: functionName)}, which writes the Target IR to read,")
+
+	return ir
+end 'buildStagedProgram'
+
+function stagedIrPath(staged FilePath, caseLabel String, target String) returns FilePath
+	return staged.join("{OutputFileStem}-{caseLabel}-{target}{IrFileSuffix}")
+end 'stagedIrPath'
+
+function stagedIrBuildSpelling(target String, functionName String) returns String
+	return "`{BuildCommandName} … {TargetOptionPrefix}{target} {EmitIrRuntimeOptionPrefix}{functionName}`"
+end 'stagedIrBuildSpelling'
+
+function spawnStagedIrBuild(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns CollectedOutput
 	let executable = staged.join("{OutputFileStem}-{caseLabel}-{target}")
-	let ir = staged.join("{OutputFileStem}-{caseLabel}-{target}{IrFileSuffix}")
 
 	let extraArguments = StringArray.create(0)
 	extraArguments.push("{TargetOptionPrefix}{target}")
@@ -115,12 +141,8 @@ function buildStagedProgram(staged FilePath, caseLabel String, target String, fu
 		extraArguments.push(PoisonFreedOption)
 	end 'withTheFill'
 
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: extraArguments)
-
-	requireBuiltOrPanic(build, output: ir, what: "`{BuildCommandName} … {TargetOptionPrefix}{target} {EmitIrRuntimeOptionPrefix}{functionName}`, which writes the Target IR to read,")
-
-	return ir
-end 'buildStagedProgram'
+	return spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: extraArguments)
+end 'spawnStagedIrBuild'
 
 function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}{executableSuffix()}")
@@ -272,6 +294,30 @@ function firstWriteOfRegister(body StringArray, register String) returns LineInd
 	throw IrScanError.noSuchLine
 end 'firstWriteOfRegister'
 
+function copySourceRegisterOf(text String, isa String) returns String throws IrScanError
+	if not text.startsWith("{isa}{RegisterMoveMnemonic}") 'notACopy'
+		throw IrScanError.noSuchLine
+	end 'notACopy'
+
+	return try text.split(ArgumentSeparator).get(CopySourceIndex) otherwise throw IrScanError.noSuchLine
+end 'copySourceRegisterOf'
+
+function lastWriteBefore(body StringArray, register String, site LineIndex) returns RegisterEvent throws IrScanError
+	let found = RegisterEventArray.create(0)
+
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.index >= site 'atOrAfterTheSite'
+			break
+		end 'atOrAfterTheSite'
+
+		if event.overwrites 'aWrite'
+			found.push(event)
+		end 'aWrite'
+	end 'eachEvent'
+
+	return try found.last() otherwise throw IrScanError.noSuchLine
+end 'lastWriteBefore'
+
 function registerHoldingArgument(body StringArray, argument String) returns String throws IrScanError
 	for event in registerEvents(body, register: argument) 'eachEvent'
 		if event.use != RegisterUse.copiedOut 'notACopy'
@@ -340,16 +386,16 @@ function destinationRegisterOf(text String) returns String throws IrScanError
 	return try spelled.split(OperandSeparator).get(0) otherwise throw IrScanError.noDestinationRegister
 end 'destinationRegisterOf'
 
-function buildMacosImage(staged FilePath, label String) returns FilePath
-	let image = staged.join("{OutputFileStem}-{label}-{MacosTargetName}")
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: image, label: label, extraArguments: ["{TargetOptionPrefix}{MacosTargetName}"])
+function buildStagedImage(staged FilePath, label String, target String) returns FilePath
+	let image = staged.join("{OutputFileStem}-{label}-{target}")
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: image, label: label, extraArguments: ["{TargetOptionPrefix}{target}"])
 
-	requireBuiltOrPanic(build, output: image, what: "`{BuildCommandName} … {TargetOptionPrefix}{MacosTargetName}`, which emits the image to read,")
+	requireBuiltOrPanic(build, output: image, what: "`{BuildCommandName} … {TargetOptionPrefix}{target}`, which emits the image to read,")
 
 	return image
-end 'buildMacosImage'
+end 'buildStagedImage'
 
-function noteImageName(findings StringArray, image ByteArray, name String, present bool, why String)
+function noteImageName(findings StringArray, image ByteArray, target String, name String, present bool, why String)
 	if image.containsSequence(asciiBytes(name)) == present 'asDemanded'
 		return
 	end 'asDemanded'
@@ -357,7 +403,7 @@ function noteImageName(findings StringArray, image ByteArray, name String, prese
 	let demand = "must carry" if present else "must NOT carry"
 	let observed = "the name is nowhere in the image" if present else "the name is in the image"
 
-	findings.push("the {MacosTargetName} image {demand} `{name}`, and {observed}. {why}")
+	findings.push("the {target} image {demand} `{name}`, and {observed}. {why}")
 end 'noteImageName'
 
 function asciiBytes(name String) returns ByteArray

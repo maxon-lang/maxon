@@ -107,19 +107,19 @@
 // 8192 written twice, which is how a page-size change silently leaves the map indexing one geometry and
 // the class table another.
 //
-// ✅ **NO LOCK OF ITS OWN, BECAUSE THE CALLER HOLDS ONE.** The whole slow path is locked, allocator and
-// arena together, at the point green threads can run these on more than one OS thread: `SlabRuntime` holds
-// `__slab_lock` across every call into this file on the allocate and release paths — `__slab_refill` takes
-// it before `__slab_arena_alloc_chunks` and `__slab_arena_map_set` and releases it after installing the
-// span, `__slab_scavenge` holds it from its entry through `__slab_arena_scavenge`, and `__slab_meta_alloc`
-// and `__slab_span_destroy` state the same requirement as a documented precondition rather than
-// re-acquiring it.
+// ✅ **NO LOCK OF ITS OWN, BECAUSE THE CALLER HOLDS ONE.** The arena is locked as a whole, at the point
+// green threads can run these on more than one OS thread: `SlabRuntime` holds the heap lock across every
+// call into this file on the allocate and release paths — `__slab_refill`'s cut takes it before
+// `__slab_arena_alloc_chunks` and releases it after `__slab_arena_map_set`, `__slab_scavenge` takes it
+// around each span destruction and around `__slab_arena_scavenge`, and `__slab_meta_alloc` and
+// `__slab_span_destroy` state the same requirement as a documented precondition rather than re-acquiring
+// it.
 //
-// ⚠ **ONE WALK IS REACHED WITHOUT THE LOCK: the reverse-map lookup `SlabRuntime.__slab_free` splices
+// ⚠ **ONE WALK IS REACHED WITHOUT THE HEAP LOCK: the reverse-map lookup `SlabRuntime.__slab_free` splices
 // inline**, which every free in the language takes and which is therefore exactly where a second M is. It
-// is a READ of the reverse map, and it is named here because "the caller holds the lock" is the sentence
-// above and this is its one exception — not because the exception has been shown to be safe. It has not
-// been measured either way.
+// is a READ of the reverse map, and it is named here because "the caller holds the heap lock" is the
+// sentence above and this is its one exception — not because the exception has been shown to be safe. It
+// has not been measured either way.
 //
 // ⚠ **AND THERE IS NO `__slab_init` / `__slab_init_done` HERE FOR A SECOND REASON THAT SURVIVES THE LOCK.**
 // The `.data` image IS the initialization, exactly as `MmRuntime`'s slab cursor's zero means "no arena yet":
@@ -436,7 +436,7 @@ export let SlabArenaMapL1Label = b"__slab_arena_map_l1"
 
 // The arena family's `.data` slots. Both are read only by tier bodies, so each is laid out exactly where a
 // surviving body names it (`DataReach.walked`); no gate is asked here. They do not go through
-// `pushRuntimeGlobal` because their discipline is `__slab_lock`, held by the caller
+// `pushRuntimeGlobal` because their discipline is the slab heap lock, held by the caller
 // (`runtime/SlabArena.maxon`'s header), which is no `MultiMSharing` class.
 export function slabArenaRuntimeGlobals() returns DataSectionEntryArray
 	let out = DataSectionEntryArray.create(0)

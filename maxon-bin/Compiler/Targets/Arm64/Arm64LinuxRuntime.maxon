@@ -23,7 +23,7 @@
 //   • **THERE IS NO `errno`.** A `svc` answers `-errno` in x0 and nothing stores it anywhere. `osLastError`
 //     is a SEPARATE op emitted after the failing one (`ManagedFileRuntime.emitWin32BoolOutcome` states that
 //     ordering), so every chunk here STASHES the reason where `mrt_host_last_error` reads it back —
-//     this OS thread's own slot in a program with the host lock and a `.data` word (`LinuxErrnoLabel`)
+//     this OS thread's own slot in a program with green threads and a `.data` word (`LinuxErrnoLabel`)
 //     in one without, which `arm64LinuxEmitErrnoAddr` decides per program. That pair is this lane's
 //     `*__error()`, and it is per-thread for the same reason Darwin's is.
 //   • **THERE IS NO `fnmatch`.** `FindFirstFileW`'s glob is matched by `mrt_linux_glob_match`, written out
@@ -307,18 +307,18 @@ let Arm64LinuxOpenDirectoryFlags = 0o40000
 // immediately after the call that failed, so the reason must survive from one to the other; a `svc` reports
 // it in x0 and keeps no copy. libc solves this with thread-local storage, and so does this lane — the
 // difference is only that the storage is the scheduler's own slot block rather than a `__thread` the linker
-// laid out, plus the `.data` word below for a program without the host lock.
+// laid out, plus the `.data` word below for a program without green threads.
 //
 // ⭐⭐⭐ **THE WORD IS PER-M BECAUSE THIS LANE HAS A REAL `clone`.** With two Ms making syscalls at once, a
 // `-errno` stashed by one and read by `mrt_host_last_error` on the other is a WRONG `FileError` — a silent
 // wrong answer, not a crash, on a lane where nothing would notice.
 //
 // ⇒ **`arm64LinuxEmitErrnoAddr` IS THE ADDRESS EVERY READER AND EVERY WRITER GOES THROUGH**, and it answers
-// this OS thread's own slot in a program with the host lock. This `.data` word is the storage of a program
-// without it, which has the one thread.
+// this OS thread's own slot in a program with green threads. This `.data` word is the storage of a program
+// without them, which has the one thread.
 //
 // ⇒ **AND ITS SHARING CLASS IS `sealedBeforeWorkers`, TRUE BY CONSTRUCTION:** a program that starts a worker
-// carries the host lock, so it does not lay this word out.
+// has green threads, so it does not lay this word out.
 
 // The `.data` slot this lane lays out, on `linuxCarriesErrnoDataWord`.
 //
@@ -387,7 +387,7 @@ let Arm64LinuxTimespecNsecSlot = 2
 // ⭐⭐ **THE ADDRESS OF *THIS OS THREAD's* errno WORD — the one door every stash and the one read go
 // through.** `TPIDR_EL0` is this lane's per-OS-thread slot block, and SLOT 0 of it is this word: the
 // scheduler's own keys start at `LinuxTlsFirstKey`, so slot 0 is never handed out and is RESERVED rather than
-// merely unused. A program without the host lock uses the process-wide `.data` word instead, which is sound
+// merely unused. A program without green threads uses the process-wide `.data` word instead, which is sound
 // because it has the one thread.
 // `__gt_context_switch` also moves the per-thread word in and out of each green thread
 // (`GtRuntime.GtOffLastError`), through `arm64LinuxEmitSlotBlockBase`.
@@ -2263,8 +2263,8 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxLockActiveSpinRounds)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotSpinRounds)
 
-	// Inlined rather than a `bl mrt_host_spin_pause`: this lock is emitted without `usesGt`, and that
-	// chunk only with it.
+	// Inlined rather than a `bl mrt_host_spin_pause`: this lock rides `usesRawOsLock`, and that chunk
+	// only `spinPauseChunkIsEmitted`, which that bit does not imply.
 	asm.placeLabel(activeRound)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxLockActiveSpinPauses)
 	arm64EmitProcyield(asm)
@@ -3216,12 +3216,11 @@ function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage Runt
 		chunks.push(buildArm64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 	end 'hostObjects'
 
-	// The main thread's slot block rides the runtime-lock gate, not the band's: a recursive lock reads
-	// its owner token from the block, and the allocator's slow-path lock does so in every allocating
-	// program.
-	if posixUsesHostLock(usage) 'hostLock'
+	// The main thread's slot block rides `usesGt`, not the band's gate: a recursive lock, which only the
+	// green-thread runtime takes, reads its owner token from the block.
+	if usage.usesGt 'mainThreadBlock'
 		chunks.push(buildArm64LinuxMainThreadBlockChunk(globalData))
-	end 'hostLock'
+	end 'mainThreadBlock'
 
 	// ⚠ **THE OS LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where
 	// the Darwin lane's `pthread_mutex_t` leaves it one.
@@ -3238,7 +3237,6 @@ function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage Runt
 	// `MAXON_MAX_PROCS` read are all reached from `__sched_init_procs` and `__gt_init`, which a green-thread
 	// program always installs together.
 	if usage.usesGt 'greenThreadFloor'
-		chunks.push(buildArm64PosixSpinPauseChunk())
 		chunks.push(buildArm64LinuxThreadYieldChunk())
 		chunks.push(buildArm64LinuxWaitNewChunk(globalData))
 		chunks.push(buildArm64LinuxEventSetChunk())

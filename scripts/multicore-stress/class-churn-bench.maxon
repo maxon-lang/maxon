@@ -1,0 +1,126 @@
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+typealias SlotBytes = int(1 to u32.max)
+
+enum ChurnMode
+	distinct
+	same
+end 'ChurnMode'
+
+let DefaultWorkers = 12
+let DefaultRounds = 5000
+let SharedPad = 1000
+let BytesPerPopulation = 460000
+let SlotOverheadBytes = 90
+let MailboxCapacity = 4
+let UsageExit = 2
+
+function distinctPads() returns TallyArray
+	return TallyArray from [3, 100, 185, 400, 1000, 2000, 3700, 6000, 9900, 16000, 20000, 30000]
+end 'distinctPads'
+
+function population(pad Tally) returns Tally
+	let slot = (pad + SlotOverheadBytes) as SlotBytes
+
+	return BytesPerPopulation / slot
+end 'population'
+
+function makePad(length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append("p")
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+function roundBytes(pad String, index Tally, count Tally) returns Tally
+	let held = StringArray.create(0)
+	held.reserve(count as ElementIndex)
+
+	for k in 0 upto count 'make'
+		held.push("{index}:{k}:{pad}")
+	end 'make'
+
+	var sum = 0 as Tally
+
+	for s in held 'sum'
+		sum = sum + (s.byteLength() as Tally)
+	end 'sum'
+
+	return sum
+end 'roundBytes'
+
+type Churn
+	var pad as String
+	var count as Tally
+
+	static function create(length Tally) returns Self
+		return Self{pad: makePad(length), count: population(length)}
+	end 'create'
+
+	export function run(rounds Tally) returns Tally
+		var checksum = 0 as Tally
+
+		for index in 0 upto rounds 'eachRound'
+			checksum = checksum + roundBytes(self.pad, index: index, count: self.count)
+		end 'eachRound'
+
+		return checksum
+	end 'run'
+end 'Churn'
+
+function usage() returns ExitCode
+	printError("usage: class-churn-bench <workers> <rounds> <distinct|same>\n")
+	return UsageExit
+end 'usage'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let workers = try CommandLine.readOptionalIntArgument(1, otherwise: DefaultWorkers) otherwise return usage()
+	let rounds = try CommandLine.readOptionalIntArgument(2, otherwise: DefaultRounds) otherwise return usage()
+	let modeName = try args.get(3) otherwise "distinct"
+	let mode = try ChurnMode.fromName(modeName) otherwise return usage()
+
+	if workers == 0 or rounds == 0 'empty'
+		return usage()
+	end 'empty'
+
+	let pads = distinctPads()
+	let handles = ChurnHandleArray.create(0)
+
+	for i in 0 upto workers 'spawnEach'
+		var pad = SharedPad as Tally
+
+		if mode == ChurnMode.distinct 'own'
+			let slot = try (i mod pads.count()) otherwise panic("class-churn-bench: the pad table is never empty")
+
+			pad = try pads.get(slot) otherwise panic("class-churn-bench: pads.get OOB at {slot}")
+		end 'own'
+
+		handles.push(spawn(capacity: MailboxCapacity) Churn.create(pad))
+	end 'spawnEach'
+
+	let replies = TallyPromiseArray.create(0)
+
+	for h in handles 'sendEach'
+		replies.push(try h.run(rounds as Tally) otherwise panic("class-churn-bench: a fresh service's mailbox holds its one message"))
+	end 'sendEach'
+
+	var checksum = 0 as Tally
+
+	for p in replies 'join'
+		checksum = checksum + (await p)
+	end 'join'
+
+	print("checksum={checksum} workers={workers} rounds={rounds} mode={mode.name}\n")
+
+	return 0
+end 'main'

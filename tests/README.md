@@ -786,7 +786,13 @@ tests/
   emittedRuntime/
     EmittedRuntimeHarness.maxon             the shared half: the build, the printed body, the line scan, the plain-load reading
     steal-reads-the-victim-ring-with-acquire-loads.maxtest     the thief reads another P's runqHead, runqTail and runnext with `ldar`, on both arm64 lanes
-    locked-relist-doors-recheck-the-owner-with-an-acquire-load.maxtest     both doors that finish a slot free under `__slab_lock` re-read the span's owner word with `ldar`, on both arm64 lanes
+    locked-relist-doors-recheck-the-owner-with-an-acquire-load.maxtest     both doors that finish a slot free off the cache re-read the span's owner word with `ldar`, on both arm64 lanes
+    the-span-stack-pop-backs-off-after-a-lost-swap-on-arm64-alone.maxtest     `__slab_refill`'s lost-swap edge calls `mrt_host_spin_pause` with a growing count on both arm64 lanes and on neither x64 lane
+    a-processor-past-the-raw-row-strands-no-span.maxtest     300 services churn one size class at 254 and at 257 processors, and the free bytes that survive two scavenges beyond what the rows cache stay bounded: a processor whose id reaches the raw row owns no span of its own
+    a-linux-program-that-only-allocates-maps-no-main-thread-block.maxtest     the x64-linux and arm64-linux images of a program that only allocates carry no `mrt_linux_main_thread_block`, and the image of one that spawns carries it
+    a-census-racing-a-relist-never-reads-a-span-mid-move.maxtest     a service walks the heap by tag while the main thread frees one slot of each of a few thousand exhausted spans, and the walk never ends the process with exit 119
+    a-census-racing-a-scavenge-never-reads-a-span-mid-collect.maxtest     a service scavenges while another walks the heap by tag, over a few dozen spans with slots queued on their remote lists, thousands of times, and the walk never ends the process with exit 119
+    a-census-racing-remote-frees-never-ends-on-a-slot-whose-free-has-begun.maxtest     three services queue remote frees on thousands of exhausted spans while main walks the heap by tag, and the walk never ends the process with exit 119
     the-debug-stream-ring-is-published-with-a-release-and-its-read-cursor-loaded-with-an-acquire.maxtest     `__ds_reserve` publishes `write_cursor` with `stlr` and reads `read_cursor` with `ldar`, and `__ds_commit` commits the entry header with `stlr`, on both arm64 lanes
     a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release.maxtest     `__shm_read_word` is one `ldar` and `__shm_write_word` one `stlr`, on both arm64 lanes
     a-pinned-green-thread-stays-on-its-machine-across-a-park.maxtest     a thread that pinned itself runs on the same machine after every park
@@ -805,6 +811,10 @@ tests/
     fixtures/cown/main.maxon.fixture        stored name only - see rule 1
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
+    fixtures/clamped-processors/main.maxon.fixture   stored name only - see rule 1
+    fixtures/census-during-relists/main.maxon.fixture   stored name only - see rule 1
+    fixtures/census-during-scavenge/main.maxon.fixture   stored name only - see rule 1
+    fixtures/census-during-remote-frees/main.maxon.fixture   stored name only - see rule 1
     fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
@@ -1564,10 +1574,10 @@ directory in the test scratch directory), and it keeps rule 5: one spawning `tes
 
 ## `emittedRuntime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
-Two of the cases are about the cown queue (below the list of the others). Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
+Two of the cases are about the cown queue (below the list of the others). The ordering cases read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
 program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
 bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
-bodies, and the two shared-segment word accessors. Each of the five builds a fixture — `spawn` for the first three,
+bodies, and the two shared-segment word accessors. Each builds a fixture — `spawn` for the first three,
 `heap` with `--debugstream` for the ring, `shared-segment` for the accessors — for `arm64-macos` and for
 `arm64-linux` with `--emit-ir-runtime=`, cut
 `func @<function>` out of the printed Target IR, and ask how that body reads a word another thread
@@ -1578,8 +1588,12 @@ body: `firstLineIndex` where an ORDER is demanded and `bodyLineCount` where a TA
 line by the op it starts with, an operand it contains and an operand it ends with; and `registerEvents`,
 the one scan that FOLLOWS a register, which reads off each line both what it does through that register
 and whether it overwrites it — two facts rather than one, because `ldr x1, [x1 + 48]` is both.
-`firstWriteOfRegister`, `registerHoldingArgument` and `accessThrough` (the first thing done through a
-register after a given line, skipping copies and throwing at an overwrite) are readings of that one scan.
+`firstWriteOfRegister`, `lastWriteBefore` (the last write to a register ahead of a given line),
+`registerHoldingArgument` and `accessThrough` (the first thing done through a
+register after a given line, skipping copies and throwing at an overwrite) are readings of that one scan;
+`copySourceRegisterOf` reads the source register off one copy line. `buildStagedProgram` panics on a
+failed build; a case that owes its own reason for one spawns the build with `spawnStagedIrBuild` and
+reads the printed body at `stagedIrPath`.
 The cases that locate a word's accesses by walking the body themselves — the scheduler words and the
 debug-stream ring — tally each access they find into a `WordAccesses`, which sorts it into plain loads,
 plain stores, acquires and releases and panics on any other shape.
@@ -1620,10 +1634,10 @@ ends.
 thief, and the victim's `runqHead`, `runqTail` and `runnext`.
 
 **`locked-relist-doors-recheck-the-owner-with-an-acquire-load`** — `__slab_free_to_full` and
-`__slab_free_to_raw`, the two doors that finish a slot free under `__slab_lock` (an exhausted span
-relisted, and a span of the shared raw row), and the span's `owning_p` word at mspan+48. The evicting processor publishes that word with a release
-store while it pops the span dry; these routines read it from another OS thread, under `__slab_lock`,
-which does not serialise that pop. So the read must be an acquire, and the case demands two things of
+`__slab_free_to_raw`, the two doors that finish a slot free off the cache (an exhausted span
+claimed and relisted under no lock, and a span of the shared raw row under the raw-row lock), and the span's `owning_p` word at mspan+48. The evicting processor publishes that word with a release
+store while it pops the span dry; these routines read it from another OS thread, and no lock
+serialises that pop. So the read must be an acquire, and the case demands two things of
 EACH door on BOTH lanes: no plain load addresses `[<span> + 48]`, and an `ldar` stands ahead of the
 body's FIRST `bl __slab_…` line — the acquire must precede every slab call, not merely appear
 somewhere in the body. ⛔ **ITS SELF-PROOF IS THAT IT ADDRESSED SOMETHING**: the body must hold
@@ -1636,6 +1650,51 @@ ahead of the `bl` writes `x1`, read off each line's destination operand rather t
 the ops that write. Failing both panics rather than passing, because a body that does none of this
 work satisfies an absence demand by holding nothing, and a register the span is not addressed through
 satisfies it the same way.
+
+**`the-span-stack-pop-backs-off-after-a-lost-swap-on-arm64-alone`** — `__slab_refill`'s pop of a size
+class's span stack, built from both the `spawn` fixture and the `heap` one, because the refill is laid
+out in every program with a heap and the pause it calls must be laid out with it. On both arm64 lanes the
+lost-swap edge must hold `bl mrt_host_spin_pause` with a count that enters the pop's attempt at 128, adds
+half of itself before the edge's closing `b`, and goes back to a block that reloads the head with `ldar`
+and swaps that same word, as Go's `lfstack.pop` does on arm64. On both x64 lanes the body must hold no
+call to the pause, as Go's backoff of 0 off arm64 has none. A failed link of either program fails the
+case with its reason, since a pause laid out only with green threads leaves the heap-only refill's call
+unresolved. ⛔ **ITS SELF-PROOF IS THE SWAP**: a body holding no compare-and-swap panics rather than
+passes, because a demand on the lost-swap edge is satisfied by a body without one.
+
+**`a-processor-past-the-raw-row-strands-no-span`** — builds the `clamped-processors` fixture for this host and
+runs it at 254 processors (every processor has a row of its own) and at 257 (processors 255 and 256 share
+the raw row). 300 services churn one size class; the program then scavenges twice and ends with exit 1 when
+the free bytes outside the rows' cached spans exceed 8 MiB. Two processors that stamp their own pointer on
+spans installed in one row displace each other's span on every refill, so the displaced span is in no row
+and on no list and the figure grows with the work.
+
+**`a-linux-program-that-only-allocates-maps-no-main-thread-block`** — builds the `heap` and `spawn` fixtures
+for `x64-linux` and `arm64-linux` and reads the image for the symbol `mrt_linux_main_thread_block`: it is
+absent from the allocating program, whose locks are exclusive and read no owner token, and present in the
+program that starts a scheduler.
+
+**`a-census-racing-a-relist-never-reads-a-span-mid-move`** — builds the `census-during-relists` fixture and
+runs it at four processors. The main thread builds 200,000 cells of 144 bytes, tells a service to take 3 by-tag
+censuses and frees every 64th cell, which is one slot of each of a few thousand exhausted spans of a class
+nothing else allocates from while the walks run, 100 times over. Each first free claims its span's relist and
+moves it with no lock, so a census that reads a span without settling on its owner word ends the process
+with exit 119.
+
+**`a-census-racing-a-scavenge-never-reads-a-span-mid-collect`** — builds the `census-during-scavenge` fixture and
+runs it at four processors. Per round the main thread builds 2,400 cells of 112 bytes, relists their spans, queues
+remote frees on each, lets a scavenge collect them, then starts a scavenge service and a census service, sending
+nothing else from main once the census is on its way, and queues 68 more remote frees on each span while they run,
+5,000 rounds over. The scavenger holds each span, moves
+its remote queue onto its free list and hands it back; a census that read the span's counts before and its lists
+after, and found its owner word and version as it began them, would count a slot twice or not at all and end the
+process with exit 119.
+
+**`a-census-racing-remote-frees-never-ends-on-a-slot-whose-free-has-begun`** — builds the `census-during-remote-frees`
+fixture and runs it at four processors. Three services build 60,000 cells of 144 bytes each, free one slot of each
+exhausted span, then queue 32 remote frees on each while main walks the heap by tag. A remote free steps the span's
+remote count before it links the slot, so for a few instructions the slot is counted free and sits on no chain; the
+census counts it free and must not end the process.
 
 **`published-scheduler-words-are-stored-with-release-and-loaded-with-acquire`** — the five `.data` words
 classed `MultiMSharing.publishedFromTheLock` (`__sched_phase`, `__sched_lastpoll`, `__sched_poll_until`,

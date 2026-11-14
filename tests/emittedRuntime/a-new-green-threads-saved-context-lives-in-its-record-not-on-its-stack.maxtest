@@ -2,19 +2,12 @@ let ANewGreenThreadsSavedContextLivesInItsRecordNotOnItsStackCaseLabel = "spawn-
 
 let SpawnFunctionName = "__gt_spawn"
 
-let X64LinuxTargetName = "x64-linux"
-let X64WindowsTargetName = "x64-windows"
-let X64InstructionPrefix = "x64."
-let Arm64InstructionPrefix = "arm64."
-
 let StoreMnemonic = "storeBaseDispReg.word64 "
-let MoveMnemonic = "movRegReg "
 let MemFillInfix = "MemFill"
 let SubtractInfix = ".sub"
 let NegativeOperandInfix = ", -"
 let StoredOperandSeparator = "], "
 let StoredOperandIndex = 1
-let MoveSourceIndex = 1
 
 let GtSpFieldName = "sp"
 
@@ -71,29 +64,13 @@ function originOf(body StringArray, register String, site LineIndex, target Stri
 	while true 'chase'
 		let write = try lastWriteBefore(body, register: traced, site: before) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, nothing in `{SpawnFunctionName}` writes `{traced}` before line {before}, so the value stored to the record's `{GtSpFieldName}` cannot be traced to where it was computed.")
 
-		if not write.line.startsWith("{isa}{MoveMnemonic}") 'computed'
+		let source = try copySourceRegisterOf(write.line, isa: isa) otherwise 'computed'
 			return write.line
 		end 'computed'
 
-		traced = try write.line.split(ArgumentSeparator).get(MoveSourceIndex) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, `{write.line}` names no source register.")
+		traced = source
 		before = write.index
 	end 'chase'
 
 	panic("emitted-runtime tests: the gate could not run — on {target}, the trace of `{register}` left its loop without a result.")
 end 'originOf'
-
-function lastWriteBefore(body StringArray, register String, site LineIndex) returns RegisterEvent throws IrScanError
-	let found = RegisterEventArray.create(0)
-
-	for event in registerEvents(body, register: register) 'eachEvent'
-		if event.index >= site 'atOrAfterTheSite'
-			break
-		end 'atOrAfterTheSite'
-
-		if event.overwrites 'aWrite'
-			found.push(event)
-		end 'aWrite'
-	end 'eachEvent'
-
-	return try found.last() otherwise throw IrScanError.noSuchLine
-end 'lastWriteBefore'

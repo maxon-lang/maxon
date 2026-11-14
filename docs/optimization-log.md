@@ -2506,3 +2506,133 @@ Along the way: the settle as first written re-walked a chain from every root tha
 `closeLinearParamConsumes` asked the linear question of every parameter before any answer was settled, which is
 why the linear settle runs first. `tests/parallelCompile` reads 15 pass, 0 fail, and `verify-recheck` passes on a
 reply, a unique and a linear program.
+
+### Result — 2026-11-14, the slab's shared span lists take a lock per size class
+
+The allocator serialised every refill, every relist of an exhausted span, the metadata slab, the arena, the
+scavenger and the census under one recursive lock. It now has a raw-row lock (threads holding no processor), one
+exclusive lock per size class (that class's partial list and the spans no processor owns) and a heap lock (arena,
+metadata slab, map levels, span destruction), taken in that order after `__sched_lock`. A lock per class is what
+Go's `mcentral` had before its lists became lock-free span sets (`vendor/go/src/runtime/mspanset.go`); contention
+between threads working one class remains and is the next change's subject. No answer, counter or fast-path
+instruction changes: one emitted-code pin moves on each lane, `__slab_free_box`, whose two locked arms lose the
+recursive lock's owner bookkeeping.
+
+The self-compile on an i7-8700, three interleaved rounds, both arms compiling the base commit's `maxon-bin`. The
+base arm is built by the pinned seed and then by itself inside a copy of the base tree, so its own allocator is
+the base one:
+
+| | base | this change | |
+|---|---|---|---|
+| wall | 101.4 s, 100.9 s, 101.7 s | 94.7 s, 96.6 s, 94.6 s | −5.9% |
+| CPU ticks | 255.1 G, 254.4 G, 256.7 G | 243.5 G, 246.7 G, 243.4 G | −4.3% |
+| `regalloc` (the backend pool's wall) | 13.8 s, 13.8 s, 13.7 s | 11.1 s, 12.1 s, 11.1 s | |
+| `stdFanOut` wall | 6.8 s, 6.8 s, 6.9 s | 3.9 s, 4.0 s, 3.9 s | |
+| `frontEndPool` wall | 11.2 s, 11.1 s, 11.2 s | 10.5 s, 10.5 s, 10.4 s | |
+| `semanticCheck` (compiling thread) | 23.7 s, 23.8 s, 24.0 s | 23.9 s, 24.2 s, 23.8 s | |
+
+A sampling profile of one compile per arm (`maxon profile run --folded --rate=200`): 52,937 samples of 5 ms
+against 47,680. Under `__slab_refill` 4,720 samples fall to 2,226 (lock entry 2,685 to 858, release 576 to 181,
+spinning 421 to 191); under `__slab_free_tracked` 4,536 fall to 1,821 (lock entry 2,835 to 926, release 672 to
+222, spinning 450 to 194). About 1,800 lock-entry samples remain, which is threads meeting on one class.
+
+`scripts/multicore-stress/class-churn-bench.maxon`, 12 services each churning 5,000 rounds, medians of 5 runs,
+wall / CPU seconds. `distinct` gives every service its own size classes and `same` gives all of them one:
+
+| host, processors | `distinct` base | `distinct` | `same` base | `same` |
+|---|---|---|---|---|
+| i7-8700, 12 | 3.45 / 15.66 | 2.78 / 10.14 | 4.16 / 25.81 | 3.95 / 23.42 |
+| i7-8700, 6 | 3.45 / 12.72 | 2.83 / 8.59 | 3.68 / 15.14 | 3.45 / 13.62 |
+| i7-8700, 1 | 7.72 / 7.66 | 7.10 / 7.03 | 5.18 / 5.13 | 4.48 / 4.44 |
+| Apple M3, 8 | 2.42 / 8.38 | 1.73 / 6.80 | 2.34 / 8.15 | 2.24 / 7.11 |
+| Apple M3, 1 | 4.67 / 4.66 | 4.65 / 4.63 | 3.31 / 3.30 | 3.30 / 3.30 |
+
+The i7 base column was taken about two hours before the others on the same machine and not interleaved with
+them, so its one-processor rows differ by more than the change accounts for; the M3 rows were interleaved.
+
+The state region grows by one 8 KiB chunk for the lock table (a 128-byte slot per lock). The pinned seed refuses
+the tree at `requireTierGeometryAgrees`, as it does for any change to the region's size.
+
+### Result — 2026-11-14, the slab's shared span lists are lock-free stacks
+
+Each size class's list of spans with free slots is a stack whose head word packs a span header's address with
+that header's push count, as Go's `lfstack` does (`vendor/go/src/runtime/lfstack.go`): a refill pops with a
+compare-and-swap loop, a free that finds an exhausted span claims the relist with a compare-and-swap on the
+span's owner word and pushes, and the scavenger takes a class's whole stack with one swap. The per-class locks
+are gone; the raw-row lock and the heap lock remain. This is not the structure Go's `mcentral` uses: its span
+sets are reset under a stop-the-world, which Maxon has none of. No answer or counter changes. One emitted-code
+pin moves on each lane, `__slab_free_box`, which loses its lock sweeps.
+
+The self-compile on an i7-8700, six interleaved rounds, both arms compiling the base commit's `maxon-bin`. The
+base arm is the compiler built from the base commit, placed inside a copy of the base tree:
+
+| | base (a lock per class) | this change | |
+|---|---|---|---|
+| wall | 101.7 s, 100.8 s, 99.7 s, 96.6 s, 95.9 s, 94.6 s | 98.9 s, 99.0 s, 94.0 s, 94.6 s, 95.3 s, 92.6 s | −2.5% |
+| CPU ticks | 256.2 G, 255.4 G, 253.1 G, 247.6 G, 245.3 G, 243.4 G | 252.9 G, 251.9 G, 243.5 G, 244.2 G, 244.3 G, 239.7 G | −1.6% |
+| `regalloc` (the backend pool's wall) | 12.9 s, 12.7 s, 12.3 s, 11.8 s, 11.1 s, 11.0 s | 11.3 s, 11.3 s, 10.0 s, 10.1 s, 11.1 s, 10.0 s | |
+| `stdFanOut` wall | 4.2 s, 4.5 s, 4.1 s, 4.3 s, 3.9 s, 3.9 s | 4.1 s, 4.0 s, 3.6 s, 3.6 s, 3.6 s, 3.2 s | |
+| `semanticCheck` (compiling thread) | 24.6 s, 24.6 s, 24.3 s, 23.9 s, 24.0 s, 23.8 s | 24.6 s, 24.5 s, 24.0 s, 23.8 s, 24.1 s, 23.8 s | |
+
+The machine was busier during rounds 1 and 2 than during the rest; this change is the faster arm of every pair,
+by 0.6 s to 5.7 s.
+
+A sampling profile of one compile per arm (`maxon profile run --folded --rate=200`): 47,961 samples of 5 ms
+against 46,526. Under `__slab_refill` 2,387 samples fall to 997 and under `__slab_free_tracked` 2,041 fall to
+548; lock entry was 1,070 and 1,150 of those and is none of either now. `__slab_free_to_full`, which holds the
+relist claim and the push, rises from 93 to 441. The remote-free path as a whole (`__slab_collect_remote`, the
+relist and the push onto a span's remote queue) is about 2% of the compile's samples.
+
+`scripts/multicore-stress/class-churn-bench.maxon`, 12 services each churning 5,000 rounds, wall / CPU seconds.
+`distinct` gives every service its own size classes and `same` gives all of them one. The i7-8700 rows are
+medians of 5 interleaved runs:
+
+| i7-8700, processors | `distinct` base | `distinct` | `same` base | `same` |
+|---|---|---|---|---|
+| 12 | 2.75 / 10.03 | 2.77 / 10.08 | 3.93 / 22.67 | 1.24 / 13.73 |
+| 6 | 3.38 / 10.03 | 2.77 / 8.91 | 3.46 / 13.70 | 1.72 / 9.16 |
+| 2 | 4.14 / 7.08 | 4.28 / 7.08 | 3.30 / 6.45 | 2.74 / 5.39 |
+| 1 | 7.11 / 7.08 | 7.11 / 7.08 | 4.47 / 4.44 | 4.52 / 4.48 |
+
+**The pop backs off after a lost swap on arm64, as Go's does there, and the measurement behind keeping it is
+small.** Go's `lfstack.pop` calls `procyield` with a count that starts at 128 and grows by half after each lost
+swap on arm64, and not at all elsewhere; `__slab_refill` does the same through `mrt_host_spin_pause`. On an
+Apple M3 (8 cores), medians of 7 interleaved runs of three arms: one allocator lock (the commit before the
+per-class locks), this change with the backoff compiled out, and this change:
+
+| M3, mode, processors | one lock | no backoff | backoff |
+|---|---|---|---|
+| `same`, 8 | 2.31 / 7.98 | 1.29 / 8.63 | 1.24 / 8.41 |
+| `same`, 6 | 2.42 / 7.83 | 1.30 / 7.26 | 1.26 / 7.13 |
+| `same`, 4 | 1.71 / 5.87 | 1.06 / 4.11 | 1.08 / 4.17 |
+| `same`, 2 | 1.90 / 3.79 | 1.80 / 3.59 | 1.80 / 3.61 |
+| `same`, 1 | 3.31 / 3.31 | 3.30 / 3.29 | 3.30 / 3.30 |
+| `distinct`, 8 | 2.42 / 8.40 | 1.71 / 6.89 | 1.71 / 6.91 |
+| `distinct`, 4 | 1.78 / 5.86 | 1.47 / 5.08 | 1.48 / 5.08 |
+| `distinct`, 1 | 4.67 / 4.67 | 4.66 / 4.66 | 4.67 / 4.65 |
+
+With every service on one class at 8 processors the lock-free stack halves the wall time and spends more CPU
+than the lock did: the lock's waiters slept in the kernel (2.6 s of system time, 0.02 s now) and the stack's
+contenders run. Paired by run, the backoff is 4% faster and 6% cheaper at 8 processors (faster in 6 runs of 7),
+3% faster at 6 (7 of 7), and 2% slower at 4 (0 of 7); every other cell is within the run-to-run spread. The
+M3's self-compile is 51.0 s with the backoff and 51.3 s without, three interleaved rounds, which is no
+difference.
+
+**Holding a span as `moving` costs the benchmark nothing measurable.** A span that is off every stack while a
+refill, a relist or the scavenger works on it holds the owner state `moving`, claimed with a compare-and-swap,
+and every hold steps the span's version before it releases, which is what lets the census reject a snapshot
+taken across one. On the M3 at 8 processors on 2026-11-15, medians of 7 interleaved runs of three arms (one
+allocator lock, the stacks without the hold, the stacks with it), wall / CPU seconds:
+
+| M3, mode, processors | one lock | no hold | hold |
+|---|---|---|---|
+| `same`, 8 | 2.50 / 8.16 | 1.24 / 7.63 | 1.30 / 7.79 |
+| `distinct`, 8 | 2.50 / 8.38 | 1.88 / 6.76 | 1.74 / 6.73 |
+
+The two stack arms overlap in both rows (`same`: 1.18 s to 1.90 s without the hold, 1.23 s to 1.81 s with it).
+On the i7-8700 at 12 processors the `same` row reads 1.2% slower with the hold, and the version step alone
+1.458 s against 1.455 s over 7 interleaved runs, both inside the spread. The allocation hit path has no
+instruction of it: the hold is on the refill, the relist and the scavenger.
+
+The state region shrinks by one 8 KiB chunk, the lock table holding two locks instead of one per class. The
+pinned seed refuses the tree at `requireTierGeometryAgrees`, as it does for any change to the region's size.

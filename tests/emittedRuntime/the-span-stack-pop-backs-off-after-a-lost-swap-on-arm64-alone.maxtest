@@ -1,0 +1,205 @@
+let TheSpanStackPopBacksOffAfterALostSwapOnArm64AloneCaseLabel = "span-stack-pop-backoff"
+
+let RefillFunctionName = "__slab_refill"
+let SpinPauseChunkName = "mrt_host_spin_pause"
+let Arm64CallPrefix = "arm64.bl "
+let Arm64BranchPrefix = "arm64.b "
+let Arm64ShiftRightPrefix = "arm64.lsr "
+let Arm64AddPrefix = "arm64.add "
+let FixedCountPrefix = "arm64.movImm "
+let X64CompareExchangePrefix = "x64.lock cmpxchg"
+let PauseCountArgumentRegister = "x0"
+let LabelSuffix = ":"
+let AcquireAddressIndex = 1
+
+let FirstBackoffCount = 128
+let HalvingShift = 1
+
+let BackoffReason = "A lost compare-and-swap on a size class's span stack means several cores are contending for the one cache line that holds the stack's head, and a pop that retries at once keeps every one of them demanding that line. Go's `lfstack.pop` waits a growing time there on arm64 and not at all on amd64, whose backoff is 0: its lost-swap edge calls `procyield` with a count that starts at {FirstBackoffCount}, adds half of itself after each wait, and goes back to reload the head. The arm64 pop does the same through `{SpinPauseChunkName}`, in every program that lays out `{RefillFunctionName}` — one with a heap and no green threads as well as one that spawns."
+
+let RefillLinkReason = "On arm64 `{RefillFunctionName}`'s lost-swap edge calls `{SpinPauseChunkName}`, and the refill is laid out in every program with a heap, so a link that fails here most likely left that chunk unresolved: it must be laid out wherever the refill is, not only where green threads are."
+
+test 'the span stack pop backs off after a lost swap on arm64 alone'
+	let findings = StringArray.create(0)
+
+	for fixture in [SpawnFixtureName, HeapFixtureName] 'eachFixture'
+		let caseLabel = "{TheSpanStackPopBacksOffAfterALostSwapOnArm64AloneCaseLabel}-{fixture}"
+		let staged = stagedFixtureTree(FixturesDirName, caseLabel: caseLabel, fixture: fixture)
+
+		notePopBackoff(findings, staged: staged, caseLabel: caseLabel, target: MacosTargetName, fixture: fixture)
+		notePopBackoff(findings, staged: staged, caseLabel: caseLabel, target: LinuxTargetName, fixture: fixture)
+		notePopWithoutPause(findings, staged: staged, caseLabel: caseLabel, target: X64LinuxTargetName, fixture: fixture)
+		notePopWithoutPause(findings, staged: staged, caseLabel: caseLabel, target: X64WindowsTargetName, fixture: fixture)
+
+		discardStagedDir(staged)
+	end 'eachFixture'
+
+	Expect.isTrue(findings.isEmpty(), message: "the emitted `{RefillFunctionName}` does not back off after a lost swap on the span stack as Go's `lfstack.pop` does:{renderedFindings(findings)}\n\n  {BackoffReason}")
+end 'the span stack pop backs off after a lost swap on arm64 alone'
+
+function refillBodyHoldingThePop(staged FilePath, caseLabel String, target String, swapPrefix String) returns StringArray throws TestFailure
+	let ir = stagedIrPath(staged, caseLabel: caseLabel, target: target)
+	let build = spawnStagedIrBuild(staged, caseLabel: caseLabel, target: target, functionName: RefillFunctionName)
+
+	try requireBuiltExecutable(build, output: ir, what: stagedIrBuildSpelling(target, functionName: RefillFunctionName), reason: RefillLinkReason)
+
+	let body = functionBody(irLines(ir), functionName: RefillFunctionName, target: target)
+
+	if bodyLineCount(body, startingWith: swapPrefix, containing: NoFurtherDemand, endingWith: NoFurtherDemand) == 0 'noPop'
+		panic("emitted-runtime tests: the gate could not run — on {target}, the emitted `{RefillFunctionName}` holds no `{swapPrefix.trim()}`, so the span stack's pop this case is about is not in the body it read, and a demand on its lost-swap edge would be satisfied by a body that does none of this work.")
+	end 'noPop'
+
+	return body
+end 'refillBodyHoldingThePop'
+
+function notePopBackoff(findings StringArray, staged FilePath, caseLabel String, target String, fixture String) throws TestFailure
+	let body = try refillBodyHoldingThePop(staged, caseLabel: caseLabel, target: target, swapPrefix: AtomicClaimMnemonic)
+	let pause = "{Arm64CallPrefix}{SpinPauseChunkName}"
+	let subject = "on {target}, the `{fixture}` program's `{RefillFunctionName}`"
+	var paused = false
+
+	for (iter, text) in body.withIterator() 'eachLine'
+		if text != pause 'anotherLine'
+			continue
+		end 'anotherLine'
+
+		paused = true
+		noteGrowingCount(findings, body: body, site: iter.index() as LineIndex, target: target, subject: subject)
+	end 'eachLine'
+
+	if not paused 'retriesAtOnce'
+		findings.push("{subject} holds no `{pause}`, so a pop that loses its swap on the span stack reloads the head at once")
+	end 'retriesAtOnce'
+end 'notePopBackoff'
+
+function noteGrowingCount(findings StringArray, body StringArray, site LineIndex, target String, subject String)
+	let handed = try lastWriteBefore(body, register: PauseCountArgumentRegister, site: site) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, nothing in `{RefillFunctionName}` writes `{PauseCountArgumentRegister}` ahead of the `{Arm64CallPrefix}{SpinPauseChunkName}` at line {site}, so the count that call is handed cannot be read.")
+
+	if handed.line.startsWith(FixedCountPrefix) 'fixedCount'
+		findings.push("{subject} hands `{SpinPauseChunkName}` one fixed count — `{handed.line}` — on every lost swap")
+		return
+	end 'fixedCount'
+
+	let count = try copySourceRegisterOf(handed.line, isa: Arm64InstructionPrefix) otherwise 'untraceable'
+		findings.push("{subject} hands `{SpinPauseChunkName}` its count with `{handed.line}`, which is no `{RegisterMovePrefix.trim()}` from the register that carries the backoff across the loop")
+		return
+	end 'untraceable'
+
+	let branch = try branchClosingTheBlock(body, after: site) otherwise 'noBranch'
+		findings.push("{subject} has no `{Arm64BranchPrefix.trim()}` closing the block of the pause at line {site} before the next label, so the lost-swap edge does not go back to retry the pop")
+		return
+	end 'noBranch'
+
+	let closing = lineAt(body, index: branch)
+
+	if not growsByHalf(body, count: count, from: site, to: branch) 'notGrowing'
+		findings.push("{subject} does not add half of the count `{count}` to itself between the pause at line {site} and `{closing}` — the count the next lost swap waits is not the grown one")
+	end 'notGrowing'
+
+	noteRetryReloadsTheHead(findings, body: body, site: site, closing: closing, count: count, subject: subject)
+end 'noteGrowingCount'
+
+function noteRetryReloadsTheHead(findings StringArray, body StringArray, site LineIndex, closing String, count String, subject String)
+	let target = closing.replace(Arm64BranchPrefix, with: NoFurtherDemand)
+	let label = try firstLineIndex(body, startingWith: "{target}{LabelSuffix}", containing: NoFurtherDemand, endingWith: NoFurtherDemand) otherwise 'noLabel'
+		findings.push("{subject} closes the lost-swap block with `{closing}`, and no block in the body is labelled `{target}`")
+		return
+	end 'noLabel'
+
+	if label > site 'notBack'
+		findings.push("{subject} closes the lost-swap block with `{closing}`, whose block stands below the pause rather than above it, so the edge does not go back to the pop's attempt")
+		return
+	end 'notBack'
+
+	let head = try headReloadAddress(body, label: label) otherwise 'noReload'
+		findings.push("{subject} goes back to `{target}`, whose block holds no `{AcquireLoadMnemonic}` of the stack's head, so the retry does not reload it")
+		return
+	end 'noReload'
+
+	if bodyLineCount(body, startingWith: AtomicClaimMnemonic, containing: "{ArgumentSeparator}{head}{ArgumentSeparator}", endingWith: NoFurtherDemand) == 0 'anotherWord'
+		findings.push("{subject} goes back to `{target}`, which reloads `{head}`, and no `{AtomicClaimMnemonic}` swaps that word — the retry reloads something other than the head the pop lost")
+	end 'anotherWord'
+
+	let first = try lastWriteBefore(body, register: count, site: label) otherwise 'noStart'
+		findings.push("{subject} never sets the count `{count}` ahead of the pop's attempt at `{target}`")
+		return
+	end 'noStart'
+
+	if first.line != "{FixedCountPrefix}{count}{ArgumentSeparator}{FirstBackoffCount}" 'anotherStart'
+		findings.push("{subject} enters the pop's attempt with the count set by `{first.line}`, where Go's first backoff is {FirstBackoffCount}")
+	end 'anotherStart'
+end 'noteRetryReloadsTheHead'
+
+function branchClosingTheBlock(body StringArray, after LineIndex) returns LineIndex throws IrScanError
+	for (iter, text) in body.withIterator() 'eachLine'
+		if iter.index() as LineIndex <= after 'beforeThePause'
+			continue
+		end 'beforeThePause'
+
+		if isLabelLine(text) 'fellThrough'
+			throw IrScanError.noSuchLine
+		end 'fellThrough'
+
+		if text.startsWith(Arm64BranchPrefix) 'theBranch'
+			return iter.index()
+		end 'theBranch'
+	end 'eachLine'
+
+	throw IrScanError.noSuchLine
+end 'branchClosingTheBlock'
+
+function growsByHalf(body StringArray, count String, from LineIndex, to LineIndex) returns bool
+	var half = NoFurtherDemand
+
+	for (iter, text) in body.withIterator() 'eachLine'
+		let index = iter.index() as LineIndex
+
+		if index <= from or index >= to 'outsideTheEdge'
+			continue
+		end 'outsideTheEdge'
+
+		if text.startsWith(Arm64ShiftRightPrefix) and text.endsWith("{ArgumentSeparator}{count}{ArgumentSeparator}{HalvingShift}") 'theHalf'
+			half = try destinationRegisterOf(text) otherwise continue
+			continue
+		end 'theHalf'
+
+		if half.isEmpty() 'noHalfYet'
+			continue
+		end 'noHalfYet'
+
+		if text == "{Arm64AddPrefix}{count}{ArgumentSeparator}{count}{ArgumentSeparator}{half}" or text == "{Arm64AddPrefix}{count}{ArgumentSeparator}{half}{ArgumentSeparator}{count}" 'theSum'
+			return true
+		end 'theSum'
+	end 'eachLine'
+
+	return false
+end 'growsByHalf'
+
+function headReloadAddress(body StringArray, label LineIndex) returns String throws IrScanError
+	for (iter, text) in body.withIterator() 'eachLine'
+		if iter.index() as LineIndex <= label 'beforeTheBlock'
+			continue
+		end 'beforeTheBlock'
+
+		if isLabelLine(text) 'blockEnded'
+			throw IrScanError.noSuchLine
+		end 'blockEnded'
+
+		if text.startsWith(AcquireLoadMnemonic) 'theReload'
+			return try text.split(ArgumentSeparator).get(AcquireAddressIndex) otherwise throw IrScanError.noSuchLine
+		end 'theReload'
+	end 'eachLine'
+
+	throw IrScanError.noSuchLine
+end 'headReloadAddress'
+
+function isLabelLine(text String) returns bool
+	return text.endsWith(LabelSuffix) and not text.contains(" ")
+end 'isLabelLine'
+
+function notePopWithoutPause(findings StringArray, staged FilePath, caseLabel String, target String, fixture String) throws TestFailure
+	let body = try refillBodyHoldingThePop(staged, caseLabel: caseLabel, target: target, swapPrefix: X64CompareExchangePrefix)
+	let site = try firstLineIndex(body, startingWith: NoFurtherDemand, containing: SpinPauseChunkName, endingWith: NoFurtherDemand) otherwise return
+
+	findings.push("on {target}, the `{fixture}` program's `{RefillFunctionName}` reaches `{SpinPauseChunkName}` — `{lineAt(body, index: site)}` — where Go's pop, whose backoff is 0 off arm64, retries at once")
+end 'notePopWithoutPause'

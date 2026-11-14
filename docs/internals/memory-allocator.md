@@ -20,13 +20,36 @@ The heap is part of the runtime the compiler emits into every program that alloc
   paths credit the box layer's own traffic columns, separate from the columns the counted doors credit.
 
 Each processor (P) of the scheduler owns a cache of spans and is their only writer, so allocating from it
-takes no lock. A slot freed by another P is pushed onto the owning P's queue with a compare-and-swap, and the
-owner reclaims it on its slow path. A thread holding no P allocates from a shared row under a global lock.
+takes no lock. A slot freed by another thread is pushed onto its span's queue with a compare-and-swap, and
+the queue is collected by the one thread that holds the span outside every cache: the free that relists it,
+the refill that takes it, or the scavenger.
+
+Each size class keeps the spans with free slots that no cache holds on a lock-free stack, built as Go's
+`lfstack` is. The stack's head is one word holding a span header's address packed with that span's push
+count, and a push or a pop is a compare-and-swap of that word. A thread that read the head before the span
+was popped and pushed again fails its compare-and-swap, because the count has moved. The first free into an
+exhausted span claims it with a compare-and-swap on the span's owner word and pushes it on the stack, and a
+refill pops the top. On arm64 a pop that loses its compare-and-swap waits before it reloads the head, 128
+nanoseconds to start and half as long again after each loss, as Go's `lfstack.pop` does there; on other
+targets it retries at once, as Go's does on amd64.
+
+The rest of the state that more than one thread reaches is guarded by one of two exclusive locks, each on a
+cache line of its own in the allocator's state region:
+
+- the raw-row lock, for the shared row a thread holding no P allocates from;
+- the heap lock, for the arena, the span headers and the page map, taken to cut a span and to destroy one.
+
+They are taken in that order, after the scheduler's lock, and the compiler refuses a runtime function that
+takes one it holds or takes them against that order (E5005). A census walk of the heap takes both. A pop, a
+relist and a collect run outside the locks on a span marked as moving, and the census waits for such a span
+and reads it again once it settles. A processor's own allocation and free on a span it caches take no lock,
+so a census taken while other threads allocate can read such a span between two of its writes; on a
+quiescent heap its figures are exact.
 
 Every allocation and free door (`__slab_alloc`, `__slab_alloc_tracked`, `__slab_alloc_scaffold`,
 `__slab_alloc_raw`, `__slab_free`, `__slab_free_tracked`, `__slab_free_scaffold` and `__slab_free_box`) is a
 leaf that finishes a request the cache can serve and tail-jumps to its full body, the door's name with a
-`_slow` suffix, for any other: a refill, the lock, a full span's relist, an oversize request. The leaf changes
+`_slow` suffix, for any other: a refill, a lock, a full span's relist, an oversize request. The leaf changes
 no allocator state and credits no traffic row before the hit is certain, so the full body that takes over
 credits a request once. A free into a span that is `partial` or owned by another P pushes onto the span's
 remote list inside the leaf. In a build without `--debugstream`, `__mm_alloc` and `__mm_free` carry the

@@ -1,0 +1,128 @@
+typealias Tally = int(0 to u64.max)
+typealias CellArray = Array with Cell
+
+let Cells = 2400
+let Rounds = 5000
+let SpanStride = 72
+let EarlyRemoteFrees = 1
+let LateRemoteFrees = 68
+let KeptTail = 300
+let Walks = 3
+let MailboxCapacity = 4
+
+type Cell
+	export let a as Tally
+	export let b as Tally
+	export let c as Tally
+	export let d as Tally
+	export let e as Tally
+	export let f as Tally
+	export let g as Tally
+	export let h as Tally
+	export let i as Tally
+	export let j as Tally
+	export let k as Tally
+	export let l as Tally
+
+	static function create(seed Tally) returns Self
+		return Self{a: seed, b: seed, c: seed, d: seed, e: seed, f: seed, g: seed, h: seed, i: seed, j: seed, k: seed, l: seed}
+	end 'create'
+end 'Cell'
+
+type Censor
+	var censuses as Tally
+
+	static function create() returns Self
+		return Self{censuses: 0}
+	end 'create'
+
+	export function walk(times Tally) returns Tally
+		for _ in 0 upto times 'eachWalk'
+			let census = HeapStats.census(HeapCensusMode.byTag)
+
+			if census.tallyBytes == 0 'emptyHeap'
+				return 0
+			end 'emptyHeap'
+
+			self.censuses = self.censuses + 1
+		end 'eachWalk'
+
+		return self.censuses
+	end 'walk'
+end 'Censor'
+
+type Scavenger
+	var passes as Tally
+
+	static function create() returns Self
+		return Self{passes: 0}
+	end 'create'
+
+	export function sweep() returns Tally
+		_ = HeapStats.scavenge()
+
+		self.passes = self.passes + 1
+
+		return self.passes
+	end 'sweep'
+end 'Scavenger'
+
+function freeQueued(cells CellArray, spare Cell, first Tally, count Tally)
+	var base = 0 as Tally
+
+	while base + KeptTail < Cells 'eachQueue'
+		for offset in 0 upto count 'eachRemoteFree'
+			try cells.set((base + first + offset) as ElementIndex, value: spare) otherwise panic("the index is inside the filled array")
+		end 'eachRemoteFree'
+
+		base = base + SpanStride
+	end 'eachQueue'
+end 'freeQueued'
+
+function main() returns ExitCode
+	let censor = spawn(capacity: MailboxCapacity) Censor.create()
+	let scavenger = spawn(capacity: MailboxCapacity) Scavenger.create()
+	let cells = CellArray.create(0)
+	let spare = Cell.create(0)
+	var censuses = 0 as Tally
+	var passes = 0 as Tally
+
+	cells.reserve(Cells as ElementIndex)
+
+	for _ in 0 upto Rounds 'eachRound'
+		cells.clear()
+
+		for index in 0 upto Cells 'fill'
+			cells.push(Cell.create(index as Tally))
+		end 'fill'
+
+		var base = 0 as Tally
+
+		while base + KeptTail < Cells 'eachSpan'
+			try cells.set(base as ElementIndex, value: spare) otherwise panic("the index is inside the filled array")
+			base = base + SpanStride
+		end 'eachSpan'
+
+		freeQueued(cells, spare: spare, first: 1, count: EarlyRemoteFrees)
+		let quiet = try scavenger.sweep() otherwise panic("the mailbox is empty between rounds")
+
+		passes = await quiet
+
+		let sweeping = try scavenger.sweep() otherwise panic("the mailbox is empty between rounds")
+		let walking = try censor.walk(Walks) otherwise panic("the mailbox is empty between rounds")
+
+		freeQueued(cells, spare: spare, first: 1 + EarlyRemoteFrees, count: LateRemoteFrees)
+
+		censuses = await walking
+		passes = await sweeping
+	end 'eachRound'
+
+	if censuses == 0 or passes == 0 'raced nothing'
+		print("census raced nothing")
+		return 2
+	end 'raced nothing'
+
+	print("census held censuses {censuses} sweeps {passes}")
+
+	return 0
+end 'main'

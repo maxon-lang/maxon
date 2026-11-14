@@ -173,22 +173,22 @@ end 'linuxUsesHostSurface'
 // states: its resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno
 // nothing in a socket program will ever read back.
 function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
-	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or linuxUsesTraceBand(usage) or usage.usesProcessDescendants
+	return linuxUsesHostSurface(usage) or posixUsesHostObjects(usage) or usage.usesManagedSocket or linuxUsesTraceBand(usage)
 end 'linuxTouchesErrnoWord'
 
-// Where errno lives, fixed per program at emit time. A program carrying the host lock gives every OS thread
+// Where errno lives, fixed per program at emit time. A program with green threads gives every OS thread
 // its slot block before the thread runs any Maxon code — `mrt_linux_main_thread_block` is first in
 // `mrt_runtime_init`, and every other thread starts with `CLONE_SETTLS` — so slot 0 of that block holds it.
-// A program without the lock starts no second thread (`usesGt` implies the lock), so the `.data` word is
-// its errno. ⚠ A thread started without the lock would share that word with the main thread, and one
-// thread's failure would be reported as the other's.
+// A program without them starts no second thread, so the `.data` word is its errno. ⚠ A thread started in
+// a program without green threads would share that word with the main thread, and one thread's failure
+// would be reported as the other's.
 export enum LinuxErrnoHome
 	slotBlock
 	dataWord
 end 'LinuxErrnoHome'
 
 export function linuxErrnoHome(usage RuntimeUsage) returns LinuxErrnoHome
-	return LinuxErrnoHome.slotBlock if posixUsesHostLock(usage) else LinuxErrnoHome.dataWord
+	return LinuxErrnoHome.slotBlock if usage.usesGt else LinuxErrnoHome.dataWord
 end 'linuxErrnoHome'
 
 // The gate both lanes lay `LinuxErrnoLabel` out on. A `dataWord` access with no slot behind the label is a
@@ -689,9 +689,9 @@ function linuxTlsSlotCount() returns FullRangeInt
 	return LinuxHostObjectPageBytes / SpillSlotBytes
 end 'linuxTlsSlotCount'
 
-// The slot holding the block's own address, which x86-64 reads as the host lock's owner token because it
-// cannot read its FS base as a value without `FSGSBASE`. Both lanes stop issuing keys below it, so a key can
-// never overwrite it.
+// The slot holding the block's own address, which x86-64 reads as a recursive lock's owner token because
+// it cannot read its FS base as a value without `FSGSBASE`. Both lanes stop issuing keys below it, so a key
+// can never overwrite it.
 export function linuxTlsSelfSlotIndex() returns FullRangeInt
 	return linuxTlsSlotCount() - 1
 end 'linuxTlsSelfSlotIndex'
@@ -700,9 +700,8 @@ export function linuxTlsSelfSlotOffset() returns FullRangeInt
 	return linuxTlsSelfSlotIndex() * (SpillSlotBytes as FullRangeInt)
 end 'linuxTlsSelfSlotOffset'
 
-// Called first in `mrt_runtime_init` in every program that takes a runtime lock
-// (`posixUsesHostLock`): a recursive lock reads its owner token from the block, and the slab takes
-// its lock before `__sched_init_procs` runs.
+// Called first in `mrt_runtime_init` in every program with green threads: a recursive lock, which only
+// the green-thread runtime takes, reads its owner token from the block.
 export let LinuxMainThreadBlockName = b"mrt_linux_main_thread_block"
 
 // The first key handed out, and the reason the counter pre-increments — see the block above.

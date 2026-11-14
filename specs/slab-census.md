@@ -61,7 +61,7 @@ the accounting entirely and the sum falls. It can never RISE: a census that has 
 fails that in one direction, and one that double-counts them fails it in the other.
 
 ⭐⭐ **`free - cachedFree` IS THE NUMBER THE OTHER FOUR EXIST TO EXPOSE.** A span that runs out of slots is
-dropped from the mcache and is reachable again only through its class's partial list, so one surviving
+dropped from the mcache and is reachable again only through its class's stack, so one surviving
 object in a span makes every other slot in it unreachable by the processor that was using it, however many
 of them are free. That quantity is invisible to every cumulative counter and to the OS's peak alike.
 
@@ -74,13 +74,18 @@ limit.
 that does not hold the span cached is queued against the span, and `free_count` does not credit it until a
 collector chains it onto the free list — so the census reads the queue's own count beside `free_count`.
 Counting it live instead would report a span whose queue nobody has collected as fully in use.
-`slab-sharding.md` owns the road.
+`slab-sharding.md` owns the road. A remote free steps the queue's count before it links its slot, so a
+slot whose free has begun is counted free while it is on no chain yet. The by-tag walk accepts exactly
+those slots and finds them outside every chain, so it also puts each in a bucket: on a busy heap the
+buckets `slabCensusTally(0)` fills can exceed the live bytes it answers by those slots. A processor's own
+allocation and free on a span it caches can also race a census, so a census taken while other threads
+allocate is approximate; on a quiescent heap every figure is exact.
 
 ⚠ **THESE ARE BYTES OF SLOT, NOT BYTES REQUESTED.** A 40-byte request occupies a 48-byte slot, so `live`
 exceeds what a program asked for by the size-class rounding. `slab-allocator.md` owns the ladder.
 
 ⛔ **THE WALK IS COLD AND THE HOT PATHS PAY NOTHING FOR IT.** Nothing is stepped at an allocation or a
-free; each figure is derived when it is asked for, under `__slab_lock`, from state the allocator was
+free; each figure is derived when it is asked for, under every slab lock, from state the allocator was
 keeping anyway. The cost is proportional to the HEAP rather than to the call, which is why the
 compiler's own residency table is sampled only under `--metrics` or `--log=compiler:debug`.
 
@@ -117,10 +122,10 @@ RED against it on **x64-windows**.
 ⭐⭐ **NO ONE-TOKEN CHANGE CAN MAKE THE TWO WALKS DISAGREE ONLY ON A MULTI-PROCESSOR HEAP, AND THAT IS WHAT
 `the-tally-totals-the-live-heap-on-several-processors` EXISTS TO KEEP TRUE.** The tally and the level share
 their enumeration (`slabWalkSpans`), their destroyed-header test, their geometry read (`slabSpanGeom`) and
-their free set (`slabSpanFreeSlots`) — so a break in any of them moves BOTH figures and the equality
-survives — which is what the table's FREE-SET-ADDED row measures, and why the two equality cases stay
-green under it. A break in what the tally does with what those four hand it moves every tally case at once,
-which is what the table's WHOLE-SLOT-COUNT row measures.
+their free set (`free_count` plus the queue's count, read once in `slabVisitSpan`) — so a break in any of
+them moves BOTH figures and the equality survives — which is what the table's FREE-SET-ADDED row measures,
+and why the two equality cases stay green under it. A break in what the tally does with what those four
+hand it moves every tally case at once, which is what the table's WHOLE-SLOT-COUNT row measures.
 
 The case is a gate against the sharing being undone: a tally that re-spelled the free set as
 `free_count` alone would agree with the level on every single-threaded heap in this file and disagree by
@@ -693,7 +698,7 @@ queued slot to the live histogram, or that skipped a span whose owner is a proce
 moves off the level by exactly those slots.
 
 ⚠ **THE WORKERS ARE ALL AWAITED BEFORE THE TALLY, AND THE TWO READINGS ARE ADJACENT STATEMENTS.** The
-allocator's fast path does NOT take `__slab_lock` (`slab-sharding.md` owns why), so a P still running would
+allocator's fast path takes NO slab lock (`slab-sharding.md` owns why), so a P still running would
 be stepping a cached span's `free_count` between the two walks and the equality would be asserting the
 scheduler's timing rather than the census. Quiescing first is what leaves only the question this case asks:
 given ONE heap, do the two derivations agree.
@@ -1591,4 +1596,227 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:4:16: Value 2048 is outside the range of 'HeapBucketIndex' (int(0 to 2047))
+```
+
+<!-- test: slab-census.a-census-read-while-classes-churn-returns-and-one-after-the-join-is-exact -->
+<!-- procs: 4 -->
+**THE CENSUS UNDER CONCURRENT REFILLS, AND THE EQUALITY ONCE THEY HAVE STOPPED.** Every census read takes the
+allocator's structures while the allocator is also refilling, relisting and returning spans for them.
+`the-tally-totals-the-live-heap-on-several-processors` asks the equality of a heap its workers have already
+left. This case asks the two harder halves. Six services churn six size classes (the ring of
+`slab-sharding.services-churning-different-size-classes-keep-their-sums`, classes 8, 19, 33, 44, 54 and 67),
+and while every round runs the main thread reads `HeapStats.slab()` and a size-class census once per round:
+120 reads that must each RETURN, with a non-zero live heap, and nothing else is asserted of them, because a
+heap that is being allocated from has no exact total.
+
+After every service has answered its last message, nothing allocates, and the case asks what the neighbouring
+case asks: the census's own live count equals the level (exit 1), and the buckets sum to it (exit 2). ⚠ The two
+reads are adjacent statements for that case's reason.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let ServiceCount = 6
+let Rounds = 120
+let FramingBytes = 10
+let FramingSum = 500
+let FirstFillByte = 97
+let BucketCount = 2048
+
+function digitSum(k Tally) returns Tally
+	return (k / 1000) + ((k / 100) mod 10) + ((k / 10) mod 10) + (k mod 10)
+end 'digitSum'
+
+function holds(s String, key Tally, fillByte Tally, padLength Tally) returns bool
+	if (s.byteLength() as Tally) != padLength + FramingBytes 'length'
+		return false
+	end 'length'
+
+	var sum = 0 as Tally
+
+	for b in s.bytes() 'sum'
+		sum = sum + (b as Tally)
+	end 'sum'
+
+	return sum == FramingSum + (2 * digitSum(key)) + (fillByte * padLength)
+end 'holds'
+
+function makePad(fill String, length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append(fill)
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+type Churn
+	var pad as String
+	var padLength as Tally
+	var fillByte as Tally
+	var population as Tally
+	var built as Tally
+	var absorbed as Tally
+	var wrong as Tally
+
+	static function create(fill String, fillByte Tally, padLength Tally, population Tally) returns Self
+		return Self{pad: makePad(fill, length: padLength), padLength: padLength, fillByte: fillByte, population: population, built: 0, absorbed: 0, wrong: 0}
+	end 'create'
+
+	export function round(next Churn.handle) returns Tally
+		let keep = StringArray.create(0)
+		var made = 0 as Tally
+
+		for k in 0 upto self.population 'make'
+			let s = "{k:04}:{self.pad}:{k:04}"
+
+			if not holds(s, key: k, fillByte: self.fillByte, padLength: self.padLength) 'badBuild'
+				self.wrong = self.wrong + 1
+			end 'badBuild'
+
+			made = made + (s.byteLength() as Tally)
+
+			if (k mod 2) == 0 'handOver'
+				try next.absorb(s, key: k, senderFill: self.fillByte, senderPad: self.padLength) otherwise panic("churn: the neighbour's mailbox holds a round's hand-overs")
+			end 'handOver' else 'keepIt'
+				keep.push(s)
+			end 'keepIt'
+		end 'make'
+
+		self.built = self.built + made
+		return made
+	end 'round'
+
+	export function absorb(s String, key Tally, senderFill Tally, senderPad Tally)
+		self.absorbed = self.absorbed + (s.byteLength() as Tally)
+
+		if not holds(s, key: key, fillByte: senderFill, padLength: senderPad) 'badAbsorb'
+			self.wrong = self.wrong + 1
+		end 'badAbsorb'
+	end 'absorb'
+
+	export function builtBytes() returns Tally
+		return self.built
+	end 'builtBytes'
+
+	export function absorbedBytes() returns Tally
+		return self.absorbed
+	end 'absorbedBytes'
+
+	export function wrongCount() returns Tally
+		return self.wrong
+	end 'wrongCount'
+end 'Churn'
+
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
+function readWhileChurning() returns Tally
+	let level = HeapStats.slab()
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+
+	if census.tallyBytes > 0 and level.live > 0 'answered'
+		return 1
+	end 'answered'
+
+	return 0
+end 'readWhileChurning'
+
+function main() returns ExitCode
+	let fills = StringArray from ["a", "b", "c", "d", "e", "f"]
+	let pads = TallyArray from [3, 185, 1000, 3700, 9900, 30000]
+	let populations = TallyArray from [1600, 800, 360, 120, 48, 16]
+
+	let handles = ChurnHandleArray.create(0)
+
+	for i in 0 upto ServiceCount 'spawnEach'
+		let fill = try fills.get(i) otherwise panic("churn: fills.get OOB at {i}")
+		let pad = try pads.get(i) otherwise panic("churn: pads.get OOB at {i}")
+		let population = try populations.get(i) otherwise panic("churn: populations.get OOB at {i}")
+
+		handles.push(spawn(capacity: 2048) Churn.create(fill, fillByte: (FirstFillByte + i) as Tally, padLength: pad, population: population))
+	end 'spawnEach'
+
+	var roundBytes = 0 as Tally
+	var reads = 0 as Tally
+
+	for _ in 0 upto Rounds 'eachRound'
+		let replies = TallyPromiseArray.create(0)
+
+		for i in 0 upto ServiceCount 'sendEach'
+			let mine = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+			let next = try handles.get((i + 1) mod ServiceCount) otherwise panic("churn: handles.get OOB at {i}")
+
+			replies.push(try mine.round(next) otherwise panic("churn: a service's mailbox holds a round"))
+		end 'sendEach'
+
+		reads = reads + readWhileChurning()
+
+		for p in replies 'join'
+			roundBytes = roundBytes + (await p)
+		end 'join'
+	end 'eachRound'
+
+	var built = 0 as Tally
+	var absorbed = 0 as Tally
+	var wrong = 0 as Tally
+
+	for i in 0 upto ServiceCount 'collect'
+		let h = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+		let b = try await h.builtBytes() otherwise 0
+		let a = try await h.absorbedBytes() otherwise 0
+		let w = try await h.wrongCount() otherwise 1
+
+		print("service {i}: built={b} absorbed={a} wrong={w}\n")
+
+		built = built + b
+		absorbed = absorbed + a
+		wrong = wrong + w
+	end 'collect'
+
+	print("total built={built} absorbed={absorbed} wrong={wrong} rounds={roundBytes} reads={reads}\n")
+
+	if wrong != 0 'corrupted'
+		return 3
+	end 'corrupted'
+
+	let liveAtTheTally = liveBytes()
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+
+	if census.tallyBytes != liveAtTheTally 'theTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theTallysOwnWalkMissedTheLevel'
+
+	var total = 0 as HeapBytes
+
+	for i in 0 upto BucketCount 'sum'
+		total = total + census.bucketBytes(i)
+	end 'sum'
+
+	if total != liveAtTheTally 'theCensusDisagreesWithTheLevel'
+		return 2
+	end 'theCensusDisagreesWithTheLevel'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+service 0: built=2496000 absorbed=28809600 wrong=0
+service 1: built=18720000 absorbed=1248000 wrong=0
+service 2: built=43632000 absorbed=9360000 wrong=0
+service 3: built=53424000 absorbed=21816000 wrong=0
+service 4: built=57081600 absorbed=26712000 wrong=0
+service 5: built=57619200 absorbed=28540800 wrong=0
+total built=232972800 absorbed=116486400 wrong=0 rounds=232972800 reads=120
 ```

@@ -5,6 +5,8 @@ typealias ExclusiveLockLabelArray = Array with immutable ByteArray
 typealias ValueLabelMap = Map with (ValueId, immutable ByteArray)
 typealias BlockPositionById = Map with (BlockId, ElementIndex)
 typealias BlockPositionArray = Array with ElementIndex
+typealias ConstantByValue = Map with (ValueId, FullRangeInt)
+typealias SumArray = Array with LockAddressSum
 
 let NoLocks = 0 as LockSet
 let OneLock = 1 as LockSet
@@ -13,6 +15,32 @@ let MaxExclusiveGlobalLocks = 32
 enum HeldLockRefusal implements Error
 	refused
 end 'HeldLockRefusal'
+
+type LockAddressSum
+	export let result as ValueId
+	export let displacement as ValueId
+
+	static function create(result ValueId, displacement ValueId) returns Self
+		return Self{result: result, displacement: displacement}
+	end 'create'
+end 'LockAddressSum'
+
+union LockRank
+	unranked
+	ranked(position ElementIndex)
+end 'LockRank'
+
+function runtimeLockAcquisitionOrder() returns ExclusiveLockLabelArray
+	let order = ExclusiveLockLabelArray.create(0)
+
+	order.push(SchedLockLabel)
+
+	for lock in SlabLock.allCases 'eachSlabLock'
+		order.push(slabLockLabel(lock))
+	end 'eachSlabLock'
+
+	return order
+end 'runtimeLockAcquisitionOrder'
 
 function requireRuntimeLocksAreUsedAsDeclared(module StdModule, firstFuncIndex ElementIndex, sites RuntimeLockSiteByOp, globalData GlobalDataTable, project Project) throws CompileError
 	match FunctionNameIndex.build(module.functions) 'names'
@@ -64,14 +92,42 @@ end 'widenLockSet'
 
 function valueLabelsOf(module StdModule, ops OpIndexArray) returns ValueLabelMap
 	let labels = ValueLabelMap.create()
+	let constants = ConstantByValue.create()
+	let sums = SumArray.create(0)
+	let access = StdAccessOperands.create()
+	let arith = StdArithOperands.create()
 
 	for opIdx in ops 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("valueLabelsOf: live op index {opIdx} not in module.ops")
 
 		if stdOpLabelKindOf(op) == StdOpLabelKind.dataSlot 'aWord'
 			labels.upsert(globalAddrResultOf(op), value: stdOpLabel(op))
+			continue
 		end 'aWord'
+
+		classifyAccessOperands(op, access: access)
+
+		if access.shape == StdAccessShape.constant 'aConstant'
+			constants.upsert(access.resultId, value: access.constValue)
+			continue
+		end 'aConstant'
+
+		classifyArithOperands(op, operands: arith)
+
+		if arith.isBinaryArith() and arith.opcode == StdBinOpcode.add 'aSum'
+			sums.push(LockAddressSum.create(arith.resultId, displacement: arith.rhs))
+		end 'aSum'
 	end 'eachOp'
+
+	for sum in sums 'eachSum'
+		let displacement = try constants.get(sum.displacement) otherwise continue
+
+		for lock in SlabLock.allCases 'eachSlabLock'
+			if slabLockSlotOffset(lock) == displacement 'aSlabLockAddress'
+				labels.upsert(sum.result, value: slabLockLabel(lock))
+			end 'aSlabLockAddress'
+		end 'eachSlabLock'
+	end 'eachSum'
 
 	return labels
 end 'valueLabelsOf'
@@ -81,6 +137,7 @@ type HeldLockCheck
 	let sites as RuntimeLockSiteByOp
 	let byName as FuncIndexByName
 	var labels as ExclusiveLockLabelArray
+	let order as ExclusiveLockLabelArray
 	var directTakes as LockSetArray
 	var directReleases as LockSetArray
 	var requires as LockSetArray
@@ -98,7 +155,7 @@ type HeldLockCheck
 	export var refusalCode as ErrorCode
 
 	static function create(first ElementIndex, sites RuntimeLockSiteByOp, byName FuncIndexByName) returns HeldLockCheck
-		return Self{first: first, sites: sites, byName: byName, labels: ExclusiveLockLabelArray.create(0), directTakes: LockSetArray.create(0), directReleases: LockSetArray.create(0), requires: LockSetArray.create(0), takes: LockSetArray.create(0), returnsHolding: LockSetArray.create(0), alwaysReturnsHolding: LockSetArray.create(0), addressTaken: BoolArray.create(0), callsThroughPointer: BoolArray.create(0), edgeStart: FuncIndexArray.create(0), edges: FuncIndexArray.create(0), indirectTakes: NoLocks, indirectRequires: NoLocks, sawAbort: false, refusal: "", refusalCode: ErrorCode.nestedExclusiveLockTake}
+		return Self{first: first, sites: sites, byName: byName, labels: ExclusiveLockLabelArray.create(0), order: runtimeLockAcquisitionOrder(), directTakes: LockSetArray.create(0), directReleases: LockSetArray.create(0), requires: LockSetArray.create(0), takes: LockSetArray.create(0), returnsHolding: LockSetArray.create(0), alwaysReturnsHolding: LockSetArray.create(0), addressTaken: BoolArray.create(0), callsThroughPointer: BoolArray.create(0), edgeStart: FuncIndexArray.create(0), edges: FuncIndexArray.create(0), indirectTakes: NoLocks, indirectRequires: NoLocks, sawAbort: false, refusal: "", refusalCode: ErrorCode.nestedExclusiveLockTake}
 	end 'create'
 
 	function bitOfLabel(label ByteArray) returns LockSet
@@ -115,6 +172,49 @@ type HeldLockCheck
 		self.labels.push(label)
 		return OneLock shl (self.labels.count() - 1)
 	end 'bitOfLabel'
+
+	function rankOf(label ByteArray) returns LockRank
+		for position in 0 upto self.order.count() 'eachPosition'
+			if (try self.order.get(position) otherwise panic("HeldLockCheck.rankOf: order.get OOB at {position}")).equals(label) 'found'
+				return LockRank.ranked(position)
+			end 'found'
+		end 'eachPosition'
+
+		return LockRank.unranked
+	end 'rankOf'
+
+	function isTakenBefore(earlier ElementIndex, later ElementIndex) returns bool
+		let firstRank = self.rankOf(try self.labels.get(earlier) otherwise panic("HeldLockCheck.isTakenBefore: labels.get OOB at {earlier}"))
+		let secondRank = self.rankOf(try self.labels.get(later) otherwise panic("HeldLockCheck.isTakenBefore: labels.get OOB at {later}"))
+
+		match firstRank 'first'
+			unranked then return false
+			ranked(firstAt) then return self.isRankedBefore(firstAt, than: secondRank)
+		end 'first'
+	end 'isTakenBefore'
+
+	function isRankedBefore(firstAt ElementIndex, than LockRank) returns bool
+		match than 'second'
+			unranked then return false
+			ranked(secondAt) then return firstAt < secondAt
+		end 'second'
+	end 'isRankedBefore'
+
+	function firstInversion(taken LockSet, held LockSet) returns (LockSet, LockSet)
+		for takenIndex in 0 upto self.labels.count() 'eachTaken'
+			if (taken and (OneLock shl takenIndex)) == NoLocks 'notTaken'
+				continue
+			end 'notTaken'
+
+			for heldIndex in 0 upto self.labels.count() 'eachHeld'
+				if (held and (OneLock shl heldIndex)) != NoLocks and self.isTakenBefore(takenIndex, later: heldIndex) 'inverted'
+					return (OneLock shl takenIndex, OneLock shl heldIndex)
+				end 'inverted'
+			end 'eachHeld'
+		end 'eachTaken'
+
+		return (NoLocks, NoLocks)
+	end 'firstInversion'
 
 	function exclusiveLockBit(site RuntimeLockSite, valueLabels ValueLabelMap) returns LockSet
 		if not markIsExclusive(site.mark) 'notExclusive'
@@ -447,6 +547,14 @@ type HeldLockCheck
 			try self.refuseSecondTake(func, bit: bit)
 		end 'again'
 
+		if not summarizing 'inOrder'
+			let (late, early) = self.firstInversion(bit, held: may)
+
+			if late != NoLocks 'outOfOrder'
+				try self.refuseOutOfOrderTake(func, taking: late, holding: early)
+			end 'outOfOrder'
+		end 'inOrder'
+
 		return (may or bit, must or bit)
 	end 'applyMark'
 
@@ -478,6 +586,12 @@ type HeldLockCheck
 			try self.refuseCall(module, func: func, calleePosition: calleePosition, bit: self.lowestLockIn(may and taken))
 		end 'takesItAgain'
 
+		let (late, early) = self.firstInversion(taken, held: may)
+
+		if late != NoLocks 'outOfOrder'
+			try self.refuseOutOfOrderCall(module, func: func, calleePosition: calleePosition, taking: late, holding: early)
+		end 'outOfOrder'
+
 		let required = try self.requires.get(calleePosition) otherwise panic("HeldLockCheck.checkCall: requires.get OOB at {calleePosition}")
 
 		if (must and required) != required 'unheld'
@@ -491,6 +605,12 @@ type HeldLockCheck
 		if (may and self.indirectTakes) != NoLocks 'anIndirectTake'
 			try self.refuseIndirectCall(module, func: func, bit: self.lowestLockIn(may and self.indirectTakes))
 		end 'anIndirectTake'
+
+		let (late, early) = self.firstInversion(self.indirectTakes, held: may)
+
+		if late != NoLocks 'outOfOrder'
+			try self.refuseOutOfOrderIndirectCall(module, func: func, taking: late, holding: early)
+		end 'outOfOrder'
 
 		if (must and self.indirectRequires) != self.indirectRequires 'anIndirectRequirement'
 			try self.refuseIndirectUnheldCall(module, func: func, bit: self.lowestLockIn(self.indirectRequires xor (must and self.indirectRequires)))
@@ -526,6 +646,35 @@ type HeldLockCheck
 	function refuseSecondTake(func IrFunction, bit LockSet) throws HeldLockRefusal
 		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' takes '{self.lockName(bit)}' while it already holds it — the lock is not recursive, so the second take waits on the first for ever")
 	end 'refuseSecondTake'
+
+	function orderText() returns String
+		var text = ""
+
+		for position in 0 upto self.order.count() 'eachPosition'
+			if position > 0 'afterTheFirst'
+				text.append(" before ")
+			end 'afterTheFirst'
+
+			let label = try self.order.get(position) otherwise panic("HeldLockCheck.orderText: order.get OOB at {position}")
+
+			text.append("'{String.from(label)}'")
+		end 'eachPosition'
+
+		return text
+	end 'orderText'
+
+	function refuseOutOfOrderTake(func IrFunction, taking LockSet, holding LockSet) throws HeldLockRefusal
+		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' takes '{self.lockName(taking)}' while it holds '{self.lockName(holding)}', and the runtime's lock order is {self.orderText()} — this takes them against that order, so a thread that follows it waits on this one for ever")
+	end 'refuseOutOfOrderTake'
+
+	function refuseOutOfOrderCall(module StdModule, func IrFunction, calleePosition ElementIndex, taking LockSet, holding LockSet) throws HeldLockRefusal
+		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' calls '{self.nameAt(module, position: calleePosition)}' while it holds '{self.lockName(holding)}', and that call takes '{self.lockName(taking)}' ({self.chainFrom(module, start: calleePosition, bit: taking)}), where the runtime's lock order is {self.orderText()} — this takes them against that order, so a thread that follows it waits on this one for ever")
+	end 'refuseOutOfOrderCall'
+
+	function refuseOutOfOrderIndirectCall(module StdModule, func IrFunction, taking LockSet, holding LockSet) throws HeldLockRefusal
+		let escapee = self.firstEscapeeIn(self.takes, bit: taking)
+		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' calls through a function pointer while it holds '{self.lockName(holding)}', and '{self.nameAt(module, position: escapee)}', a function whose address is taken, takes '{self.lockName(taking)}' ({self.chainFrom(module, start: escapee, bit: taking)}), where the runtime's lock order is {self.orderText()} — this takes them against that order, so a thread that follows it waits on this one for ever")
+	end 'refuseOutOfOrderIndirectCall'
 
 	function refuseCall(module StdModule, func IrFunction, calleePosition ElementIndex, bit LockSet) throws HeldLockRefusal
 		try self.refuse(ErrorCode.nestedExclusiveLockTake, message: "'{String.from(func.name)}' calls '{self.nameAt(module, position: calleePosition)}' while it holds '{self.lockName(bit)}', and that call takes it again ({self.chainFrom(module, start: calleePosition, bit: bit)}) — the lock is not recursive, so the second take waits on the first for ever")

@@ -5399,12 +5399,11 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 	end 'hostObjects'
 
-	// The main thread's slot block rides the runtime-lock gate, not the band's: a recursive lock reads
-	// its owner token from the block, and the allocator's slow-path lock does so in every allocating
-	// program.
-	if posixUsesHostLock(usage) 'hostLock'
+	// The main thread's slot block rides `usesGt`, not the band's gate: a recursive lock, which only the
+	// green-thread runtime takes, reads its owner token from the block.
+	if usage.usesGt 'mainThreadBlock'
 		chunks.push(buildX64LinuxMainThreadBlockChunk())
-	end 'hostLock'
+	end 'mainThreadBlock'
 
 	// ⚠ **THE OS LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where
 	// the Darwin lane's `pthread_mutex_t` leaves it one.

@@ -1,0 +1,33 @@
+let ACensusRacingRemoteFreesNeverEndsOnASlotWhoseFreeHasBegunCaseLabel = "census-during-remote-frees"
+
+let RemoteFreeCensusProcessors = 4
+let RemoteFreeCensusHeldLine = "census held"
+
+let StagedSlotReason = "A free from a thread that does not hold a span queues its slot on the span's remote list: it steps the span's remote count first and links the slot with a compare-and-swap after, so for a few instructions the slot is counted free and is on no chain. A by-tag census that finds a span's marked free slots disagreeing with its counts by exactly such slots must not end the process with exit 119: the slot's free has begun, so the census counts it free, and the span's remote count read after its chains bounds how many such slots there can be. Here three services free thousands of cells of exhausted spans, each a slot queued on a remote list, while main walks the heap."
+
+test 'a census racing remote frees never ends on a slot whose free has begun'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ACensusRacingRemoteFreesNeverEndsOnASlotWhoseFreeHasBegunCaseLabel, fixture: CensusDuringRemoteFreesFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: ACensusRacingRemoteFreesNeverEndsOnASlotWhoseFreeHasBegunCaseLabel)
+
+	let findings = StringArray.create(0)
+
+	noteRemoteFreeCensusRun(findings, executable: executable, staged: staged, procs: RemoteFreeCensusProcessors)
+
+	Expect.isTrue(findings.isEmpty(), message: "a census walked spans while other threads queued remote frees on them:{renderedFindings(findings)}\n\n  {StagedSlotReason}")
+
+	discardStagedDir(staged)
+end 'a census racing remote frees never ends on a slot whose free has begun'
+
+function noteRemoteFreeCensusRun(findings StringArray, executable FilePath, staged FilePath, procs ProcessorCount)
+	let run = runStagedForHost(executable, staged: staged, procs: procs, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	if run.exitCode() != 0 'didNotFinish'
+		findings.push("at {procs} processor(s) the program exited {run.exitCode()} — it said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr. Exit 119 is the census finding a span it cannot describe")
+
+		return
+	end 'didNotFinish'
+
+	if not run.stdout.contains(RemoteFreeCensusHeldLine) 'neverRaced'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{RemoteFreeCensusHeldLine}` once a census has run beside the remote frees")
+	end 'neverRaced'
+end 'noteRemoteFreeCensusRun'

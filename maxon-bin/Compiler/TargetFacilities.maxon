@@ -790,10 +790,9 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 		return match facility 'f'
 			// `monotonicClock` and `sleep` stand or fall with `greenThreads` (the x64-linux row states why).
 			// The green-thread floor's host objects are `futex` twins of the macOS pthread sequences, under
-			// the same `mrt_host_*` symbols. ⚠ The slab's lock must stay recursive: `__slab_refill` takes
-			// the slab's own lock twice, and a non-recursive lock hangs there. This lane is multi-M exactly
-			// as arm64-macOS is, so `StdDialect`'s barrier-free `completed` publication is a live question
-			// on both weakly-ordered lanes (that note carries the fix it is owed).
+			// the same `mrt_host_*` symbols. This lane is multi-M exactly as arm64-macOS is, so
+			// `StdDialect`'s barrier-free `completed` publication is a live question on both
+			// weakly-ordered lanes (that note carries the fix it is owed).
 			//
 			// `subprocess`: a failed exec is reported through an `O_CLOEXEC` status pipe, because the
 			// failure happens in another process; without it `SubprocessError.spawnFailed` is unreachable
@@ -1031,6 +1030,25 @@ function machineModel(target Target) returns MachineModel
 
 	panic("machineModel: no machine model is stated for target {targetToString(target)}")
 end 'machineModel'
+
+enum SpanStackPopBackoff
+	immediateRetry
+	growingWait
+end 'SpanStackPopBackoff'
+
+function spanStackPopBackoff(target Target) returns SpanStackPopBackoff
+	return match target.cpu 'cpu'
+		arm64 gives SpanStackPopBackoff.growingWait
+		x64 or
+		wasm32 gives SpanStackPopBackoff.immediateRetry
+	end 'cpu'
+end 'spanStackPopBackoff'
+
+// `__slab_refill` is laid out in every heap program, scheduler or not, and its backing-off pop calls
+// this chunk, so a gate on `usesGt` alone leaves a heap-only arm64 program a call to an absent symbol.
+function spinPauseChunkIsEmitted(usage RuntimeUsage, target Target) returns bool
+	return usage.usesGt or (usage.usesHeap and spanStackPopBackoff(target) == SpanStackPopBackoff.growingWait)
+end 'spinPauseChunkIsEmitted'
 
 // The per-function short-circuit `SemanticCheck.checkCalls` settles once and hands to every call
 // op. A walk over `allCases` rather than `x64 and windows`, so a lane that completes the table

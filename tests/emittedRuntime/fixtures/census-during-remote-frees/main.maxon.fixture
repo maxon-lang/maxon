@@ -1,0 +1,141 @@
+typealias Tally = int(0 to u64.max)
+typealias CellArray = Array with Cell
+typealias HolderHandleArray = Array with Holder.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let Holders = 3
+let Rounds = 40
+let Cells = 60000
+let SpanStride = 64
+let RemoteFreesPerSpan = 32
+let KeptTail = 512
+let MailboxCapacity = 4
+
+type Cell
+	export let a as Tally
+	export let b as Tally
+	export let c as Tally
+	export let d as Tally
+	export let e as Tally
+	export let f as Tally
+	export let g as Tally
+	export let h as Tally
+	export let i as Tally
+	export let j as Tally
+	export let k as Tally
+	export let l as Tally
+	export let m as Tally
+	export let n as Tally
+	export let o as Tally
+	export let p as Tally
+
+	static function create(seed Tally) returns Self
+		return Self{a: seed, b: seed, c: seed, d: seed, e: seed, f: seed, g: seed, h: seed, i: seed, j: seed, k: seed, l: seed, m: seed, n: seed, o: seed, p: seed}
+	end 'create'
+end 'Cell'
+
+type Holder
+	var cells as CellArray
+	var spare as Cell
+
+	static function create() returns Self
+		return Self{cells: CellArray.create(0), spare: Cell.create(0)}
+	end 'create'
+
+	export function fill() returns Tally
+		self.cells.clear()
+
+		for index in 0 upto Cells 'make'
+			self.cells.push(Cell.create(index as Tally))
+		end 'make'
+
+		return self.cells.count() as Tally
+	end 'fill'
+
+	export function release() returns Tally
+		var freed = 0 as Tally
+		var base = 0 as Tally
+
+		while base + KeptTail < Cells 'eachRelist'
+			try self.cells.set(base as ElementIndex, value: self.spare) otherwise panic("the index is inside the filled array")
+			freed = freed + 1
+			base = base + SpanStride
+		end 'eachRelist'
+
+		base = 0
+
+		while base + KeptTail < Cells 'eachQueue'
+			for offset in 1 to RemoteFreesPerSpan 'eachRemoteFree'
+				try self.cells.set((base + offset) as ElementIndex, value: self.spare) otherwise panic("the index is inside the filled array")
+				freed = freed + 1
+			end 'eachRemoteFree'
+
+			base = base + SpanStride
+		end 'eachQueue'
+
+		return freed
+	end 'release'
+end 'Holder'
+
+function everyoneIsDone(promises TallyPromiseArray) returns bool
+	for p in promises 'eachPromise'
+		if not p.isComplete() 'pending'
+			return false
+		end 'pending'
+	end 'eachPromise'
+
+	return true
+end 'everyoneIsDone'
+
+function main() returns ExitCode
+	let handles = HolderHandleArray.create(0)
+
+	for _ in 0 upto Holders 'spawnEach'
+		handles.push(spawn(capacity: MailboxCapacity) Holder.create())
+	end 'spawnEach'
+
+	var censuses = 0 as Tally
+	var freed = 0 as Tally
+
+	for _ in 0 upto Rounds 'eachRound'
+		let fills = TallyPromiseArray.create(0)
+
+		for h in handles 'fillEach'
+			fills.push(try h.fill() otherwise panic("the mailbox is empty between rounds"))
+		end 'fillEach'
+
+		for p in fills 'filled'
+			_ = await p
+		end 'filled'
+
+		let releases = TallyPromiseArray.create(0)
+
+		for h in handles 'releaseEach'
+			releases.push(try h.release() otherwise panic("the mailbox is empty between rounds"))
+		end 'releaseEach'
+
+		while not everyoneIsDone(releases) 'walkWhileTheyFree'
+			let census = HeapStats.census(HeapCensusMode.byTag)
+
+			censuses = censuses + 1
+
+			if census.tallyBytes == 0 'emptyHeap'
+				return 3
+			end 'emptyHeap'
+		end 'walkWhileTheyFree'
+
+		for p in releases 'join'
+			freed = freed + (await p)
+		end 'join'
+	end 'eachRound'
+
+	if censuses == 0 'raced nothing'
+		print("census raced nothing")
+		return 2
+	end 'raced nothing'
+
+	print("census held freed {freed} censuses {censuses}")
+
+	return 0
+end 'main'

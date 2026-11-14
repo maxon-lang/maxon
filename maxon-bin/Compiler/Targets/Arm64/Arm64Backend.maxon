@@ -3306,7 +3306,7 @@ export function finishArm64Backend(stdModule StdModule, target Target, globalDat
 	// every chunk in it calls that runtime's walker, frame printer and stderr writer BY NAME — order
 	// among runtime chunks is inert (they all fall inside `[mrt_start, __symtable)`, the only range the
 	// text guard tests), so this is about reading order rather than about layout.
-	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, usesGt: usage.usesGt, carriesHostLock: posixUsesHostLock(usage), recordsCpuFeatures: cpuFeaturesAreProbed(usage, target: target), errnoHome: linuxErrnoHome(usage), target: target)
+	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, usesGt: usage.usesGt, recordsCpuFeatures: cpuFeaturesAreProbed(usage, target: target), errnoHome: linuxErrnoHome(usage), target: target)
 
 	if hardwareAesChunksAreEmitted(usage, target: target) 'hardwareAes'
 		chunks.push(buildArm64AesExpandKeyChunk())
@@ -3333,6 +3333,10 @@ export function finishArm64Backend(stdModule StdModule, target Target, globalDat
 		windows then panic("finishArm64Backend: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes")
 		wasi then panic("finishArm64Backend: `wasm32-wasi` is not an arm64 lane — a WASI component has no arm64 `.text` at all, so an `Os.wasi` reaching this backend is a target-construction bug")
 	end 'hostSurface'
+
+	if spinPauseChunkIsEmitted(usage, target: target) 'spinPause'
+		chunks.push(buildArm64PosixSpinPauseChunk())
+	end 'spinPause'
 
 	// The hand-assembled green-thread chunks, on the same `usesGt` bit `installGtRuntime` was gated on rather than
 	// a probe of the module — the reason `BackendDispatch` gives for the x64 twin.

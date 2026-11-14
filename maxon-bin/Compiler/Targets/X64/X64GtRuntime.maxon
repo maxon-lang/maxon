@@ -724,7 +724,7 @@ end 'gtShimStackArgWordsOf'
 // `blocking` import may never be called with `__sched_lock` held. Bracketing one that runs under
 // the lock deadlocks the whole scheduler: a runtime lock's contended acquire sleeps in
 // `WaitForSingleObject`, and it is reached from `__cown_send_wait`, `__cown_dequeue_slow`, `__gt_register_park` and
-// `__slab_lock` on every allocation, so a machine blocked on one of those locks would have its P
+// the slab locks on the allocator's slow paths, so a machine blocked on one of those locks would have its P
 // handed off by `__sysmon`, then wait in `__sched_syscall_regain` for a processor while holding the
 // lock, for ever. Every scheduler-internal call made under that lock is therefore `schedulerBound`
 // here, which makes the requirement checkable by reading this one table.
@@ -2528,7 +2528,7 @@ end 'buildLinuxPreemptHandlerChunk'
 // mrt_host_spin_pause(rcx = pauses), on both x64 lanes
 // ==========================================================================
 
-function buildGtSpinPauseChunk() returns FunctionCodeChunk
+export function buildGtSpinPauseChunk() returns FunctionCodeChunk
 	let code = ByteArray.create(0)
 
 	encodeX64Procyield(code, count: X64Register.rcx)
@@ -2543,7 +2543,6 @@ end 'buildGtSpinPauseChunk'
 // `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
 // `mrt_start` stays at `.text` offset 0.
 export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target, context HostContextLayout)
-	chunks.push(buildGtSpinPauseChunk())
 	chunks.push(buildGtContextSwitchChunk(target))
 	chunks.push(buildGtTrampolineChunk())
 	chunks.push(buildGtGuardTrippedChunk())

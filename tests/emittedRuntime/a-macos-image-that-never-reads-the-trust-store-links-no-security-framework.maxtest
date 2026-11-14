@@ -8,13 +8,13 @@ let LinkReason = "Only a program that uses TrustStore links Security.framework a
 
 test 'a macOS image that never reads the trust store links no Security framework and imports none of the walk'
 	let staged = stagedFixtureTree(FixturesDirName, caseLabel: AMacosImageThatNeverReadsTheTrustStoreLinksNoSecurityFrameworkCaseLabel, fixture: PlainFixtureName)
-	let image = fileBytes(buildMacosImage(staged, label: AMacosImageThatNeverReadsTheTrustStoreLinksNoSecurityFrameworkCaseLabel))
+	let image = fileBytes(buildStagedImage(staged, label: AMacosImageThatNeverReadsTheTrustStoreLinksNoSecurityFrameworkCaseLabel, target: MacosTargetName))
 
 	Expect.greaterThan(image.count(), than: 0, message: "the {MacosTargetName} build wrote an EMPTY file, so nothing read out of it means anything.")
 
 	let findings = StringArray.create(0)
-	noteImageName(findings, image: image, name: SecurityFrameworkName, present: false, why: LinkReason)
-	noteImageName(findings, image: image, name: WalkEntryName, present: false, why: LinkReason)
+	noteImageName(findings, image: image, target: MacosTargetName, name: SecurityFrameworkName, present: false, why: LinkReason)
+	noteImageName(findings, image: image, target: MacosTargetName, name: WalkEntryName, present: false, why: LinkReason)
 
 	Expect.isTrue(findings.isEmpty(), message: "the {MacosTargetName} image of a program that never reads the trust store carries trust-store links:{renderedFindings(findings)}")
 

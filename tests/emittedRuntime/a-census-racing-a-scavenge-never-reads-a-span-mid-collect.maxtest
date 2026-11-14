@@ -1,0 +1,33 @@
+let ACensusRacingAScavengeNeverReadsASpanMidCollectCaseLabel = "census-during-scavenge"
+
+let ScavengeCensusProcessors = 4
+let ScavengeCensusHeldLine = "census held"
+
+let MidCollectReason = "A by-tag census requires the slots a span's free list and remote queue hold, plus its live slots, to account for every slot of the span, and ends the process with exit 119 when they do not. The scavenger takes each span off its class's stack, collects the slots queued against it into its free list and puts it back, with no lock. A census that read the span's free count before the collect and its free list or remote queue after it, and then found the owner word and push count it began with, took a snapshot no instant of the span ever matched. The scavenger's hold of a span must therefore be a change the census can see on the span itself, however the hold ended, and the census must read the owner word before the version when it validates. Here a service scavenges while another walks the heap, over a few dozen spans with slots queued against them, thousands of times over."
+
+test 'a census racing a scavenge never reads a span mid collect'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ACensusRacingAScavengeNeverReadsASpanMidCollectCaseLabel, fixture: CensusDuringScavengeFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: ACensusRacingAScavengeNeverReadsASpanMidCollectCaseLabel)
+
+	let findings = StringArray.create(0)
+
+	noteScavengeCensusRun(findings, executable: executable, staged: staged, procs: ScavengeCensusProcessors)
+
+	Expect.isTrue(findings.isEmpty(), message: "a census walked spans while the scavenger collected them:{renderedFindings(findings)}\n\n  {MidCollectReason}")
+
+	discardStagedDir(staged)
+end 'a census racing a scavenge never reads a span mid collect'
+
+function noteScavengeCensusRun(findings StringArray, executable FilePath, staged FilePath, procs ProcessorCount)
+	let run = runStagedForHost(executable, staged: staged, procs: procs, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	if run.exitCode() != 0 'didNotFinish'
+		findings.push("at {procs} processor(s) the program exited {run.exitCode()} — it said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr. Exit 119 is the census finding a span it cannot describe")
+
+		return
+	end 'didNotFinish'
+
+	if not run.stdout.contains(ScavengeCensusHeldLine) 'neverRaced'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{ScavengeCensusHeldLine}` once a census has run beside the scavenger")
+	end 'neverRaced'
+end 'noteScavengeCensusRun'

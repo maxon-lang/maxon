@@ -1,0 +1,33 @@
+let ACensusRacingARelistNeverReadsASpanMidMoveCaseLabel = "census-during-relists"
+
+let CensusProcessors = 4
+let CensusHeldLine = "census held"
+
+let MidMoveReason = "A by-tag census requires a span's live count to equal the live slots it walks, and ends the process with exit 119 when they differ. The first free into an exhausted span claims its relist and then moves the span: it collects the slots queued against it, pushes the freed slot onto its free list and pushes the span onto its class's stack, all with no lock. Here one thread frees ONE slot of each of a few thousand exhausted spans of a size class no processor allocates from while a service on another processor walks the heap, so every relist is a span in motion that a census may meet. The census must settle on a span's owner word before it reads the span's lists, and read it again afterwards, rather than take whatever the claimant has written so far."
+
+test 'a census racing a relist never reads a span mid move'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ACensusRacingARelistNeverReadsASpanMidMoveCaseLabel, fixture: CensusDuringRelistsFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: ACensusRacingARelistNeverReadsASpanMidMoveCaseLabel)
+
+	let findings = StringArray.create(0)
+
+	noteCensusRun(findings, executable: executable, staged: staged, procs: CensusProcessors)
+
+	Expect.isTrue(findings.isEmpty(), message: "a census walked spans while another thread relisted them:{renderedFindings(findings)}\n\n  {MidMoveReason}")
+
+	discardStagedDir(staged)
+end 'a census racing a relist never reads a span mid move'
+
+function noteCensusRun(findings StringArray, executable FilePath, staged FilePath, procs ProcessorCount)
+	let run = runStagedForHost(executable, staged: staged, procs: procs, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	if run.exitCode() != 0 'didNotFinish'
+		findings.push("at {procs} processor(s) the program exited {run.exitCode()} — it said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr. Exit 119 is the census finding a span it cannot describe")
+
+		return
+	end 'didNotFinish'
+
+	if not run.stdout.contains(CensusHeldLine) 'neverRaced'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{CensusHeldLine}` once a census has run beside the relists")
+	end 'neverRaced'
+end 'noteCensusRun'

@@ -1,0 +1,31 @@
+let ALinuxProgramThatOnlyAllocatesMapsNoMainThreadBlockCaseLabel = "linux-main-thread-block"
+
+let MainThreadBlockName = "mrt_linux_main_thread_block"
+let LinuxImageTargetNames = ["x64-linux", "arm64-linux"]
+
+let BlockReason = "The main thread's slot block is what a recursive lock reads its owner token from, and where a program with a second OS thread keeps each thread's errno apart from the next's. Both belong to the scheduler: only it takes a recursive lock, and only it starts a thread. The allocator's locks are exclusive, which read no token, so a program that allocates and starts no scheduler has nothing to map: the block's chunk is not laid out and `mrt_runtime_init` does not call it. A program that spawns a green thread needs it, so the same name must be in that image."
+
+test 'a Linux program that only allocates maps no main thread block'
+	let heapLabel = "{ALinuxProgramThatOnlyAllocatesMapsNoMainThreadBlockCaseLabel}-{HeapFixtureName}"
+	let spawnLabel = "{ALinuxProgramThatOnlyAllocatesMapsNoMainThreadBlockCaseLabel}-{SpawnFixtureName}"
+	let heapStaged = stagedFixtureTree(FixturesDirName, caseLabel: heapLabel, fixture: HeapFixtureName)
+	let spawnStaged = stagedFixtureTree(FixturesDirName, caseLabel: spawnLabel, fixture: SpawnFixtureName)
+
+	let findings = StringArray.create(0)
+
+	for target in LinuxImageTargetNames 'eachTarget'
+		let heapImage = fileBytes(buildStagedImage(heapStaged, label: heapLabel, target: target))
+
+		Expect.greaterThan(heapImage.count(), than: 0, message: "the {target} build of the allocating program wrote an EMPTY file, so nothing read out of it means anything.")
+		noteImageName(findings, image: heapImage, target: target, name: MainThreadBlockName, present: false, why: BlockReason)
+
+		let spawnImage = fileBytes(buildStagedImage(spawnStaged, label: spawnLabel, target: target))
+
+		noteImageName(findings, image: spawnImage, target: target, name: MainThreadBlockName, present: true, why: BlockReason)
+	end 'eachTarget'
+
+	Expect.isTrue(findings.isEmpty(), message: "a Linux image maps the main thread's slot block where it does not need to, or lacks it where it does:{renderedFindings(findings)}")
+
+	discardStagedDir(heapStaged)
+	discardStagedDir(spawnStaged)
+end 'a Linux program that only allocates maps no main thread block'

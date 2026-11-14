@@ -22,7 +22,7 @@
 // which at hello-world size IS the whole program. The lane is asked as `#if arch(wasm32)`, which is what
 // `IrModule.hasPageReservation` answers one tier up.
 //
-// ✅ **NO LOCK OF ITS OWN, BECAUSE THE CALLER HOLDS ONE.** `SlabRuntime` holds `__slab_lock` across every
+// ✅ **NO LOCK OF ITS OWN, BECAUSE THE CALLER HOLDS ONE.** `SlabRuntime` holds the heap lock across every
 // call into this file on the allocate and release paths. The one exception is the reverse-map READ, and that
 // read is not here.
 //
@@ -533,7 +533,7 @@ function slabArenaMarkGranuleSeenFree(wordAddr ArenaWord, bitPos BitmapBitPositi
 	end 'wasMarked'
 end 'slabArenaMarkGranuleSeenFree'
 
-// Precondition: the caller holds `__slab_lock`. Every claim and every scavenge writes these bitmaps, so
+// Precondition: the caller holds the heap lock. Every claim and every scavenge writes these bitmaps, so
 // an unlocked walk reads a granule mid-transition.
 //
 // ⚠ The bitmap is popcounted rather than a running total being kept. A counter stepped at the commit and

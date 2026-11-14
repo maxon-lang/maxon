@@ -1,0 +1,35 @@
+let AProcessorPastTheRawRowStrandsNoSpanCaseLabel = "clamped-processors"
+
+let ProcessorsBelowTheRawRow = 254
+let ProcessorsPastTheRawRow = 257
+let NoStrandedLine = "spans ok"
+
+let StrandingReason = "A processor whose id is 255 or more has no mcache row of its own: it takes the shared raw row, serialised under the raw-row lock, exactly as a thread with no processor does. Every thread on that row must therefore stamp the SAME owner on the spans it installs there. A processor that stamps its own pointer instead makes the cached span of one clamped processor a miss for the next, whose refill installs over it: the displaced span has free slots, is in no row and on no list, and nothing reuses, relists or scavenges it, so every allocation of two clamped processors strands a whole span and the heap grows with the work. Nothing reaches the leak gate, because the slots of a stranded span were freed; the reading is the free bytes that survive two scavenges beyond what the rows still cache."
+
+test 'a processor past the raw row strands no span'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: AProcessorPastTheRawRowStrandsNoSpanCaseLabel, fixture: ClampedProcessorsFixtureName)
+	let executable = buildStagedForHost(staged, caseLabel: AProcessorPastTheRawRowStrandsNoSpanCaseLabel)
+
+	let findings = StringArray.create(0)
+
+	noteStrandingRun(findings, executable: executable, staged: staged, procs: ProcessorsBelowTheRawRow)
+	noteStrandingRun(findings, executable: executable, staged: staged, procs: ProcessorsPastTheRawRow)
+
+	Expect.isTrue(findings.isEmpty(), message: "processors whose ids reach the raw row left spans stranded:{renderedFindings(findings)}\n\n  {StrandingReason}")
+
+	discardStagedDir(staged)
+end 'a processor past the raw row strands no span'
+
+function noteStrandingRun(findings StringArray, executable FilePath, staged FilePath, procs ProcessorCount)
+	let run = runStagedForHost(executable, staged: staged, procs: procs, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	if run.exitCode() != 0 'didNotFinish'
+		findings.push("at {procs} processor(s) the program exited {run.exitCode()} — it said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr")
+
+		return
+	end 'didNotFinish'
+
+	if not run.stdout.contains(NoStrandedLine) 'stranded'
+		findings.push("at {procs} processor(s) the program exited 0 and said `{oneLine(run.stdout)}` where it says `{NoStrandedLine}` when every free slot is reachable")
+	end 'stranded'
+end 'noteStrandingRun'

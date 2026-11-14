@@ -8,18 +8,18 @@ let WalkReason = "Go's darwin root walk reads every trust-settings domain (syste
 
 test 'a macOS image that reads the trust store imports the trust-settings walk and no anchor-only call'
 	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TheMacosTrustStoreReadsTheAdminAndUserTrustSettingsDomainsCaseLabel, fixture: TrustStoreFixtureName)
-	let image = fileBytes(buildMacosImage(staged, label: TheMacosTrustStoreReadsTheAdminAndUserTrustSettingsDomainsCaseLabel))
+	let image = fileBytes(buildStagedImage(staged, label: TheMacosTrustStoreReadsTheAdminAndUserTrustSettingsDomainsCaseLabel, target: MacosTargetName))
 
 	Expect.greaterThan(image.count(), than: 0, message: "the {MacosTargetName} build wrote an EMPTY file, so nothing read out of it means anything.")
 
 	let findings = StringArray.create(0)
 
 	for symbol in CarriedSymbols 'eachCarried'
-		noteImageName(findings, image: image, name: symbol, present: true, why: WalkReason)
+		noteImageName(findings, image: image, target: MacosTargetName, name: symbol, present: true, why: WalkReason)
 	end 'eachCarried'
 
 	for symbol in DroppedSymbols 'eachDropped'
-		noteImageName(findings, image: image, name: symbol, present: false, why: WalkReason)
+		noteImageName(findings, image: image, target: MacosTargetName, name: symbol, present: false, why: WalkReason)
 	end 'eachDropped'
 
 	Expect.isTrue(findings.isEmpty(), message: "the {MacosTargetName} image of a program that reads the trust store does not import the trust-settings walk:{renderedFindings(findings)}")

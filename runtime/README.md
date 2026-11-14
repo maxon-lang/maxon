@@ -274,7 +274,8 @@ a walk with a builder stays a builder:
 The slab object layer's remaining entries are builders in `installSlabRuntime`: `__slab_collect_remote`,
 `__slab_rounded_size`, `__slab_refill`, `__slab_alloc`, `__slab_alloc_tracked`, `__slab_alloc_raw`, `__slab_span_destroy`,
 `__slab_free_to_full`, `__slab_free_to_raw`, `__slab_scavenge`, `__slab_free_to_span`, `__slab_free`,
-`__slab_free_tracked`, and the eight census wrappers that take `__slab_lock` around a tier census walk. Each
+`__slab_free_tracked`, the class allocators `__slab_alloc_class` and `__slab_alloc_class_unzeroed` that
+hold the pop, and the eight census wrappers that take slab locks around a tier census walk. Each
 allocation and free door is a leaf that serves a hit and tail-jumps to its full body, the door's name with a
 `_slow` suffix (`__slab_alloc_slow`, `__slab_free_tracked_slow`, and so on for the raw, scaffold and
 `--poison-freed` box doors). In a build without `--debugstream`, `__mm_alloc` and `__mm_free` carry the tracked

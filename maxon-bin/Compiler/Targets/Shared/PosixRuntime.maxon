@@ -112,11 +112,6 @@ export let HostTlsAllocName = b"mrt_host_tls_alloc"
 // rides it rather than a gate of its own: `mrt_host_wait_close` dispatches to it for the process KIND of
 // handle, and a call to an absent symbol is a link failure rather than a diagnostic.
 //
-// ⛔⛔ **THE LOCK IS NOT ON THIS GATE AND MUST NOT BE PUT BACK ON IT.** Its producers are a different set
-// (`posixUsesHostLock` below), and the widest of them is every program that allocates — so a lock chunk moved
-// back here would drag `mrt_host_proc_reap`, a `wait4`-based child reaper, and `mrt_host_wait_close` into
-// every single-threaded POSIX program that allocates one box.
-//
 // ⚠ **ALL THREE POSIX LANES ASK IT AND NONE OWNS IT** — the question is about `RuntimeUsage` and names no
 // instruction set, exactly as `LinuxRuntime`'s four gates record for their bands. A copy beside one
 // assembler is a producer added to one lane's gate and not the others'.
@@ -131,21 +126,6 @@ end 'posixUsesHostObjects'
 export function posixOpensFiles(usage RuntimeUsage) returns bool
 	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesChildPipes or usage.usesManagedSocket
 end 'posixOpensFiles'
-
-// ⭐⭐ **WHO TAKES A RUNTIME LOCK — the programs whose main thread maps its Linux slot block first in
-// `mrt_runtime_init`**, because a recursive lock's owner token (`StdOp.osThreadToken`) is read from
-// that block. Three independent producers: the scheduler's locks (`SchedRuntime`), the DebugStream
-// ring's guard (`DebugStreamRuntime.buildDsReserve`), and — the widest — the allocator's slow-path
-// lock (`SlabRuntime.emitSlabLockEnter`), taken in every program that allocates.
-//
-// ⚠ **A GATE NARROWER THAN THE PRODUCER SET READS THE TOKEN THROUGH A THREAD POINTER NOTHING SET**
-// — a fault on x64-linux, and on arm64-linux a token of 0, which matches a free lock's empty owner
-// word.
-//
-// ⚠ **ALL THREE POSIX LANES ASK IT AND NONE OWNS IT**, for `posixUsesHostObjects`' reason.
-export function posixUsesHostLock(usage RuntimeUsage) returns bool
-	return usage.usesGt or usage.usesDebugStream or usage.usesHeap
-end 'posixUsesHostLock'
 
 // ⭐⭐ **WHO EMITS `StdOp.osEnvRead` — the union both env-read gates on a POSIX lane read.** Two producers
 // and they are independent: `SchedRuntime.emitResolveMaxProcs` reads `MAXON_MAX_PROCS` in every

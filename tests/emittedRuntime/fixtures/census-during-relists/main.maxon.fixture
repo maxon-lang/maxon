@@ -1,0 +1,92 @@
+typealias Tally = int(0 to u64.max)
+typealias CellArray = Array with Cell
+
+let Cells = 200000
+let Rounds = 100
+let Stride = 64
+let KeptTail = 512
+let Walks = 3
+let MailboxCapacity = 4
+
+type Cell
+	export let a as Tally
+	export let b as Tally
+	export let c as Tally
+	export let d as Tally
+	export let e as Tally
+	export let f as Tally
+	export let g as Tally
+	export let h as Tally
+	export let i as Tally
+	export let j as Tally
+	export let k as Tally
+	export let l as Tally
+	export let m as Tally
+	export let n as Tally
+	export let o as Tally
+	export let p as Tally
+
+	static function create(seed Tally) returns Self
+		return Self{a: seed, b: seed, c: seed, d: seed, e: seed, f: seed, g: seed, h: seed, i: seed, j: seed, k: seed, l: seed, m: seed, n: seed, o: seed, p: seed}
+	end 'create'
+end 'Cell'
+
+type Censor
+	var censuses as Tally
+
+	static function create() returns Self
+		return Self{censuses: 0}
+	end 'create'
+
+	export function walk(times Tally) returns Tally
+		for _ in 0 upto times 'eachWalk'
+			let census = HeapStats.census(HeapCensusMode.byTag)
+
+			if census.tallyBytes == 0 'emptyHeap'
+				return 0
+			end 'emptyHeap'
+
+			self.censuses = self.censuses + 1
+		end 'eachWalk'
+
+		return self.censuses
+	end 'walk'
+end 'Censor'
+
+function main() returns ExitCode
+	let censor = spawn(capacity: MailboxCapacity) Censor.create()
+	let cells = CellArray.create(0)
+	let spare = Cell.create(0)
+	var censuses = 0 as Tally
+	var freed = 0 as Tally
+
+	cells.reserve(Cells as ElementIndex)
+
+	for _ in 0 upto Rounds 'eachRound'
+		cells.clear()
+
+		for index in 0 upto Cells 'fill'
+			cells.push(Cell.create(index as Tally))
+		end 'fill'
+
+		let walking = try censor.walk(Walks) otherwise panic("the mailbox is empty between rounds")
+		var index = 0 as Tally
+
+		while index + KeptTail < Cells 'eachStride'
+			try cells.set(index as ElementIndex, value: spare) otherwise panic("the index is inside the filled array")
+			freed = freed + 1
+			index = index + Stride
+		end 'eachStride'
+
+		censuses = await walking
+	end 'eachRound'
+
+	if censuses == 0 'raced nothing'
+		print("census raced nothing")
+		return 2
+	end 'raced nothing'
+
+	print("census held freed {freed} censuses {censuses}")
+
+	return 0
+end 'main'

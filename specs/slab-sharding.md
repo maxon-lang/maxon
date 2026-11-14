@@ -20,14 +20,21 @@ program, which is what the cases below drive:
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
 | **the remote-free queue** | a free by a P that does not hold the slot's span cached CAS-pushes it onto the SPAN's own Treiber stack; the chain is collected when a P takes that span off its class's list, when an exhausted span is relisted, and by the scavenger |
 
-⚠ **NOTHING HERE TESTS TWO PROCESSORS, BECAUSE A COMMITTED CASE CANNOT.** A case can set its processor
-count — the harness has a per-case processor marker (`specs/sched-default-procs.md` owns it), and the default
-is the machine's processor count, so an unmarked case is already multi-processor on any ordinary host; the
-last case in this file uses that marker to pin ONE processor. But the multi-M properties need the OS to
-actually run a second machine while twelve harness workers compete for the box, and it sometimes does not:
-a multi-processor version of the last case fails intermittently at eight messages, and so does a version
-that WAITS for the property across up to 500 waves. `pin-matrix.sh:100-137` hits the same wall from the
-other side.
+⚠ **NO CASE HERE CAN DEMAND THAT TWO PROCESSORS CONTEND, BECAUSE A COMMITTED CASE CANNOT.** A case can set
+its processor count — the harness has a per-case processor marker (`specs/sched-default-procs.md` owns it), and
+the default is the machine's processor count, so an unmarked case is already multi-processor on any ordinary
+host; `a-sole-processors-frees-onto-an-uncached-span-are-not-remote` uses that marker to pin ONE processor.
+But the multi-M properties need the OS to actually run a second machine while twelve harness workers compete
+for the box, and it sometimes does not: a multi-processor version of that case fails intermittently at eight
+messages, and so does a version that WAITS for the property across up to 500 waves. `pin-matrix.sh:100-137`
+hits the same wall from the other side.
+
+⚠ **THE CASES AT THE END RUN AT FOUR PROCESSORS AND ARE A SAFETY NET, NOT A GATE.** Six services churn
+`String`s through six size classes, then the same six with a seventh service scavenging under them, then six
+over ONE class, then six over one class with a seventh scavenging, and each checks every byte of every object
+it reads. They are green whether or not the OS ran the services on different machines at the moment that
+mattered, so a contention bug in the allocator's shared structures shows as a failure rate across runs, not
+as a red on every run.
 
 ⚠ **`multicore-stress/alloc-torture.maxon` IS NOT THE MULTI-PROCESSOR GATE.** Its work is `async`, an
 `async` frame is a coroutine of its caller, and that program is asserted to read `workers=1` at one
@@ -42,18 +49,19 @@ What a ONE-processor program CAN reach, and what each case below is for:
   drained span and the return of an emptied one all run against `owning_p`.
 * **the RAW row and its lock.** Everything a program allocates *before* its first `async` is allocated
   with no P at all, so those spans are owned by nobody and live on the raw row. Freeing one of them
-  AFTER the scheduler exists takes the serialised path — the one arm of the lock an ordinary
-  single-threaded program reaches, and it reaches it on **every** green-thread program.
+  AFTER the scheduler exists takes the serialised path under the raw-row lock — the one arm of that lock
+  an ordinary single-threaded program reaches, and it reaches it on **every** green-thread program.
 * **the uncached sentinels.** A span a processor has drained is stamped with a sentinel that is neither a
   P nor "no P" and reaches its class's mcentral list on the next free into it; the next refill re-stamps
   it. A free that observed the DEAD sentinel would be a double free — the span's last slot has already
   come back and the header is on the metadata free list — and the runtime aborts
   (`slabFreeOfParkedSpan`, exit 89) rather than writing through a recycled record.
 
-⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the ownership gate
-actually REJECTING a span, two threads contending for the raw row, and whether the traffic
-counters are stepped ATOMICALLY. Those need a second OS thread crediting the same word, and are
-covered by `multicore-stress/` instead.
+⚠ **WHAT NO CASE HERE CAN FORCE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the ownership gate
+actually REJECTING a span, two threads contending for the raw row, two processors meeting on one class's
+stack or on the heap lock, and whether the traffic counters are stepped ATOMICALLY. Those need a second OS
+thread running at the same instant; the four-processor cases give the OS the chance, and
+`multicore-stress/` sweeps for it.
 
 ⭐ **THE REMOTE-FREE TREIBER PUSH IS COUNTABLE, WHICH IS NOT THE SAME AS BEING PINNED HERE.**
 `HeapStats.slab().remoteFrees` sums a per-P counter, so the road that `service-torture` and
@@ -146,7 +154,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it -->
-**THE RAW ROW, AND THE ONE ARM OF THE LOCK A SINGLE-THREADED PROGRAM REACHES.** Everything allocated
+**THE RAW ROW, AND THE ONE ARM OF THE RAW-ROW LOCK A SINGLE-THREADED PROGRAM REACHES.** Everything allocated
 before the first `async` is allocated with NO processor: the P read answers "none", the spans
 land on the dedicated raw row and are stamped as owned by nobody. Once the scheduler exists those same
 spans are shared, in principle, by every OS thread that owns no P — so a free of one of their slots
@@ -158,7 +166,7 @@ in front of a running scheduler, which no other case here does.
 
 ⚠ **WHAT IT CATCHES AND WHAT IT ONLY EXERCISES, because the difference is not visible from a green
 result.** It CATCHES a refill that fails to establish a span's owner (with the owner stamp
-removed from `__slab_refill`, this case exits 89). It only EXERCISES the serialised arm of the lock: with
+removed from `__slab_refill`, this case exits 89). It only EXERCISES the serialised arm of the raw-row lock: with
 one OS thread there is no second writer to race, so a build that took no lock at all would still pass
 here. That half is not this case's to verify.
 ```maxon
@@ -620,4 +628,901 @@ remote-after-drop=0 before=0
 ```
 ```exitcode
 0
+```
+
+<!-- test: slab-sharding.services-churning-different-size-classes-keep-their-sums -->
+<!-- procs: 4 -->
+**SIX SERVICES, SIX SIZE CLASSES, ONE ALLOCATOR, FOUR PROCESSORS.** Every refill, every return of an exhausted
+span to its class's list and every scavenge shares the allocator's structures, and a change to how they are
+guarded must leave this program's answers where they are. Each service builds a population of `String`s of
+ONE fixed size per round, hands every second one to the next service of a ring to drop, and drops the rest at
+the end of its round, so a service fills whole spans of its own class, frees slots of spans it did not allocate
+from, and frees slots onto spans another processor holds.
+
+The sizes are chosen from the class table (`SlabClasses.maxon`) to spread over it: a string's slot is its
+header plus its bytes, and these pads land in six different classes, which the program ASKS THE CENSUS about
+before it starts (exit 4 when a pad lands anywhere else, so the claim below cannot rot silently).
+
+| service | pad bytes | slot class | slot bytes | slots per span | objects per round |
+|---|---|---|---|---|---|
+| 0 | 3 | 8 | 96 | 85 | 1600 |
+| 1 | 185 | 19 | 288 | 28 | 800 |
+| 2 | 1000 | 33 | 1152 | 7 | 360 |
+| 3 | 3700 | 44 | 4096 | 2 | 120 |
+| 4 | 9900 | 54 | 10240 | 4 (5 pages) | 48 |
+| 5 | 30000 | 67 | 32768 | 1 (4 pages) | 16 |
+
+Every class therefore fills between 12 and 60 spans per round and gives them all back, 120 rounds over, so the
+refill, the relist of an exhausted span and the return of an emptied one run thousands of times per class, on
+different classes at the same moment.
+
+⭐ **EACH OBJECT CARRIES ITS OWN KEY AND FILL BYTE, AND THE CHECK READS EVERY BYTE.** A string is
+`{key:04}:<pad of the service's fill letter>:{key:04}`, and both the builder and the receiver compare its length
+and the sum of all its bytes with what the key and the sender's fill letter say it must be. A slot handed to two
+objects, or a span's slots read after the span was recycled, changes a sum; `wrong` counts them and must be 0. The
+printed totals are functions of the rounds and the sizes alone, so they are the same at every interleaving.
+
+⚠ **THIS IS A SAFETY NET FOR A LOCKING CHANGE, NOT A DISCRIMINATOR FOR ONE.** It is green whatever guards the
+class lists: what it can catch is a refill or relist that races with another on a DIFFERENT class's list, or with the scavenger's walk (the next case). Whether a lock is taken at
+all is not observable here.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let ServiceCount = 6
+let Rounds = 120
+let FramingBytes = 10
+let FramingSum = 500
+let FirstFillByte = 97
+let ProbeObjects = 20
+
+function digitSum(k Tally) returns Tally
+	return (k / 1000) + ((k / 100) mod 10) + ((k / 10) mod 10) + (k mod 10)
+end 'digitSum'
+
+function holds(s String, key Tally, fillByte Tally, padLength Tally) returns bool
+	if (s.byteLength() as Tally) != padLength + FramingBytes 'length'
+		return false
+	end 'length'
+
+	var sum = 0 as Tally
+
+	for b in s.bytes() 'sum'
+		sum = sum + (b as Tally)
+	end 'sum'
+
+	return sum == FramingSum + (2 * digitSum(key)) + (fillByte * padLength)
+end 'holds'
+
+function makePad(fill String, length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append(fill)
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+type Churn
+	var pad as String
+	var padLength as Tally
+	var fillByte as Tally
+	var population as Tally
+	var built as Tally
+	var absorbed as Tally
+	var wrong as Tally
+
+	static function create(fill String, fillByte Tally, padLength Tally, population Tally) returns Self
+		return Self{pad: makePad(fill, length: padLength), padLength: padLength, fillByte: fillByte, population: population, built: 0, absorbed: 0, wrong: 0}
+	end 'create'
+
+	export function round(next Churn.handle) returns Tally
+		let keep = StringArray.create(0)
+		var made = 0 as Tally
+
+		for k in 0 upto self.population 'make'
+			let s = "{k:04}:{self.pad}:{k:04}"
+
+			if not holds(s, key: k, fillByte: self.fillByte, padLength: self.padLength) 'badBuild'
+				self.wrong = self.wrong + 1
+			end 'badBuild'
+
+			made = made + (s.byteLength() as Tally)
+
+			if (k mod 2) == 0 'handOver'
+				try next.absorb(s, key: k, senderFill: self.fillByte, senderPad: self.padLength) otherwise panic("churn: the neighbour's mailbox holds a round's hand-overs")
+			end 'handOver' else 'keepIt'
+				keep.push(s)
+			end 'keepIt'
+		end 'make'
+
+		self.built = self.built + made
+		return made
+	end 'round'
+
+	export function absorb(s String, key Tally, senderFill Tally, senderPad Tally)
+		self.absorbed = self.absorbed + (s.byteLength() as Tally)
+
+		if not holds(s, key: key, fillByte: senderFill, padLength: senderPad) 'badAbsorb'
+			self.wrong = self.wrong + 1
+		end 'badAbsorb'
+	end 'absorb'
+
+	export function builtBytes() returns Tally
+		return self.built
+	end 'builtBytes'
+
+	export function absorbedBytes() returns Tally
+		return self.absorbed
+	end 'absorbedBytes'
+
+	export function wrongCount() returns Tally
+		return self.wrong
+	end 'wrongCount'
+end 'Churn'
+
+function classCount(sizeClass HeapBucketIndex) returns HeapCount
+	return HeapStats.census(HeapCensusMode.bySizeClass).bucketCount(sizeClass)
+end 'classCount'
+
+function landsIn(fill String, length Tally, sizeClass HeapBucketIndex) returns bool
+	let pad = makePad(fill, length: length)
+	let held = StringArray.create(0)
+	let before = classCount(sizeClass)
+
+	for k in 0 upto ProbeObjects 'alloc'
+		held.push("{k:04}:{pad}:{k:04}")
+	end 'alloc'
+
+	return classCount(sizeClass) >= before + (held.count() as HeapCount)
+end 'landsIn'
+
+function main() returns ExitCode
+	let fills = StringArray from ["a", "b", "c", "d", "e", "f"]
+	let pads = TallyArray from [3, 185, 1000, 3700, 9900, 30000]
+	let populations = TallyArray from [1600, 800, 360, 120, 48, 16]
+	let classes = TallyArray from [8, 19, 33, 44, 54, 67]
+
+	let handles = ChurnHandleArray.create(0)
+
+	for i in 0 upto ServiceCount 'spawnEach'
+		let fill = try fills.get(i) otherwise panic("churn: fills.get OOB at {i}")
+		let pad = try pads.get(i) otherwise panic("churn: pads.get OOB at {i}")
+		let population = try populations.get(i) otherwise panic("churn: populations.get OOB at {i}")
+		let sizeClass = try classes.get(i) otherwise panic("churn: classes.get OOB at {i}")
+
+		if not landsIn(fill, length: pad, sizeClass: sizeClass as HeapBucketIndex) 'misplaced'
+			return 4
+		end 'misplaced'
+
+		handles.push(spawn(capacity: 2048) Churn.create(fill, fillByte: (FirstFillByte + i) as Tally, padLength: pad, population: population))
+	end 'spawnEach'
+
+	var roundBytes = 0 as Tally
+
+	for _ in 0 upto Rounds 'eachRound'
+		let replies = TallyPromiseArray.create(0)
+
+		for i in 0 upto ServiceCount 'sendEach'
+			let mine = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+			let next = try handles.get((i + 1) mod ServiceCount) otherwise panic("churn: handles.get OOB at {i}")
+
+			replies.push(try mine.round(next) otherwise panic("churn: a service's mailbox holds a round"))
+		end 'sendEach'
+
+		for p in replies 'join'
+			roundBytes = roundBytes + (await p)
+		end 'join'
+	end 'eachRound'
+
+	var built = 0 as Tally
+	var absorbed = 0 as Tally
+	var wrong = 0 as Tally
+
+	for i in 0 upto ServiceCount 'collect'
+		let h = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+		let b = try await h.builtBytes() otherwise 0
+		let a = try await h.absorbedBytes() otherwise 0
+		let w = try await h.wrongCount() otherwise 1
+
+		print("service {i}: built={b} absorbed={a} wrong={w}\n")
+
+		built = built + b
+		absorbed = absorbed + a
+		wrong = wrong + w
+	end 'collect'
+
+	print("total built={built} absorbed={absorbed} wrong={wrong} rounds={roundBytes}\n")
+
+	if wrong != 0 'corrupted'
+		return 3
+	end 'corrupted'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+service 0: built=2496000 absorbed=28809600 wrong=0
+service 1: built=18720000 absorbed=1248000 wrong=0
+service 2: built=43632000 absorbed=9360000 wrong=0
+service 3: built=53424000 absorbed=21816000 wrong=0
+service 4: built=57081600 absorbed=26712000 wrong=0
+service 5: built=57619200 absorbed=28540800 wrong=0
+total built=232972800 absorbed=116486400 wrong=0 rounds=232972800
+```
+
+<!-- test: slab-sharding.the-same-churn-keeps-its-sums-while-another-service-scavenges -->
+<!-- procs: 4 -->
+**THE CHURN OF THE CASE ABOVE, WITH THE SCAVENGER RUNNING UNDER IT.** The same six services, the same six
+size classes (8, 19, 33, 44, 54 and 67) and the same checks, plus a seventh service that calls
+`HeapStats.scavenge()` three times per round and yields between the calls, so the scavenger walks every class's
+list, destroys the spans the churn has just emptied and hands their chunks back to the arena WHILE the six
+refill from those lists and from the same arena. A span the scavenger destroys must not be one a refill has just
+taken, and a chunk it returns must not be one a refill is cutting a span from.
+
+What is asserted is what the churn asserts: no object is corrupted (`wrong=0`), the totals are the rounds' and
+the sizes' own, every scavenger pass ran (`sweeps=360`), and the program exits 0, which is the leak gate and the
+allocator's own aborts. The number of bytes a scavenge released is NOT printed or asserted: it depends on what
+the churn had emptied at that instant.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let ServiceCount = 6
+let Rounds = 120
+let FramingBytes = 10
+let FramingSum = 500
+let FirstFillByte = 97
+let SweepsPerRound = 3
+
+function digitSum(k Tally) returns Tally
+	return (k / 1000) + ((k / 100) mod 10) + ((k / 10) mod 10) + (k mod 10)
+end 'digitSum'
+
+function holds(s String, key Tally, fillByte Tally, padLength Tally) returns bool
+	if (s.byteLength() as Tally) != padLength + FramingBytes 'length'
+		return false
+	end 'length'
+
+	var sum = 0 as Tally
+
+	for b in s.bytes() 'sum'
+		sum = sum + (b as Tally)
+	end 'sum'
+
+	return sum == FramingSum + (2 * digitSum(key)) + (fillByte * padLength)
+end 'holds'
+
+function makePad(fill String, length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append(fill)
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+type Churn
+	var pad as String
+	var padLength as Tally
+	var fillByte as Tally
+	var population as Tally
+	var built as Tally
+	var absorbed as Tally
+	var wrong as Tally
+
+	static function create(fill String, fillByte Tally, padLength Tally, population Tally) returns Self
+		return Self{pad: makePad(fill, length: padLength), padLength: padLength, fillByte: fillByte, population: population, built: 0, absorbed: 0, wrong: 0}
+	end 'create'
+
+	export function round(next Churn.handle) returns Tally
+		let keep = StringArray.create(0)
+		var made = 0 as Tally
+
+		for k in 0 upto self.population 'make'
+			let s = "{k:04}:{self.pad}:{k:04}"
+
+			if not holds(s, key: k, fillByte: self.fillByte, padLength: self.padLength) 'badBuild'
+				self.wrong = self.wrong + 1
+			end 'badBuild'
+
+			made = made + (s.byteLength() as Tally)
+
+			if (k mod 2) == 0 'handOver'
+				try next.absorb(s, key: k, senderFill: self.fillByte, senderPad: self.padLength) otherwise panic("churn: the neighbour's mailbox holds a round's hand-overs")
+			end 'handOver' else 'keepIt'
+				keep.push(s)
+			end 'keepIt'
+		end 'make'
+
+		self.built = self.built + made
+		return made
+	end 'round'
+
+	export function absorb(s String, key Tally, senderFill Tally, senderPad Tally)
+		self.absorbed = self.absorbed + (s.byteLength() as Tally)
+
+		if not holds(s, key: key, fillByte: senderFill, padLength: senderPad) 'badAbsorb'
+			self.wrong = self.wrong + 1
+		end 'badAbsorb'
+	end 'absorb'
+
+	export function builtBytes() returns Tally
+		return self.built
+	end 'builtBytes'
+
+	export function absorbedBytes() returns Tally
+		return self.absorbed
+	end 'absorbedBytes'
+
+	export function wrongCount() returns Tally
+		return self.wrong
+	end 'wrongCount'
+end 'Churn'
+
+type Scavenger
+	var passes as Tally
+
+	static function create() returns Self
+		return Self{passes: 0}
+	end 'create'
+
+	export function sweep(count Tally) returns Tally
+		for _ in 0 upto count 'passes'
+			_ = HeapStats.scavenge()
+			self.passes = self.passes + 1
+			Scheduler.yield()
+		end 'passes'
+
+		return self.passes
+	end 'sweep'
+end 'Scavenger'
+
+function main() returns ExitCode
+	let scavenger = spawn Scavenger.create()
+	let fills = StringArray from ["a", "b", "c", "d", "e", "f"]
+	let pads = TallyArray from [3, 185, 1000, 3700, 9900, 30000]
+	let populations = TallyArray from [1600, 800, 360, 120, 48, 16]
+
+	let handles = ChurnHandleArray.create(0)
+
+	for i in 0 upto ServiceCount 'spawnEach'
+		let fill = try fills.get(i) otherwise panic("churn: fills.get OOB at {i}")
+		let pad = try pads.get(i) otherwise panic("churn: pads.get OOB at {i}")
+		let population = try populations.get(i) otherwise panic("churn: populations.get OOB at {i}")
+
+		handles.push(spawn(capacity: 2048) Churn.create(fill, fillByte: (FirstFillByte + i) as Tally, padLength: pad, population: population))
+	end 'spawnEach'
+
+	var roundBytes = 0 as Tally
+	var sweeps = 0 as Tally
+
+	for _ in 0 upto Rounds 'eachRound'
+		let replies = TallyPromiseArray.create(0)
+		let sweeping = try scavenger.sweep(SweepsPerRound) otherwise panic("churn: the scavenger's mailbox holds a round")
+
+		for i in 0 upto ServiceCount 'sendEach'
+			let mine = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+			let next = try handles.get((i + 1) mod ServiceCount) otherwise panic("churn: handles.get OOB at {i}")
+
+			replies.push(try mine.round(next) otherwise panic("churn: a service's mailbox holds a round"))
+		end 'sendEach'
+
+		for p in replies 'join'
+			roundBytes = roundBytes + (await p)
+		end 'join'
+
+		sweeps = await sweeping
+	end 'eachRound'
+
+	var built = 0 as Tally
+	var absorbed = 0 as Tally
+	var wrong = 0 as Tally
+
+	for i in 0 upto ServiceCount 'collect'
+		let h = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+		let b = try await h.builtBytes() otherwise 0
+		let a = try await h.absorbedBytes() otherwise 0
+		let w = try await h.wrongCount() otherwise 1
+
+		print("service {i}: built={b} absorbed={a} wrong={w}\n")
+
+		built = built + b
+		absorbed = absorbed + a
+		wrong = wrong + w
+	end 'collect'
+
+	print("total built={built} absorbed={absorbed} wrong={wrong} rounds={roundBytes} sweeps={sweeps}\n")
+
+	if wrong != 0 'corrupted'
+		return 3
+	end 'corrupted'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+service 0: built=2496000 absorbed=28809600 wrong=0
+service 1: built=18720000 absorbed=1248000 wrong=0
+service 2: built=43632000 absorbed=9360000 wrong=0
+service 3: built=53424000 absorbed=21816000 wrong=0
+service 4: built=57081600 absorbed=26712000 wrong=0
+service 5: built=57619200 absorbed=28540800 wrong=0
+total built=232972800 absorbed=116486400 wrong=0 rounds=232972800 sweeps=360
+```
+
+<!-- test: slab-sharding.services-churning-one-size-class-keep-their-sums -->
+<!-- procs: 4 -->
+**THE CONTROL FOR SAME-LIST CONTENTION: SIX SERVICES, ONE SIZE CLASS.** The ring and the checks of the first
+case, with every service building 1000-byte pads: all six allocate from class 33 (1152-byte slots, 7 to a
+span, so 360 objects fill 52 spans per round and each service refills over and over), all six free into the
+same class's span list, and every relist and every refill of every service meets another's on one list. The
+fill letters still differ per service, so a slot handed to two services is a corrupted sum.
+
+⚠ **THE EXISTING EIGHT-SERVICES CASE OF `inline-allocation-under-preemption` IS NOT THIS CASE.** Its arrays
+come from the inline hit path and a few spans last the whole run; this population is far larger than the spans a
+processor holds cached, so the work is in the refill and relist roads on one class's list. The
+program asks the census, before it starts, that the pads do land in class 33 (exit 4 otherwise).
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let ServiceCount = 6
+let Rounds = 120
+let FramingBytes = 10
+let FramingSum = 500
+let FirstFillByte = 97
+let ProbeObjects = 20
+let SharedClass = 33
+
+function digitSum(k Tally) returns Tally
+	return (k / 1000) + ((k / 100) mod 10) + ((k / 10) mod 10) + (k mod 10)
+end 'digitSum'
+
+function holds(s String, key Tally, fillByte Tally, padLength Tally) returns bool
+	if (s.byteLength() as Tally) != padLength + FramingBytes 'length'
+		return false
+	end 'length'
+
+	var sum = 0 as Tally
+
+	for b in s.bytes() 'sum'
+		sum = sum + (b as Tally)
+	end 'sum'
+
+	return sum == FramingSum + (2 * digitSum(key)) + (fillByte * padLength)
+end 'holds'
+
+function makePad(fill String, length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append(fill)
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+type Churn
+	var pad as String
+	var padLength as Tally
+	var fillByte as Tally
+	var population as Tally
+	var built as Tally
+	var absorbed as Tally
+	var wrong as Tally
+
+	static function create(fill String, fillByte Tally, padLength Tally, population Tally) returns Self
+		return Self{pad: makePad(fill, length: padLength), padLength: padLength, fillByte: fillByte, population: population, built: 0, absorbed: 0, wrong: 0}
+	end 'create'
+
+	export function round(next Churn.handle) returns Tally
+		let keep = StringArray.create(0)
+		var made = 0 as Tally
+
+		for k in 0 upto self.population 'make'
+			let s = "{k:04}:{self.pad}:{k:04}"
+
+			if not holds(s, key: k, fillByte: self.fillByte, padLength: self.padLength) 'badBuild'
+				self.wrong = self.wrong + 1
+			end 'badBuild'
+
+			made = made + (s.byteLength() as Tally)
+
+			if (k mod 2) == 0 'handOver'
+				try next.absorb(s, key: k, senderFill: self.fillByte, senderPad: self.padLength) otherwise panic("churn: the neighbour's mailbox holds a round's hand-overs")
+			end 'handOver' else 'keepIt'
+				keep.push(s)
+			end 'keepIt'
+		end 'make'
+
+		self.built = self.built + made
+		return made
+	end 'round'
+
+	export function absorb(s String, key Tally, senderFill Tally, senderPad Tally)
+		self.absorbed = self.absorbed + (s.byteLength() as Tally)
+
+		if not holds(s, key: key, fillByte: senderFill, padLength: senderPad) 'badAbsorb'
+			self.wrong = self.wrong + 1
+		end 'badAbsorb'
+	end 'absorb'
+
+	export function builtBytes() returns Tally
+		return self.built
+	end 'builtBytes'
+
+	export function absorbedBytes() returns Tally
+		return self.absorbed
+	end 'absorbedBytes'
+
+	export function wrongCount() returns Tally
+		return self.wrong
+	end 'wrongCount'
+end 'Churn'
+
+function classCount(sizeClass HeapBucketIndex) returns HeapCount
+	return HeapStats.census(HeapCensusMode.bySizeClass).bucketCount(sizeClass)
+end 'classCount'
+
+function landsIn(fill String, length Tally, sizeClass HeapBucketIndex) returns bool
+	let pad = makePad(fill, length: length)
+	let held = StringArray.create(0)
+	let before = classCount(sizeClass)
+
+	for k in 0 upto ProbeObjects 'alloc'
+		held.push("{k:04}:{pad}:{k:04}")
+	end 'alloc'
+
+	return classCount(sizeClass) >= before + (held.count() as HeapCount)
+end 'landsIn'
+
+function main() returns ExitCode
+	let fills = StringArray from ["a", "b", "c", "d", "e", "f"]
+	let pads = TallyArray from [1000, 1000, 1000, 1000, 1000, 1000]
+	let populations = TallyArray from [360, 360, 360, 360, 360, 360]
+
+	let handles = ChurnHandleArray.create(0)
+
+	for i in 0 upto ServiceCount 'spawnEach'
+		let fill = try fills.get(i) otherwise panic("churn: fills.get OOB at {i}")
+		let pad = try pads.get(i) otherwise panic("churn: pads.get OOB at {i}")
+		let population = try populations.get(i) otherwise panic("churn: populations.get OOB at {i}")
+
+		if not landsIn(fill, length: pad, sizeClass: SharedClass) 'misplaced'
+			return 4
+		end 'misplaced'
+
+		handles.push(spawn(capacity: 2048) Churn.create(fill, fillByte: (FirstFillByte + i) as Tally, padLength: pad, population: population))
+	end 'spawnEach'
+
+	var roundBytes = 0 as Tally
+
+	for _ in 0 upto Rounds 'eachRound'
+		let replies = TallyPromiseArray.create(0)
+
+		for i in 0 upto ServiceCount 'sendEach'
+			let mine = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+			let next = try handles.get((i + 1) mod ServiceCount) otherwise panic("churn: handles.get OOB at {i}")
+
+			replies.push(try mine.round(next) otherwise panic("churn: a service's mailbox holds a round"))
+		end 'sendEach'
+
+		for p in replies 'join'
+			roundBytes = roundBytes + (await p)
+		end 'join'
+	end 'eachRound'
+
+	var built = 0 as Tally
+	var absorbed = 0 as Tally
+	var wrong = 0 as Tally
+
+	for i in 0 upto ServiceCount 'collect'
+		let h = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+		let b = try await h.builtBytes() otherwise 0
+		let a = try await h.absorbedBytes() otherwise 0
+		let w = try await h.wrongCount() otherwise 1
+
+		print("service {i}: built={b} absorbed={a} wrong={w}\n")
+
+		built = built + b
+		absorbed = absorbed + a
+		wrong = wrong + w
+	end 'collect'
+
+	print("total built={built} absorbed={absorbed} wrong={wrong} rounds={roundBytes}\n")
+
+	if wrong != 0 'corrupted'
+		return 3
+	end 'corrupted'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+service 0: built=43632000 absorbed=21816000 wrong=0
+service 1: built=43632000 absorbed=21816000 wrong=0
+service 2: built=43632000 absorbed=21816000 wrong=0
+service 3: built=43632000 absorbed=21816000 wrong=0
+service 4: built=43632000 absorbed=21816000 wrong=0
+service 5: built=43632000 absorbed=21816000 wrong=0
+total built=261792000 absorbed=130896000 wrong=0 rounds=261792000
+```
+
+<!-- test: slab-sharding.services-churning-one-size-class-keep-their-sums-while-another-service-scavenges -->
+<!-- procs: 4 -->
+**THE TWO CASES ABOVE, JOINED: SIX SERVICES ON ONE SIZE CLASS, A SEVENTH SCAVENGING UNDER THEM.** The ring, the
+pads and the checks of the one-class case (all six build 1000-byte pads in class 33, each hands every second
+string to the next service to drop), plus the scavenger of the case before it, which calls
+`HeapStats.scavenge()` three times per round and yields between the calls. Every refill, every relist and every
+scavenge of the one class's span list meets another's. It is a safety net: it is green whether or not a lock
+guards that list, and a race on it shows as a failure rate: a corrupted sum (`wrong` above 0), an allocator
+abort or a leak at exit (the exit code is pinned to 0). The census check that the pads land in class 33 runs
+first (exit 4 otherwise), and `sweeps=360` says every scavenger pass ran.
+
+⭐ **A LOST SPAN IS CAUGHT AFTER THE JOIN.** Once every service has answered its last message the heap is
+quiescent, so the main thread scavenges twice and reads `HeapStats.slab().parked`, the bytes of spans that
+hold no live slot yet sit on no processor's cache. A healthy allocator has destroyed every such span on a
+class's list by then, so the figure is exactly 0 whichever processor ran which service; a span the lock-free
+list dropped, with every slot free, is one no pass can reach and reads as parked (exit 5).
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+typealias StringArray = Array with String
+typealias ChurnHandleArray = Array with Churn.handle
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+let ServiceCount = 6
+let Rounds = 120
+let FramingBytes = 10
+let FramingSum = 500
+let FirstFillByte = 97
+let ProbeObjects = 20
+let SharedClass = 33
+let SweepsPerRound = 3
+let SettlingPasses = 2
+
+function digitSum(k Tally) returns Tally
+	return (k / 1000) + ((k / 100) mod 10) + ((k / 10) mod 10) + (k mod 10)
+end 'digitSum'
+
+function holds(s String, key Tally, fillByte Tally, padLength Tally) returns bool
+	if (s.byteLength() as Tally) != padLength + FramingBytes 'length'
+		return false
+	end 'length'
+
+	var sum = 0 as Tally
+
+	for b in s.bytes() 'sum'
+		sum = sum + (b as Tally)
+	end 'sum'
+
+	return sum == FramingSum + (2 * digitSum(key)) + (fillByte * padLength)
+end 'holds'
+
+function makePad(fill String, length Tally) returns String
+	let sb = StringBuilder.create()
+	var left = length
+
+	while left > 0 'build'
+		sb.append(fill)
+		left = left - 1
+	end 'build'
+
+	return sb.build()
+end 'makePad'
+
+type Churn
+	var pad as String
+	var padLength as Tally
+	var fillByte as Tally
+	var population as Tally
+	var built as Tally
+	var absorbed as Tally
+	var wrong as Tally
+
+	static function create(fill String, fillByte Tally, padLength Tally, population Tally) returns Self
+		return Self{pad: makePad(fill, length: padLength), padLength: padLength, fillByte: fillByte, population: population, built: 0, absorbed: 0, wrong: 0}
+	end 'create'
+
+	export function round(next Churn.handle) returns Tally
+		let keep = StringArray.create(0)
+		var made = 0 as Tally
+
+		for k in 0 upto self.population 'make'
+			let s = "{k:04}:{self.pad}:{k:04}"
+
+			if not holds(s, key: k, fillByte: self.fillByte, padLength: self.padLength) 'badBuild'
+				self.wrong = self.wrong + 1
+			end 'badBuild'
+
+			made = made + (s.byteLength() as Tally)
+
+			if (k mod 2) == 0 'handOver'
+				try next.absorb(s, key: k, senderFill: self.fillByte, senderPad: self.padLength) otherwise panic("churn: the neighbour's mailbox holds a round's hand-overs")
+			end 'handOver' else 'keepIt'
+				keep.push(s)
+			end 'keepIt'
+		end 'make'
+
+		self.built = self.built + made
+		return made
+	end 'round'
+
+	export function absorb(s String, key Tally, senderFill Tally, senderPad Tally)
+		self.absorbed = self.absorbed + (s.byteLength() as Tally)
+
+		if not holds(s, key: key, fillByte: senderFill, padLength: senderPad) 'badAbsorb'
+			self.wrong = self.wrong + 1
+		end 'badAbsorb'
+	end 'absorb'
+
+	export function builtBytes() returns Tally
+		return self.built
+	end 'builtBytes'
+
+	export function absorbedBytes() returns Tally
+		return self.absorbed
+	end 'absorbedBytes'
+
+	export function wrongCount() returns Tally
+		return self.wrong
+	end 'wrongCount'
+end 'Churn'
+
+type Scavenger
+	var passes as Tally
+
+	static function create() returns Self
+		return Self{passes: 0}
+	end 'create'
+
+	export function sweep(count Tally) returns Tally
+		for _ in 0 upto count 'passes'
+			_ = HeapStats.scavenge()
+			self.passes = self.passes + 1
+			Scheduler.yield()
+		end 'passes'
+
+		return self.passes
+	end 'sweep'
+end 'Scavenger'
+
+function parkedBytes() returns HeapBytes
+	return HeapStats.slab().parked
+end 'parkedBytes'
+
+function classCount(sizeClass HeapBucketIndex) returns HeapCount
+	return HeapStats.census(HeapCensusMode.bySizeClass).bucketCount(sizeClass)
+end 'classCount'
+
+function landsIn(fill String, length Tally, sizeClass HeapBucketIndex) returns bool
+	let pad = makePad(fill, length: length)
+	let held = StringArray.create(0)
+	let before = classCount(sizeClass)
+
+	for k in 0 upto ProbeObjects 'alloc'
+		held.push("{k:04}:{pad}:{k:04}")
+	end 'alloc'
+
+	return classCount(sizeClass) >= before + (held.count() as HeapCount)
+end 'landsIn'
+
+function main() returns ExitCode
+	let fills = StringArray from ["a", "b", "c", "d", "e", "f"]
+	let pads = TallyArray from [1000, 1000, 1000, 1000, 1000, 1000]
+	let populations = TallyArray from [360, 360, 360, 360, 360, 360]
+
+	let handles = ChurnHandleArray.create(0)
+
+	for i in 0 upto ServiceCount 'spawnEach'
+		let fill = try fills.get(i) otherwise panic("churn: fills.get OOB at {i}")
+		let pad = try pads.get(i) otherwise panic("churn: pads.get OOB at {i}")
+		let population = try populations.get(i) otherwise panic("churn: populations.get OOB at {i}")
+
+		if not landsIn(fill, length: pad, sizeClass: SharedClass) 'misplaced'
+			return 4
+		end 'misplaced'
+
+		handles.push(spawn(capacity: 2048) Churn.create(fill, fillByte: (FirstFillByte + i) as Tally, padLength: pad, population: population))
+	end 'spawnEach'
+
+	let scavenger = spawn Scavenger.create()
+
+	var roundBytes = 0 as Tally
+	var sweeps = 0 as Tally
+
+	for _ in 0 upto Rounds 'eachRound'
+		let replies = TallyPromiseArray.create(0)
+		let sweeping = try scavenger.sweep(SweepsPerRound) otherwise panic("churn: the scavenger's mailbox holds a round")
+
+		for i in 0 upto ServiceCount 'sendEach'
+			let mine = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+			let next = try handles.get((i + 1) mod ServiceCount) otherwise panic("churn: handles.get OOB at {i}")
+
+			replies.push(try mine.round(next) otherwise panic("churn: a service's mailbox holds a round"))
+		end 'sendEach'
+
+		for p in replies 'join'
+			roundBytes = roundBytes + (await p)
+		end 'join'
+
+		sweeps = await sweeping
+	end 'eachRound'
+
+	var built = 0 as Tally
+	var absorbed = 0 as Tally
+	var wrong = 0 as Tally
+
+	for i in 0 upto ServiceCount 'collect'
+		let h = try handles.get(i) otherwise panic("churn: handles.get OOB at {i}")
+		let b = try await h.builtBytes() otherwise 0
+		let a = try await h.absorbedBytes() otherwise 0
+		let w = try await h.wrongCount() otherwise 1
+
+		print("service {i}: built={b} absorbed={a} wrong={w}\n")
+
+		built = built + b
+		absorbed = absorbed + a
+		wrong = wrong + w
+	end 'collect'
+
+	print("total built={built} absorbed={absorbed} wrong={wrong} rounds={roundBytes} sweeps={sweeps}\n")
+
+	if wrong != 0 'corrupted'
+		return 3
+	end 'corrupted'
+
+	for _ in 0 upto SettlingPasses 'settle'
+		_ = HeapStats.scavenge()
+	end 'settle'
+
+	if parkedBytes() != 0 'spanLost'
+		return 5
+	end 'spanLost'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+service 0: built=43632000 absorbed=21816000 wrong=0
+service 1: built=43632000 absorbed=21816000 wrong=0
+service 2: built=43632000 absorbed=21816000 wrong=0
+service 3: built=43632000 absorbed=21816000 wrong=0
+service 4: built=43632000 absorbed=21816000 wrong=0
+service 5: built=43632000 absorbed=21816000 wrong=0
+total built=261792000 absorbed=130896000 wrong=0 rounds=261792000 sweeps=360
 ```

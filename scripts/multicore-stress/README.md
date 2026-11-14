@@ -3,8 +3,9 @@
 The gate that says the multi-core runtime **truly works** before the compiler depends on it. Scope:
 **x64-windows**.
 
-The runtime the compiler emits into every compiled binary has a per-P sharded, lock-free slab
-allocator with an ownership gate and a cross-P remote-free MPSC queue, plus a green-thread scheduler
+The runtime the compiler emits into every compiled binary has a per-P sharded slab allocator, whose
+fast path takes no lock, with an ownership gate, a per-span remote-free MPSC queue, a lock-free stack of
+spans per size class and two locks on its slow paths, plus a green-thread scheduler
 that spawns worker OS threads (Ms) on demand. Those cross-P paths have no coverage anywhere else:
 a spec case is a Maxon program the harness compiles and runs once, and everything here is a **sweep**
 across processor counts, a repetition count, or a latency — readings a single case cannot take.
@@ -143,6 +144,22 @@ family a program is in decides what its rows mean**, so it is the first column h
   sink never ran, 4 a send neither delivered nor refused, 5 a refusal that handed no payload back.
 - **`cown-multi-torture.maxon`** — `CownTorture.violations`, the multi-cown acquire's mutual-exclusion
   check ([`CownTorture`](../../docs/STDLIB_REFERENCE.md#cowntorture)). Exit 1 is a violation.
+- **`class-churn-bench.maxon`** — an INSTRUMENT: no driver runs it and nothing judges its output;
+  `compile-all.sh` only builds it. `class-churn-bench <workers> <rounds> <distinct|same>` (defaults
+  12, 5000, `distinct`) spawns `workers` services, and each runs `rounds` rounds of building a
+  population of heap `String`s worth ~460 KB of slots and dropping all of it, so a round fills 14 to 60
+  spans of its class and empties them again: refills and relists, and almost no hit on a span a processor
+  already holds. In `distinct` service `i` takes the `i`-th of twelve pad sizes, each in a size class of its
+  own or straddling two adjacent ones (96-byte slots up to 32 KiB), and no two services share one; in `same`
+  every service takes one pad, class 33. It prints one line,
+  `checksum=<n> workers=<w> rounds=<r> mode=<m>`, a function of its arguments alone, and exits 0 (2 is a
+  usage error).
+  Read it as wall and CPU seconds per mode at each `MAXON_MAX_PROCS` (1, 2, 6, 12 at `workers=12`; min and
+  median of several runs, the two modes interleaved). ⚠ **COMPARE WITHIN A MODE ACROSS PROCESSOR COUNTS
+  AND BETWEEN THE MODES AT ONE COUNT, NEVER ABSOLUTE SECONDS BETWEEN THE MODES**: the object sizes differ,
+  so the work per round does. CPU seconds above wall seconds is time spent waiting on the allocator's
+  shared structures, not work: a run whose CPU grows with the processor count while its wall time does not
+  fall is contended.
 - **`refcount-service-refused.maxon`** — a **MUST-NOT-COMPILE** entry: `refcount-torture` written
   against services. A send is a MOVE, so the first send takes the shared `String` away from `main`
   and the second asks `main` to give up a reference it no longer holds. `compile-all.sh` asserts the
