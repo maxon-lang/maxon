@@ -958,6 +958,96 @@ done sibling=1 read=5
 0
 ```
 
+<!-- test: a-busy-processor-serves-a-machine-regaining-one -->
+<!-- procs: 1 -->
+<!-- stdin: after "S: reader is in the kernel" -->
+`reader` blocks in a `stdin` read, the monitor takes its processor, and the read returns while `main` holds the one
+processor again: `reader`'s machine waits to be handed one. `main` never yields and never idles the processor: each
+turn of its loop sends to two services and awaits both, so every turn schedules a thread from the ring, which the
+monitor reads as a fresh slice, not as one strand holding the processor too long. The wait ends only if the
+scheduler hands the processor to the waiting machine on its own, at a schedule; otherwise the case reads a timeout.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias StageCell = SharedValue with Integer
+
+let reading = 1 as Integer
+let answered = 2 as Integer
+
+function textOf(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives ""
+	end 'read'
+end 'textOf'
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read(stage StageCell) returns Integer
+		stage.publish(reading)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
+		stage.publish(answered)
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+type Worker
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function work(n Integer) returns Integer
+		return n + 1
+	end 'work'
+end 'Worker'
+
+function scatterGather(first Worker.handle, second Worker.handle) returns Integer
+	let a = try first.work(1) otherwise panic("an open mailbox with room takes the send")
+	let b = try second.work(1) otherwise panic("an open mailbox with room takes the send")
+
+	return (await a) + (await b)
+end 'scatterGather'
+
+function main() returns ExitCode
+	let stage = StageCell.create(0 as Integer)
+	let reader = spawn Reader.create()
+	let answer = try reader.read(stage.clone()) otherwise panic("an open mailbox with room takes the send")
+	let first = spawn Worker.create()
+	let second = spawn Worker.create()
+	var total = 0 as Integer
+
+	while stage.current() < reading 'untilReading'
+		total = total + scatterGather(first, second: second)
+	end 'untilReading'
+
+	print("S: reader is in the kernel\n")
+
+	while stage.current() < answered 'untilAnswered'
+		total = total + scatterGather(first, second: second)
+	end 'untilAnswered'
+
+	let n = await answer
+	print("answered {n} worked {total > 0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+S: reader is in the kernel
+answered 5 worked true
+```
+```exitcode
+0
+```
+
 <!-- test: a-print-enters-a-kernel-bracket -->
 **THE CONTROL FOR EVERY ASSERTION THAT A WINDOW HOLDS NO BRACKET.** A write to standard output is
 `SyscallClass.blocking` on every lane that brackets — its far end may stop reading — so one `print` from `main`,

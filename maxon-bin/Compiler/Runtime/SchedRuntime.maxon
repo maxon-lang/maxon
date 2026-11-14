@@ -175,8 +175,9 @@ export enum MultiMSharing
 	// arms that are both correct, as Go's reading of the same pair does. One reads `__sched_midle`'s head:
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
 	// machine, and whose stale "empty" that function argues. One reads `__sched_regain_head`:
-	// `emitSchedRegainWaiterQueued`'s peek, which chooses whether a yield's strand goes behind everyone, and
-	// whose stale "yes" the locked hand-off answers none to and whose stale "no" the next yield corrects.
+	// `emitSchedRegainWaiterQueued`'s peek, which chooses whether a yield's strand goes behind everyone and
+	// whether the scheduler loop takes the lock to hand its processor over, and whose stale "yes" the locked
+	// hand-off answers none to and whose stale "no" the next schedule corrects.
 	//
 	// ⭐ **THREE MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**:
 	// `__sched_idle_processor_count` answers `__sched_npidle`, `__sched_timer_start_count` answers
@@ -6314,7 +6315,7 @@ export function emitSchedRegainWaiterQueued(module StdModule, block IrBlock, ids
 	return emitCompareWithConstant(module, block: block, value: emitLoadGlobalWord(module, block: block, label: SchedRegainHeadLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitSchedRegainWaiterQueued'
 
-export function emitSchedHandProcessorToRegainWaiterLocked(module StdModule, func IrFunction, cur IrBlock, handedOff IrBlock, kept IrBlock, ids ValueMinter)
+function emitSchedHandProcessorToRegainWaiterLocked(module StdModule, func IrFunction, cur IrBlock, handedOff IrBlock, kept IrBlock, ids ValueMinter)
 	let examineProc = module.addBlock(func, label: b"hrexamine", heat: BlockHeat.cold)
 	let drainIt = module.addBlock(func, label: b"hrdrain", heat: BlockHeat.cold)
 	let releaseIt = module.addBlock(func, label: b"hrrelease", heat: BlockHeat.cold)
@@ -6568,6 +6569,9 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let lockedAdopt = module.addBlock(func, label: b"wlockedadopt", heat: BlockHeat.cold)
 	let lockedRun = module.addBlock(func, label: b"wlockedrun", heat: BlockHeat.cold)
 	let lockedStrandRun = module.addBlock(func, label: b"wlockedstrandrun", heat: BlockHeat.cold)
+	let servePeek = module.addBlock(func, label: b"wservepeek", heat: BlockHeat.normal)
+	let serveLocked = module.addBlock(func, label: b"wservelocked", heat: BlockHeat.cold)
+	let serveHandedOff = module.addBlock(func, label: b"wservehandedoff", heat: BlockHeat.cold)
 	let checkTimers = module.addBlock(func, label: b"wchecktimers", heat: BlockHeat.normal)
 	let dequeue = module.addBlock(func, label: b"wdequeue", heat: BlockHeat.normal)
 	let sortWork = module.addBlock(func, label: b"wsortwork", heat: BlockHeat.normal)
@@ -6637,7 +6641,17 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedLoopExitBranch(module, func: func, cur: loopTop, leave: leave, exitBlock: exitBlock, cont: lockedCheck, holdsLock: false, ids: ids)
 
 	let lockedGt = emitLoadField(module, block: lockedCheck, record: m, offset: MOffLockedGt, ids: ids)
-	emitBranchOnCompare(module, block: lockedCheck, value: lockedGt, pred: StdCmpPred.eq, against: 0, whenTrue: checkTimers, whenFalse: lockedRelease, ids: ids)
+	emitBranchOnCompare(module, block: lockedCheck, value: lockedGt, pred: StdCmpPred.eq, against: 0, whenTrue: servePeek, whenFalse: lockedRelease, ids: ids)
+
+	// Only a processor release serves a machine in `__sched_syscall_regain`, and `__sysmon` asks a strand to give
+	// one up only while `POffSchedTick` stands still: this check at every schedule is what bounds the wait.
+	let regainQueued = emitSchedRegainWaiterQueued(module, block: servePeek, ids: ids)
+	module.setTerminator(servePeek, op: StdOp.condBranch(regainQueued, thenBlockId: serveLocked.id, elseBlockId: checkTimers.id))
+
+	emitSchedLockEnter(module, block: serveLocked, ids: ids)
+	emitSchedHandProcessorToRegainWaiterLocked(module, func: func, cur: serveLocked, handedOff: serveHandedOff, kept: checkTimers, ids: ids)
+
+	emitBranchCarrying(module, from: serveHandedOff, to: handedOffProc, values: argsOf(emitConst(module, block: serveHandedOff, value: WakeDebtNone, ids: ids)))
 
 	_ = emitSchedSpinningTransition(module, block: lockedRelease, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	emitSchedLockEnter(module, block: lockedRelease, ids: ids)
