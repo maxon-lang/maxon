@@ -158,6 +158,9 @@ compile, in any process, starts from what that one wrote:
   type, declares a name the library uses, or lives inside `stdlib/` has its names settled first: it
   sweeps the library's declarations itself, from the cached tokens, and its parses of library files are
   its own. A program lives inside `stdlib/` by its physical path, so one named through a symbolic link counts.
+  A typealias that has the name and form (ranged, function, tuple or generic) of the library's one typealias
+  of that name folds on top of the library's like any other declaration, and the program shares its parses
+  of library files with the programs that declare the same library typealiases.
 - **An entry is checked when it is read.** One that is damaged, was written under another entry format, or
   holds a number outside the range it is read into is deleted and written again, and the compile goes on
   as a cold one. Entries are written under a temporary name and renamed into place, so concurrent compiles
@@ -3398,8 +3401,9 @@ maxon verify-recheck <file|dir>
   typealiases implement a library interface (`implements ElementIndex`) cannot serve one without them. The
   sibling declares what the third declares under other type names and is compiled just before it, so the
   third is served from a program that carries its key. For a program that shadows a library type, or
-  declares a name the library declares, it checks instead that the library is parsed cold, and the `PASS`
-  line says `library parsed cold (shadowed)` or `library parsed cold (namesOverlap)`.
+  declares a name the library uses in a way that [settles its names first](#the-library-cache), it checks
+  instead that the library is parsed cold, and the `PASS` line says `library parsed cold (shadowed)` or
+  `library parsed cold (namesOverlap)`.
 
   A program that does not compile reports its errors and runs the cache-hit and invalidation properties,
   which need no compile. The other three each print a line,

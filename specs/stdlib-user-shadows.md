@@ -1317,3 +1317,91 @@ end 'main'
 ```exitcode
 3
 ```
+
+<!-- test: stdlib-user-shadows.error.a-result-declared-as-the-librarys-count-does-not-land-in-the-programs-own-count -->
+A function in a file that declares its own `Count` returns `stdlib.Count`. Its result is the library's `Count`,
+so assigning it to a variable of the file's own `Count` needs a cast.
+```maxon
+typealias Count = int(0 to 3)
+
+function sizeOf(words StringArray) returns stdlib.Count
+	return words.count()
+end 'sizeOf'
+
+function main() returns ExitCode
+	let words = "a b c d e f g".split(" ")
+	var mine = 0 as Count
+	mine = sizeOf(words)
+	return mine as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: cannot assign a value of type 'stdlib.Count' to variable 'mine', which holds 'Count' — cast the value with 'as Count'
+```
+
+<!-- test: stdlib-user-shadows.a-generic-function-binds-the-librarys-byte-in-a-file-declaring-its-own -->
+A generic function in a file that declares its own `Byte` is called with a byte read from a string. Its type
+parameter binds the library's `Byte`, so the result goes where `stdlib.Byte` is declared, and a call with the
+file's own `Byte` binds that one and keeps a value past the library's range.
+```maxon
+typealias Byte = int(0 to 60000)
+
+function pick(value T) uses T returns T
+	return value
+end 'pick'
+
+function same(left stdlib.Byte, right stdlib.Byte) returns bool
+	return left == right
+end 'same'
+
+function main() returns ExitCode
+	let bytes = "AB".toByteArray()
+	let first = try bytes.get(0) otherwise 0
+	let mine = 50000 as Byte
+	print("{same(pick(first), right: first)} {pick(mine)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true 50000
+```
+
+<!-- test: stdlib-user-shadows.a-field-declared-as-the-librarys-byte-keeps-the-librarys-range -->
+A field declared `stdlib.Byte` in a file whose own `Byte` is wider holds the library's `Byte`: the field of the
+file's own `Byte` takes a value past 255, and a value past 255 stored into the other panics, naming
+`stdlib.Byte`.
+```maxon
+typealias Byte = int(0 to 60000)
+typealias Tally = int(0 to 100000)
+
+type Cell
+	export var tiny as stdlib.Byte
+	export var mine as Byte
+
+	static function create(tiny stdlib.Byte, mine Byte) returns Cell
+		return Cell{tiny: tiny, mine: mine}
+	end 'create'
+end 'Cell'
+
+function main() returns ExitCode
+	let bytes = "AB".toByteArray()
+	let first = try bytes.get(0) otherwise 0
+	let cell = Cell.create(first, mine: 9)
+	cell.mine = cell.mine + 300
+	cell.tiny = (cell.tiny as Tally + 130) as stdlib.Byte
+	cell.tiny = cell.tiny + 100
+	return (cell.tiny as Tally + cell.mine as Tally) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at stdlib-user-shadows.a-field-declared-as-the-librarys-byte-keeps-the-librarys-range.test:20: Range check failed: value outside typealias 'stdlib.Byte'
+Stack trace:
+  in main
+  in mrt_start
+```

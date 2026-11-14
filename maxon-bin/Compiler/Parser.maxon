@@ -87377,7 +87377,13 @@ export type Parser
 			return
 		end 'opaqueElement'
 
-		if not self.signatures.typeExcludesZero(self.signatures.containerElementType(giid)) 'zeroIsAnElement'
+		let element = self.signatures.containerElementType(giid)
+
+		if (self.job.isStdlibSource or self.job.isRuntimeSource) and maxonTypeTag(element) == ValueTypeTag.named and self.signatures.settledDeclarations().typeAliases.bareNameTookLibraryIdentities(self.signatures.indexSpaceTypeName(element)) 'aSharedParseWouldBakeAnAuthorsAnswer'
+			panic("Parser.requireZeroIsAnElement: a library file's container element is the bare name '{String.from(self.signatures.indexSpaceTypeName(element))}', which an author's declaration made every declaration mint — its zero answer would include the author's and a shared parse would keep it")
+		end 'aSharedParseWouldBakeAnAuthorsAnswer'
+
+		if not self.signatures.typeExcludesZero(element) 'zeroIsAnElement'
 			return
 		end 'zeroIsAnElement'
 

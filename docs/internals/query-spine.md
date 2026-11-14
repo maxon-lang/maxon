@@ -132,15 +132,20 @@ names are still file-local, and a hit is rebased onto the current program; a row
 is a miss. Its key is a signature hash over the library alone, since the whole-program hash moves with every
 user declaration, mixed with the facts of the asking program that a library file's parse reads: the answers
 the file is parsed with, the instances the program requests of the library's generic functions, whether the
-program spawns a service, which of the file's `default`s it builds, and the by-reference conventions the
-library's own call sites meet. Those conventions are a program function taking a `mutable` parameter, or a
+program spawns a service, which of the file's `default`s it builds, the library typealiases the program
+declares too, and the by-reference conventions the library's own call sites meet. A program declares a
+library typealias too when a typealias of its own has the name and the form (ranged, function, tuple or
+generic) of the library's one typealias of that name: the library's declaration keeps its identity and the
+bare entries of that name, and the program's takes a mint of its own, so what a library file's parse reads
+turns on which such names the program declares, whatever range, shape or element each is declared over
+(`ProgramSignatures.contestedAliasesDigest`). Those conventions are a program function taking a `mutable` parameter, or a
 program field holding a function value, under a name a library call hands a `var` to; a free function taking
 a `mutable` parameter at a position where a library call through a function value hands a `var`; and a
 program type's method named like a method of a library interface. Two programs that agree on those facts
 share every library parse, whatever else each declares. A held parse is frozen and deep-cloned at every hit, because the merge renumbers an
 artifact in place; the store of a one-shot `maxon build` hands the decoded parse over instead, since that
 compile is its last. A program that shadows a library name, declares one the library
-means, or is rooted inside `stdlib/` parses the library cold. One file's swept declarations stay with their
+means in any other way, or is rooted inside `stdlib/` parses the library cold. One file's swept declarations stay with their
 `Project`. A compile's state lives on its `Project` and its `CompileSession`, which lets the language server
 run project checks in services of their own beside its main loop; a `fileMemos` store serves one compile at a
 time, and the shared library store serves every compile at once.
@@ -151,6 +156,11 @@ The library's declarations are swept once, into a `ProgramSignatures` holding th
 (`LibraryBaseline.maxon`). A program starts from a copy of it and folds only its own files on top, then
 runs the whole-program tail. A program that shadows a library type, declares a name the library means, or
 is rooted inside `stdlib/` needs its names settled before the library folds, so it is swept user first.
+A typealias with the name and form of the library's one typealias of that name folds on top of the baseline:
+the library means that name as its own declaration whichever program is compiled. Every other meeting of an
+author name and a library name is swept user first: an alias named like a library type, a runtime-tier type
+or a name the library only mentions, an alias of another form, a name the library declares twice, and any
+type or function overlap.
 It finds that out per file, through a flag the index sets the moment an author name meets a name the
 library means, and the facts already discovered for its files are handed to the user-first sweep, so each
 file is discovered once.

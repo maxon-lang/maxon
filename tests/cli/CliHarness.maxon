@@ -1332,81 +1332,119 @@ export let LibraryReachingProgramSource = "typealias Tally = int(0 to 1000)\n\nf
 export let OwnGenericFunctionProgramSource = "typealias Tally = int(0 to 1000)\n\nfunction preferred(first T, second T, takeFirst bool) uses T returns T\n\treturn first if takeFirst else second\nend 'preferred'\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\tlet pick = preferred(length, second: 40, takeFirst: false)\n\treturn (pick + seed) as ExitCode\nend 'main'\n"
 export let OwnGenericFunctionProgramExitCode = 61
 
-let ProgramBeforeDirName = "before"
-let ProgramAfterDirName = "after"
-let ProgramBeforeOutputName = "program-before"
-let ProgramAfterOutputName = "program-after"
-let WarmImageName = "warm-image"
-let WarmSidecarName = "warm-sidecar"
-let ColdCacheRootDirName = "cold-cache"
+let FirstProgramDirName = "first"
+let FirstProgramOutputName = "first-program"
+let SequencedProgramDirPrefix = "program-"
+let SequencedOutputPrefix = "image-"
+let WarmImagePrefix = "warm-image-"
+let WarmSidecarPrefix = "warm-sidecar-"
+let ColdCacheRootDirPrefix = "cold-cache-"
 
 export function requireColdLibraryCacheBuild(dir FilePath, cacheRootDirName String, program String, output String, which String) returns LibraryCacheReport throws TestFailure
 	let cacheRoot = stagingDir(dir.join(cacheRootDirName).toString())
 	let cold = try libraryCacheReportOf(runLibraryCacheBuildUnder(cacheRoot, dir: dir, program: program, output: output, options: StringArray.create(0)), which: which)
-	try Expect.equal(cold.baseline, expected: LibraryBaseline.built, message: "{which} did not build the library baseline itself, so the cache root it was given was not empty and the build was not a cold one. It wrote: {cold.line}")
+	try Expect.notEqual(cold.baseline, expected: LibraryBaseline.loaded, message: "{which} loaded the library baseline from the cache, so the cache root it was given was not empty and the build was not a cold one. It wrote: {cold.line}")
+
+	if cold.baseline == LibraryBaseline.unused 'nothingItBuiltToLoad'
+		try Expect.equal(cold.loaded, expected: 0, message: "{which} left the library baseline unused and still loaded library cache entries, so the cache root it was given was not empty and the build was not a cold one. It wrote: {cold.line}")
+	end 'nothingItBuiltToLoad'
 
 	return cold
 end 'requireColdLibraryCacheBuild'
 
-function requireBuiltAfterAnotherMatchesCold(dir FilePath, before String, source String, exitCode ExitInt, subject String) returns LibraryCacheReport throws TestFailure
-	stageProgram(dir, name: ProgramBeforeDirName, source: before)
-	stageProgram(dir, name: ProgramAfterDirName, source: source)
+export enum LibraryCacheExpectation
+	servedEveryParse
+	loadsTheBaselineAndParsesTheLibrary
+	leavesTheBaselineUnused
+end 'LibraryCacheExpectation'
 
-	_ = try requireLibraryCacheBuild(dir, program: ProgramBeforeDirName, output: ProgramBeforeOutputName, which: "the build of the program before {subject}, which fills the library cache")
+export type SequencedProgram
+	export let source as String
+	export let exitCode as ExitInt
+	export let subject as String
+	export let expectation as LibraryCacheExpectation
 
-	let image = dir.join("{ProgramAfterOutputName}{executableSuffix()}")
-	let sidecar = dir.join("{ProgramAfterOutputName}{executableSuffix()}{SidecarSuffix}")
+	export static function create(source String, exitCode ExitInt, subject String, expectation LibraryCacheExpectation) returns SequencedProgram
+		return Self{source: source, exitCode: exitCode, subject: subject, expectation: expectation}
+	end 'create'
+end 'SequencedProgram'
 
-	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramAfterDirName, output: ProgramAfterOutputName, options: StringArray.create(0)), which: "the warm build of {subject}")
-	try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the warm build of {subject} did not load the library baseline the program before it wrote, so the program declares a name the library means and no build of it is served the library. It wrote: {warm.line}")
+export typealias SequencedProgramArray = Array with SequencedProgram
 
+function requireLibraryCacheExpectation(warm LibraryCacheReport, expectation LibraryCacheExpectation, subject String) throws TestFailure
+	try Expect.equal(warm.rejected, expected: 0, message: "the warm build of {subject} rejected library cache entries the programs before it had just written. It wrote: {warm.line}")
+
+	match expectation 'expected'
+		servedEveryParse then try requireServedEveryParse(warm, subject: subject)
+		loadsTheBaselineAndParsesTheLibrary then try requireParsedOnTheLoadedBaseline(warm, subject: subject)
+		leavesTheBaselineUnused then try requireSweptAndParsed(warm, subject: subject)
+	end 'expected'
+end 'requireLibraryCacheExpectation'
+
+function requireReportedBaseline(warm LibraryCacheReport, baseline LibraryBaseline, subject String) throws TestFailure
+	try Expect.equal(warm.baseline, expected: baseline, message: "the warm build of {subject} did not report the library baseline `{baseline.name}`, where `{LibraryBaseline.loaded.name}` is a program served the baseline a program before it wrote and `{LibraryBaseline.unused.name}` is one that declares a name the library means and sweeps the library itself. It wrote: {warm.line}")
+end 'requireReportedBaseline'
+
+function requireOnTheLoadedBaseline(warm LibraryCacheReport, subject String) throws TestFailure
+	try requireReportedBaseline(warm, baseline: LibraryBaseline.loaded, subject: subject)
+	try Expect.equal(warm.swept, expected: 0, message: "the warm build of {subject} swept library files itself, although a program before it had cached the library baseline. It wrote: {warm.line}")
+end 'requireOnTheLoadedBaseline'
+
+function requireServedEveryParse(warm LibraryCacheReport, subject String) throws TestFailure
+	try requireOnTheLoadedBaseline(warm, subject: subject)
+	try Expect.equal(warm.parsed, expected: 0, message: "{subject} was re-parsing library files, although the programs before it had cached every parse it needs. It wrote: {warm.line}")
+end 'requireServedEveryParse'
+
+function requireParsedOnTheLoadedBaseline(warm LibraryCacheReport, subject String) throws TestFailure
+	try requireOnTheLoadedBaseline(warm, subject: subject)
+	try Expect.greaterThan(warm.parsed, than: 0, message: "the warm build of {subject} parsed no library file itself, so what it adds moved no library file's key and its bytes agreeing with the cold build's shows nothing about a key that moves. It wrote: {warm.line}")
+end 'requireParsedOnTheLoadedBaseline'
+
+function requireSweptAndParsed(warm LibraryCacheReport, subject String) throws TestFailure
+	try requireReportedBaseline(warm, baseline: LibraryBaseline.unused, subject: subject)
+	try Expect.greaterThan(warm.swept, than: 0, message: "the build of {subject} swept no library file itself, although it left the library baseline unused. It wrote: {warm.line}")
+	try Expect.greaterThan(warm.parsed, than: 0, message: "the build of {subject} parsed no library file itself, although it left the library baseline unused. It wrote: {warm.line}")
+end 'requireSweptAndParsed'
+
+function requireBuiltWarmMatchesCold(dir FilePath, ordinal ElementIndex, program SequencedProgram) throws TestFailure
+	let name = "{SequencedProgramDirPrefix}{ordinal}"
+	let output = "{SequencedOutputPrefix}{ordinal}"
+	let subject = program.subject
+	stageProgram(dir, name: name, source: program.source)
+
+	let image = dir.join("{output}{executableSuffix()}")
+	let sidecar = dir.join("{output}{executableSuffix()}{SidecarSuffix}")
+
+	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: name, output: output, options: StringArray.create(0)), which: "the warm build of {subject}")
 	let ran = spawnCompiler(StringArray.create(0), binary: image, staged: dir)
-	try Expect.equal(ran.exitCode(), expected: exitCode, message: "{subject}, built warm, did not exit {exitCode}. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+	try Expect.equal(ran.exitCode(), expected: program.exitCode, message: "{subject}, built warm, did not exit {program.exitCode}. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
 
-	let warmImage = retainedAside(image, aside: dir.join(WarmImageName))
-	let warmSidecar = retainedAside(sidecar, aside: dir.join(WarmSidecarName))
+	let warmImage = retainedAside(image, aside: dir.join("{WarmImagePrefix}{ordinal}"))
+	let warmSidecar = retainedAside(sidecar, aside: dir.join("{WarmSidecarPrefix}{ordinal}"))
 
-	_ = try requireColdLibraryCacheBuild(dir, cacheRootDirName: ColdCacheRootDirName, program: ProgramAfterDirName, output: ProgramAfterOutputName, which: "the cold build of {subject}")
+	_ = try requireColdLibraryCacheBuild(dir, cacheRootDirName: "{ColdCacheRootDirPrefix}{ordinal}", program: name, output: output, which: "the cold build of {subject}")
 
 	try requireWarmBytesAreTheColdOnes(image, warmImage: warmImage, coldSidecar: sidecar, warmSidecar: warmSidecar, subject: subject)
+	try requireLibraryCacheExpectation(warm, expectation: program.expectation, subject: subject)
+end 'requireBuiltWarmMatchesCold'
 
-	return warm
-end 'requireBuiltAfterAnotherMatchesCold'
+export type BuiltInSequenceMatchesCold implements OutsideCheckoutCase
+	let first as String
+	let programs as SequencedProgramArray
 
-export type BuiltAfterAnotherMatchesCold implements OutsideCheckoutCase
-	let before as String
-	let source as String
-	let exitCode as ExitInt
-	let subject as String
-
-	export static function create(source String, exitCode ExitInt, subject String, before String = LibraryReachingProgramSource) returns BuiltAfterAnotherMatchesCold
-		return Self{before: before, source: source, exitCode: exitCode, subject: subject}
+	export static function create(programs SequencedProgramArray, first String = LibraryReachingProgramSource) returns BuiltInSequenceMatchesCold
+		return Self{first: first, programs: programs}
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let warm = try requireBuiltAfterAnotherMatchesCold(dir, before: self.before, source: self.source, exitCode: self.exitCode, subject: self.subject)
+		stageProgram(dir, name: FirstProgramDirName, source: self.first)
+		_ = try requireLibraryCacheBuild(dir, program: FirstProgramDirName, output: FirstProgramOutputName, which: "the build of the first program, which fills the library cache")
 
-		try Expect.greaterThan(warm.parsed, than: 0, message: "the warm build of {self.subject} parsed no library file itself, so the fact it adds moved no library file's key and its bytes agreeing with the cold build's shows nothing about a key that moves. It wrote: {warm.line}")
+		for (position, program) in self.programs.withIterator() 'eachProgram'
+			try requireBuiltWarmMatchesCold(dir, ordinal: position.index(), program: program)
+		end 'eachProgram'
 	end 'requireHeldIn'
-end 'BuiltAfterAnotherMatchesCold'
-
-export type AddedFactIsServedTheLibrary implements OutsideCheckoutCase
-	let source as String
-	let exitCode as ExitInt
-	let fact as String
-
-	export static function create(source String, exitCode ExitInt, fact String) returns AddedFactIsServedTheLibrary
-		return Self{source: source, exitCode: exitCode, fact: fact}
-	end 'create'
-
-	export function requireHeldIn(dir FilePath) throws TestFailure
-		let subject = "a program that adds {self.fact}"
-		let warm = try requireBuiltAfterAnotherMatchesCold(dir, before: LibraryReachingProgramSource, source: self.source, exitCode: self.exitCode, subject: subject)
-
-		try Expect.equal(warm.rejected, expected: 0, message: "the warm build of {subject} rejected library cache entries the program before it had just written. It wrote: {warm.line}")
-		try Expect.equal(warm.parsed, expected: 0, message: "a program was re-parsing library files, although the program before it had cached every parse it needs and it differs from that program only by {self.fact}. It wrote: {warm.line}")
-	end 'requireHeldIn'
-end 'AddedFactIsServedTheLibrary'
+end 'BuiltInSequenceMatchesCold'
 
 export function libraryCacheReportOf(build CollectedOutput, which String) returns LibraryCacheReport throws TestFailure
 	try Expect.equal(build.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {build.stdout} and to stderr: {build.stderr}")

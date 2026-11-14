@@ -93,8 +93,10 @@ end 'forgetOneSourceFile'
 // (`forOneCompile`) hands the decoded parse over and drops it, since no later compile asks.
 //
 // Its key is the library-only signature hash (`ProgramSignatures.libraryHash`), because the
-// whole-program hash moves with every user declaration. A program that shadows or overlaps a
-// library name, or declares a runtime name, parses the library cold (`LibraryParseSharing`).
+// whole-program hash moves with every user declaration, with the library aliases the program
+// declares too (`contestedAliasesDigest`), which the library's identities for those names turn
+// on. A program that shadows a library name, overlaps one any other way, or declares a runtime
+// name, parses the library cold (`LibraryParseSharing`).
 //
 // ⛔⛔ **A SWEPT DECLARATION IS NOT HELD: THE DECLARATION SCAN IS NOT A FUNCTION OF THE BYTES.**
 // `Parser.foldDeclaredSignaturesInto` READS the whole-program index while it walks (whatever the
@@ -446,7 +448,7 @@ export function sharedParsePlanOf(project Project, job ParseJob, contentHash Has
 		return SharedParsePlan.unshared
 	end 'notShareable'
 
-	let key = Hasher.combined(Hasher.combined(signatures.libraryHash, value: overrides.digest), value: liveness)
+	let key = Hasher.combined(Hasher.combined(Hasher.combined(signatures.libraryHash, value: overrides.digest), value: liveness), value: signatures.contestedAliasesDigest)
 
 	let variant = sharedParseVariant(project, job: job)
 	project.db.sharedParseVariantsUsed.insert(variant)

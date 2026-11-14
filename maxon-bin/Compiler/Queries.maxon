@@ -1675,7 +1675,11 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 end 'contestStdlibDeclarationsAgainstUserNames'
 
 function noteTopLevelTypeDeclaration(signatures ProgramSignatures, header TypeDeclarationHeader, path FilePath, moduleDirectory String, isStdlibSource bool)
-	signatures.noteDeclaredName(header.name)
+	if isTypeAliasDecl(header.kind) 'anAlias'
+		signatures.noteDeclaredAliasName(header.name, form: header.kind)
+	end 'anAlias' else 'aNominalType'
+		signatures.noteDeclaredName(header.name)
+	end 'aNominalType'
 
 	if not isStdlibSource 'anAuthorsDeclaration'
 		signatures.noteUserDeclaredTypeName(header.name)

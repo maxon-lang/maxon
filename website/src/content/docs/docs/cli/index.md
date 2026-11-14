@@ -161,6 +161,9 @@ compile, in any process, starts from what that one wrote:
   type, declares a name the library uses, or lives inside `stdlib/` has its names settled first: it
   sweeps the library's declarations itself, from the cached tokens, and its parses of library files are
   its own. A program lives inside `stdlib/` by its physical path, so one named through a symbolic link counts.
+  A typealias that has the name and form (ranged, function, tuple or generic) of the library's one typealias
+  of that name folds on top of the library's like any other declaration, and the program shares its parses
+  of library files with the programs that declare the same library typealiases.
 - **An entry is checked when it is read.** One that is damaged, was written under another entry format, or
   holds a number outside the range it is read into is deleted and written again, and the compile goes on
   as a cold one. Entries are written under a temporary name and renamed into place, so concurrent compiles

@@ -147,8 +147,9 @@ maxon verify-recheck <file|dir>
   typealiases implement a library interface (`implements ElementIndex`) cannot serve one without them. The
   sibling declares what the third declares under other type names and is compiled just before it, so the
   third is served from a program that carries its key. For a program that shadows a library type, or
-  declares a name the library declares, it checks instead that the library is parsed cold, and the `PASS`
-  line says `library parsed cold (shadowed)` or `library parsed cold (namesOverlap)`.
+  declares a name the library uses in a way that [settles its names first](/docs/cli/#the-library-cache), it checks
+  instead that the library is parsed cold, and the `PASS` line says `library parsed cold (shadowed)` or
+  `library parsed cold (namesOverlap)`.
 
   A program that does not compile reports its errors and runs the cache-hit and invalidation properties,
   which need no compile. The other three each print a line,

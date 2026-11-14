@@ -2490,6 +2490,22 @@ function layerHidesDeclaration(declaredByTheCorpus bool, readerIsTheCorpus bool)
 	return readerIsTheCorpus and not declaredByTheCorpus
 end 'layerHidesDeclaration'
 
+export enum BareEntryRole
+	leads
+	displaces
+	behind
+end 'BareEntryRole'
+
+// The corpus declaration holds a bare alias entry whichever layer folds first: a shared library parse
+// reads that entry, and an author's declaration taking it would hand one program's answer to every sharer.
+export function bareEntryRole(heldByTheCorpus bool, incomingByTheCorpus bool) returns BareEntryRole
+	if heldByTheCorpus == incomingByTheCorpus 'oneLayer'
+		return BareEntryRole.leads
+	end 'oneLayer'
+
+	return BareEntryRole.displaces if incomingByTheCorpus else BareEntryRole.behind
+end 'bareEntryRole'
+
 export typealias FoldLayer = int(0 to 1)
 
 let FoldLayerAuthors = 0 as FoldLayer
@@ -2560,23 +2576,46 @@ export type ClaimantProvenance
 		return false
 	end 'anAuthorDeclaresAny'
 
+	// A corpus declaration's mint counts corpus sharers alone, and authors number after them: a shared
+	// library parse holds the corpus mint, so it cannot turn on what a program's authors declare.
 	export function ordinalMints(spellings MintByDeclaringFile) returns MintByDeclaringFile
-		let sharersOfSpelling = SharersBySpelling.create()
+		let corpusSharers = SharersBySpelling.create()
+		let authorSharers = SharersBySpelling.create()
 
 		for (declPath, spelling) in spellings 'eachDeclaration'
-			if not sharersOfSpelling.contains(spelling) 'firstDeclarationOfThisSpelling'
-				sharersOfSpelling.upsert(spelling, value: StringArray.create(0))
-			end 'firstDeclarationOfThisSpelling'
+			let layer = corpusSharers if self.declaresInTheCorpus(declPath) else authorSharers
 
-			let sharers = try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was just seeded into the sharer map and is not there")
+			if not layer.contains(spelling) 'firstDeclarationOfThisSpellingInThisLayer'
+				layer.upsert(spelling, value: StringArray.create(0))
+			end 'firstDeclarationOfThisSpellingInThisLayer'
+
+			let sharers = try layer.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was just seeded into the sharer map and is not there")
 			sharers.push(declPath)
 		end 'eachDeclaration'
 
 		let minted = MintByDeclaringFile.create()
 
 		for (declPath, spelling) in spellings 'eachMint'
-			let sharers = try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was grouped in the pass above")
-			minted.upsert(declPath, value: spelling if sharers.count() < 2 else ordinalMintSpelling(spelling, place: self.ordinalMintPlace(declPath, sharers: sharers)))
+			if self.declaresInTheCorpus(declPath) 'aCorpusDeclaration'
+				let sharers = try corpusSharers.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was grouped in the pass above")
+				minted.upsert(declPath, value: spelling if sharers.count() < 2 else ordinalMintSpelling(spelling, place: self.ordinalMintPlace(declPath, sharers: sharers)))
+				continue
+			end 'aCorpusDeclaration'
+
+			let sharers = try authorSharers.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was grouped in the pass above")
+			var corpusCount = 0 as ElementIndex
+
+			if let held = try corpusSharers.get(spelling) 'theCorpusSharesTheSpelling'
+				corpusCount = held.count()
+			end 'theCorpusSharesTheSpelling'
+
+			if sharers.count() < 2 and corpusCount == 0 'nothingElseSharesTheSpelling'
+				minted.upsert(declPath, value: spelling)
+				continue
+			end 'nothingElseSharesTheSpelling'
+
+			let corpusOffset = corpusCount if corpusCount > 1 else 0
+			minted.upsert(declPath, value: ordinalMintSpelling(spelling, place: self.ordinalMintPlace(declPath, sharers: sharers) + corpusOffset))
 		end 'eachMint'
 
 		return minted
@@ -3185,11 +3224,35 @@ export type RangedAliasRegistry
 		return maxonTypeTag(alias.underlying) == ValueTypeTag.integer and not alias.domain.isPattern() and alias.low >= ExitCodeAliasLow and alias.low <= alias.high and alias.high <= self.exitCodeHigh
 	end 'fitsTheBuiltinExitCode'
 
+	export function bareNameTookLibraryIdentities(name ByteArray) returns bool
+		if isMintName(name) or not self.identities.contains(name) 'noIdentityWasTaken'
+			return false
+		end 'noIdentityWasTaken'
+
+		let byFile = try self.multiplyDeclared.get(name) otherwise return false
+
+		for (declPath, _) in byFile 'eachDeclaringFile'
+			if self.provenance.declaresInTheCorpus(declPath) 'theLibraryDeclaresItToo'
+				return true
+			end 'theLibraryDeclaresItToo'
+		end 'eachDeclaringFile'
+
+		return false
+	end 'bareNameTookLibraryIdentities'
+
+	function requireNotABareNameThatTookLibraryIdentities(name ByteArray, door String)
+		if self.bareNameTookLibraryIdentities(name) 'aBareNameWithMintedDeclarations'
+			panic("RangedAliasRegistry.{door}: '{String.from(name)}' is declared by a library file and by an author, so every declaration of it was minted and a bare answer belongs to none of them — a caller of this whole-name door holds a declaration's mint, and a bare name that took identities arriving here is a defect in the caller")
+		end 'aBareNameWithMintedDeclarations'
+	end 'requireNotABareNameThatTookLibraryIdentities'
+
 	// ⭐ **THE DECLARATION `byName` HOLDS — no scoping, and NO BUILTIN FALLBACK.** It is deliberately not
 	// `lookup`, whose job is to answer what a READER means and which therefore synthesizes the builtin
 	// `ExitCode` alias for a name no file declares. A contest is a question about DECLARATIONS, so a
 	// synthesized answer here would file a claim for a declaration that appears in no program.
 	export function declarationInAnyFile(name ByteArray) returns DeclaredAlias
+		self.requireNotABareNameThatTookLibraryIdentities(name, door: "declarationInAnyFile")
+
 		if let any = try self.byName.get(name) 'declaredSomewhere'
 			return DeclaredAlias.declared(any)
 		end 'declaredSomewhere'
@@ -3231,6 +3294,7 @@ export type RangedAliasRegistry
 	end 'containsInAnyFile'
 
 	export function declaredAsFloatInAnyFile(name ByteArray) returns bool
+		self.requireNotABareNameThatTookLibraryIdentities(name, door: "declaredAsFloatInAnyFile")
 		let any = try self.byName.get(name) otherwise return false
 		return tagIsFloat(maxonTypeTag(any.underlying)) or self.underlyingContested.contains(name)
 	end 'declaredAsFloatInAnyFile'
@@ -3255,6 +3319,7 @@ export type RangedAliasRegistry
 	// one probe to read. `throws` is `Map.get`'s own channel: a name no file declares is not a ranged
 	// alias, which is the caller's case to handle, not a width to invent.
 	export function storageBytesInEveryFile(name ByteArray) returns ByteOffset throws MapError
+		self.requireNotABareNameThatTookLibraryIdentities(name, door: "storageBytesInEveryFile")
 		return try self.storageBytes.get(name)
 	end 'storageBytesInEveryFile'
 
@@ -3274,11 +3339,12 @@ export type RangedAliasRegistry
 	// this registry at all, so they miss here and the exclusion is structural rather than a rule
 	// someone has to remember to keep. `enum-narrow-storage` forbids packing a 3-case enum into 2 bits.
 	export function packedBitsInEveryFile(name ByteArray) returns ElementPacking
+		self.requireNotABareNameThatTookLibraryIdentities(name, door: "packedBitsInEveryFile")
 		return try self.packedBits.get(name) otherwise ElementPacking.byteStrided
 	end 'packedBitsInEveryFile'
 
 	// ⭐ **DOES ANY FILE DECLARE `name` AS A RANGED ALIAS AT ALL?** The door above's `throws` channel
-	// as a plain bool, for the one reader that wants whether a declaration EXISTS and never what it
+	// as a plain bool, for a reader that wants whether a declaration EXISTS and never what it
 	// says: `ProgramSignatures.elementIsAByteNoFileDeclares` is asking whether an element's slot comes
 	// from `undeclaredNamedElementSlot` — the miss arm — and therefore has no declared range for a raw
 	// byte to fall outside of. It reads the SAME index for the same reason `storageBytesInEveryFile`
@@ -3363,6 +3429,7 @@ export type RangedAliasRegistry
 	// ⚠ Asked only after two aggregate names have already DISAGREED — a rejected program's path — so the walk
 	// over one name's declarations costs every compiling program nothing, exactly as its twin does.
 	export function spansEveryIntInEveryFile(name ByteArray) returns bool throws MapError
+		self.requireNotABareNameThatTookLibraryIdentities(name, door: "spansEveryIntInEveryFile")
 		return try self.everyDeclarationOf(name, satisfies: function(alias) gives rangeSpansEveryInt(alias.low, high: alias.high))
 	end 'spansEveryIntInEveryFile'
 
@@ -3387,6 +3454,7 @@ export type RangedAliasRegistry
 	// what the compiler's own two byte elements are worth is the caller's to state, not this index's
 	// to invent.
 	export function holdsEveryByteInEveryFile(name ByteArray) returns bool throws MapError
+		self.requireNotABareNameThatTookLibraryIdentities(name, door: "holdsEveryByteInEveryFile")
 		return try self.everyDeclarationOf(name, satisfies: function(alias) gives rangeHoldsEveryByte(alias.low, high: alias.high))
 	end 'holdsEveryByteInEveryFile'
 
@@ -6216,7 +6284,9 @@ export type FunctionAliasRegistry
 			return
 		end 'firstDeclarationOfThisName'
 
-		self.byName.upsert(alias.name, value: alias)
+		if bareEntryRole(self.provenance.declaresInTheCorpus(sole.declFilePath.toString()), incomingByTheCorpus: self.provenance.declaresInTheCorpus(alias.declFilePath.toString())) != BareEntryRole.behind 'theBareNameStillDescribesTheCorpus'
+			self.byName.upsert(alias.name, value: alias)
+		end 'theBareNameStillDescribesTheCorpus'
 
 		if self.multiplyDeclared.contains(alias.name) 'alreadyContested'
 			let byFile = try self.multiplyDeclared.get(alias.name) otherwise panic("FunctionAliasRegistry.record: '{String.from(alias.name)}' is in `multiplyDeclared` and its read failed one line after `contains` said it is there")
