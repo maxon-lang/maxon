@@ -13,6 +13,7 @@ export enum LibraryEntryKind
 	parses
 	baseline
 	coreBaseline
+	audit
 end 'LibraryEntryKind'
 
 export enum LibraryEntryClass
@@ -77,23 +78,35 @@ end 'LibraryCacheDirectory'
 
 typealias LibraryDirectoryMap = Map with (String, LibraryCacheDirectory)
 typealias AbsentPackSet = Set with String
-export typealias LibraryEntryKeyArray = Array with HashDigest
+typealias LibraryEntryKeyArray = Array with HashDigest
 
 // A lineage is one compiler path and target, so `maxon.previous`, retired images and temporary
 // compilers each start one; without this bound they accumulate forever.
 let MostLibraryLineages = 16
-export let MostEntriesOfAKind = 4 as ElementIndex
-export let MostParsePacks = 16 as ElementIndex
+let MostEntriesOfAKind = 4 as ElementIndex
+let MostParsePacks = 16 as ElementIndex
 
-module type HeldBaseline
+type HeldBaseline implements ClassedLibraryEntry
 	export let key as HashDigest
 	export let kind as LibraryEntryKind
 	export let entryClass as LibraryEntryClass
 	export var declarations as LibraryDeclarations
 
-	module static function create(key HashDigest, kind LibraryEntryKind, entryClass LibraryEntryClass, declarations LibraryDeclarations) returns HeldBaseline
+	static function create(key HashDigest, kind LibraryEntryKind, entryClass LibraryEntryClass, declarations LibraryDeclarations) returns HeldBaseline
 		return Self{key: key, kind: kind, entryClass: entryClass, declarations: declarations}
 	end 'create'
+
+	function entryClassOf() returns LibraryEntryClass
+		return self.entryClass
+	end 'entryClassOf'
+
+	function isFor(wantedKey HashDigest, wantedKind LibraryEntryKind) returns bool
+		return self.key == wantedKey and self.kind == wantedKind
+	end 'isFor'
+
+	function supersedes(older HeldBaseline) returns bool
+		return older.isFor(self.key, wantedKind: self.kind)
+	end 'supersedes'
 end 'HeldBaseline'
 
 export type LibraryCache
@@ -270,6 +283,7 @@ function libraryEntryPrefix(kind LibraryEntryKind, entryClass LibraryEntryClass)
 		parses gives "parses"
 		baseline gives "baseline"
 		coreBaseline gives "core"
+		audit gives "audit"
 	end 'prefix'
 
 	return match entryClass 'class'
@@ -278,7 +292,7 @@ function libraryEntryPrefix(kind LibraryEntryKind, entryClass LibraryEntryClass)
 	end 'class'
 end 'libraryEntryPrefix'
 
-export function libraryEntryName(kind LibraryEntryKind, entryClass LibraryEntryClass, parts LibraryEntryKeyArray) returns String
+function libraryEntryName(kind LibraryEntryKind, entryClass LibraryEntryClass, parts LibraryEntryKeyArray) returns String
 	var name = libraryEntryPrefix(kind, entryClass: entryClass)
 
 	for part in parts 'eachPart'
@@ -346,7 +360,7 @@ function discardStaleLineages(current FilePath)
 	discardAllButNewestIn(lineages, kept: MostLibraryLineages - 1, admits: function(lineage) gives not lineage.equals(current))
 end 'discardStaleLineages'
 
-module function noteLibraryCacheTrouble(message String)
+function noteLibraryCacheTrouble(message String)
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.compiler).debug("library cache: {message}")
 	end 'debugging'

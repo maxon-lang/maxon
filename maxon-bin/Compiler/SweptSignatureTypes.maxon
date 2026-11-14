@@ -1,12 +1,12 @@
-module function callNamesNothingTheReaderWrote(mint CalleeMint, readerFilePath FilePath) returns bool
+function callNamesNothingTheReaderWrote(mint CalleeMint, readerFilePath FilePath) returns bool
 	return mintSpellsTheWholeCallee(mint) or readerFilePath.isEmpty()
 end 'callNamesNothingTheReaderWrote'
 
-module function sweptSlotNames(candidate SweptDeclaration) returns NameRoster
+function sweptSlotNames(candidate SweptDeclaration) returns NameRoster
 	return callAlignedFrom(candidate.paramNames) if candidate.takesReceiver else candidate.paramNames
 end 'sweptSlotNames'
 
-module function aggregateNameIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns immutable ByteArray
+function aggregateNameIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns immutable ByteArray
 	if tagNamesADeclaredType(tag) 'struct'
 		return try interner.nameOf(nameId) otherwise panic("aggregateNameIn: structRef id {nameId} is not in the interner the caller named — a structRef's name id is minted in it")
 	end 'struct'
@@ -33,7 +33,7 @@ module function aggregateNameIn(signatures ProgramSignatures, interner TypeNameI
 	return signatures.namedIdentityOf(name, readerFilePath: readerFilePath)
 end 'aggregateNameIn'
 
-module function aggregateCannotDecayIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId) returns bool
+function aggregateCannotDecayIn(signatures ProgramSignatures, interner TypeNameInterner, tag ValueTypeTag, nameId TypeNameId) returns bool
 	if tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.string or tag == ValueTypeTag.character 'alwaysARecord'
 		return true
 	end 'alwaysARecord'
@@ -67,7 +67,7 @@ end 'aggregateCannotDecayIn'
 // The answer is deliberately still UNRESOLVED, because its two readers need it in that order: the TYPE wants
 // the erasure `resolveTypes` already performed on the arriving side (`resolvedSlotThroughCallInstance`), and
 // `substitutedSlotIdentity` wants the name that erasure destroys. One crossing, two readers.
-module function slotThroughInstance(signatures ProgramSignatures, interner TypeNameInterner, slotType MaxonType, gid GenericInstanceId) returns MaxonType
+function slotThroughInstance(signatures ProgramSignatures, interner TypeNameInterner, slotType MaxonType, gid GenericInstanceId) returns MaxonType
 	if signatures.slotNamesTheInstancesBase(slotType, interner: interner, gid: gid) 'theDeclarationsSelf'
 		return MaxonType.genericInstance(gid)
 	end 'theDeclarationsSelf'
@@ -82,11 +82,11 @@ module function slotThroughInstance(signatures ProgramSignatures, interner TypeN
 	return index.adoptType(substituted, into: interner)
 end 'slotThroughInstance'
 
-module function paramTagCarriesADeclarationView(paramTag ValueTypeTag) returns bool
+function paramTagCarriesADeclarationView(paramTag ValueTypeTag) returns bool
 	return paramTag == ValueTypeTag.structRef or paramTag == ValueTypeTag.genericInstance
 end 'paramTagCarriesADeclarationView'
 
-module function paramTypeAtInstance(signatures ProgramSignatures, interner TypeNameInterner, gid GenericInstanceId, paramType MaxonType) returns MaxonType
+function paramTypeAtInstance(signatures ProgramSignatures, interner TypeNameInterner, gid GenericInstanceId, paramType MaxonType) returns MaxonType
 	if maxonTypeTag(paramType) == ValueTypeTag.structRef 'maybeSelf'
 		return slotThroughInstance(signatures, interner: interner, slotType: paramType, gid: gid)
 	end 'maybeSelf'
@@ -102,9 +102,9 @@ end 'paramTypeAtInstance'
 // ⭐ A `runtime/` entry answers to no directory's module scope: the compiler reaches one by name out of
 // whatever file wrote the construct that needs it, so no author wrote the call. ⛔ The test is that the
 // name is RESERVED (`isCompilerInternalCallee`), not merely declared in the tier: the tier's other
-// declarations are module-scoped (E3154 is its ceiling), and keyed on the tier alone this would publish
+// declarations are directory-scoped (E3154 is its ceiling), and keyed on the tier alone this would publish
 // every one of them to every file in the program.
-module function declarationMayBeNamed(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, registeredName ByteArray, readerFilePath FilePath, callerName ByteArray) returns bool
+function declarationMayBeNamed(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, registeredName ByteArray, readerFilePath FilePath, callerName ByteArray) returns bool
 	if declFilePath.isEmpty() or signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerFilePath) 'theOrdinaryRule'
 		return true
 	end 'theOrdinaryRule'
@@ -122,7 +122,7 @@ end 'declarationMayBeNamed'
 // canonical ones (`__Tuple2.int.String`) — two names for one type, and a closure offered at a parameter
 // declared with a tuple-slot function alias was refused on the difference. Outermost step, because it
 // must see the name the three repairs and the scope crossing below settled on.
-module function canonicalizeSweptTupleName(signatures ProgramSignatures, interner TypeNameInterner, repaired MaxonType) returns MaxonType
+function canonicalizeSweptTupleName(signatures ProgramSignatures, interner TypeNameInterner, repaired MaxonType) returns MaxonType
 	if maxonTypeTag(repaired) != ValueTypeTag.structRef 'carriesNoStructName'
 		return repaired
 	end 'carriesNoStructName'
@@ -137,7 +137,7 @@ module function canonicalizeSweptTupleName(signatures ProgramSignatures, interne
 	return MaxonType.structRef(interner.intern(canonical))
 end 'canonicalizeSweptTupleName'
 
-module function declaredBrandInFile(signatures ProgramSignatures, spelled immutable ByteArray, declFilePath FilePath) returns immutable ByteArray
+function declaredBrandInFile(signatures ProgramSignatures, spelled immutable ByteArray, declFilePath FilePath) returns immutable ByteArray
 	if spelled.isEmpty() 'nothingSpelled'
 		return EmptySourceText
 	end 'nothingSpelled'

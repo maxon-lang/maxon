@@ -13,7 +13,7 @@
 // it was assigned, which the merge then applies to the file's ops and registry
 // contributions.
 
-export let FileLocalNamesBase = 0 as TypeNameId
+let FileLocalNamesBase = 0 as TypeNameId
 
 export type TypeNameInterner
 	var table as NameTable
@@ -38,7 +38,7 @@ export type TypeNameInterner
 	// An interner over a frozen base: ids below the base's name count resolve there, and the overlay's
 	// own names follow from that count. Its table keeps the empty name every interner starts with as
 	// an unreachable row 0, so a table row `r` holds id `r + idOffset`.
-	module static function overlaying(frozen immutable FrozenNames) returns TypeNameInterner
+	static function overlaying(frozen immutable FrozenNames) returns TypeNameInterner
 		return Self.made(0, base: NameTableBase.over(frozen), baseCount: frozen.table.count() as TypeNameId)
 	end 'overlaying'
 
@@ -50,7 +50,7 @@ export type TypeNameInterner
 		return interner
 	end 'made'
 
-	module function frozenNames() returns FrozenNames
+	function frozenNames() returns FrozenNames
 		let texts = NameRoster.create(self.table.count(), zeroed: false)
 
 		for id in 0 upto self.table.count() 'eachName'
@@ -103,15 +103,15 @@ export type TypeNameInterner
 		return added
 	end 'namesSinceBaseline'
 
-	module function markTable() returns NameId
+	function markTable() returns NameId
 		return table.count()
 	end 'markTable'
 
-	module function baselineTableMark() returns NameId
+	function baselineTableMark() returns NameId
 		return (self.baselineCount - self.idOffset) as NameId
 	end 'baselineTableMark'
 
-	module function rewindTo(mark NameId)
+	function rewindTo(mark NameId)
 		table.truncateTo(mark)
 	end 'rewindTo'
 
@@ -234,11 +234,11 @@ union NameTableBase
 	over(frozen immutable FrozenNames)
 end 'NameTableBase'
 
-module type FrozenNames
-	module let table as NameTable
-	module let texts as NameRoster
+type FrozenNames
+	let table as NameTable
+	let texts as NameRoster
 
-	module static function of(table NameTable, texts NameRoster) returns FrozenNames
+	static function of(table NameTable, texts NameRoster) returns FrozenNames
 		return Self{table: table, texts: texts}
 	end 'of'
 end 'FrozenNames'
@@ -247,7 +247,7 @@ export typealias GenericInstanceIdMap = Map with (GenericInstanceId, GenericInst
 export typealias ObservedNameSet = Set with TypeNameId
 export typealias InterfaceIndexMap = Map with (ElementIndex, ElementIndex)
 export typealias ObservedInterfaceSet = Set with ElementIndex
-export typealias InterfaceIndexArray = Array with ElementIndex
+typealias InterfaceIndexArray = Array with ElementIndex
 
 // ⭐ **ONE RENUMBERING OF A SET OF TYPE IDS, NAMES AND INSTANCES TOGETHER.** A name id at or above `namesBase`
 // moves to `names[id - namesBase]` and one below it stays; an instance id `instances` holds moves to what it
@@ -343,7 +343,7 @@ end 'TypeIdRemap'
 
 // Rewrite the type ids a `MaxonType` carries through a remap. The `typeParameter` token is a digest of source
 // text, the same in every file, and passes through.
-export function remapMaxonType(t MaxonType, remap TypeIdRemap) returns MaxonType
+function remapMaxonType(t MaxonType, remap TypeIdRemap) returns MaxonType
 	return match t 'r'
 		boolean gives t
 		integer gives t
@@ -392,7 +392,7 @@ end 'remapMaxonType'
 // rest on is stated at `remapStructLayoutFieldTypes` (every arm is TAG-PRESERVING), and it is worth exactly
 // once. ⚠ THE COUNT IS THE CALLER COUNT AND NOTHING ELSE CHECKS IT — the `PayloadField` walk below is a
 // LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
-export function remapMaxonTypes(types MaxonTypeArray, remap TypeIdRemap) returns MaxonTypeArray
+function remapMaxonTypes(types MaxonTypeArray, remap TypeIdRemap) returns MaxonTypeArray
 	let remapped = MaxonTypeArray.create(types.count(), zeroed: false)
 
 	for t in types 'each'
@@ -418,7 +418,7 @@ end 'remapMaxonTypes'
 // ⚠ `float` is the one tag whose slot may hold either: a float alias's name rides the column
 // while `MaxonType.float` carries none, so the reconstruction would drop it and the alias's name
 // is remapped directly.
-module function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap TypeIdRemap) returns TypeNameId
+function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap TypeIdRemap) returns TypeNameId
 	if tag == ValueTypeTag.void 'void'
 		return nameId
 	end 'void'
@@ -431,7 +431,7 @@ module function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap Type
 end 'remapValueNameId'
 
 // Rewrite the named-type id a `MaxonReturnType` may carry (its `value` inner).
-export function remapMaxonReturnType(rt MaxonReturnType, remap TypeIdRemap) returns MaxonReturnType
+function remapMaxonReturnType(rt MaxonReturnType, remap TypeIdRemap) returns MaxonReturnType
 	return match rt 'r'
 		void gives MaxonReturnType.void
 		value(inner) gives MaxonReturnType.value(remapMaxonType(inner, remap: remap))
@@ -458,7 +458,7 @@ end 'remapMaxonReturnType'
 // that nothing here states and nothing checks; a single arm that changed a tag would move a field's slot
 // count and every later field in that struct would read one slot short, silently. Handing the column back
 // through the type that owns it is what makes the rebuild unmissable rather than remembered.
-export function remapStructLayoutFieldTypes(layout StructLayout, remap TypeIdRemap)
+function remapStructLayoutFieldTypes(layout StructLayout, remap TypeIdRemap)
 	layout.replaceFieldTypes(remapMaxonTypes(layout.fieldTypes, remap: remap))
 	layout.recordWhereConstraints(renumberedWhereConstraints(layout.whereConstraints, remap: remap))
 	layout.recordConformances(layout.conformsTo, bindings: renumberedConformanceBindings(layout.conformanceBindings, remap: remap))
@@ -473,7 +473,7 @@ end 'remapStructLayoutFieldTypes'
 // registry deeper. Both callers that reconcile a file's enum layouts into a bigger table
 // (`remapArtifact` into `Project`, `ProgramSignatures.foldFile` into the index) go through here, so
 // the two cannot disagree about what a payload's declared type means.
-export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeIdRemap)
+function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeIdRemap)
 	let remappedCases = PayloadFieldArrayArray.create(layout.casePayloads.count(), zeroed: false)
 
 	for casePayloads in layout.casePayloads 'eachCase'

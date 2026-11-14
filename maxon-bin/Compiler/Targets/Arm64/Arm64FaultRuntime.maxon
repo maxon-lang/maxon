@@ -198,7 +198,7 @@ let DarwinSigactionBytes = 16 as StackSize
 // `stack_t`: `ss_sp` (8), `ss_size` (8), `ss_flags` (a C `int`).
 let DarwinSigstackOffSp = 0x00
 let DarwinSigstackOffSize = 0x08
-module let DarwinSigstackOffFlags = 0x10
+let DarwinSigstackOffFlags = 0x10
 
 // `SA_SIGINFO` gives the handler its third argument (the ucontext), which is the only thing that carries
 // the faulting PC. `SA_ONSTACK` switches the kernel to the thread's `__signal_stack_install` stack.
@@ -219,7 +219,7 @@ let DarwinSignalChld = 20
 // ⭐ SIGURG — what an asynchronous preemption is delivered as, and **16 on Darwin where it is 23 on Linux**.
 // Go's choice, for its reason: the default disposition is to ignore it and no program in this tree has a
 // socket urgent-data notion for a stray one to collide with.
-export let DarwinSignalUrg = 16 as Imm32
+let DarwinSignalUrg = 16 as Imm32
 
 // The `oldact`/`oss` out-parameter, declined: neither install reads back a previous disposition.
 let PosixDeclinePrevious = 0
@@ -740,7 +740,7 @@ end 'buildArm64WriteStreamChunk'
 // ⛔ **THE INSTALL IS A `match` PER OS.** Each lane's install reads its own struct layout and reaches the
 // kernel its own way, and an arm that inherited the other's would be a `sigaction` GOT call in an ELF image
 // or a raw `svc` in a Mach-O one.
-export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, recordsCpuFeatures bool, errnoHome LinuxErrnoHome, target Target)
+function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, recordsCpuFeatures bool, errnoHome LinuxErrnoHome, target Target)
 	match target.os 'installLane'
 		macos then chunks.push(buildArm64DarwinRuntimeInitChunk(usesGt, target: target))
 		linux then chunks.push(buildArm64LinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, target: target))

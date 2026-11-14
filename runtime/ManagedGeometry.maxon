@@ -56,7 +56,7 @@ let AllBitsSet = -1 as ElementStride
 // The sign mask is all-ones for a packed stamp and zero otherwise, so anding each arm with the mask and its
 // complement selects one without a branch — seven ALU ops, no memory traffic and no control flow, which is
 // why the byte-strided paths can afford to be routed through it.
-module function __mg_element_bits(es ElementStride) returns MachineWord
+function __mg_element_bits(es ElementStride) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	let signMask = es shr ElementStrideSignShift
@@ -73,7 +73,7 @@ end '__mg_element_bits'
 // total whose top bit is set rounds DOWN to a huge byte count rather than to a negative one — which is what
 // lets a capacity bound above this file compare two extents and get a true answer. An arithmetic shift here
 // hands a caller a negative length and the OS a truncated one.
-module function __mg_bits_to_bytes(totalBits MachineWord) returns MachineWord
+function __mg_bits_to_bytes(totalBits MachineWord) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	return (totalBits + BitPosWithinByteMask) shr BitPosToByteShift
@@ -84,7 +84,7 @@ end '__mg_bits_to_bytes'
 // as exactly `count · es`, because `count · es · 8` bits rounded up to whole bytes IS `count · es`. Every
 // allocation size, every copy length and every zero-fill extent comes through here, so no site is left
 // multiplying a NEGATIVE stride by a count and asking the allocator for a wrapped size.
-module function __mg_element_byte_len(count BufferCoordinate, es ElementStride) returns MachineWord
+function __mg_element_byte_len(count BufferCoordinate, es ElementStride) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	return __mg_bits_to_bytes((count as MachineWord) * __mg_element_bits(es))

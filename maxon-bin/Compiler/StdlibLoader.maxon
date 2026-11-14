@@ -40,7 +40,7 @@
 //     PURE PERMUTATION of the other order's, the same lines in a different order. Nothing computes a
 //     different answer.
 //
-//   • EMISSION ORDER IS DECIDED AT THE MERGE. Function order and which of two same-named FILE-PRIVATE
+//   • EMISSION ORDER IS DECIDED AT THE MERGE. Function order and which of two same-named UNEXPORTED
 //     globals gets the `$1` suffix follow the order the merge folds the files in, and that order is
 //     `Queries.sourceFilesInEmissionOrder`'s key over each file's tier and path, never the walk's.
 //
@@ -93,7 +93,7 @@
 // range contest) — are keyed on the NAME and consult visibility NOWHERE. They fold every declaration in
 // the program, private ones included, which holds for a USER file too.
 // ⇒ **weigh every ranged `typealias` a candidate module declares, `export`ed or not.** A module audited on
-// its `export`s alone would wave a file-private `typealias Byte = int(0 to 1000)` straight through, and it
+// its `export`s alone would wave an unexported `typealias Byte = int(0 to 1000)` straight through, and it
 // would move exactly the same emitted code.
 //
 // ⭐ THE COLLISION RULE FOR ADDING A MODULE TO `stdlib/`. It was written when adding a module here meant
@@ -177,7 +177,7 @@
 //     OWN FREE FUNCTIONS.** That bullet asks one question — *does a BARE BUILTIN claim this
 //     name?* — against `parseCallNamed`'s chain, and the type-name bullet asks the stdlib-vs-stdlib question
 //     for TYPES ("two stdlib modules declaring one type name is a maintainer's bug in `stdlib/`"). Nobody
-//     asked it for free FUNCTIONS, and `export` is not read at the folds that matter, so a file-private one
+//     asked it for free FUNCTIONS, and `export` is not read at the folds that matter, so an unexported one
 //     counts. ⇒ **ask BOTH: against the chain, and against every free function the other stdlib modules
 //     declare.**
 //     ✅ **A FREE-FUNCTION NAME IS DECLARED ONCE PER DIRECTORY.** The free
@@ -214,7 +214,7 @@
 // ⚠ ONE implementation, parameterized by root, rather than one per tier: "register every Maxon source
 // under this directory as library source" is one question, and two copies of the answer would be free to
 // drift on the walk, on the double-load guard and on the memo admission.
-export function loadLibrarySources(project Project) throws CompileError
+function loadLibrarySources(project Project) throws CompileError
 	let usersOwn = try setAsideTheUsersOwnLibraryFiles(project)
 
 	if not try loadLibraryRoot(project, root: project.stdlibDir, usersOwn: usersOwn) 'stdlibContributedNothing'
@@ -390,7 +390,7 @@ end 'setAsideTheUsersOwnLibraryFiles'
 // The type names `stdlib/` declares and the methods its interface extensions add, held on the session's shared file memos and re-read when any file's
 // stamp stops describing it or the build key differs. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
 // same-size edit made in that second (see `SourceFileStamp`).
-module function libraryRoster(project Project) returns LibraryNameRoster throws CompileError
+function libraryRoster(project Project) returns LibraryNameRoster throws CompileError
 	let found = MaxonSourcePathArray.create(0)
 	let buildKey = buildKeyOf(project)
 

@@ -6,32 +6,32 @@ let UsageEntryColumnWidth = 32
 let UsageLineWidth = 100
 
 // Resolved against the process cwd: the runner is invoked from the repo root.
-module let DefaultSpecDir = "specs"
+let DefaultSpecDir = "specs"
 
 // Distinct from 1 (a command ran and reported failures) and from 101 (a leak): a caller reading
 // only the exit code, such as a shell script or CI, must be able to tell "nothing ran" from
 // "something failed". Same number and meaning as `cross-target-gate.sh`'s own refusal. Declared
 // here, where the driver's exit codes are decided, because more than one refusal returns it.
-module let NothingRanExitCode = 2
+let NothingRanExitCode = 2
 
 // Re-emitted on the command lines that relaunch this driver — a pool worker
 // (`SpecWorkerPool.spawnNoWait`), a delegated Linux suite (`SpecTestRunner.spawnGuestSuite`) and the
 // MCP `run_spec_test` tool (`McpTools.specTestArgv`) — and read back by the parser in this file, so
 // the halves cannot drift apart into a hang.
-module let SpecTestCommandName = "spec-test"
+let SpecTestCommandName = "spec-test"
 let StageLibraryTierCommandName = "stage-library-tier"
 let CheckScriptlibCommandName = "check-scriptlib"
 let CheckStdlibCommandName = "check-stdlib"
 
 // Re-emitted by `SpecTestRunner.buildGuestCompiler` and `ScaleTestRunner.compileRung`, and read
 // back by the same parser.
-module let BuildSubcommandName = "build"
+let BuildSubcommandName = "build"
 
 // Constants because `MaxonArgs.parse` matches each word and `maxon help` prints it: a word written
 // twice can be renamed in one place and stay documented under the other.
 let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
 let VerifyRecheckCommandName = "verify-recheck"
-module let LspServerCommandName = "lsp-server"
+let LspServerCommandName = "lsp-server"
 let DapServerCommandName = "dap-server"
 let DevFlag = "--dev"
 let McpHttpFlag = "--http"
@@ -39,18 +39,18 @@ let McpHttpFlagPrefix = "--http="
 let McpIdleTimeoutFlagPrefix = "--idle-timeout="
 let McpMaxSessionsFlagPrefix = "--max-sessions="
 let McpExitOnStdinEofFlag = "--exit-on-stdin-eof"
-module let ScaleTestCommandName = "scale-test"
+let ScaleTestCommandName = "scale-test"
 
-module let OutputFlagPrefix = "--output="
+let OutputFlagPrefix = "--output="
 
 // A spec run with nothing filtered takes a while, and a cold-cache compile spikes well past the
 // usual. Ten minutes gives head room without making a runaway run silent.
-module let CompilerChildTimeoutMs = 600000 as WaitDeadlineMs
+let CompilerChildTimeoutMs = 600000 as WaitDeadlineMs
 
 // `fmt` takes no options: `main` refuses a flag another command takes, and `runFmt` refuses any other
 // `-`-leading argument (`anyOption`). Silently dropping one is destructive — `maxon fmt --check`
 // would find no path, fall back to the current directory and rewrite the whole tree in place.
-module let FmtCommandName = "fmt"
+let FmtCommandName = "fmt"
 
 // `fmt`'s refusals are its own sentences, not the driver's `Usage:` line. Pinned byte-for-byte by
 // `tests/fmt/fixtures/flag-refused`, `flag-refused-no-path` and `two-paths-refused`.
@@ -68,8 +68,7 @@ let DebugCommandName = "debug"
 // not be consumed on its way past nor abort the run before the child is spawned.
 let CoverageCommandName = "coverage"
 
-// `module` because `Run/CacheCommand.maxon` names the command in its own usage line and refusals.
-module let CacheCommandName = "cache"
+let CacheCommandName = "cache"
 
 // Tail-stopping: `profile run <exe> <flags>` forwards everything after the executable to the child.
 let ProfileCommandName = "profile"
@@ -78,37 +77,35 @@ let ProfileCommandName = "profile"
 //
 // Also reached with no word at all: a first argument ending in `MaxonSourceExtension`, which is
 // what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`. See
-// `MaxonArgs.parse`. `module` because `Run/RunCommand.maxon` names the command in its own refusals.
-module let ExecuteCommandName = "execute"
+// `MaxonArgs.parse`.
+let ExecuteCommandName = "execute"
 
-module let RunCommandName = "run"
+let RunCommandName = "run"
 
-module let InitCommandName = "init"
+let InitCommandName = "init"
 
-module let MainSourceFileName = "main.maxon"
+let MainSourceFileName = "main.maxon"
 
-// `module` because `Upgrade/UpgradeCommand.maxon` names both in its own refusals and usage line.
-module let UpgradeCommandName = "upgrade"
-module let DryRunFlag = "--dry-run"
+let UpgradeCommandName = "upgrade"
+let DryRunFlag = "--dry-run"
 
 // Declared here because the reference names it, and `upgrade` overrides it with the root the
 // running compiler sits in.
-module let InstallRootVariable = "MAXON_INSTALL"
+let InstallRootVariable = "MAXON_INSTALL"
 
 // Declared here rather than beside the cache because the reference prints it too: a variable a
 // reader is told to set must be the one the code consults.
-module let RunCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let RunCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 
-module let WorkerPersistentFlag = "--worker-persistent"
+let WorkerPersistentFlag = "--worker-persistent"
 
-module let WorkerRunDirFlagPrefix = "--run-dir="
+let WorkerRunDirFlagPrefix = "--run-dir="
 
-module let RelayedFlag = "--relayed"
+let RelayedFlag = "--relayed"
 
-module let FilterFlagPrefix = "--filter="
+let FilterFlagPrefix = "--filter="
 
-// `module` because `SpecTestRunner.pinComparedRun` names this flag as the remedy.
-module let UpdateRequiredFlag = "--update-required"
+let UpdateRequiredFlag = "--update-required"
 
 let BatchFlagPrefix = "--batch="
 let BatchOnValue = "on"
@@ -122,20 +119,19 @@ let BatchOffValue = "off"
 //
 // Re-emitted to every worker: a worker that never heard the flag would answer for tests nobody
 // counted.
-module let NetworkFlag = "--network"
+let NetworkFlag = "--network"
 
 // Re-emitted: a cross-target spec run forwards it to every worker (`SpecWorkerPool.spawnNoWait`),
 // and the parser reads it back through this constant.
-module let TargetFlagPrefix = "--target="
+let TargetFlagPrefix = "--target="
 
-// `module` because the guest delegation forwards a pool size the caller typed
-// (`SpecTestRunner.spawnGuestSuite`), and a spelling this parser does not read back is silently
-// refused.
-module let WorkersFlagPrefix = "--workers="
+// The guest delegation forwards a pool size the caller typed (`SpecTestRunner.spawnGuestSuite`), and a
+// spelling this parser does not read back is silently refused.
+let WorkersFlagPrefix = "--workers="
 
 let ShardFlagPrefix = "--shard="
 
-module let LogFlagPrefix = "--log="
+let LogFlagPrefix = "--log="
 let DetailLoggingName = "detail logging"
 
 // The selection half of every `spec-test` command line the compiler builds: the two re-emitters
@@ -144,7 +140,7 @@ let DetailLoggingName = "detail logging"
 //
 // A re-emitter passes the resolved directory, never a default the far side would re-derive from its
 // own working directory. Each flag is emitted only when set.
-module function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, mode SpecRunMode, includeNetwork bool) returns StringArray
+function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, mode SpecRunMode, includeNetwork bool) returns StringArray
 	let argv = StringArray.create(0)
 	argv.push(specDir)
 
@@ -173,8 +169,8 @@ end 'specSelectionArgv'
 
 // Matched by `MaxonArgs.parse`, the one reader of this driver's command line: a second parser would
 // silently swallow a flag the first understood.
-module let TestListFlag = "--list"
-module let TestBuildFlag = "--build"
+let TestListFlag = "--list"
+let TestBuildFlag = "--build"
 let TestJsonFlag = "--json"
 let TestNoTimingFlag = "--no-timing"
 let TestIsolateFlag = "--isolate"
@@ -186,7 +182,7 @@ let TestColorFlagPrefix = "--color="
 // Failures allowed before the run stops CLAIMING work, when `--bail` is given with no count.
 let DefaultBailAfter = 1
 
-module let EmitIrFlag = "--emit-ir"
+let EmitIrFlag = "--emit-ir"
 
 // Opt-in per build: without it the trace calls are not emitted at all rather than branched over at
 // run time (see `GtRuntime.GtTraceEmitName`).
@@ -205,32 +201,31 @@ let AllocationsByTagFlagPrefix = "--allocations-by-tag="
 // byte-identical either way, gated by `tests/debug/byte-identical-debug-info.maxtest`.
 //
 // Only `build` acts on it; every other command keeps the compiler's own default (off).
-module let NoDebugInfoFlag = "--no-debug-info"
+let NoDebugInfoFlag = "--no-debug-info"
 
-module let RebuildFlag = "--rebuild"
+let RebuildFlag = "--rebuild"
 
 let CompiledReportPrefix = "Compiled -> "
 let UpToDateReportPrefix = "Up to date -> "
 let NoBuildRecordReason = "no build record can be kept"
 
-module let DumpInfoOption = "--dump-info"
-module let SymbolizeOption = "--symbolize"
-module let BatchOption = "--batch"
-module let CommandsOptionPrefix = "--commands="
-module let CompleteOptionPrefix = "--complete="
-module let StopTimeoutOptionPrefix = "--stop-timeout="
-module let TargetEnvOptionPrefix = "--target-env="
-module let ClassifyOptionPrefix = "--classify="
-module let ClassifyArm64CpuPrefix = "arm64:"
-module let DebugTraceOption = "--trace"
-module let DefaultStopTimeoutSeconds = 10.0 as TargetSeconds
-module let MillisecondsPerSecond = 1000
+let DumpInfoOption = "--dump-info"
+let SymbolizeOption = "--symbolize"
+let BatchOption = "--batch"
+let CommandsOptionPrefix = "--commands="
+let CompleteOptionPrefix = "--complete="
+let StopTimeoutOptionPrefix = "--stop-timeout="
+let TargetEnvOptionPrefix = "--target-env="
+let ClassifyOptionPrefix = "--classify="
+let ClassifyArm64CpuPrefix = "arm64:"
+let DebugTraceOption = "--trace"
+let DefaultStopTimeoutSeconds = 10.0 as TargetSeconds
+let MillisecondsPerSecond = 1000
 
 // Changes the emitted code, so it is a separate build from the one you ship. It requires the
 // sidecar: a counter is an anonymous index and what it counts lives in the `.mxdbg` coverage-point
-// table, so a build without it is refused (`refusedBuildOptions`). `module` because
-// `Debug/CoverageCommand.maxon`'s banner names the flag.
-module let CoverageFlag = "--coverage"
+// table, so a build without it is refused (`refusedBuildOptions`).
+let CoverageFlag = "--coverage"
 
 // Assembled from the flag names, so a rename cannot leave the sentence naming a flag that no longer
 // exists.
@@ -244,34 +239,32 @@ end 'coverageNeedsDebugInfoMessage'
 // build, so a build that does not ask is unchanged.
 let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
-// One leading dash makes an argument an option. `module` because `runCoverage`'s own tail parse
-// asks it too.
-module let OptionPrefix = "-"
+// One leading dash makes an argument an option.
+let OptionPrefix = "-"
 
 // A command rather than a flag, so `maxon` with no arguments lists it with every other command.
 let HelpCommandName = "help"
 
 let VersionCommandName = "version"
 
-// `module` because `ScaleTestRunner.compileRung` spawns one build per rung with it.
-module let MetricsFlagPrefix = "--metrics="
+let MetricsFlagPrefix = "--metrics="
 
 // The value may contain `=` and the name may not, so the split is at the first one: a description
 // or a URL needs it, and a mangled value would be found only by reading the emitted binary.
 let DefineFlagPrefix = "--define="
-module let DefineNameValueSeparator = "="
+let DefineNameValueSeparator = "="
 
-module let RungsFlagPrefix = "--rungs="
-module let RepeatFlagPrefix = "--repeat="
-module let NoteFlagPrefix = "--note="
-module let ResultJsonFlagPrefix = "--result-json="
-module let EmitCorpusFlagPrefix = "--emit-corpus="
+let RungsFlagPrefix = "--rungs="
+let RepeatFlagPrefix = "--repeat="
+let NoteFlagPrefix = "--note="
+let ResultJsonFlagPrefix = "--result-json="
+let EmitCorpusFlagPrefix = "--emit-corpus="
 
 // Comma, like the `<!-- unsupported-targets: … -->` marker: one separator for every list this
 // project reads.
 let RuntimeNameSeparator = ","
 
-module enum DefinePairError implements Error
+enum DefinePairError implements Error
 	noSeparator
 end 'DefinePairError'
 
@@ -280,7 +273,7 @@ end 'DefinePairError'
 //
 // The value is every piece after the first, rejoined: `Url=https://x/?a=b` splits into four pieces.
 // Slicing at a byte offset is not simpler, because a `String` index is a grapheme cursor.
-module function defineFromPair(pair String) returns Define throws DefinePairError
+function defineFromPair(pair String) returns Define throws DefinePairError
 	let cut = pair.split(DefineNameValueSeparator)
 
 	if cut.count() < 2 'noValueGiven'
@@ -359,10 +352,10 @@ function main() returns ExitCode
 	end 'cmd'
 end 'main'
 
-module let SolePositionalIndex = 0 as ElementIndex
+let SolePositionalIndex = 0 as ElementIndex
 let FirstWordCount = 1 as ElementIndex
 
-module function optionValueOf(arg String) returns String
+function optionValueOf(arg String) returns String
 	return try CommandLine.optionValue(arg) otherwise panic("optionValueOf: '{arg}' was matched by a prefix ending in '=', so it carries one")
 end 'optionValueOf'
 
@@ -398,13 +391,13 @@ function commandReadsEveryWord(command MaxonCommand) returns bool
 	end 'whichCommand'
 end 'commandReadsEveryWord'
 
-module enum TargetFlagError implements Error
+enum TargetFlagError implements Error
 	unrecognized
 end 'TargetFlagError'
 
 // One reader for every command that takes `--target`, so none can drift on what no `--target`
 // means. An unrecognized spelling is reported here, so a caller only has to stop.
-module function commandLineTarget(stated StatedText) returns Target throws TargetFlagError
+function commandLineTarget(stated StatedText) returns Target throws TargetFlagError
 	let spec = try stated.text() otherwise return detectHostTarget()
 
 	match resolveTarget(spec, among: supportedTargets()) 'targetSel'
@@ -485,7 +478,7 @@ end 'statedOrDefaultOutput'
 
 // A field the description states and this cannot use is an error, never a default: a guess is how a
 // build compiles the wrong thing while reporting success.
-module function buildFromManifestOutput(described String, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
+function buildFromManifestOutput(described String, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
 	let voice = buildVoice(args)
 
 	return buildResolved(resolveDescription(described, manifest: manifest, base: base, depth: depth, voice: voice), args: args, voice: voice)
@@ -590,7 +583,7 @@ function invocationArguments() returns StringArray
 	return try words.slice(1, endIndex: words.count()) otherwise panic("invocationArguments: this process was dispatched on the command word after its program name, so both are present")
 end 'invocationArguments'
 
-module function reportEntryRosterError(e EntryRosterError, sink DiagnosticSink = DiagnosticSink.printing())
+function reportEntryRosterError(e EntryRosterError, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'why'
 		unreadable(driverFile) then reportCompileError(CompileError.readError(driverFile), sink: sink)
 		unlexable(diagnostic) then sink.emit(diagnostic.render())
@@ -1283,11 +1276,11 @@ end 'refusedFmtWalk'
 
 typealias FormattedFileCount = int(0 to u64.max)
 
-module let ListSeparator = ", "
+let ListSeparator = ", "
 let FinalListSeparator = " and "
 
 // A free function because the library carries no `String.join`.
-module function joinedWith(values StringArray, separator String) returns String
+function joinedWith(values StringArray, separator String) returns String
 	let out = StringBuilder.create()
 	var first = true
 
@@ -1303,7 +1296,7 @@ module function joinedWith(values StringArray, separator String) returns String
 	return out.build()
 end 'joinedWith'
 
-module function backQuoted(words StringArray) returns StringArray
+function backQuoted(words StringArray) returns StringArray
 	let quoted = StringArray.create(words.count(), zeroed: false)
 
 	for word in words 'eachWord'
@@ -1442,8 +1435,8 @@ end 'specDirSpelling'
 // True when it refused, having printed why. A command reading at most `allowed` positionals refuses
 // the next rather than obeying the first and dropping the rest: that is a command line the driver
 // only partly understood. `allowed` is a count because some commands read none, and for them the
-// first positional is already the typo. `module` for `Testing/ScaleTestRunner`.
-module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
+// first positional is already the typo.
+function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
 	if args.paths.count() <= allowed as Count 'withinBudget'
 		return false
 	end 'withinBudget'
@@ -1454,7 +1447,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
 	return true
 end 'refusedPositionalBeyond'
 
-module typealias PositionalCount = int(0 to 2) implements ElementIndex
+typealias PositionalCount = int(0 to 2) implements ElementIndex
 
 // A command's streams belong to its subject: at the default INFO level every compile announces the
 // bytes it wrote, which is noise on `test`'s fixture-compared stdout, on `run`'s program streams,
@@ -1466,7 +1459,7 @@ module typealias PositionalCount = int(0 to 2) implements ElementIndex
 //
 // It answers the level it found, so a caller quieting ONE compile of several can put that level
 // back and let the rest be heard.
-module function quietTheBuildChatter(logOverridden bool) returns LogLevel
+function quietTheBuildChatter(logOverridden bool) returns LogLevel
 	let inForce = Log.level()
 
 	if logOverridden 'theCallerAskedForLogging'
@@ -1477,21 +1470,20 @@ module function quietTheBuildChatter(logOverridden bool) returns LogLevel
 	return inForce
 end 'quietTheBuildChatter'
 
-module let OwnFailureExit = 1 as ExitCode
-module let SucceededExit = 0 as ExitCode
+let OwnFailureExit = 1 as ExitCode
+let SucceededExit = 0 as ExitCode
 
-module function exitSucceeded(code ExitCode) returns bool
+function exitSucceeded(code ExitCode) returns bool
 	return code == SucceededExit
 end 'exitSucceeded'
 
 typealias SignalNumber = int(0 to u32.max)
 
 // The child's stdout, stderr and exit code are the command's own (`run`'s program, `upgrade`'s
-// install script). `module` so every command that forwards to a child shares one spawn
-// configuration.
+// install script).
 //
 // No deadline: it would kill a long-running child the caller launched deliberately.
-module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory WorkingDirectory, speaker String) returns ExitCode
+function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory WorkingDirectory, speaker String) returns ExitCode
 	let config = Configuration.create(executable)
 	config.arguments = arguments
 	config.environment = environment
@@ -1568,7 +1560,7 @@ end 'reportResults'
 // A SKIP prints no reason: E3104's diagnostic names a scratch path and spans lines, so the stderr
 // census prints it once per case. A NOTRUN prints none because every case on such a lane shares one
 // reason, stated once in the trailer.
-module function verdictLine(outcome TestOutcome, label String) returns String
+function verdictLine(outcome TestOutcome, label String) returns String
 	let token = outcome.token().rawValue
 
 	return match outcome 'verdict'
@@ -1670,7 +1662,7 @@ end 'commandWordsOf'
 // arm is silent because nobody is waiting for the answer of a check whose `CompileInterest` lapsed.
 //
 // `DiagnosticSink` terminates each line, so no arm carries its own newline.
-module function reportCompileError(e CompileError, sink DiagnosticSink = DiagnosticSink.printing())
+function reportCompileError(e CompileError, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'report'
 		nestedProjectFile(outer, nested) then sink.emit(nestedProjectFileDiagnostic(outer, nested: nested).render())
 		compileError or
@@ -1694,7 +1686,7 @@ module function reportCompileError(e CompileError, sink DiagnosticSink = Diagnos
 	end 'report'
 end 'reportCompileError'
 
-module function driverErrorSentence(e CompileError) returns String
+function driverErrorSentence(e CompileError) returns String
 	return match e 'sentence'
 		fileNotFound(p) gives "file not found: {p}"
 		directoryNotFound(p) gives "directory not found: {p}"
@@ -2266,7 +2258,7 @@ end 'printOverview'
 // ASCII only, because a Windows console renders stdout in its own code page.
 let EarlyPreviewNotice = "warning: Maxon is an early preview. The language, standard library and tools may change incompatibly between releases."
 
-module function printVersionHeader()
+function printVersionHeader()
 	print("{versionLine()}\n{EarlyPreviewNotice}\n")
 end 'printVersionHeader'
 
@@ -2420,7 +2412,6 @@ export typealias SourcePathSpellingArray = Array with String
 
 export typealias FilterPatternArray = Array with String
 
-// `module` because `Testing/ScaleTestRunner` takes the parsed args.
 export type MaxonArgs
 	export var command as MaxonCommand
 
@@ -2549,12 +2540,12 @@ export type MaxonArgs
 	// The defaults live here rather than in `parse`'s locals: `parse` accumulates into a record (see
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
-	module static function create() returns MaxonArgs
+	static function create() returns MaxonArgs
 		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
-	module function anyOption() returns String throws AbsentError
+	function anyOption() returns String throws AbsentError
 		return try self.optionsSeen.get(0) otherwise throw AbsentError.absent
 	end 'anyOption'
 
@@ -2572,7 +2563,7 @@ export type MaxonArgs
 		return SpecRunMode.create(self.updateRequired, batchRuns: self.batchRuns, shard: self.shard)
 	end 'specRunMode'
 
-	module function positionalAt(index ElementIndex) returns String throws AbsentError
+	function positionalAt(index ElementIndex) returns String throws AbsentError
 		return try self.paths.get(index) otherwise throw AbsentError.absent
 	end 'positionalAt'
 
@@ -2628,7 +2619,7 @@ export type MaxonArgs
 	// positional (see `laterCommandWordIsAPath`). An unrecognized `-`-leading argument is recorded as
 	// a bad option, never absorbed as a positional: `spec-test --mm-trace` must not look for a spec
 	// directory named `--mm-trace`.
-	module static function parse() returns MaxonArgs
+	static function parse() returns MaxonArgs
 		// The working set is one record, not a `var` per flag: a `var` assigned in one arm becomes a phi
 		// on the loop header, and one register per flag exceeds x64's GPRs (E5001) — a refusal, not a
 		// slowdown. A field store keeps the loop carrying one value, so adding a flag means adding a

@@ -287,7 +287,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// the live range and zeroes the slot), the length is republished over the zeroed slot, and the swap back
 	/// returns it to `at`. It is composed from existing buffer members because this library is also compiled by
 	/// the released compiler that bootstraps the tree, which serves no member it has never heard of.
-	module function clearSlot(at ElementIndex) throws ArrayError
+	function clearSlot(at ElementIndex) throws ArrayError
 		if isOutsideLiveRange(at) 'outsideLiveRange'
 			throw ArrayError.indexOutOfBounds
 		end 'outsideLiveRange'
@@ -436,7 +436,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// one, whose slot holds exactly one reference — taking and releasing that reference is emitted
 	/// by the compiler at each store, and a bulk runtime loop cannot respell it. The per-element
 	/// loop below is the arm it declined, and it is the whole of what these two do.
-	module function fillPublished(start ElementIndex, count ElementIndex, value Element)
+	function fillPublished(start ElementIndex, count ElementIndex, value Element)
 		let applied = try managed.fill(start, count: count, value: value) otherwise 'fillErr'
 			panic("Array.fillPublished: fill OOB — the window is inside the length the caller just published")
 		end 'fillErr'

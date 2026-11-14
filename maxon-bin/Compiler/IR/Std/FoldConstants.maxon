@@ -104,7 +104,7 @@
 // `GtRuntime`, the synthesized cascades) contain no `const <op> const` at all — every arithmetic op
 // they emit has at least one live operand. A second run there would walk every appended function to
 // fold nothing.
-module function foldConstantsHeadline(funcCount ElementIndex) returns String
+function foldConstantsHeadline(funcCount ElementIndex) returns String
 	return "foldConstants: {funcCount} function(s)"
 end 'foldConstantsHeadline'
 
@@ -135,7 +135,7 @@ end 'foldConstantsHeadline'
 // Iterating this walk instead would trade a LINEAR pass for
 // one whose worst case is O(blocks x ops), for two ops.
 // Fold one function, in place. `branch` is the caller's terminator record, refilled per block.
-module function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands)
+function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands)
 	let opIndices = module.liveOpIndices(func)
 	let constMap = ConstValueMap.create()
 
@@ -373,7 +373,7 @@ end 'evaluateCmp'
 // answer is FALSE (`comparison-operators/compared-against-the-unsigned-extreme` pins it). `foldIntCompare`
 // speaks the signed reading only, and where one folder cannot speak for the operation, the operation
 // keeps its instruction — the rule this pass applies to `div`/`mod` and to floats as well.
-module function evaluateIntCompare(pred StdCmpPred, lhs FullRangeInt, rhs FullRangeInt, operandType StdType) returns FoldedInt
+function evaluateIntCompare(pred StdCmpPred, lhs FullRangeInt, rhs FullRangeInt, operandType StdType) returns FoldedInt
 	if stdTypeIsUnsigned(operandType) 'unsignedReading'
 		return FoldedInt.notFoldable
 	end 'unsignedReading'
@@ -585,7 +585,7 @@ let FoldedFloatType = StdType.f64
 // immediate against, and asking it once covers both signs instead of adding a second negative-only
 // test that would have to be kept in step. Declining costs one unfolded shift inside a cascade that is
 // already six ops.
-module function evaluateIntBinOp(opcode StdBinOpcode, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
+function evaluateIntBinOp(opcode StdBinOpcode, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
 	// ⚠ **THE HIGH MULTIPLY IS DECLINED BEFORE THE BRIDGE, NOT INSIDE IT.** Two independent facts
 	// say no and it needs only the first: its answer is bits 64..127 of a 128-bit product, which a
 	// 64-bit `FullRangeInt` cannot hold, so this pass has no arithmetic for it; and it has no `MaxonBinOp`
@@ -682,24 +682,24 @@ function foldCondBranch(module StdModule, block IrBlock, termIdx ElementIndex, c
 end 'foldCondBranch'
 
 // One compare a pass decided, and what it decided.
-module type CompareDecision
+type CompareDecision
 	export let opIdx as ElementIndex
 	export var resultId as ValueId
 	export var holds as bool
 
-	module static function create(opIdx ElementIndex, resultId ValueId, holds bool) returns CompareDecision
+	static function create(opIdx ElementIndex, resultId ValueId, holds bool) returns CompareDecision
 		return Self{opIdx: opIdx, resultId: resultId, holds: holds}
 	end 'create'
 end 'CompareDecision'
 
-module typealias CompareDecisionArray = Array with CompareDecision
+typealias CompareDecisionArray = Array with CompareDecision
 
 // The rewrite every deciding pass shares: each decided compare becomes the `const` it evaluates to, at
 // its own index and keeping its result id, so every reader — the branch, a second branch, a stored bool
 // — reads the constant; the branches on those constants fold as `foldConstantBranches` folds them; the
 // arm a fold dropped goes with everything only it reached; the constants nothing reads any more are
 // retired. Answers how many branches folded.
-module function applyCompareDecisions(module StdModule, func IrFunction, decisions CompareDecisionArray, branch StdBranchOperands, def StdFoldableDef) returns TallyCount
+function applyCompareDecisions(module StdModule, func IrFunction, decisions CompareDecisionArray, branch StdBranchOperands, def StdFoldableDef) returns TallyCount
 	let constMap = ConstValueMap.create()
 
 	for decision in decisions 'eachDecision'
@@ -722,7 +722,7 @@ end 'applyCompareDecisions'
 // The i1 payload a FALSE condition carries. Named because it is a fact about the bool encoding
 // (`TypeRules.boolPayload`) rather than a number that happens to appear here. `threadConstantBranches`
 // reads a folded verdict against it for the same decision.
-module let ConditionIsFalse = 0 as FullRangeInt
+let ConditionIsFalse = 0 as FullRangeInt
 
 // `edges` without the ONE edge to `droppedTarget` — the arm the fold made unreachable from this block.
 //
@@ -734,7 +734,7 @@ module let ConditionIsFalse = 0 as FullRangeInt
 // successor that CARRIES PHIS, so the not-taken target has either one edge here or none (the same-target
 // case, where it could have two, is refused by `foldCondBranch` and by `threadConstantBranches` alike,
 // which is the other pass that turns a `condBranch` into a `branch` and drops the arm's edge through here).
-module function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
+function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
 	let kept = BranchEdgeArray.create(edges.count(), zeroed: false)
 	var alreadyDropped = false
 
@@ -777,7 +777,7 @@ end 'edgesWithoutTarget'
 // continuation by splicing in a callee that never returns.
 //
 // Survivors keep their relative order, so nothing that depends on layout moves.
-module function dropUnreachableBlocks(module StdModule, func IrFunction)
+function dropUnreachableBlocks(module StdModule, func IrFunction)
 	let blockCount = func.blockRefs.count()
 
 	if blockCount == 0 'noBlocks'
@@ -801,7 +801,7 @@ end 'dropUnreachableBlocks'
 // Reachability is over the edges the terminator ops name, exactly as `buildStdSuccessorGraph` reads
 // them: a block without a terminator op is a `Terminator.dead` one, which no execution leaves, so
 // the block minted after it is reachable only through its own predecessors.
-module function reachableBlockPositions(module StdModule, func IrFunction) returns FixedBoolArray
+function reachableBlockPositions(module StdModule, func IrFunction) returns FixedBoolArray
 	let blockCount = func.blockRefs.count()
 	let byId = module.blockIndexById(func)
 	let reachable = FixedBoolArray.create(blockCount)

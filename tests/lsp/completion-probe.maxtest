@@ -21,11 +21,11 @@ end 'completionLabelsAfterDot'
 
 // The labels a position offered. `after` is the cursor's own context, so a red says which request never
 // completed rather than only that one did not.
-export function completionLabelsFor(source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
+function completionLabelsFor(source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
 	return try completionLabelsForAtUri(CompletionUri, source: source, line: line, character: character, after: after)
 end 'completionLabelsFor'
 
-export function completionLabelsForAtUri(uri String, source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
+function completionLabelsForAtUri(uri String, source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
 	let client = LspClient.start()
 
 	if let labels = try completionLabelsAfterDot(client, uri: uri, source: source, line: line, character: character) 'offered'
@@ -39,13 +39,13 @@ export function completionLabelsForAtUri(uri String, source String, line LspCoor
 	panic("completionLabelsForAtUri: `abandonedSession` always throws, so this line is unreachable")
 end 'completionLabelsForAtUri'
 
-export function assertCompletionOffersEach(labels StringArray, wanted StringArray, after String) throws TestFailure
+function assertCompletionOffersEach(labels StringArray, wanted StringArray, after String) throws TestFailure
 	for name in wanted 'eachWanted'
 		try Expect.isTrue(completionOffersLabel(labels, label: name), message: "completion after {after} did not offer `{name}`. Each name asserted here is declared by the type the cursor sits on, so a list missing one is a list an editor would mislead with.")
 	end 'eachWanted'
 end 'assertCompletionOffersEach'
 
-export function completionOffersLabel(labels StringArray, label String) returns bool
+function completionOffersLabel(labels StringArray, label String) returns bool
 	for offered in labels 'eachLabel'
 		if offered == label 'hit'
 			return true

@@ -1,6 +1,6 @@
 typealias FuzzyDistance = int(0 to u32.max)
 
-export union FuzzyMatch
+union FuzzyMatch
 	one(name String)
 	several(candidates StringArray)
 	none(suggestion StatedText)
@@ -11,7 +11,7 @@ let NameSeparator = "."
 let MaxSuggestionDistance = 2 as FuzzyDistance
 let SuggestionLengthDivisor = 2
 
-export function fuzzyResolve(spelling String, pool StringArray) returns FuzzyMatch
+function fuzzyResolve(spelling String, pool StringArray) returns FuzzyMatch
 	let exact = namesMatching(spelling, pool: pool, rung: FuzzyRung.whole)
 
 	if exact.count() > 0 'anExactName'
@@ -39,7 +39,7 @@ export function fuzzyResolve(spelling String, pool StringArray) returns FuzzyMat
 	return FuzzyMatch.none(nearestName(spelling, pool: pool))
 end 'fuzzyResolve'
 
-export function completionsFor(partial String, pool StringArray) returns StringArray
+function completionsFor(partial String, pool StringArray) returns StringArray
 	let offered = StringArray.create(0)
 	let seen = DebugNameSet.create()
 
@@ -55,7 +55,7 @@ export function completionsFor(partial String, pool StringArray) returns StringA
 	return offered
 end 'completionsFor'
 
-export function nearestName(spelling String, pool StringArray) returns StatedText
+function nearestName(spelling String, pool StringArray) returns StatedText
 	var best = StatedText.unstated
 	var bestDistance = MaxSuggestionDistance + 1
 

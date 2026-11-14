@@ -1,6 +1,6 @@
 // One walk over a function's body ops that lists every one-argument retain door call. The counts
 // let a pass skip a function that has no retain to move or no release to pair.
-module type RetainSite
+type RetainSite
 	export let blockRef as ElementIndex
 	export let blockId as BlockId
 	export let position as ElementIndex
@@ -14,19 +14,19 @@ module type RetainSite
 	end 'create'
 end 'RetainSite'
 
-module typealias RetainSiteArray = Array with RetainSite
+typealias RetainSiteArray = Array with RetainSite
 
-module type RetainCensus
+type RetainCensus
 	export var sites as RetainSiteArray
 	export var fusableReleases as ElementIndex
 	export var handsBackSites as ElementIndex
 	var call as StdCallOperands
 
-	module static function create() returns Self
+	static function create() returns Self
 		return Self{sites: RetainSiteArray.create(0), fusableReleases: 0, handsBackSites: 0, call: StdCallOperands.create()}
 	end 'create'
 
-	module function fill(module StdModule, func IrFunction)
+	function fill(module StdModule, func IrFunction)
 		self.sites.clear()
 		self.fusableReleases = 0
 		self.handsBackSites = 0
@@ -66,6 +66,6 @@ module type RetainCensus
 	end 'note'
 end 'RetainCensus'
 
-module function stdOpLeavesTheCountAlone(op StdOp) returns bool
+function stdOpLeavesTheCountAlone(op StdOp) returns bool
 	return op.rawValue.isPure and op.rawValue.role == OpRole.plain
 end 'stdOpLeavesTheCountAlone'

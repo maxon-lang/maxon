@@ -26,7 +26,7 @@ public enum TlsContentType
 	handshake = 22
 	applicationData = 23
 
-	module function isProtectable() returns bool
+	function isProtectable() returns bool
 		return match self 'type'
 			alert or
 			handshake or
@@ -36,14 +36,14 @@ public enum TlsContentType
 	end 'isProtectable'
 end 'TlsContentType'
 
-module interface TlsRecordOpener
+interface TlsRecordOpener
 	function open(mutable self, record ByteArray) returns TlsOpenedRecord throws TlsRecordError
 end 'TlsRecordOpener'
 
-module typealias TlsRecordVersion = int(0 to u16.max) implements TlsWireValue
+typealias TlsRecordVersion = int(0 to u16.max) implements TlsWireValue
 
 public let tlsRecordHeaderBytes = 5
-module let tlsRecordVersion = 0x0303
+let tlsRecordVersion = 0x0303
 public let tlsRecordTypeOffset = 0
 public let tlsRecordVersionOffset = 1
 public let tlsRecordLengthOffset = 3
@@ -51,7 +51,7 @@ public let tlsRecordFieldBytes = 2
 let tlsTagBytes = 16
 let tlsExplicitNonceBytes = 8
 let tlsSequenceBytes = 8
-module let tlsMaxPlaintextBytes = 16384
+let tlsMaxPlaintextBytes = 16384
 let tlsMaxInnerPlaintextBytes = 16385
 let tlsMaxCiphertext13Bytes = 16640
 public let tlsMaxCiphertext12Bytes = 18432
@@ -68,7 +68,7 @@ public type TlsOpenedRecord
 		return storedPlaintext
 	end 'plaintext'
 
-	module static function create(contentType TlsContentType, plaintext ByteArray) returns TlsOpenedRecord
+	static function create(contentType TlsContentType, plaintext ByteArray) returns TlsOpenedRecord
 		return Self{contentType: contentType, storedPlaintext: plaintext}
 	end 'create'
 end 'TlsOpenedRecord'
@@ -336,7 +336,7 @@ function tlsProtectedType(code Byte) returns TlsContentType throws TlsRecordErro
 	return contentType
 end 'tlsProtectedType'
 
-module function tlsRequireFraming(record ByteArray) throws TlsRecordError
+function tlsRequireFraming(record ByteArray) throws TlsRecordError
 	if record.count() < tlsRecordHeaderBytes 'short'
 		throw TlsRecordError.decodeError
 	end 'short'
@@ -348,7 +348,7 @@ module function tlsRequireFraming(record ByteArray) throws TlsRecordError
 	end 'length'
 end 'tlsRequireFraming'
 
-module function tlsRecordHeader(contentType TlsContentType, version TlsRecordVersion, bodyBytes Count) returns ByteArray
+function tlsRecordHeader(contentType TlsContentType, version TlsRecordVersion, bodyBytes Count) returns ByteArray
 	let header = ByteArray.create(0)
 	header.push(contentType.rawValue as Byte)
 	appendOrderedWord(header, word: version as OrderedWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)

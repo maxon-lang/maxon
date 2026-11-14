@@ -3,7 +3,7 @@
 // (specs/type-name-collision.md), and an extension method declared in two files is E3006. The claims
 // come from one front-end pass per case (`DriverWork.claims`); source text is read only to
 // rewrite `main` and to find unused exports. Each case is staged in a directory of its own so
-// its file-private names stay apart, its `main` becomes an exported `__spec_case_<n>`, and a
+// its unmarked names stay apart, its `main` becomes an exported `__spec_case_<n>`, and a
 // generated entry runs the cases its `--select=` list names between BEGIN and END markers that
 // carry each case's exit code, the live green-thread count `Scheduler.quiesce()` reports, and how many
 // processes the case left running, which `Process.endDescendants()` ends and names on framed stderr
@@ -27,7 +27,7 @@
 // run. A failure that belongs to no case (`BatchBuild.unbuildable`: staging, a missing stdlib or
 // runtime, a driver failure; or a spent trial budget) blames nobody: the cases run alone and one
 // run-level `harness error:` line makes the suite exit non-zero.
-module let MinBatchedCases = 2
+let MinBatchedCases = 2
 let MaxBatchCompileAttempts = 4
 let MaxBatchIsolationTrials = 24
 let SplitInHalves = 2
@@ -68,7 +68,7 @@ let AsciiUpperZ = 0x5A
 let AsciiLowerA = 0x61
 let AsciiLowerZ = 0x7A
 let AsciiUnderscore = 0x5F
-let MainSignatureQualifiers = ["export ", "module ", "public ", "async "]
+let MainSignatureQualifiers = ["export ", "public ", "async "]
 
 let CommandLineReader = "CommandLine"
 let ExecutablePathReader = "executablePath"
@@ -81,9 +81,9 @@ let BatchNothingOutstanding = 0
 let FileMacro = "__file__"
 let LineMacro = "__line__"
 let SourceLineBreak = "\n"
-let UnusedExportModifiers = ["export ", "module "]
+let ExportModifier = "export "
 
-module enum SoloReason
+enum SoloReason
 	compileError
 	pinsStderr
 	takesArgs
@@ -104,7 +104,7 @@ module enum SoloReason
 	// and a batch image is not re-signed.
 	drivesOtherProcesses
 
-	// A multi-file program refuses an export nothing uses (E3092, E3094).
+	// A multi-file program refuses an export nothing outside its directory uses (E3092).
 	exportsFromItsFile
 
 	// `__DebugStream.` name ids are numbered across the whole program.
@@ -137,12 +137,12 @@ module enum SoloReason
 	unrecognisedMain
 end 'SoloReason'
 
-module enum MainShape
+enum MainShape
 	returnsExitCode
 	returnsNothing
 end 'MainShape'
 
-module union Placement
+union Placement
 	together(shape MainShape)
 	apart(reason SoloReason)
 end 'Placement'
@@ -279,7 +279,7 @@ end 'usesNetwork'
 
 // The reasons a case runs alone that its spec text states; `claimedPlacementOf` asks the rest of the
 // front end's claims. Together they are the one list of `SoloReason`s.
-module function placementOf(test SpecTest, irAction IrAction) returns Placement
+function placementOf(test SpecTest, irAction IrAction) returns Placement
 	if test.expectation.expectsCompileError() 'compileError'
 		return Placement.apart(SoloReason.compileError)
 	end 'compileError'
@@ -356,26 +356,24 @@ end 'placementOf'
 
 function declaresUnusedExports(source String) returns bool
 	for rawLine in source.split(SourceLineBreak) 'eachLine'
-		for modifier in UnusedExportModifiers 'eachModifier'
-			if rawLine.startsWith(modifier) 'marked'
-				return true
-			end 'marked'
-		end 'eachModifier'
+		if rawLine.startsWith(ExportModifier) 'marked'
+			return true
+		end 'marked'
 	end 'eachLine'
 
 	return false
 end 'declaresUnusedExports'
 
-module typealias ClaimedNameSet = Set with String
+typealias ClaimedNameSet = Set with String
 
-module type BatchClaim
+type BatchClaim
 	export let nominals as StringArray
 	export let aliases as StringArray
 	export let extensionKeys as StringArray
 	export let mentioned as ClaimedNameSet
 	export let libraryExtensionMethods as StringArray
 
-	module static function of(claims SourceClaims) returns BatchClaim
+	static function of(claims SourceClaims) returns BatchClaim
 		let mentioned = ClaimedNameSet.create()
 
 		for name in claims.mentionedNames 'eachMention'
@@ -385,14 +383,14 @@ module type BatchClaim
 		return Self{nominals: claims.declaredNominals, aliases: claims.declaredAliases, extensionKeys: claims.extensionMethodKeys, mentioned: mentioned, libraryExtensionMethods: claims.libraryExtensionMethods}
 	end 'of'
 
-	module function declares(name String) returns bool
+	function declares(name String) returns bool
 		return self.nominals.contains(name) or self.aliases.contains(name)
 	end 'declares'
 
 	// A declared nominal conflicts with any mention of it, since the name is whole-program. A declared
 	// typealias conflicts only with a case that mentions the name without declaring it, which would
 	// read this case's alias in place of the library's; two cases that both declare it may share.
-	module function meansAnotherCasesName(other BatchClaim) returns bool
+	function meansAnotherCasesName(other BatchClaim) returns bool
 		for nominal in self.nominals 'eachNominal'
 			if other.mentioned.contains(nominal) 'otherNamesIt'
 				return true
@@ -408,7 +406,7 @@ module type BatchClaim
 		return false
 	end 'meansAnotherCasesName'
 
-	module function sharesAnExtensionMethodWith(other BatchClaim) returns bool
+	function sharesAnExtensionMethodWith(other BatchClaim) returns bool
 		for key in self.extensionKeys 'eachKey'
 			if other.extensionKeys.contains(key) 'sameKey'
 				return true
@@ -418,7 +416,7 @@ module type BatchClaim
 		return false
 	end 'sharesAnExtensionMethodWith'
 
-	module function exposesItsTypesToExtensionCallsIn(other BatchClaim) returns bool
+	function exposesItsTypesToExtensionCallsIn(other BatchClaim) returns bool
 		for method in self.libraryExtensionMethods 'eachMethod'
 			if other.mentioned.contains(method) 'otherCallsIt'
 				return true
@@ -431,26 +429,26 @@ end 'BatchClaim'
 
 typealias BatchClaimArray = Array with BatchClaim
 
-module type ClaimedMember
+type ClaimedMember
 	export let member as BatchMember
 	export let claim as BatchClaim
 
-	module static function create(member BatchMember, claim BatchClaim) returns ClaimedMember
+	static function create(member BatchMember, claim BatchClaim) returns ClaimedMember
 		return Self{member: member, claim: claim}
 	end 'create'
 end 'ClaimedMember'
 
-module typealias ClaimedMemberArray = Array with ClaimedMember
+typealias ClaimedMemberArray = Array with ClaimedMember
 
-module type BatchGroup
+type BatchGroup
 	export var members as BatchMemberArray
 	var claims as BatchClaimArray
 
-	module static function create() returns BatchGroup
+	static function create() returns BatchGroup
 		return Self{members: BatchMemberArray.create(0), claims: BatchClaimArray.create(0)}
 	end 'create'
 
-	module function admits(claim BatchClaim) returns bool
+	function admits(claim BatchClaim) returns bool
 		for held in self.claims 'eachHeld'
 			if claim.sharesAnExtensionMethodWith(held) or claim.meansAnotherCasesName(held) or held.meansAnotherCasesName(claim) or claim.exposesItsTypesToExtensionCallsIn(held) or held.exposesItsTypesToExtensionCallsIn(claim) 'conflicts'
 				return false
@@ -460,15 +458,15 @@ module type BatchGroup
 		return true
 	end 'admits'
 
-	module function admit(claimed ClaimedMember)
+	function admit(claimed ClaimedMember)
 		self.members.push(claimed.member)
 		self.claims.push(claimed.claim)
 	end 'admit'
 end 'BatchGroup'
 
-module typealias BatchGroupArray = Array with BatchGroup
+typealias BatchGroupArray = Array with BatchGroup
 
-module function partitionedByClaims(candidates ClaimedMemberArray) returns BatchGroupArray
+function partitionedByClaims(candidates ClaimedMemberArray) returns BatchGroupArray
 	let groups = BatchGroupArray.create(0)
 
 	for claimed in candidates 'eachMember'
@@ -494,17 +492,17 @@ module function partitionedByClaims(candidates ClaimedMemberArray) returns Batch
 	return groups
 end 'partitionedByClaims'
 
-module union ClaimAnswer
+union ClaimAnswer
 	answered(claims SourceClaims)
 	refused
 end 'ClaimAnswer'
 
-module union ClaimedPlacement
+union ClaimedPlacement
 	together(claimed ClaimedMember)
 	apart(reason SoloReason)
 end 'ClaimedPlacement'
 
-module function claimedPlacementOf(member BatchMember, answer ClaimAnswer) returns ClaimedPlacement
+function claimedPlacementOf(member BatchMember, answer ClaimAnswer) returns ClaimedPlacement
 	return match answer 'answer'
 		answered(claims) gives claimedPlacementFor(member, claims: claims)
 		refused gives ClaimedPlacement.apart(SoloReason.refusedByTheFrontEnd)
@@ -561,16 +559,16 @@ function namesAny(claims SourceClaims, words StringArray) returns bool
 	return false
 end 'namesAny'
 
-module type BatchMember
+type BatchMember
 	export let testIndex as ElementIndex
 	export let shape as MainShape
 
-	module static function create(testIndex ElementIndex, shape MainShape) returns BatchMember
+	static function create(testIndex ElementIndex, shape MainShape) returns BatchMember
 		return Self{testIndex: testIndex, shape: shape}
 	end 'create'
 end 'BatchMember'
 
-module typealias BatchMemberArray = Array with BatchMember
+typealias BatchMemberArray = Array with BatchMember
 
 function batchCaseName(caseIndex ElementIndex) returns String
 	return "{BatchCaseRunnerPrefix}{caseIndex}"
@@ -680,18 +678,18 @@ function mintedNamesForBatchEntry() returns immutable NameRoster
 	return freeze names
 end 'mintedNamesForBatchEntry'
 
-module type BatchProgram
+type BatchProgram
 	export let exePath as FilePath
 	export var members as BatchMemberArray
 	export let stdlibDir as String
 	export let runtimeDir as String
 	export let writtenFiles as FilePathArray
 
-	module static function create(exePath FilePath, members BatchMemberArray, stdlibDir String, runtimeDir String, writtenFiles FilePathArray) returns BatchProgram
+	static function create(exePath FilePath, members BatchMemberArray, stdlibDir String, runtimeDir String, writtenFiles FilePathArray) returns BatchProgram
 		return Self{exePath: exePath, members: members, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writtenFiles: writtenFiles}
 	end 'create'
 
-	module function allCases() returns TestRunIndexArray
+	function allCases() returns TestRunIndexArray
 		let cases = TestRunIndexArray.create(self.members.count(), zeroed: false)
 
 		for index in 0 upto self.members.count() 'eachMember'
@@ -702,7 +700,7 @@ module type BatchProgram
 	end 'allCases'
 end 'BatchProgram'
 
-module union BatchBuild
+union BatchBuild
 	built(program BatchProgram, ticks CpuTicks)
 	notBuilt(answer CompileAnswer, refused TestRunIndexArray)
 	unbuildable(reason String)
@@ -735,7 +733,7 @@ function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	return build
 end 'stageBatch'
 
-module function batchBuildsWithFreedBoxPoison(tests SpecTestArray, members BatchMemberArray) returns bool
+function batchBuildsWithFreedBoxPoison(tests SpecTestArray, members BatchMemberArray) returns bool
 	var poisons = false
 
 	for (iter, member) in members.withIterator() 'eachMember'
@@ -795,15 +793,15 @@ function batchBuildAfterError(answer CompileAnswer, ordinal ElementIndex, count 
 	end 'verdict'
 end 'batchBuildAfterError'
 
-module type BatchRefusal
+type BatchRefusal
 	export let diagnostics as String
 	export let partners as StringArray
 
-	module static function create(diagnostics String, partners StringArray) returns BatchRefusal
+	static function create(diagnostics String, partners StringArray) returns BatchRefusal
 		return Self{diagnostics: diagnostics, partners: partners}
 	end 'create'
 
-	module function note() returns String
+	function note() returns String
 		if self.partners.isEmpty() 'noPartner'
 			return BatchBreakNote
 		end 'noPartner'
@@ -812,14 +810,14 @@ module type BatchRefusal
 	end 'note'
 end 'BatchRefusal'
 
-module typealias BatchRefusalMap = Map with (ElementIndex, BatchRefusal)
+typealias BatchRefusalMap = Map with (ElementIndex, BatchRefusal)
 
-module type BatchOutcome
+type BatchOutcome
 	export let build as BatchBuild
 	export let refusals as BatchRefusalMap
 	export let harnessErrors as StringArray
 
-	module static function create(build BatchBuild, refusals BatchRefusalMap, harnessErrors StringArray) returns BatchOutcome
+	static function create(build BatchBuild, refusals BatchRefusalMap, harnessErrors StringArray) returns BatchOutcome
 		return Self{build: build, refusals: refusals, harnessErrors: harnessErrors}
 	end 'create'
 end 'BatchOutcome'
@@ -942,7 +940,7 @@ function discardBatchLeftovers(tempDir FilePath, ordinal ElementIndex, exeExtens
 	discardBuild(FilePathArray.create(0), exePath: batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension))
 end 'discardBatchLeftovers'
 
-module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchOutcome
+function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchOutcome
 	var remaining = members.clone()
 	let refusals = BatchRefusalMap.create()
 	var last = BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: "no batch compile was attempted"), refused: TestRunIndexArray.create(0))
@@ -1411,12 +1409,12 @@ union RegionLookup
 	absent
 end 'RegionLookup'
 
-module union BatchReading
+union BatchReading
 	observed(capture ProcessCapture)
 	unobserved
 	failed(reason String)
 
-	module function needsRerun() returns bool
+	function needsRerun() returns bool
 		return match self 'reading'
 			unobserved gives true
 			observed or
@@ -1425,11 +1423,11 @@ module union BatchReading
 	end 'needsRerun'
 end 'BatchReading'
 
-module typealias BatchReadingArray = Array with immutable BatchReading
+typealias BatchReadingArray = Array with immutable BatchReading
 
 let OutsideTheMarkers = "the batch program printed outside the case markers — a case runs code before main that the batching checks did not catch; the runner must keep it out of batches"
 
-module function readBatch(batch ProcessCapture, caseCount ElementIndex) returns BatchReadingArray
+function readBatch(batch ProcessCapture, caseCount ElementIndex) returns BatchReadingArray
 	let readings = BatchReadingArray.create(caseCount, zeroed: false)
 	let unreadable = BatchReading.unobserved
 	let process = batchProcessTrusted(batch)
@@ -1459,7 +1457,7 @@ module function readBatch(batch ProcessCapture, caseCount ElementIndex) returns 
 	return readings
 end 'readBatch'
 
-module function unreadBatch(caseCount ElementIndex) returns BatchReadingArray
+function unreadBatch(caseCount ElementIndex) returns BatchReadingArray
 	let readings = BatchReadingArray.create(caseCount, zeroed: false)
 	readings.refill(caseCount, value: BatchReading.unobserved)
 	return readings
@@ -1503,7 +1501,7 @@ function agreeingReading(out MarkedRegion, err MarkedRegion) returns BatchReadin
 	return BatchReading.observed(ProcessCapture.create(out.code, stdout: out.body, stderr: err.body))
 end 'agreeingReading'
 
-module function readAlone(observation RunObservation, caseIndex ElementIndex) returns RunObservation
+function readAlone(observation RunObservation, caseIndex ElementIndex) returns RunObservation
 	return match observation 'observed'
 		completed(capture) gives readAloneCapture(capture, caseIndex: caseIndex)
 		failed or

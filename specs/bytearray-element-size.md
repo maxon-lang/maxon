@@ -531,7 +531,7 @@ error E3005: specs/bytearray-element-size/byte-string-global-refused-when-a-byte
 <!-- test: readers-own-byte-decides-which-literal-bytes-fit -->
 ### A byte legal under ONE file's `Byte` stays legal there while a sibling file's is narrower
 The RANGE half of the rule that the reading file's `Byte` decides: `wide.maxon`'s literal is checked against `wide.maxon`'s `int(0 to u8.max)`, and `main.maxon`'s
-against its own `int(0 to 100)`. Both declarations are file-private, so each file sees exactly one `Byte`.
+against its own `int(0 to 100)`. Both declarations are unmarked, so each file sees exactly one `Byte`.
 A whole-program fold over both declarations — or a check that read the declaring file of whichever `Byte`
 was recorded last — gets one of the two wrong.
 ```maxon
@@ -623,7 +623,7 @@ element declared `int(0 to 200)`, under the most natural name a byte alias has. 
 element's declared BOUNDS (`RangedAliasRegistry.holdsEveryByteInEveryFile`) — is what closes it, and
 `a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer` at the end of this file is the case.
 
-⚠ **THE VIEW-SIDE BEHAVIOUR IS REACHABLE FROM A SPEC.** `String.addressableBytes()` is a `module` member of
+⚠ **THE VIEW-SIDE BEHAVIOUR IS REACHABLE FROM A SPEC.** `String.addressableBytes()` is an unmarked member of
 `stdlib/String.maxon`, so no file outside `stdlib/` can call it (E3008). But the element is EVERY
 compiler-synthesized byte buffer, and three of its producers are library-tier statics
 (`__ManagedDirectory.filename`/`currentPath`, `__Builtins.commandLineArg`), so an arriving
@@ -835,16 +835,14 @@ needs to contain its full namespace"*. Without a qualifier the refusal reads **`
 prevent, and which no case in this file could see because every case above is single-file or names
 two DIFFERENT aliases.
 
-The two cases below are the two shapes the qualifier takes, and they are separate because the tier is
-chosen by a MEASUREMENT of the program (`contestedAliasNamespacesAreDistinct`) rather than fixed: a
-namespace only tells the claimants apart when the claimants are in different modules, and a
-non-exported `typealias` is FILE-local, so two files in one directory can contest a name while sharing
-a namespace. Each case would go CONTENTLESS — both sides spelling the same word — if its tier were
-not chosen.
+An unmarked `typealias` is visible to its declaring directory's subtree, and one directory declares a
+name once, so the claimants of one name are always in two DIRECTORIES. A diagnostic that names both
+qualifies each by its directory, `dir.Name`, and without that qualifier the case below would go
+CONTENTLESS — both sides spelling the same word.
 
 <!-- test: error.a-contested-alias-is-qualified-by-its-namespace -->
-### Claimants in different modules: the NAMESPACE is the qualifier
-`api/lib.maxon` and `app/main.maxon` each declare a file-private `Bytes` over their own `Byte`, and those
+### Claimants in different directories: the NAMESPACE is the qualifier
+`api/lib.maxon` and `app/main.maxon` each declare an unmarked `Bytes` over their own `Byte`, and those
 are two element types. Neither file sees the other's declaration, so a value of one could reach the other
 only through an exported surface, and the field `Holder.items` is such a surface: E3167 refuses it, naming
 the field by its namespace `api` and the alias as `api/lib.maxon` wrote it. The value read from the field
@@ -877,46 +875,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:22: exported field 'api.Holder.items' names file-private typealias 'Bytes' in its type
+error E3167: api/<fragment>:7:22: exported field 'api.Holder.items' names unexported typealias 'Bytes' in its type
 error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'
-```
-
-<!-- test: error.a-contested-alias-in-one-module-is-qualified-by-its-file -->
-### Claimants in ONE module: the refusal still names the field and the alias as written
-The same contest with both declarations in `pkg/`. Both declarations are file-private, which is what lets
-two files of one directory hold one name, and `Holder.items` would be the only way a `pkg/lib.maxon`
-value could reach `app/main.maxon`. E3167 refuses the field at its declaration, and the two `Bytes` meet in
-an argument check that E3005 refuses.
-```maxon
-// --- file: pkg/lib.maxon
-typealias Byte = int(0 to 1000)
-typealias Bytes = Array with Byte
-
-export type Holder
-	export var items as Bytes
-
-	export static function make() returns Holder
-		var b = Bytes.create(0)
-		b.push(300)
-		return Holder{items: b}
-	end 'make'
-end 'Holder'
-
-// --- file: app/main.maxon
-typealias Byte = int(0 to u8.max)
-typealias Bytes = Array with Byte
-
-function takesNarrow(b Bytes) returns ExitCode
-	return b.count() as ExitCode
-end 'takesNarrow'
-
-function main() returns ExitCode
-	return takesNarrow(Holder.make().items)
-end 'main'
-```
-```maxoncstderr
-error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'pkg.Bytes'
-error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bytes' in its type
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->
@@ -925,7 +885,7 @@ error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-p
 the library's byte-PACKED `ByteArray` (one-byte stride) holding `A`; read through a parameter declared over
 `main.maxon`'s OWN `ByteArray`, an `Array with int(0 to 1000)` (two-byte stride), it would read two bytes
 per element — on a program the whole element-identity family exists to refuse. Both other directions of
-the same contest are refused (`a-byte-two-files-disagree-about-is-two-types`, and the two cases above), so
+the same contest are refused (`a-byte-two-files-disagree-about-is-two-types`, and the case above), so
 what this pins is not the RULE but the return door.
 
 The callee is the library because no two AUTHOR declarations of one name can meet at a return: a function
@@ -1020,30 +980,30 @@ end 'main'
 error E2015: <fragment>:6:10: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
 ```
 
-<!-- test: a-buffer-field-strides-its-declaring-files-byte -->
+<!-- test: a-buffer-field-strides-its-declaring-directorys-byte -->
 <!-- tier: stdlib -->
-### A `__ManagedMemory` FIELD strides its DECLARING file's `Byte`, not its reader's
+### A `__ManagedMemory` FIELD strides its DECLARING directory's `Byte`, not its reader's
 `ProgramSignatures.declaredSlotType` resolves a slot's compiler-minted alias against the file that
-DECLARED the slot. `holder.maxon` declares no `Byte`, so `Holder.buf` is a byte-PACKED buffer for
-every reader — including `main.maxon`, whose own `Byte` is two bytes wide. Scoped to the reader
-instead, `main.maxon` would read a record `holder.maxon` stamped at stride 1 as though it strode 2,
+DECLARED the slot. No `Byte` is declared in `holder.maxon`'s directory, so `Holder.buf` is a byte-PACKED
+buffer for every reader — including `app/main.maxon`, whose own `Byte` is two bytes wide. Scoped to the
+reader instead, `app/main.maxon` would read a record `holder.maxon` stamped at stride 1 as though it strode 2,
 with no diagnostic anywhere; `first()` returning `a` is what says it did not.
 ```maxon
 // --- file: holder.maxon
-export type Holder
-	export var buf as __ManagedMemory
+type Holder
+	var buf as __ManagedMemory
 
-	export static function ofText(t String) returns Holder
+	static function ofText(t String) returns Holder
 		return Holder{buf: t.toByteArray()}
 	end 'ofText'
 
-	export function first() returns Integer
+	function first() returns Integer
 		return try self.buf.get(0) otherwise 0
 	end 'first'
 end 'Holder'
 
-export typealias Integer = int(i64.min to i64.max)
-// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+// --- file: app/main.maxon
 typealias Byte = int(0 to 1000)
 
 function widen(b Byte) returns Integer
@@ -1059,36 +1019,36 @@ end 'main'
 47
 ```
 
-<!-- test: a-buffer-field-refuses-another-files-byte-at-the-construction -->
+<!-- test: a-buffer-field-refuses-another-directorys-byte-at-the-construction -->
 <!-- tier: stdlib -->
 ### …and the disagreement lands LOUDLY, at the construction
-The same two files with the buffer handed IN rather than built inside `holder.maxon`. `main.maxon`'s
+The same two files with the buffer handed IN rather than built inside `holder.maxon`. `app/main.maxon`'s
 `c.bytes()` is its OWN `Byte`, two bytes wide, and the field is one byte wide — so the two
-files meet nominally, at the line that hands the record over, instead of silently striding one
+directories meet nominally, at the line that hands the record over, instead of silently striding one
 record two ways. This is the refusal that pays for the case above.
 
 ⚠ **THE PRODUCER IS A `Character`'s BYTES, NOT A `String`'s**, because a
 `String`'s bytes are `stdlib/String.maxon`'s `ByteArray` and answer to the CORPUS's canonical `Byte`,
-which is the field's own one byte — so the two files would agree and there would be no disagreement to
-land. `Character.bytes()` is the producer typed at the reading file's `Byte`, which is the property
+which is the field's own one byte — so the two directories would agree and there would be no disagreement
+to land. `Character.bytes()` is the producer typed at the reading file's `Byte`, which is the property
 this case is about. The case above uses `toByteArray()`, because it builds the
-buffer inside `holder.maxon` where the corpus's `Byte` and that file's `Byte` are the same one byte.
+buffer inside `holder.maxon` where the corpus's `Byte` and that directory's `Byte` are the same one byte.
 ```maxon
 // --- file: holder.maxon
-export type Holder
-	export var buf as __ManagedMemory
+type Holder
+	var buf as __ManagedMemory
 
-	export static function of(b __ManagedMemory) returns Holder
+	static function of(b __ManagedMemory) returns Holder
 		return Holder{buf: b}
 	end 'of'
 
-	export function first() returns Integer
+	function first() returns Integer
 		return try self.buf.get(0) otherwise 0
 	end 'first'
 end 'Holder'
 
-export typealias Integer = int(i64.min to i64.max)
-// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+// --- file: app/main.maxon
 typealias Byte = int(0 to 1000)
 
 function widen(b Byte) returns Integer
@@ -1102,7 +1062,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:17: argument type mismatch for 'b': expected '__ManagedMemory with stdlib.Byte', got 'Array with Byte'
+error E3005: app/<fragment>:25:17: argument type mismatch for 'b': expected '__ManagedMemory with stdlib.Byte', got 'Array with app.Byte'
 ```
 
 ### The MINT is an internal spelling, and no diagnostic quotes it
@@ -2234,13 +2194,13 @@ and so does the `b"hi"` literal's element. The export fits one byte, so the lite
 one declaration on both sides: `104 - 56`.
 ```maxon
 // --- file: sibling.maxon
-export typealias Byte = int(0 to 200)
+typealias Byte = int(0 to 200)
 
-export function widen(b Byte) returns Integer
+function widen(b Byte) returns Integer
 	return b
 end 'widen'
 
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let a = b"hi"
@@ -2252,12 +2212,12 @@ end 'main'
 48
 ```
 
-<!-- test: a-byte-string-literal-adopts-the-sibling-module-byte-the-file-names-bare -->
-`main.maxon` declares no `Byte`; its bare `Byte` is `types.maxon`'s `module` one, and so is the element of
+<!-- test: a-byte-string-literal-adopts-the-sibling-files-byte-the-file-names-bare -->
+`main.maxon` declares no `Byte`; its bare `Byte` is `types.maxon`'s unmarked one, and so is the element of
 its `b"hi"`. The literal therefore reaches a parameter `main.maxon` declares as an `Array with Byte`.
 ```maxon
 // --- file: types.maxon
-module typealias Byte = int(0 to 255)
+typealias Byte = int(0 to 255)
 
 // --- file: main.maxon
 typealias Bytes = Array with Byte

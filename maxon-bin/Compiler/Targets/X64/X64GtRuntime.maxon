@@ -57,8 +57,8 @@ let GtSwitchPcScratchReg = X64ReturnJumpScratchReg
 // outside `[StackLimit, StackBase)`. The syscall shim (repoint at the system stack for a call) and the context
 // switch (repoint at the resumed GT's stack) write them and the backtrace walker reads them, so they are named
 // once here.
-module let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
-module let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
+let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
+let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
 let TebDeallocationStackDisp = 0x1478
 
 // The NT_TIB stack bounds are a PAIR (base, limit); these two helpers spell that two-word structure ONCE for
@@ -133,7 +133,7 @@ end 'emitLinuxRawLastError'
 // ⚠ **IT IS THE OS's QUESTION AND NOT THE ROUTE'S, WHICH IS WHY IT IS NOT `x64OsCallKind`.** That one asks how
 // this backend reaches the kernel (an import or a `syscall`); this one asks what the kernel demands of the
 // stack once it is there, and the two are independent facts that happen to split the same two OSes today.
-module function x64OsProbesStackBounds(os Os) returns bool
+function x64OsProbesStackBounds(os Os) returns bool
 	return match os 'os'
 		windows gives true
 		linux gives false
@@ -399,9 +399,9 @@ typealias ImportStubSlotByName = Map with (ByteArray, IatSlot)
 typealias ImportStubSlotSet = Set with IatSlot
 
 type SavedFrameSlots
-	module let pc as Imm32
-	module let sp as Imm32
-	module let fp as Imm32
+	let pc as Imm32
+	let sp as Imm32
+	let fp as Imm32
 
 	static function ofMachine() returns SavedFrameSlots
 		return Self{pc: MOffSavedFramePc as Imm32, sp: MOffSavedFrameSp as Imm32, fp: MOffSavedFrameFp as Imm32}
@@ -484,7 +484,7 @@ end 'emitSavedFrameRecordLoad'
 // instead of the thread's slot. `encodeMovRegSegBase` routes through the shared
 // `encodeModRmBaseDisp`, which emits the zero-`disp8` form for exactly those two bases, so either
 // register may be anything.
-module function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId, os Os, noGreenThread BlockId)
+function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId, os Os, noGreenThread BlockId)
 	x64EmitLoadCurrentMOrBail(code, rdataRelocs: rdataRelocs, fixups: fixups, dest: mDest, bail: bail, os: os)
 	encodeLoadRegBaseDisp(code, destReg: gtDest, base: mDest, disp: MOffCurrentGt as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: gtDest, src: gtDest, wide: true)
@@ -1080,7 +1080,7 @@ let ExitSyscallSlowFrameSlots = 2
 // Branch unless `addr` lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`: to `onOsStack` for a
 // `stackBase` of 0, to `below` for an address under the stack's base and to `above` for one at or over its top.
 // Past all three bails `scratch` holds the stack's top and `gt` its size.
-module function emitGtBailUnlessOnItsOwnStack(code ByteArray, fixups ChunkRel32FixupArray, gt X64Register, scratch X64Register, addr X64Register, onOsStack BlockId, below BlockId, above BlockId)
+function emitGtBailUnlessOnItsOwnStack(code ByteArray, fixups ChunkRel32FixupArray, gt X64Register, scratch X64Register, addr X64Register, onOsStack BlockId, below BlockId, above BlockId)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gt, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: scratch, src: scratch, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: onOsStack)
@@ -1094,7 +1094,7 @@ end 'emitGtBailUnlessOnItsOwnStack'
 
 // The range takes in the headroom and guard page under the stack: a fault on an overflowing system
 // stack is dispatched there, and its handler and that handler's OS calls must run in place.
-module function emitBailUnlessOnTheSystemStack(code ByteArray, fixups ChunkRel32FixupArray, m X64Register, scratch X64Register, addr X64Register, outside BlockId)
+function emitBailUnlessOnTheSystemStack(code ByteArray, fixups ChunkRel32FixupArray, m X64Register, scratch X64Register, addr X64Register, outside BlockId)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: m, disp: MOffSystemStackSP as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: addr, src: scratch, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.aboveEqual, targetBlockId: outside)
@@ -1105,7 +1105,7 @@ end 'emitBailUnlessOnTheSystemStack'
 
 // Takes the system stack's top, so every caller must already be proven off that stack: a caller on it
 // would overwrite its own live frames.
-module function emitSwitchToTheSystemStack(code ByteArray, rdataRelocs RdataRelocationArray, rspBelowTop Imm32)
+function emitSwitchToTheSystemStack(code ByteArray, rdataRelocs RdataRelocationArray, rspBelowTop Imm32)
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: MOffSystemStackSP as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
@@ -1113,11 +1113,11 @@ module function emitSwitchToTheSystemStack(code ByteArray, rdataRelocs RdataRelo
 	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: X64Register.rax, disp: rspBelowTop)
 end 'emitSwitchToTheSystemStack'
 
-module let GtDispatchBelowStackBottomFatalName = b"mrt_fatal_dispatch_below_gt_stack"
+let GtDispatchBelowStackBottomFatalName = b"mrt_fatal_dispatch_below_gt_stack"
 
 // Both fatals are reached on a stack with no room the runtime can vouch for — under a green thread's
 // bottom, or on no stack it knows — so the report is printed from the system stack.
-module function buildGtSystemStackFatalChunk(name ByteArray, fatal RuntimeFatal, exitRoute X64OsCallKind, target Target) returns FunctionCodeChunk
+function buildGtSystemStackFatalChunk(name ByteArray, fatal RuntimeFatal, exitRoute X64OsCallKind, target Target) returns FunctionCodeChunk
 	let entry = ByteArray.create(0)
 	let callFixups = CallFixupArray.create(0)
 	let rdataRelocs = RdataRelocationArray.create(0)
@@ -1134,7 +1134,7 @@ module function buildGtSystemStackFatalChunk(name ByteArray, fatal RuntimeFatal,
 	return chunk
 end 'buildGtSystemStackFatalChunk'
 
-export function encodeImportStubCall(code ByteArray, callFixups CallFixupArray, slotIndex RelocSlotIndex, usesGt bool)
+function encodeImportStubCall(code ByteArray, callFixups CallFixupArray, slotIndex RelocSlotIndex, usesGt bool)
 	encodeCallDirect(code, callFixups: callFixups, targetName: importStubName(iatSlotOfIndex(slotIndex), usesGt: usesGt))
 end 'encodeImportStubCall'
 
@@ -1907,7 +1907,7 @@ end 'emitGtRelocateChainWalk'
 // request before its compare and calls `__gt_morestack` itself, with no jump back, because the
 // grower makes the frame fit in one call. A request `__sysmon` stores after the withdrawal reaches
 // the grower, which leaves it in place when the frame fits.
-export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
+function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
 	let guardFixups = ChunkRel32FixupArray.create(0)
 	let guardLabels = BlockOffsetTable.create()
 	let guardTop = code.count()

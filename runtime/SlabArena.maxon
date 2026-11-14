@@ -36,7 +36,7 @@
 // instruction for no reason. Full-range because an address, a bitmap word and a chunk index share this type
 // and none of them has a bound this file could state; narrowing it would be a guarded door that could only
 // ever fire on a word the OS itself wrote, in a body with no caller to report to (`runtime/Word.maxon`).
-module typealias ArenaWord = int(i64.min to i64.max)
+typealias ArenaWord = int(i64.min to i64.max)
 
 // ⭐⭐ **A BIT'S POSITION IN ITS BITMAP WORD, RANGED — AND THE RANGE IS WHAT KEEPS THE ARENA'S INNERMOST
 // LOOP TO ONE SHIFT.** THE SHIFT RULE (`Parser.emitGuardedShift`) saturates a count the compiler can
@@ -61,7 +61,7 @@ let PopCountResultMask = 127 as ArenaWord
 // `SlabClasses.SlabPageShift` is the compiler's copy; the map indexes by `addr shr SlabPageShift`, so the
 // two halves of one address split must be this same number.
 let SlabPageShift = 13
-module let SlabPageBytes = 8192
+let SlabPageBytes = 8192
 
 // A bitmap word is a machine word. The count, the shift that divides by it and the mask that takes a
 // remainder of it are one fact three times over by necessity.
@@ -183,7 +183,7 @@ let UnreachedAnswer = 0
 // the result register (−ENOMEM is −12), which an equality test waves through as a valid base. Testing the
 // sign catches both at the same single compare, because no lane can answer a legitimate page base that is
 // zero or negative.
-module function __slab_assert_os_alloc(ptr ArenaWord) returns ArenaWord
+function __slab_assert_os_alloc(ptr ArenaWord) returns ArenaWord
 	if ptr <= 0 'refused'
 		__Raw.osExit(SlabOsAllocFailedExit)
 
@@ -217,7 +217,7 @@ end '__slab_assert_os_alloc'
 // address `VirtualAlloc` answered, and a POSIX unmap of `[base, base + bytes)` would leak the align-up's
 // head slack. The align-up is not injective, so a teardown has to start by giving the metadata chunk a
 // reserved-base word.
-module function __slab_arena_new() returns ArenaWord
+function __slab_arena_new() returns ArenaWord
 	let reserved = __slab_assert_os_alloc(__Raw.osReservePages(ArenaReservationBytes as MachineWord) as ArenaWord)
 	let base = (reserved + ArenaGranuleMask) and ArenaGranuleAlignMask
 
@@ -271,7 +271,7 @@ end '__slab_arena_new'
 // ⭐ **AND THE CLAIM COMMITS WHAT IT REACHES.** The bits are marked used, then every granule the run touches
 // that is not backed already is committed — the scavenger may since have dropped the backing of any granule
 // the run lands in.
-module function __slab_arena_alloc_chunks(numChunks ArenaWord) returns ArenaWord
+function __slab_arena_alloc_chunks(numChunks ArenaWord) returns ArenaWord
 	if numChunks < 1 or numChunks > ArenaAllocatableChunks 'unsatisfiable'
 		__Raw.osExit(SlabChunkRunUnsatisfiableExit)
 
@@ -365,7 +365,7 @@ end '__slab_arena_alloc_chunks'
 // ⚠ **IT IS SAFE TO WRITE, WHICH IS NOT OBVIOUS.** The run is being RELEASED, so it was CLAIMED, so every
 // granule it touches was backed and the scavenger cannot have dropped one — a granule holding a claimed
 // chunk is not fully free.
-module function __slab_arena_free_chunks(arenaBase ArenaWord, chunkIndex ArenaWord, numChunks ArenaWord)
+function __slab_arena_free_chunks(arenaBase ArenaWord, chunkIndex ArenaWord, numChunks ArenaWord)
 	let pastRun = chunkIndex + numChunks
 
 	if chunkIndex < ArenaMetadataChunks or numChunks < 1 or pastRun > ArenaChunkCount 'outOfArena'
@@ -395,7 +395,7 @@ end '__slab_arena_free_chunks'
 //
 // ⚠ It ABORTS rather than answering a sentinel: every caller is about to use the answer as a base to compute
 // a chunk index from, and a 0 there would release chunk `addr shr SlabPageShift` of the arena at address 0.
-module function __slab_arena_of(addr ArenaWord) returns ArenaWord
+function __slab_arena_of(addr ArenaWord) returns ArenaWord
 	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
 
 	while arena != 0 'walk'
@@ -438,7 +438,7 @@ end '__slab_arena_of'
 // ⚠ **ON wasm32-wasi `osDecommitPages` EMITS NOTHING, and this body still runs in full.** Linear memory only
 // grows, so there is no backing to drop; the commit bit still clears and is still re-set by the next claim
 // that reaches it, and the chunks are still reusable by any class.
-module function __slab_arena_scavenge() returns ArenaWord
+function __slab_arena_scavenge() returns ArenaWord
 	var released = 0 as ArenaWord
 	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
 
@@ -539,7 +539,7 @@ end 'slabArenaMarkGranuleSeenFree'
 // ⚠ The bitmap is popcounted rather than a running total being kept. A counter stepped at the commit and
 // the decommit is a second copy of what the bitmap already holds, and a path that moved a bit without the
 // counter would leave the two disagreeing with nothing to notice.
-module function __slab_arena_committed_bytes() returns ArenaWord
+function __slab_arena_committed_bytes() returns ArenaWord
 	var granules = 0 as ArenaWord
 	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
 
@@ -580,7 +580,7 @@ end 'slabArenaPopCount'
 // ⭐⭐ **IT ANSWERS THE SLOT RATHER THAN NOTHING**, so `__slab_arena_map_set` does not repeat the whole
 // L1→L2→spans chain by hand to reach the slot the ensure was standing on — that would be two walks, two
 // copies of the index arithmetic, and two places for a shift to be wrong.
-module function __slab_arena_map_ensure(addr ArenaWord) returns ArenaWord
+function __slab_arena_map_ensure(addr ArenaWord) returns ArenaWord
 	let l1 = slabArenaMapLevel(__Raw.slabArenaMapL1Addr() as ArenaWord, entryCount: ArenaMapL1Entries)
 	let l2 = slabArenaMapLevel(slabArenaMapSlotAddr(l1, addr: addr, shift: ArenaMapL1Shift, mask: ArenaMapL1Mask), entryCount: ArenaMapLevelEntries)
 	let l3 = slabArenaMapLevel(slabArenaMapSlotAddr(l2, addr: addr, shift: ArenaMapL2Shift, mask: ArenaMapLevelMask), entryCount: ArenaMapLevelEntries)
@@ -594,7 +594,7 @@ end '__slab_arena_map_ensure'
 // ⚠ **EVERY PAGE OF A MULTI-PAGE SPAN GETS ITS OWN SLOT, HOLDING THE SAME POINTER.** That is what makes the
 // reverse map answer for a pointer anywhere INSIDE the span rather than only at its base — which is the
 // whole question a `free` asks.
-module function __slab_arena_map_set(base ArenaWord, numPages ArenaWord, span ArenaWord)
+function __slab_arena_map_set(base ArenaWord, numPages ArenaWord, span ArenaWord)
 	var page = 0 as ArenaWord
 
 	while page < numPages 'pages'

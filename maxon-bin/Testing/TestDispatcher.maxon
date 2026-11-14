@@ -31,7 +31,7 @@
 // project's OWN `main` stay exactly where it is: it simply stops being reachable, and dead-function
 // elimination drops it (`Project.entryFunctionName`). The `__` prefix marks it compiler-owned, as
 // `__TestReport` is, and it is `export`ed because the per-file runners it calls live in other files.
-export let MaxonTestEntrySymbol = "__maxon_test_main"
+let MaxonTestEntrySymbol = "__maxon_test_main"
 
 // The generated type carrying the run's shared helpers. ONE copy, in the entry file, called from every
 // test file.
@@ -65,20 +65,20 @@ let MaxTestsPerRun = 1000000
 // A discovered test paired with its position in the whole run. The pair rather than a bare index because
 // the generated call needs the symbol and the generated guard needs the index, and splitting them across
 // two parallel arrays is one fact stored twice.
-export type IndexedTest
+type IndexedTest
 	export let index as ElementIndex
 	export let test as DiscoveredTest
 
-	export static function create(index ElementIndex, test DiscoveredTest) returns IndexedTest
+	static function create(index ElementIndex, test DiscoveredTest) returns IndexedTest
 		return Self{index: index, test: test}
 	end 'create'
 end 'IndexedTest'
 
-export typealias IndexedTestArray = Array with IndexedTest
+typealias IndexedTestArray = Array with IndexedTest
 
 // ⭐ **ONE TEST FILE AND THE TESTS IN IT, IN DISCOVERY ORDER** — the unit both the compile and the run are
 // organized around: a file is what a dispatcher is generated for, and what a report groups by.
-export type TestFileGroup
+type TestFileGroup
 	// The `.maxtest` file as the COMPILER recorded it — the user's own path, not the staged copy's. It
 	// is what a report names and what the staging maps FROM, so it is identity.
 	export let file as FilePath
@@ -93,15 +93,15 @@ export type TestFileGroup
 	export let runnerName as String
 	export var tests as IndexedTestArray
 
-	export static function create(file FilePath, runnerName String, tests IndexedTestArray) returns TestFileGroup
+	static function create(file FilePath, runnerName String, tests IndexedTestArray) returns TestFileGroup
 		return Self{file: file, runnerName: runnerName, tests: tests}
 	end 'create'
 end 'TestFileGroup'
 
-export typealias TestFileGroupArray = Array with TestFileGroup
+typealias TestFileGroupArray = Array with TestFileGroup
 
 // Everything a staged test build hands its compile.
-export type StagedTestBuild
+type StagedTestBuild
 	// ⭐ **EVERY STAGED SOURCE, NAMED, WITH THE STAGED ROOT LAST.** Naming each file is what makes the
 	// `.maxtest` copies compile at all — a path the caller named escapes every walk exclusion
 	// (`Compiler.loadSourceFiles`) — and the root rides along at the end to FIX the project root, exactly as
@@ -135,23 +135,23 @@ export type StagedTestBuild
 
 	export let tracksDescendants as bool
 
-	export static function create(buildTargets MaxonSourcePathArray, compilerWrittenSources CompilerWrittenSourceArray, stagedSourceOrigins StagedSourceOriginArray, root FilePath, groups TestFileGroupArray, tracksDescendants bool) returns StagedTestBuild
+	static function create(buildTargets MaxonSourcePathArray, compilerWrittenSources CompilerWrittenSourceArray, stagedSourceOrigins StagedSourceOriginArray, root FilePath, groups TestFileGroupArray, tracksDescendants bool) returns StagedTestBuild
 		return Self{buildTargets: buildTargets, compilerWrittenSources: compilerWrittenSources, stagedSourceOrigins: stagedSourceOrigins, root: root, groups: groups, tracksDescendants: tracksDescendants}
 	end 'create'
 end 'StagedTestBuild'
 
 // Why a staging attempt could not produce a tree to compile. Every arm is an IO or path failure the caller
 // reports and exits on: none of them is a fact about the tests, so none is a test result.
-export union TestStagingError implements Error
+union TestStagingError implements Error
 	refused(reason String)
 end 'TestStagingError'
 
-export union TestSubject
+union TestSubject
 	projectDirectory(dir FilePath, sources MaxonSourcePathArray)
 	singleFile(path FilePath)
 end 'TestSubject'
 
-export function testSubjectInputs(subject TestSubject) returns MaxonSourcePathArray
+function testSubjectInputs(subject TestSubject) returns MaxonSourcePathArray
 	return match subject 'inputs'
 		projectDirectory(_, sources) gives sources.clone()
 		singleFile(path) gives MaxonSourcePathArray from [path]
@@ -182,7 +182,7 @@ end 'TestFileGroupLookup'
 // built so far per file transition. A map keyed on the path would remove it, but its key would
 // restate `FilePath.equals`'s platform rule (exact bytes on POSIX, case-folded on Windows) outside
 // the stdlib that owns it.
-export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGroupArray throws TestStagingError
+function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGroupArray throws TestStagingError
 	// Refused here, by count, rather than left to fail inside generated source: every index there is typed
 	// by the generated alias, so the overflow would otherwise surface as a range error in text nobody wrote.
 	// `>` and not `>=`: indices run `0..count-1`, so exactly `MaxTestsPerRun` tests is the largest run whose
@@ -269,7 +269,7 @@ end 'groupOfFile'
 // The staging root is RECONSTRUCTED, never inherited: a `.maxon` left behind by an earlier run with a
 // different test set would join this build silently and change what it means. That is the failure
 // `SpecTestRunner.stageSourceFiles` records having had twice.
-export function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups TestFileGroupArray, tracksDescendants bool) returns StagedTestBuild throws TestStagingError
+function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups TestFileGroupArray, tracksDescendants bool) returns StagedTestBuild throws TestStagingError
 	if groups.isEmpty() 'nothingToDispatch'
 		// A caller-contract violation and not a user error: a run with no tests is reported and exited on
 		// BEFORE anything is staged, because the generated entry would otherwise bind a `selection` no

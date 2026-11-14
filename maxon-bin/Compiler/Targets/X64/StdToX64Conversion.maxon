@@ -67,7 +67,7 @@ end 'constMaterializationOp'
 // argument register, so there is no return/argument register conflict. The array LENGTH
 // is this file's REGISTER capacity (`x64RegisterArgCapacity`): an argument past it
 // travels in an outgoing STACK slot (`win64OutgoingArgDisp`).
-export let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi]
+let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi]
 
 // ⭐⭐ **THE HAND-ASSEMBLED RUNTIME CHUNKS TAKE THEIR ARGUMENTS SOMEWHERE ELSE, AND THAT IS NOT AN
 // OVERSIGHT.** Every chunk in `X64Runtime`/`X64LinuxRuntime` is written to the Win64 order — rcx/rdx/r8/r9
@@ -77,7 +77,7 @@ export let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X6
 // register the chunk answers in. ⛔ MEASURED, and it is a SILENT WRONG ANSWER: `File.writeText("abc")`
 // wrote 94,976 bytes to disk on x64-linux, because `mrt_host_write_file` read its count out of a register
 // nothing had loaded and its BOOL verdict was still true.
-export let X64IntegerResultReg = X64Register.r8
+let X64IntegerResultReg = X64Register.r8
 
 let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9]
 
@@ -107,7 +107,7 @@ end 'hostChunkArgRegisterAt'
 // registers when it calls VirtualAlloc/VirtualFree — which are Win64-volatile in exactly them. It must
 // therefore save and restore this list, and a second hand-written spelling of xmm0–5 over there is the
 // one-fact-written-twice bug this file's header warns of.
-export let argFpRegisters = [X64Register.xmm0, X64Register.xmm1, X64Register.xmm2, X64Register.xmm3, X64Register.xmm4, X64Register.xmm5]
+let argFpRegisters = [X64Register.xmm0, X64Register.xmm1, X64Register.xmm2, X64Register.xmm3, X64Register.xmm4, X64Register.xmm5]
 
 // ⭐ **THE HIGH HALF OF AN UNSIGNED DIVIDEND** — RDX, for the group-3 `div` that reads RDX:RAX as a
 // single 128-bit number. Zero, because Maxon's unsigned divide is a 64-bit ÷ 64-bit one: the dividend
@@ -227,7 +227,7 @@ let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child in
 let CreateSuspended = 0x00000004
 let CreateUnicodeEnvironment = 0x00000400
 let SpawnFixedCreationFlags = CreateSuspended or CreateUnicodeEnvironment
-module let JobObjectExtendedLimitInformationClass = 9
+let JobObjectExtendedLimitInformationClass = 9
 let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
 let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
 let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB)
@@ -318,13 +318,13 @@ let BelowNormalPriorityClass = 0x4000
 // copies exactly `WriteFileStackArgWords` words from the caller's frame onto the system stack
 // (`X64GtRuntime.gtShimStackArgWordsOf`), and every emitter that marshals a `WriteFile` sizes its outgoing
 // region from the same constant, so the shim can never silently disagree with the arg layout.
-export let WriteFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+let WriteFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
 
 // The console writer's two >4-argument imports, stated in this band with their siblings for the band's own
 // reason: the SAME constant sizes `mrt_write_stream`'s outgoing region (`X64Runtime`) and the syscall shim's
 // per-call copy, so the two cannot disagree about how many words each call reads off the stack.
-export let WriteConsoleStackArgWords = 1 as MachineWord  // arg 5: lpReserved
-export let MultiByteToWideCharStackArgWords = 2 as MachineWord  // args 5-6: lpWideCharStr, cchWideChar
+let WriteConsoleStackArgWords = 1 as MachineWord  // arg 5: lpReserved
+let MultiByteToWideCharStackArgWords = 2 as MachineWord  // args 5-6: lpWideCharStr, cchWideChar
 
 // The six CreateProcessW outgoing stack SLOTS `__gt_process_run`'s frame reserves, past the shadow space.
 // CreateProcessW takes TEN arguments; the first four (lpApplicationName, lpCommandLine, lpProcessAttributes,
@@ -336,7 +336,7 @@ export let MultiByteToWideCharStackArgWords = 2 as MachineWord  // args 5-6: lpW
 // arguments the kernel reads — there is NO scratch out-param slot — so the outgoing reservation IS the
 // stack-argument count. The GT syscall shim copies `CreateProcessStackArgWords` words from the GT frame onto
 // the system stack; deriving the reservation from the same constant keeps the shim's copy count from drifting.
-export let CreateProcessStackArgWords = 6 as MachineWord  // args 5-10, all real stack arguments
+let CreateProcessStackArgWords = 6 as MachineWord  // args 5-10, all real stack arguments
 
 // `PeekNamedPipe`'s two stack arguments, past the four register ones: `lpBytesLeftThisMessage` is the last
 // and `lpTotalBytesAvail` the one before it. Named for `CreateProcess*Slot`'s reason — a bare 0/1 at a
@@ -355,8 +355,8 @@ let HostSampleArg6Slot = 1
 
 // EXPORTED for `X64GtRuntime`'s system-stack shim, which must reserve the same words this lowering writes
 // into — one number, read by the producer and by the shim, exactly as `CreateProcessStackArgWords` is.
-export let PeekPipeStackArgWords = 2 as MachineWord  // args 5-6, both real stack arguments
-export let QueryJobObjectStackArgWords = 1 as MachineWord
+let PeekPipeStackArgWords = 2 as MachineWord  // args 5-6, both real stack arguments
+let QueryJobObjectStackArgWords = 1 as MachineWord
 let QueryJobObjectReturnLengthSlot = 0
 
 let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
@@ -377,34 +377,34 @@ let CreateProcessOutgoingSlots = CreateProcessStackArgWords
 // (`gtShimStackArgWordsOf`), so the two can never disagree about how many words each kernel call reads off the
 // stack. All are REAL stack arguments the kernel reads (no out-param scratch slot on the stack — ReadFile's
 // bytes-read out-param is the 4th argument in r9, a register). EXPORTED because the shim reads them.
-export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes
-export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
-export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
-export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
-export let UpdateProcThreadAttributeStackArgWords = 3 as MachineWord  // args 5-7: cbSize, lpPreviousValue, lpReturnSize
-export let RegGetValueStackArgWords = 3 as MachineWord  // args 5-7: pdwType, pvData, pcbData
+let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes
+let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
+let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
+let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+let UpdateProcThreadAttributeStackArgWords = 3 as MachineWord  // args 5-7: cbSize, lpPreviousValue, lpReturnSize
+let RegGetValueStackArgWords = 3 as MachineWord  // args 5-7: pdwType, pvData, pcbData
 
 // The DebugStream producer's one import that overflows the register file. Stated in this band with its
 // five siblings rather than beside the lowering, for the band's own reason — the SAME constant sizes the
 // frame reservation and the syscall shim's copy, so the two cannot disagree about the one word the kernel
 // reads off the stack.
-export let MapViewOfFileStackArgWords = 1 as MachineWord  // arg 5: dwNumberOfBytesToMap
+let MapViewOfFileStackArgWords = 1 as MachineWord  // arg 5: dwNumberOfBytesToMap
 
 // The CONSUMER half's one import that overflows the register file, stated in this band with its siblings
 // for the band's own reason — the SAME constant sizes the frame reservation and the syscall shim's copy.
-export let CreateFileMappingStackArgWords = 2 as MachineWord  // args 5-6: dwMaximumSizeLow, lpName
+let CreateFileMappingStackArgWords = 2 as MachineWord  // args 5-6: dwMaximumSizeLow, lpName
 
 // The host-process family's two counts. ⭐ **`osHostProcess` IS ONE OP OVER THE WHOLE `HostProcessCall`
 // ROSTER, so its frame reservation is its WIDEST member's** — `NtGetNextThread` and `SetWaitableTimer` both
 // take six arguments, four in registers and two on the stack. `ReadProcessMemory` states its own because
 // `gtShimStackArgWordsOf` keys on a SLOT and copies exactly what that call reads.
 // EXPORTED because the GT syscall shim reads them, exactly as its five siblings above are.
-export let HostProcessStackArgWords = 2 as MachineWord  // args 5-6 of the six-argument services
-export let ReadProcessMemoryStackArgWords = 1 as MachineWord  // arg 5: lpNumberOfBytesRead
+let HostProcessStackArgWords = 2 as MachineWord  // args 5-6 of the six-argument services
+let ReadProcessMemoryStackArgWords = 1 as MachineWord  // arg 5: lpNumberOfBytesRead
 
 // The overlapped socket pair's three stack arguments, stated in this band for the poller's reason. EXPORTED
 // for the shim, which copies exactly what the kernel reads.
-export let SocketOverlappedStackArgWords = 3 as MachineWord  // args 5-7: lpFlags/dwFlags, lpOverlapped, lpCompletionRoutine
+let SocketOverlappedStackArgWords = 3 as MachineWord  // args 5-7: lpFlags/dwFlags, lpOverlapped, lpCompletionRoutine
 
 // `osSocketOverlapped`'s outgoing slots: its widest verb's stack arguments, which is every verb's, since
 // `WSARecv` and `WSASend` take seven apiece.
@@ -429,10 +429,10 @@ let WsaOverlappedSlot = 1
 let WsaCompletionRoutineSlot = 2
 
 // `getsockopt`'s fifth argument, the in/out option length. EXPORTED for the shim.
-export let SocketOptionStackArgWords = 1 as MachineWord  // arg 5: optlen
+let SocketOptionStackArgWords = 1 as MachineWord  // arg 5: optlen
 let SocketOptionLengthSlot = 0
 
-export let SocketCreateStackArgWords = 2 as MachineWord  // args 5-6: g, dwFlags
+let SocketCreateStackArgWords = 2 as MachineWord  // args 5-6: g, dwFlags
 let SocketCreateGroupSlot = 0
 let SocketCreateFlagsSlot = 1
 let WsaNoProtocolInfo = 0
@@ -460,7 +460,7 @@ let WinsockSolSocket = 0xFFFF
 let WinsockSoError = 0x1007
 
 // The poller's one import past the register file, stated in this band for its reason. EXPORTED for the shim.
-export let GetQueuedCompletionStatusExStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, fAlertable
+let GetQueuedCompletionStatusExStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, fAlertable
 
 // `osNetpoll`'s outgoing slots: room for the stack arguments of its widest call,
 // `CreateNamedPipeW`'s four. Slot 2 doubles as a word the frame owns for the length of a call that
@@ -481,7 +481,7 @@ let NetpollWaitNotAlertable = 0
 let WaitExecuteOnlyOnce = 8
 
 // `RegisterWaitForSingleObject`'s six arguments, two of which the kernel reads off the stack.
-export let RegisterWaitStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, dwFlags
+let RegisterWaitStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, dwFlags
 
 // ⛔ **THE SCHEDULER PORT'S `NumberOfConcurrentThreads` IS UNBOUNDED — Go's `_DWORD_MAX`.** Every machine that
 // has ever polled stays associated with the port and counts against the limit whenever it runs, so a limit of
@@ -594,7 +594,7 @@ end 'hostProcessCallSlot'
 // through this; the GT syscall SHIM then copies those same words onto the system stack. A second, inline
 // spelling of the sum can disagree about the STRIDE, and a disagreement here is uninitialised KERNEL
 // arguments on a path where no test fails, because the corpus combines no `async` with OS calls.
-export function win64OutgoingArgDisp(slot MachineWord) returns Imm32
+function win64OutgoingArgDisp(slot MachineWord) returns Imm32
 	return (ShadowSpaceBytes + (slot as StackSize) * SpillSlotBytes) as Imm32
 end 'win64OutgoingArgDisp'
 
@@ -622,7 +622,7 @@ let SavedRbpAndReturnAddressBytes = 16
 // reads through the CALLER's frame pointer, so a leaf with stack parameters but no locals, spills or calls
 // would need a guard forcing a frame onto it. EVERY function is framed unconditionally, so there is no
 // such leaf and no guard to forget.
-export function win64IncomingArgDisp(slot MachineWord) returns Imm32
+function win64IncomingArgDisp(slot MachineWord) returns Imm32
 	return SavedRbpAndReturnAddressBytes + win64OutgoingArgDisp(slot)
 end 'win64IncomingArgDisp'
 
@@ -691,14 +691,14 @@ export function win64ProcessExitOp(usesGt bool, target Target) returns TargetOp
 	return TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess))
 end 'win64ProcessExitOp'
 
-export function argRegisterAt(index ParamCount) returns X64Register
+function argRegisterAt(index ParamCount) returns X64Register
 	return try argRegisters.get(index) otherwise panic("argRegisterAt: argument index {index} exceeds the {argRegisters.count()} register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'argRegisterAt'
 
 // The physical XMM register FP argument slot `index` occupies — the float twin of `argRegisterAt`, and a
 // compiler-invariant break past the file for the same reason. It must reject cleanly rather than
 // mis-storing from the wrong file.
-export function argFpRegisterAt(index ParamCount) returns X64Register
+function argFpRegisterAt(index ParamCount) returns X64Register
 	return try argFpRegisters.get(index) otherwise panic("argFpRegisterAt: float argument slot {index} exceeds the {argFpRegisters.count()} XMM register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'argFpRegisterAt'
 

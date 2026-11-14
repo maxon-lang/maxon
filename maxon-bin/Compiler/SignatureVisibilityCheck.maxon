@@ -32,7 +32,7 @@ function declarationSubjectKind(kind TypeDeclKind) returns SignatureSubjectKind
 	end 'kind'
 end 'declarationSubjectKind'
 
-module function subjectNoun(kind SignatureSubjectKind) returns String
+function subjectNoun(kind SignatureSubjectKind) returns String
 	return match kind 'kind'
 		declaredFunction gives "function"
 		constantBinding gives "constant"
@@ -142,7 +142,7 @@ function namesTheEnclosingType(enclosing EnclosingType, name ByteArray) returns 
 	end 'enclosing'
 end 'namesTheEnclosingType'
 
-module function checkSignatureVisibility(project Project, module MaxonModule, signatures ProgramSignatures)
+function checkSignatureVisibility(project Project, module MaxonModule, signatures ProgramSignatures)
 	// A warm project checks again, and a demand left by a signature its sources no longer declare
 	// would still excuse an E3092.
 	project.signatureTypeDemands = SignatureTypeDemandArray.create(0)
@@ -210,9 +210,9 @@ function checkStructDeclaration(project Project, signatures ProgramSignatures, d
 end 'checkStructDeclaration'
 
 function checkStructLayout(project Project, signatures ProgramSignatures, decl TypeNameDecl, layout StructLayout)
-	if layout.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateType'
+	if layout.visibility == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedType'
 		return
-	end 'noTypeCanBeNarrowerThanAFilePrivateType'
+	end 'noTypeCanBeNarrowerThanAnUnexportedType'
 
 	if not layout.declFilePath.equals(decl.claim.declFilePath) 'anotherFilesDeclarationOfThisName'
 		return
@@ -228,7 +228,7 @@ function checkEveryField(project Project, signatures ProgramSignatures, decl Typ
 	for position in 0 upto layout.fieldCount() 'eachField'
 		let tier = narrowerTier(layout.fieldTier(position), other: layout.visibility)
 
-		if tier == Visibility.file 'noCallerCanReadIt'
+		if tier == Visibility.unexported 'noCallerCanReadIt'
 			continue
 		end 'noCallerCanReadIt'
 
@@ -249,9 +249,9 @@ function checkEnumDeclaration(project Project, signatures ProgramSignatures, dec
 end 'checkEnumDeclaration'
 
 function checkEnumLayout(project Project, signatures ProgramSignatures, decl TypeNameDecl, layout EnumLayout)
-	if layout.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateType'
+	if layout.visibility == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedType'
 		return
-	end 'noTypeCanBeNarrowerThanAFilePrivateType'
+	end 'noTypeCanBeNarrowerThanAnUnexportedType'
 
 	if not layout.declFilePath.equals(decl.claim.declFilePath) 'anotherFilesDeclarationOfThisName'
 		return
@@ -284,9 +284,9 @@ function checkEveryPayload(project Project, signatures ProgramSignatures, decl T
 end 'checkEveryPayload'
 
 function checkInterfaceExtends(project Project, signatures ProgramSignatures, decl TypeNameDecl)
-	if decl.claim.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateInterface'
+	if decl.claim.visibility == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedInterface'
 		return
-	end 'noTypeCanBeNarrowerThanAFilePrivateInterface'
+	end 'noTypeCanBeNarrowerThanAnUnexportedInterface'
 
 	let interfaces = signatures.interfaceMap()
 
@@ -305,9 +305,9 @@ function walkExtendedInterfaces(project Project, signatures ProgramSignatures, s
 end 'walkExtendedInterfaces'
 
 function checkAliasTarget(project Project, signatures ProgramSignatures, decl TypeNameDecl)
-	if decl.claim.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateAlias'
+	if decl.claim.visibility == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedAlias'
 		return
-	end 'noTypeCanBeNarrowerThanAFilePrivateAlias'
+	end 'noTypeCanBeNarrowerThanAnUnexportedAlias'
 
 	let subject = declarationSubject(decl, tier: decl.claim.visibility)
 	let seen = ReportedTypeNameSet.create()
@@ -332,7 +332,7 @@ function checkConformanceClauses(project Project, signatures ProgramSignatures)
 end 'checkConformanceClauses'
 
 function checkConformingType(project Project, signatures ProgramSignatures, conformance ConformanceDecl, kind TypeDeclKind, visibility Visibility, declFilePath FilePath)
-	if visibility == Visibility.file or signatures.declaredByTheCorpus(declFilePath) 'noTypeAnAuthorMadeAndOthersCanName'
+	if visibility == Visibility.unexported or signatures.declaredByTheCorpus(declFilePath) 'noTypeAnAuthorMadeAndOthersCanName'
 		return
 	end 'noTypeAnAuthorMadeAndOthersCanName'
 
@@ -357,7 +357,7 @@ end 'typeParametersOf'
 
 function checkGenericTemplates(project Project, signatures ProgramSignatures)
 	for template in signatures.genericTemplateRoster() 'eachTemplate'
-		if template.visibility == Visibility.file or template.constraints.count() == 0 or isSynthesizedName(signatures, name: template.key) or signatures.declaredByTheCorpus(template.declFilePath) 'noConstraintAnAuthorWroteOnAReachableFunction'
+		if template.visibility == Visibility.unexported or template.constraints.count() == 0 or isSynthesizedName(signatures, name: template.key) or signatures.declaredByTheCorpus(template.declFilePath) 'noConstraintAnAuthorWroteOnAReachableFunction'
 			continue
 		end 'noConstraintAnAuthorWroteOnAReachableFunction'
 
@@ -403,9 +403,9 @@ function checkDeclaredBindings(project Project, signatures ProgramSignatures)
 	for index in 0 upto signatures.topLevelDeclCount() 'eachBinding'
 		let decl = signatures.declAt(index)
 
-		if decl.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateBinding'
+		if decl.visibility == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedBinding'
 			continue
-		end 'noTypeCanBeNarrowerThanAFilePrivateBinding'
+		end 'noTypeCanBeNarrowerThanAnUnexportedBinding'
 
 		if isSynthesizedName(signatures, name: decl.name) 'noBindingAnAuthorWrote'
 			continue
@@ -426,9 +426,9 @@ function checkInterfaceRequirements(project Project, signatures ProgramSignature
 	let interfaces = signatures.interfaceMap()
 
 	for site in signatures.interfaceDeclarationSites() 'eachInterface'
-		if site.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateInterface'
+		if site.visibility == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedInterface'
 			continue
-		end 'noTypeCanBeNarrowerThanAFilePrivateInterface'
+		end 'noTypeCanBeNarrowerThanAnUnexportedInterface'
 
 		let name = try site.name.declaredName() otherwise continue
 
@@ -462,9 +462,9 @@ end 'checkOneRequirement'
 
 // On a service's instance method `export` means "this is a message", and a message can be sent no
 // further than a handle to its service travels, so its surface is capped at the service type's tier.
-// Without the cap a file-private service could not name its own types in its messages.
+// Without the cap an unexported service could not name its own types in its messages.
 function declaredTierOf(signatures ProgramSignatures, func IrFunction) returns Visibility
-	if func.visibility == Visibility.file 'noMessageTierCanNarrowIt'
+	if func.visibility == Visibility.unexported 'noMessageTierCanNarrowIt'
 		return func.visibility
 	end 'noMessageTierCanNarrowIt'
 
@@ -478,9 +478,9 @@ end 'declaredTierOf'
 function checkDeclaredSignature(project Project, signatures ProgramSignatures, func IrFunction)
 	let tier = declaredTierOf(signatures, func: func)
 
-	if tier == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateFunction'
+	if tier == Visibility.unexported 'noTypeCanBeNarrowerThanAnUnexportedFunction'
 		return
-	end 'noTypeCanBeNarrowerThanAFilePrivateFunction'
+	end 'noTypeCanBeNarrowerThanAnUnexportedFunction'
 
 	if func.isCompilerBuilt() 'synthesizedAndSpellsNothingAnAuthorWrote'
 		return
@@ -650,7 +650,7 @@ function judgeDeclaredType(project Project, signatures ProgramSignatures, subjec
 
 	// A monomorphized library body carries its `stdlib/` file as its source with an author's type
 	// substituted into the signature, and no library source can have written that name down. Without this
-	// the author's own file-private type earns E3167 against a library function they never wrote.
+	// the author's own unexported type earns E3167 against a library function they never wrote.
 	if signatures.declaredByTheCorpus(subject.reportFilePath) and not signatures.declaredByTheCorpus(declFilePath) 'aLibrarySignatureCannotHaveWrittenAnAuthorsName'
 		return
 	end 'aLibrarySignatureCannotHaveWrittenAnAuthorsName'
@@ -691,7 +691,7 @@ function walkThroughAlias(project Project, signatures ProgramSignatures, subject
 	match kind 'kind'
 		genericAlias then walkInstanceArguments(project, signatures: signatures, subject: inside, where: where, id: signatures.genericAliasInstanceFrom(name, readerFilePath: subject.readerFilePath), seen: seen)
 		functionAlias then walkFunctionAliasShape(project, signatures: signatures, subject: subject, inside: inside, where: where, name: name, seen: seen)
-		tupleAlias then walkSignatureTypeName(project, signatures: signatures, subject: inside, where: where, name: signatures.scopedTupleAlias(name, readerFilePath: subject.readerFilePath).tupleName, seen: seen)
+		tupleAlias then walkSignatureTypeName(project, signatures: signatures, subject: inside, where: where, name: signatures.tupleAliasNamed(name, readerFilePath: subject.readerFilePath).tupleName, seen: seen)
 		structType or
 		enumType or
 		unionType or

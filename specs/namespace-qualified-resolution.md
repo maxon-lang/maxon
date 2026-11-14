@@ -22,7 +22,7 @@ DISCRIMINATE:
   `stdlib` (`stdlib.Byte`); a directory path that cannot be written as a qualifier — a top-level piece
   `export`, `stdlib`, `runtime` or a keyword, or any piece that is not a name — is refused when the compile
   starts (E3182);
-- the qualifier is a NAME LOOKUP and never a visibility bypass — `export`, `module` and file-private each
+- the qualifier is a NAME LOOKUP and never a visibility bypass — `export`, `public` and unmarked each
   answer at the qualified spelling exactly as they answer at the bare one;
 - a bare name declared as a free function in several directories means the one declaration the caller
   may name — a declaration it cannot see never counts toward ambiguity, and two visible ones are E3095;
@@ -33,11 +33,9 @@ DISCRIMINATE:
 - a typealias's identity is its DECLARATION: two aliases of one spelling declared in two places are two
   types even over one range, so a value of one reaches the other (an operator, an argument, a return, a
   store, an `if` or `match` join) only through a cast, and E3005 otherwise;
-- so that each qualified spelling names exactly one declaration, a directory holds at most one
-  NAMEABLE (`export`, `public` or `module`) declaration of a type name: a second one in another file of the
-  same directory is refused at its declaration, E3061 for two aliases and E3006 otherwise. A file-private
-  alias beside it is legal, and is no second meaning for any other file; in its own file the bare name is
-  ambiguous;
+- so that each qualified spelling names exactly one declaration, a directory declares a type name once,
+  whatever the visibility of its declarations: a second one in the same directory is refused at its
+  declaration, E3061 for two aliases and E3006 otherwise;
 - a `Type.method` reading of the same tokens always wins, so a directory may be named after a type
   without moving a single call;
 - the CALL position and the TYPE position read one and the same namespace, segment for segment — a
@@ -386,7 +384,7 @@ end 'main'
 
 
 <!-- test: error.qualified-call-to-non-exported-function -->
-The qualifier is a name LOOKUP, not a visibility bypass: a file-private function named through its
+The qualifier is a name LOOKUP, not a visibility bypass: an unmarked function named through its
 directory is refused by the tier its declaration wrote, and the message is the one that says what is
 actually wrong rather than "no such function".
 ```maxon
@@ -411,14 +409,14 @@ error E3008: app/specs/namespace-qualified-resolution/error.qualified-call-to-no
 ```
 
 
-<!-- test: error.multi-segment-qualified-call-to-module-scoped-function -->
-The same rule through a multi-segment qualifier and the middle tier: a `module` declaration named
-from outside its directory subtree is refused with the tier's own diagnostic.
+<!-- test: error.multi-segment-qualified-call-to-an-unmarked-function -->
+The same rule through a multi-segment qualifier: an unmarked declaration named from outside its directory
+subtree is refused.
 ```maxon
 // --- file: lib/inner/deep.maxon
 export typealias Integer = int(0 to 125)
 
-module function scopedHelper() returns Integer
+function scopedHelper() returns Integer
 	return 7
 end 'scopedHelper'
 
@@ -432,19 +430,19 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: app/specs/namespace-qualified-resolution/error.multi-segment-qualified-call-to-module-scoped-function.maxon:15:19: function 'scopedHelper' is module-scoped and not visible from this directory
+error E3008: app/<fragment>:15:19: function 'scopedHelper' is not exported
 ```
 
 
-<!-- test: error.module-tier-alias-is-not-nameable-outside-its-subtree -->
-A `module`-visible typealias named through its directory from a file outside that subtree. The
+<!-- test: error.an-unmarked-alias-is-not-nameable-outside-its-subtree -->
+An unmarked typealias named through its directory from a file outside that subtree. The
 qualified spelling finds the declaration — which is what makes this the sharper diagnostic rather
 than "unknown type" — and the tier then refuses it.
 ```maxon
 // --- file: feature/types.maxon
-module typealias Level = int(0 to 50)
+typealias Level = int(0 to 50)
 
-module function seed() returns Level
+function seed() returns Level
 	return 21
 end 'seed'
 
@@ -455,13 +453,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: app/specs/namespace-qualified-resolution/error.module-tier-alias-is-not-nameable-outside-its-subtree.maxon:11:16: typealias 'feature.Level' is module-scoped and not visible from this directory
+error E3008: app/<fragment>:11:16: typealias 'feature.Level' is not exported
 ```
 
 
 <!-- test: error.hidden-alias-as-a-qualified-static-call-head -->
 A typealias named through its directory as the HEAD of a static call, `lib.ScoreArray.create(0)`, is refused
-like the same name in any other type position: the declaration is file-private to `lib/scores.maxon`, and
+like the same name in any other type position: the declaration is unmarked to `lib/scores.maxon`, and
 the qualified spelling reaches it without making it visible.
 ```maxon
 // --- file: lib/scores.maxon
@@ -630,8 +628,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: app/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:20:12: type 'Box' is not exported
-error E3167: lib/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:11:18: exported typealias 'lib.StrBox' names file-private type 'Box' in its target
-error E3167: lib/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:13:17: exported function 'lib.made' names file-private type 'Box' in its return type
+error E3167: lib/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:11:18: exported typealias 'lib.StrBox' names unexported type 'Box' in its target
+error E3167: lib/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:13:17: exported function 'lib.made' names unexported type 'Box' in its return type
 ```
 
 <!-- test: error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported -->
@@ -664,8 +662,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: app/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:18:27: type 'Box' is not exported
-error E3167: lib/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:11:18: exported typealias 'lib.StrBox' names file-private type 'Box' in its target
-error E3167: lib/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:13:17: exported function 'lib.made' names file-private type 'Box' in its return type
+error E3167: lib/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:11:18: exported typealias 'lib.StrBox' names unexported type 'Box' in its target
+error E3167: lib/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:13:17: exported function 'lib.made' names unexported type 'Box' in its return type
 ```
 
 <!-- test: error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written -->
@@ -705,8 +703,8 @@ end 'main'
 ```maxoncstderr
 error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:22:21: type 'lib.Item' is not exported
 error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:28:12: type 'Box' is not exported
-error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:15:18: exported typealias 'lib.StrBox' names file-private type 'Box' in its target
-error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:17:17: exported function 'lib.made' names file-private type 'Box' in its return type
+error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:15:18: exported typealias 'lib.StrBox' names unexported type 'Box' in its target
+error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:17:17: exported function 'lib.made' names unexported type 'Box' in its return type
 ```
 
 <!-- test: error.a-written-hidden-name-explains-only-its-own-files-member-reads -->
@@ -741,7 +739,7 @@ end 'main'
 ```maxoncstderr
 error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:16:18: type 'lib.Box' is not exported
 error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:23:12: type 'Box' is not exported
-error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:11:17: exported function 'lib.made' names file-private type 'Box' in its return type
+error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:11:17: exported function 'lib.made' names unexported type 'Box' in its return type
 ```
 
 <!-- test: error.a-written-hidden-typealias-explains-the-member-reads-of-the-type-it-denotes -->
@@ -1172,15 +1170,15 @@ AB
 
 <!-- test: contested-bare-call-with-exactly-one-visible-candidate-resolves -->
 **A DECLARATION THE CALLER CANNOT SEE NEVER COUNTS TOWARD A CONTEST.** `helper` is declared in two
-directories; from `app/`, alpha's is `module`-scoped and out of reach, so beta's exported one is the
+directories; from `app/`, alpha's is unmarked and out of reach, so beta's exported one is the
 only candidate and the bare call resolves to it. Ambiguity is a question about what a file could
-MEAN, and a file cannot mean a name it may not write — otherwise a `module` helper added inside
+MEAN, and a file cannot mean a name it may not write — otherwise an unmarked helper added inside
 `alpha/` would break a call in `app/` that can only ever reach `beta/`.
 
 alpha's helper answers 3 and beta's 7, so the exit code says which one was reached.
 ```maxon
 // --- file: alpha/a.maxon
-module function helper() returns alpha.Integer
+function helper() returns alpha.Integer
 	return 3
 end 'helper'
 
@@ -1213,7 +1211,7 @@ program index files; the parse's own record must be a copy of it, because the fi
 a front-end worker that keeps its index. alpha's helper answers 3 and beta's the length of `hello`.
 ```maxon
 // --- file: alpha/a.maxon
-module function helper(s String) returns alpha.Integer
+function helper(s String) returns alpha.Integer
 	return (s.byteLength() + 2) as alpha.Integer
 end 'helper'
 
@@ -1264,9 +1262,9 @@ end 'main'
 
 
 <!-- test: contested-bare-call-resolves-past-a-file-private-competitor-declared-first -->
-A file-private competitor in another directory, folded BEFORE the exported declaration. The two
+An unmarked competitor in another directory, folded BEFORE the exported declaration. The two
 declarations disagree about the return type (`bool` against an integer), so a call that bound the
-private one would be refused at the cast rather than merely answer differently; `true 8` is only
+unmarked one would be refused at the cast rather than merely answer differently; `true 8` is only
 reachable with each call reaching its own declaration.
 ```maxon
 // --- file: alpha/a.maxon
@@ -1380,9 +1378,9 @@ main 2
 ```
 
 
-<!-- test: contested-bare-call-resolves-past-an-invisible-root-competitor -->
-A ROOT declaration keeps the bare key, but a file-private one is still invisible from `app/`, so it is
-no candidate there and beta's exported declaration is the one the bare call means.
+<!-- test: contested-bare-call-resolves-to-the-roots-unmarked-declaration -->
+A ROOT declaration keeps the bare key, and an unmarked one is visible from every directory, so from `app/`
+the bare call means the root's `helper` and not beta's `public` one.
 ```maxon
 // --- file: r.maxon
 public typealias Integer = int(0 to 125)
@@ -1396,7 +1394,7 @@ public function useRoot() returns Integer
 end 'useRoot'
 
 // --- file: beta/b.maxon
-export function helper() returns Integer
+public function helper() returns Integer
 	return 7
 end 'helper'
 
@@ -1406,15 +1404,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-37
+33
 ```
 
 
-<!-- test: a-let-initializer-call-resolves-past-an-invisible-root-competitor -->
-A `let`'s initializer resolves its bare call the way a body does: the root's `make` is
-file-private, so it is no candidate in `app/`, and beta's exported declaration is the one meant.
+<!-- test: a-let-initializer-call-resolves-past-an-invisible-competitor -->
+A `let`'s initializer resolves its bare call the way a body does: gamma's `make` is unmarked, so it is
+no candidate in `app/`, and beta's exported declaration is the one meant.
 ```maxon
-// --- file: r.maxon
+// --- file: gamma/r.maxon
 public typealias Integer = int(0 to 125)
 
 public type Box
@@ -1450,7 +1448,7 @@ end 'main'
 
 
 <!-- test: a-let-initializer-call-resolves-to-its-one-visible-contested-declaration -->
-Two sibling directories declare `make`; `alpha`'s is file-private, so `beta`'s is the one visible from
+Two sibling directories declare `make`; `alpha`'s is unmarked, so `beta`'s is the one visible from
 `app/`, and a `let`'s initializer means it as a body call would. Returns 37.
 ```maxon
 // --- file: r.maxon
@@ -1574,10 +1572,10 @@ error E3004: <fragment>:5:10: call to undefined function 'nothere'
 
 
 <!-- test: error.a-let-initializer-call-to-a-name-only-invisible-declarations-carry -->
-The root's and `alpha`'s `make` are both file-private, so `app/` can name neither; the `let` initializer is
+`gamma`'s and `alpha`'s `make` are both unmarked, so `app/` can name neither; the `let` initializer is
 refused as a body call naming it is.
 ```maxon
-// --- file: r.maxon
+// --- file: gamma/r.maxon
 public typealias Integer = int(0 to 125)
 
 function make(n Integer) returns Integer
@@ -1604,27 +1602,27 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: app/<fragment>:24:10: function 'make' is not exported
+error E3004: app/<fragment>:24:10: call to undefined function 'make'
 ```
 
 
-<!-- test: contested-bare-call-resolves-past-an-invisible-same-directory-competitor -->
-The caller's OWN directory declares the name, but in another file and file-private, so the local tier
-has nothing this file may name and the one visible declaration elsewhere is the answer.
+<!-- test: contested-bare-call-resolves-to-the-same-directory-declaration-of-another-file -->
+The caller's OWN directory declares the name, in another file and unmarked. An unmarked declaration is
+visible to every file of its directory, so the local tier answers and beta's `public` one is not reached.
 ```maxon
 // --- file: app/other.maxon
-export typealias Integer = int(0 to 125)
+public typealias Integer = int(0 to 125)
 
 function helper() returns Integer
 	return 3
 end 'helper'
 
-export function useOther() returns Integer
+function useOther() returns Integer
 	return helper()
 end 'useOther'
 
 // --- file: beta/b.maxon
-export function helper() returns Integer
+public function helper() returns Integer
 	return 7
 end 'helper'
 
@@ -1634,7 +1632,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-37
+33
 ```
 
 
@@ -1785,10 +1783,9 @@ error E3101: app/<fragment>:24:10: Cannot use throwing function 'beta.risky' as 
 ```
 
 
-<!-- test: error.two-visible-candidates-are-ambiguous-past-an-invisible-root-declaration -->
-A file-private ROOT declaration keeps the bare key, but from `app/` it is no candidate: the call is
-ambiguous between the two visible subdirectory declarations, and the root one is neither reported as
-"not exported" nor listed.
+<!-- test: two-subdirectory-candidates-are-no-ambiguity-beside-the-roots-unmarked-declaration -->
+An unmarked ROOT declaration keeps the bare key and is visible from `app/`, so the call means it: the two
+subdirectory declarations visible beside it do not make the call ambiguous.
 ```maxon
 // --- file: r.maxon
 public typealias Integer = int(0 to 125)
@@ -1802,12 +1799,12 @@ public function useRoot() returns Integer
 end 'useRoot'
 
 // --- file: alpha/f.maxon
-export function pick() returns Integer
+public function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: zulu/f.maxon
-export function pick() returns Integer
+public function pick() returns Integer
 	return 4
 end 'pick'
 
@@ -1816,8 +1813,8 @@ function main() returns ExitCode
 	return (pick() + useRoot()) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3095: app/<fragment>:25:10: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, zulu.pick
+```exitcode
+2
 ```
 
 
@@ -2655,12 +2652,12 @@ end 'main'
 80
 ```
 
-<!-- test: error.a-module-and-an-exported-alias-in-one-directory-are-a-duplicate -->
+<!-- test: error.an-unmarked-and-an-exported-alias-in-one-directory-are-a-duplicate -->
 Two declarations of one name in one directory are a duplicate at the second declaration, whatever tiers
 they were written at.
 ```maxon
 // --- file: api/a.maxon
-module typealias Score = int(0 to 100)
+typealias Score = int(0 to 100)
 
 // --- file: api/b.maxon
 export typealias Score = int(0 to 100)
@@ -2671,12 +2668,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3062: api/<fragment>:3:11: unused typealias: 'Score'
 error E3061: api/<fragment>:6:18: Duplicate typealias 'Score'
 ```
 
 <!-- test: error.a-file-private-alias-beside-its-directorys-exported-one-is-a-duplicate -->
-A directory declares a name once, whatever the visibility of its declarations: the file-private alias beside
-the directory's exported one is a duplicate at the second declaration. The remedy is to rename it.
+A directory declares a name once, whatever the visibility of its declarations: the unmarked alias that one file
+reads beside the directory's exported one is a duplicate at the second declaration. The remedy is to rename it.
 ```maxon
 // --- file: api/a.maxon
 typealias Score = int(0 to 10)
@@ -2702,7 +2700,7 @@ The standard library never takes part in ambiguity: beside the library's `Byte`,
 alias, whose range admits 500.
 ```maxon
 // --- file: wide.maxon
-module typealias Byte = int(0 to 1000)
+typealias Byte = int(0 to 1000)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let b = 500 as Byte
@@ -2719,27 +2717,27 @@ and an argument to a root function declared over the bare name, a type as a para
 and a free function called, called as a statement, and read as a value (5 + 3 + 3 + 1).
 ```maxon
 // --- file: root.maxon
-module type Point
-	module var x as Integer
+type Point
+	var x as Integer
 
-	module static function make() returns Point
+	static function make() returns Point
 		return Point{x: 5}
 	end 'make'
 end 'Point'
 
-module function pick() returns Integer
+function pick() returns Integer
 	return 3
 end 'pick'
 
-module function shout()
+function shout()
 	print("root")
 end 'shout'
 
-module typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-module typealias Byte = int(0 to 1000)
+typealias Byte = int(0 to 1000)
 
-module function widen(b Byte) returns Integer
+function widen(b Byte) returns Integer
 	return b - 499
 end 'widen'
 // --- file: app/main.maxon
@@ -2770,14 +2768,14 @@ A static of a root type is called through `export` both as a statement, the `voi
 `make`.
 ```maxon
 // --- file: root.maxon
-module type Calc
+type Calc
 	export let v as ExitCode
 
-	module static function make() returns Calc
+	static function make() returns Calc
 		return Calc{v: 13}
 	end 'make'
 
-	module static function ping()
+	static function ping()
 		print("ping\n")
 	end 'ping'
 end 'Calc'
@@ -2801,7 +2799,7 @@ the project root, so a directory named `export` is refused when the program is l
 it could be offered a spelling that names the root instead.
 ```maxon
 // --- file: r.maxon
-module typealias Score = int(0 to 100)
+typealias Score = int(0 to 100)
 // --- file: export/t.maxon
 export typealias Score = int(0 to 10)
 // --- file: app/main.maxon
@@ -2901,14 +2899,14 @@ end 'main'
 ```
 
 <!-- test: export-qualified-type-reaches-the-roots-declaration-past-the-readers-own-alias -->
-The same rule through the root qualifier: `export.Foo` is the root module's struct in a parameter type and a
+The same rule through the root qualifier: `export.Foo` is the root directory's struct in a parameter type and a
 static call's base, beside the reading file's own ranged alias.
 ```maxon
 // --- file: r.maxon
-module type Foo
+type Foo
 	export let v as ExitCode
 
-	module static function make() returns Foo
+	static function make() returns Foo
 		return Foo{v: 42}
 	end 'make'
 end 'Foo'
@@ -3028,8 +3026,8 @@ end 'main'
 
 <!-- test: error.a-top-level-binding-named-like-a-directory-claims-a-call-in-an-expression -->
 The binding claims a CALL through its name as it claims a field: in the file that declares `util`, `util.f()` is
-a method call on the binding's `int`, which supplies no `f`, while a file the binding is hidden from calls the
-directory's function.
+a method call on the binding's `int`, which supplies no `f`, while a file in another directory, which the binding
+is hidden from, calls the directory's function.
 ```maxon
 // --- file: util/f.maxon
 export function f() returns ExitCode
@@ -3043,8 +3041,8 @@ function main() returns ExitCode
 	return util.f() + other()
 end 'main'
 
-// --- file: app/other.maxon
-module function other() returns ExitCode
+// --- file: other/other.maxon
+export function other() returns ExitCode
 	return util.f()
 end 'other'
 ```
@@ -3068,8 +3066,8 @@ function main() returns ExitCode
 	return other()
 end 'main'
 
-// --- file: app/other.maxon
-module function other() returns ExitCode
+// --- file: other/other.maxon
+export function other() returns ExitCode
 	return util.f()
 end 'other'
 ```
@@ -3322,11 +3320,11 @@ end 'main'
 
 <!-- test: an-authors-alias-reached-bare-and-qualified-beside-another-directorys-is-one-type -->
 Two directories declare `Score`, and only one of them is visible to `a/t.maxon`, so that file's bare `Score` and
-its `a.Score` name one declaration and are one type. `b`'s module alias is read only inside `b`, where `a`'s
-exported alias is visible too, so it is read there as `b.Score`.
+its `a.Score` name one declaration and are one type. `b`'s unmarked alias is read only inside `b`, where `a`'s
+public alias is visible too, so it is read there as `b.Score`.
 ```maxon
 // --- file: a/s.maxon
-export typealias Score = int(0 to 100)
+public typealias Score = int(0 to 100)
 
 // --- file: a/t.maxon
 export function mix() returns ExitCode
@@ -3336,7 +3334,7 @@ export function mix() returns ExitCode
 end 'mix'
 
 // --- file: b/s.maxon
-module typealias Score = int(0 to 10)
+typealias Score = int(0 to 10)
 
 // --- file: b/t.maxon
 function seed() returns b.Score

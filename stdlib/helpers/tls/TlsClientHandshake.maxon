@@ -1,11 +1,11 @@
 let tlsRecordLegacyVersion = 0x0301
 
-module union TlsCertificateRequest
+union TlsCertificateRequest
 	notRequested
 	requested(context ByteArray, schemes TlsSignatureSchemeCodeArray)
 end 'TlsCertificateRequest'
 
-module union TlsClientPhase
+union TlsClientPhase
 	awaitingServerHello
 	awaitingRetriedServerHello(retrySuite Tls13CipherSuite)
 	awaitingEncryptedExtensions
@@ -16,14 +16,14 @@ module union TlsClientPhase
 	tls12
 end 'TlsClientPhase'
 
-module type TlsClientOffer
-	module var suites as TlsCipherSuiteCodeArray
-	module var sessionId as ByteArray
-	module var versions as TlsVersionCodeArray
-	module var shareGroups as TlsGroupCodeArray
-	module var scan as TlsExtensionScan
+type TlsClientOffer
+	var suites as TlsCipherSuiteCodeArray
+	var sessionId as ByteArray
+	var versions as TlsVersionCodeArray
+	var shareGroups as TlsGroupCodeArray
+	var scan as TlsExtensionScan
 
-	module static function of(hello TlsClientHello) returns TlsClientOffer
+	static function of(hello TlsClientHello) returns TlsClientOffer
 		let scan = TlsExtensionScan.ofBlock(hello.extensions().clone())
 		let versions = scan.supportedVersions.clone()
 		let shareGroups = TlsGroupCodeArray.create(0)
@@ -40,17 +40,17 @@ module type TlsClientOffer
 	end 'of'
 end 'TlsClientOffer'
 
-module type TlsReadHello
-	module var hello as TlsServerHello
-	module var isRetry as bool
-	module var suite as Tls13CipherSuite
+type TlsReadHello
+	var hello as TlsServerHello
+	var isRetry as bool
+	var suite as Tls13CipherSuite
 
-	module static function create(hello TlsServerHello, isRetry bool, suite Tls13CipherSuite) returns TlsReadHello
+	static function create(hello TlsServerHello, isRetry bool, suite Tls13CipherSuite) returns TlsReadHello
 		return Self{hello: hello, isRetry: isRetry, suite: suite}
 	end 'create'
 end 'TlsReadHello'
 
-module union TlsAdmittedHello
+union TlsAdmittedHello
 	tls13(read TlsReadHello)
 	tls12(read Tls12ReadHello)
 end 'TlsAdmittedHello'
@@ -80,15 +80,15 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 		return Self{config: config, entropy: entropy, peer: peer, helloSource: helloSource, storedSession: session, phase: TlsClientPhase.awaitingServerHello, offer: offer, firstHello: hello, tls12: Tls12ClientFlow.create(config, entropy: entropy, peer: peer, session: session, offer: offer, clientRandom: hello.random())}
 	end 'create'
 
-	module function receive(record ByteArray) throws TlsHandshakeError
+	function receive(record ByteArray) throws TlsHandshakeError
 		try storedSession.receive(record, handler: self)
 	end 'receive'
 
-	module function session() returns TlsSession
+	function session() returns TlsSession
 		return storedSession
 	end 'session'
 
-	module function dispatch(message ByteArray) throws TlsHandshakeError
+	function dispatch(message ByteArray) throws TlsHandshakeError
 		match phase 'phase'
 			awaitingServerHello then try onServerHello(message)
 			awaitingRetriedServerHello(retrySuite) then try onRetriedServerHello(message, retrySuite: retrySuite)

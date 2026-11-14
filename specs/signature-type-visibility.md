@@ -13,13 +13,12 @@ A function's signature is part of its visibility contract: whoever may call the 
 to name what the call takes and gives back. So every type a signature names must carry a written
 visibility at least the function's own.
 
-The four tiers, narrowest first — `public` outranks `export` for this rule, so a `public` function may not
+The three tiers, narrowest first — `public` outranks `export` for this rule, so a `public` function may not
 name an `export` type:
 
 | modifier | tier word in the diagnostic |
 |----------|-----------------------------|
-| *(none)* | `file-private` |
-| `module` | `module` |
+| *(none)* | `unexported` |
 | `export`  | `exported` |
 | `public` | `public` |
 
@@ -44,11 +43,10 @@ One diagnostic per offending (function, type, position), in signature order — 
 then the return type, then the throws clause — anchored at the function NAME:
 
 ```text
-error E3167: api/lib.maxon:3:17: exported function 'api.f' names file-private typealias 'ElementIndex' in the type of parameter 'i'
+error E3167: api/lib.maxon:3:17: exported function 'api.f' names unexported typealias 'ElementIndex' in the type of parameter 'i'
 ```
 
-A `module`, `export` or `public` binding is held to the same rule: a top-level `let` or `var`, and a
-`static let` or `static var` member. Its type is the one its initializer gives it, whether or not the
+An `export` or `public` binding is held to the same rule: a top-level `let` and a `static let` member. Its type is the one its initializer gives it, whether or not the
 binding writes it, and the alias the initializer was spelled through — a cast's `as Small`, or the
 `Tallies` in `Tallies.create()` — is judged with it. The refusal sits at the binding name; a `let` is a
 "constant", a `var` a "variable", and the position is "in its type":
@@ -63,7 +61,7 @@ export let BIG = Status.big   // E3167
 ```
 
 ```text
-error E3167: api/lib.maxon:6:12: exported constant 'api.BIG' names file-private enum 'Status' in its type
+error E3167: api/lib.maxon:6:12: exported constant 'api.BIG' names unexported enum 'Status' in its type
 ```
 
 Widen the type to the binding's tier (`export enum Status`), or narrow the binding (`let BIG`).
@@ -81,7 +79,7 @@ Every other surface a declaration exposes is held to the same rule, with its own
 | an `extends` clause | `interface` | `in its extends clause` | the interface's |
 | a struct-backed enum's backing record | `enum` | `in its backing record` | the enum's |
 
-An unmarked field is private to its type and is asked nothing. A field or payload is reported at the type it
+An unmarked field is visible only inside its type's directory and is asked nothing. A field or payload is reported at the type it
 writes, every other surface at the declaration's name:
 
 ```text
@@ -96,19 +94,19 @@ end 'Holder'
 ```
 
 ```text
-error E3167: api/lib.maxon:7:21: exported field 'api.Holder.mode' names file-private enum 'Mode' in its type
+error E3167: api/lib.maxon:7:21: exported field 'api.Holder.mode' names unexported enum 'Mode' in its type
 ```
 
 A service's `handle` is its service's tier, so a surface naming `Worker.handle` names `Worker`.
 
-A surface reached from another file counts as a use of every type it names this way, and so does a surface
+A surface reached from another directory counts as a use of every type it names this way, and so does a surface
 of a type that is itself so used: a field of a type only an exported function returns credits the field's
 type. That keeps an `export` type that only an exported surface exposes clear of
 [E3092](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3092).
 
 ### The library is held to it too
 
-A typealias written in `stdlib/` with no modifier is file-private to the library file it lives in, the
+A typealias written in `stdlib/` with no modifier is visible only in its library directory's subtree, the
 same as anyone's, and any library declaration without `public` is hidden from author code, so user code
 that names one — bare or as `stdlib.Name` — is refused where it writes the name. Every alias a `public`
 library signature names is therefore written `public` itself.
@@ -137,29 +135,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:5:17: exported function 'api.f' names file-private typealias 'ElementIndex' in the type of parameter 'i'
-error E3167: api/<fragment>:5:17: exported function 'api.f' names file-private typealias 'ElementIndex' in its return type
-```
-
-<!-- test: error.a-module-function-names-a-file-private-type -->
-The tier word follows the function's own modifier: `module`, not `exported`. The caller sits in the
-declaring directory, which is the only place a `module` function is reachable from.
-```maxon
-// --- file: api/lib.maxon
-typealias ElementIndex = int(0 to 100)
-
-module function show(i ElementIndex)
-	print("{i}")
-end 'show'
-
-// --- file: api/main.maxon
-function main() returns ExitCode
-	show(7)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:5:17: module function 'api.show' names file-private typealias 'ElementIndex' in the type of parameter 'i'
+error E3167: api/<fragment>:5:17: exported function 'api.f' names unexported typealias 'ElementIndex' in the type of parameter 'i'
+error E3167: api/<fragment>:5:17: exported function 'api.f' names unexported typealias 'ElementIndex' in its return type
 ```
 
 <!-- test: error.an-export-function-throws-a-file-private-error -->
@@ -187,18 +164,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:17: exported function 'api.f' names file-private enum 'LibError' in its throws clause
+error E3167: api/<fragment>:7:17: exported function 'api.f' names unexported enum 'LibError' in its throws clause
 ```
 
-<!-- test: error.an-export-function-names-a-module-type -->
-`module` is NARROWER than `export`, so the violation is one tier wide rather than all the way down to
-file-private. Both tier words are read off the written modifiers.
+<!-- test: error.an-export-function-read-in-its-directory-names-an-unmarked-type -->
+The only reader sits in `api/` itself, where `Config` is visible, and the rule still holds: an `export`
+function's surface is judged at `export`, whoever calls it. Both tier words are read off the written modifiers.
 ```maxon
 // --- file: api/config.maxon
-module type Config
-	module var size as ExitCode
+type Config
+	var size as ExitCode
 
-	module static function create(size ExitCode) returns Self
+	static function create(size ExitCode) returns Self
 		return Self{size: size}
 	end 'create'
 end 'Config'
@@ -215,7 +192,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:11:17: exported function 'api.make' names module type 'Config' in its return type
+error E3167: api/<fragment>:11:17: exported function 'api.make' names unexported type 'Config' in its return type
 ```
 
 <!-- test: error.a-public-function-names-an-export-type -->
@@ -249,7 +226,7 @@ error E3167: api/<fragment>:11:17: public function 'api.make' names exported typ
 <!-- test: error.a-type-argument-counts -->
 ⭐⭐ **THE WALK IS STRUCTURAL, NOT SURFACE.** `SecretArray` is `export` and passes on its own; the
 element it carries does not, and a caller holding the array holds `Secret` values. Asking only the
-written name would let every file-private type out through one exported alias.
+written name would let every unmarked type out through one exported alias.
 ```maxon
 // --- file: api/lib.maxon
 type Secret
@@ -276,8 +253,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:9:18: exported typealias 'api.SecretArray' names file-private type 'Secret' in its target
-error E3167: api/<fragment>:11:17: exported function 'api.all' names file-private type 'Secret' in its return type
+error E3167: api/<fragment>:9:18: exported typealias 'api.SecretArray' names unexported type 'Secret' in its target
+error E3167: api/<fragment>:11:17: exported function 'api.all' names unexported type 'Secret' in its return type
 ```
 
 <!-- test: error.a-tuple-element-counts -->
@@ -302,7 +279,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:9:17: exported function 'api.pair' names file-private type 'Secret' in its return type
+error E3167: api/<fragment>:9:17: exported function 'api.pair' names unexported type 'Secret' in its return type
 ```
 
 <!-- test: error.a-generic-instances-base-type-counts -->
@@ -333,8 +310,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:11:18: exported typealias 'api.IntBox' names file-private type 'Box' in its target
-error E3167: api/<fragment>:13:17: exported function 'api.wrap' names file-private type 'Box' in its return type
+error E3167: api/<fragment>:11:18: exported typealias 'api.IntBox' names unexported type 'Box' in its target
+error E3167: api/<fragment>:13:17: exported function 'api.wrap' names unexported type 'Box' in its return type
 ```
 
 <!-- test: error.a-method-outranks-its-parameter-type -->
@@ -362,7 +339,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:10:18: public function 'api.Box.get' names file-private typealias 'Slot' in the type of parameter 'index'
+error E3167: api/<fragment>:10:18: public function 'api.Box.get' names unexported typealias 'Slot' in the type of parameter 'index'
 ```
 
 <!-- test: error.a-user-name-containing-union-cases-is-still-checked -->
@@ -389,13 +366,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:10:18: exported function 'api.Holder.unionCasesFor' names file-private typealias 'Slot' in the type of parameter 'index'
+error E3167: api/<fragment>:10:18: exported function 'api.Holder.unionCasesFor' names unexported typealias 'Slot' in the type of parameter 'index'
 ```
 
 <!-- test: error.a-public-interface-member-names-a-file-private-type -->
 An interface member writes no modifier of its own, so it takes the INTERFACE's: a caller reaches the
 requirement through `Sized`, and whatever can name `Sized` must be able to name what `size` returns.
-The conforming `Box.size` is file-private and names the same alias legally — the tier that was
+The conforming `Box.size` is unmarked and names the same alias legally — the tier that was
 breached is the interface's.
 ```maxon
 // --- file: api/lib.maxon
@@ -426,12 +403,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:6:11: public function 'api.Sized.size' names file-private typealias 'Count' in its return type
+error E3167: api/<fragment>:6:11: public function 'api.Sized.size' names unexported typealias 'Count' in its return type
 ```
 
 <!-- test: error.a-narrower-generic-alias-in-an-interface-requirement-return-is-refused -->
 A generic alias is a declaration like a ranged one, and a requirement's return type is asked like a
-function's. `Tallies` is file-private and `Stocked` is `export`, so whatever can name `Stocked` must be able to
+function's. `Tallies` is unmarked and `Stocked` is `export`, so whatever can name `Stocked` must be able to
 name what `items` returns.
 ```maxon
 // --- file: api/lib.maxon
@@ -464,12 +441,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:6:11: exported function 'api.Stocked.items' names file-private typealias 'Tallies' in its return type
+error E3167: api/<fragment>:6:11: exported function 'api.Stocked.items' names unexported typealias 'Tallies' in its return type
 ```
 
 <!-- test: error.a-narrower-alias-as-an-instance-argument-in-an-interface-requirement-is-refused -->
 The structural walk reaches a requirement's parameters too. `Secrets` is `export`, but the element it carries
-is the file-private `Secret`, and a conformer's caller hands `keep` an array of them.
+is the unmarked `Secret`, and a conformer's caller hands `keep` an array of them.
 ```maxon
 // --- file: api/lib.maxon
 typealias Secret = int(0 to 9)
@@ -501,13 +478,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:4:18: exported typealias 'api.Secrets' names file-private typealias 'Secret' in its target
-error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Secret' in the type of parameter 'xs'
+error E3167: api/<fragment>:4:18: exported typealias 'api.Secrets' names unexported typealias 'Secret' in its target
+error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names unexported typealias 'Secret' in the type of parameter 'xs'
 ```
 
 <!-- test: error.an-interface-inner-alias-over-a-file-private-type-is-refused -->
 An alias declared inside an interface body is as visible as its right-hand side, not as its interface.
-`ElementArray` sits inside the `export` interface `Keeper`, but it carries the file-private `Foo`, and a
+`ElementArray` sits inside the `export` interface `Keeper`, but it carries the unmarked `Foo`, and a
 conformer's caller hands `keep` an array of them.
 ```maxon
 // --- file: api/lib.maxon
@@ -546,15 +523,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Foo' in the type of parameter 'xs'
+error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names unexported typealias 'Foo' in the type of parameter 'xs'
 ```
 
 <!-- test: error.a-stdlib-internal-alias-is-not-nameable-from-user-code -->
 ⭐⭐ **THE LIBRARY IS HELD TO THE SAME RULE, AND THIS IS WHAT THAT COSTS USER CODE.**
 `stdlib/Math.maxon:8` writes `typealias SeriesTermLimit = int(2 to 64)` with no modifier; its one
-reader is `Math.lnBySeries`, a file-private static, and no other library file names it. It is an
+reader is `Math.lnBySeries`, an unmarked static, and no other library file names it. It is an
 implementation detail of one function's term count, and nothing about `Math`'s public surface says it
-exists. It is file-private, so the name resolves to nothing the author may name at the `as`, and the
+exists. It is unmarked, so the name resolves to nothing the author may name at the `as`, and the
 compiler gives the answer it gives for any other file's non-exported typealias.
 ```maxon
 // --- file: api/lib.maxon
@@ -573,16 +550,16 @@ end 'main'
 error E3008: api/<fragment>:4:15: typealias 'SeriesTermLimit' is not exported
 ```
 
-<!-- test: error.an-export-function-names-a-module-type-declared-in-another-file -->
-The declaring file is not the naming file. `Config` is `module`, so `api/lib.maxon` may name it and
+<!-- test: error.an-export-function-names-an-unmarked-type-declared-in-another-file -->
+The declaring file is not the naming file. `Config` is unmarked, so `api/lib.maxon` may name it and
 `app/main.maxon` may not — which is exactly the gap the rule closes, and the only shape in this file
 where the type and the function are written in two different files.
 ```maxon
 // --- file: api/other.maxon
-module type Config
-	module var size as ExitCode
+type Config
+	var size as ExitCode
 
-	module static function create(size ExitCode) returns Self
+	static function create(size ExitCode) returns Self
 		return Self{size: size}
 	end 'create'
 end 'Config'
@@ -602,8 +579,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:12:17: exported function 'api.make' names module type 'Config' in its return type
-error E3167: api/<fragment>:16:17: exported function 'api.sizeOf' names module type 'Config' in the type of parameter 'c'
+error E3167: api/<fragment>:12:17: exported function 'api.make' names unexported type 'Config' in its return type
+error E3167: api/<fragment>:16:17: exported function 'api.sizeOf' names unexported type 'Config' in the type of parameter 'c'
 ```
 
 Now the guards. Each is legal: the rule is a floor under the function's own
@@ -611,7 +588,7 @@ tier, and nothing below that floor is an error.
 
 <!-- test: a-file-private-function-may-name-a-public-type -->
 The bar is one-directional. A narrow function may name anything it can see — `scoreOf` is
-file-private and names two `public` declarations, which is the common case and must stay silent.
+unmarked and names two `public` declarations, which is the common case and must stay silent.
 ```maxon
 // --- file: api/lib.maxon
 public typealias Score = int(0 to 100)
@@ -670,7 +647,7 @@ end 'main'
 ```
 
 <!-- test: a-type-parameter-named-like-a-file-private-type-is-not-judged -->
-Inside `Bag`, `Item` is `Bag`'s type parameter, whatever else in the file holds the name. The file-private
+Inside `Bag`, `Item` is `Bag`'s type parameter, whatever else in the file holds the name. The unmarked
 `type Item` beside it is a different declaration, and `first` names only the parameter, so nothing is asked.
 ```maxon
 // --- file: api/lib.maxon
@@ -752,11 +729,11 @@ end 'main'
 ```
 
 <!-- test: a-function-naming-an-alias-beside-an-invisible-interface-of-its-name-is-judged-by-the-alias -->
-`lib/`'s interface `X` is `module`, so the root cannot see it and its bare `X` means its own `public` alias.
+`lib/`'s interface `X` is unmarked, so the root cannot see it and its bare `X` means its own `public` alias.
 `f` names that alias, at `f`'s own tier; the interface is never asked.
 ```maxon
 // --- file: lib/shape.maxon
-module interface X
+interface X
 	function size() returns ExitCode
 end 'X'
 
@@ -803,7 +780,7 @@ end 'main'
 <!-- test: an-inner-alias-in-an-exported-method-is-not-judged-as-the-files-same-named-alias -->
 Inside `Wrapper`, a bare `Idx` means `Wrapper`'s own alias, whatever the file declares under the same name.
 `at` names that inner alias, which is `export` like `at` and whose right-hand side is a range naming no
-declaration, so `at` is legal and the file-private `Idx` beside it is never asked. `7` is outside the file's
+declaration, so `at` is legal and the unmarked `Idx` beside it is never asked. `7` is outside the file's
 `Idx` and inside the inner one.
 ```maxon
 // --- file: api/lib.maxon
@@ -845,9 +822,9 @@ end 'main'
 ```
 
 <!-- test: error.an-unmarked-inner-alias-in-an-exported-signature-is-refused -->
-A type's inner alias carries its own modifier like any other member, and an unmarked one is file-private
+A type's inner alias carries its own modifier like any other member, and an unmarked one is unmarked
 however visible its type is. `Idx` sits inside the `export` type `Wrapper` with no modifier, so the
-`export` method `at` names a file-private alias.
+`export` method `at` names an unmarked alias.
 ```maxon
 // --- file: api/lib.maxon
 export type Wrapper
@@ -868,12 +845,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:10:18: exported function 'api.Wrapper.at' names file-private typealias 'Idx' in the type of parameter 'i'
+error E3167: api/<fragment>:10:18: exported function 'api.Wrapper.at' names unexported typealias 'Idx' in the type of parameter 'i'
 ```
 
 <!-- test: error.an-extension-in-another-file-naming-a-file-private-inner-alias-is-refused -->
-An extension written in another file names the type's unmarked inner alias `Arr`, which is private to the
-file declaring `Wrapper`, so `api/more.maxon` cannot name it at all, and the `export` method `f` could not
+An extension written in another directory names the type's unmarked inner alias `Arr`, which is visible only
+in `api/`, so `more/more.maxon` cannot name it at all, and the `export` method `f` could not
 hand it to a caller either.
 ```maxon
 // --- file: api/lib.maxon
@@ -885,7 +862,7 @@ export type Wrapper
 	end 'make'
 end 'Wrapper'
 
-// --- file: api/more.maxon
+// --- file: more/more.maxon
 export extension Wrapper
 	export function f(xs Arr) returns ExitCode
 		return xs.count() as ExitCode
@@ -898,11 +875,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: api/<fragment>:13:23: typealias 'Arr' is not exported
+error E3008: more/<fragment>:13:23: typealias 'Arr' is not exported
 ```
 
 <!-- test: error.a-qualified-file-private-inner-alias-from-another-file-is-refused -->
-Qualifying the name does not widen it. `Wrapper.Idx` is unmarked, so it is private to `api/lib.maxon`
+Qualifying the name does not widen it. `Wrapper.Idx` is unmarked, so it is unmarked to `api/lib.maxon`
 however visible `Wrapper` is, and `app/main.maxon` cannot name it as `Wrapper.Idx` any more than bare.
 ```maxon
 // --- file: api/lib.maxon
@@ -933,7 +910,7 @@ error E3008: app/<fragment>:16:14: typealias 'Wrapper.Idx' is not exported
 
 <!-- test: error.a-per-instance-spelling-of-a-file-private-inner-alias-is-refused -->
 An instance alias reaches the same member. `Pools` names `Pool with ExitCode`, so `Pools.Idx` is that
-instance's copy of `Pool`'s unmarked inner alias, private to `api/lib.maxon`, and naming it from
+instance's copy of `Pool`'s unmarked inner alias, unmarked to `api/lib.maxon`, and naming it from
 `app/main.maxon` is refused as the generic's own spelling is.
 ```maxon
 // --- file: api/lib.maxon
@@ -970,14 +947,14 @@ Equal is enough at every tier — the rule asks "at least as visible", not "wide
 in one program so that a check written as a strict comparison fails on both.
 ```maxon
 // --- file: api/lib.maxon
-export typealias Score = int(0 to 100)
-module typealias Slot = int(0 to 100)
+public typealias Score = int(0 to 100)
+typealias Slot = int(0 to 100)
 
-export function scored(s Score) returns Score
+public function scored(s Score) returns Score
 	return s
 end 'scored'
 
-module function slotted(s Slot) returns Slot
+function slotted(s Slot) returns Slot
 	return s
 end 'slotted'
 
@@ -1062,11 +1039,11 @@ end 'main'
 32
 ```
 
-<!-- test: error.a-reached-module-demand-does-not-excuse-an-export -->
-⚠ **A REACHED DEMAND EXCUSES ONLY THE TIER IT ASKS FOR.** `hold` is `module` and `pkg/sub/user.maxon`
-reaches it, so the demand on `Item` is reached and E3092 is rightly silent — but what a `module` function
-needs is a `module` type. `Item` is `export`, nothing outside the subtree names it, and E3093 is the
-verdict the audit gives without the demand at all.
+<!-- test: error.a-reached-unmarked-demand-does-not-excuse-an-export -->
+⚠ **A REACHED DEMAND EXCUSES ONLY THE TIER IT ASKS FOR.** `hold` is unmarked and `pkg/sub/user.maxon`
+reaches it, so the demand on `Item` is reached — but what an unmarked function needs is an unmarked type.
+`Item` is `export`, nothing outside `pkg/` names it, and E3092 is the verdict the audit gives without the
+demand at all.
 ```maxon
 // --- file: pkg/lib.maxon
 export type Item
@@ -1077,7 +1054,7 @@ export type Item
 	end 'create'
 end 'Item'
 
-module function hold(it Item) returns ExitCode
+function hold(it Item) returns ExitCode
 	return it.n
 end 'hold'
 
@@ -1092,12 +1069,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3093: pkg/<fragment>:3:13: exported type 'Item' is only referenced inside its declaring module subtree; consider 'module' visibility
+error E3092: pkg/<fragment>:3:13: exported type 'Item' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.a-contested-generic-alias-is-judged-by-the-readers-own-declaration -->
 ⚠ **THE TIER IS THE READER'S DECLARATION'S, NOT THE FIRST ONE FILED UNDER THE NAME.** The library declares a
-`public` `StringArray`, and `pkg/lib.maxon` keeps a file-private one of its own, which is what its bare
+`public` `StringArray`, and `pkg/lib.maxon` keeps an unmarked one of its own, which is what its bare
 `StringArray` means because the library takes no part in ambiguity. `pkg.apply` is `export` and its `Handler`
 is spelled over `pkg/lib.maxon`'s `StringArray`, so that is the declaration it is held against — a door that
 answered with the library's declaration would read its `public` tier and refuse nothing, as it refuses nothing
@@ -1128,14 +1105,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:12:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
-error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
-error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'b'
+error E3167: pkg/<fragment>:12:18: exported typealias 'pkg.Handler' names unexported typealias 'StringArray' in its target
+error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names unexported typealias 'StringArray' in the type of parameter 'h'
+error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names unexported typealias 'StringArray' in the type of parameter 'b'
 ```
 
 <!-- test: error.an-alias-walked-from-another-file-judges-its-components-in-its-own-file -->
 ⚠ **AN ALIAS'S COMPONENTS MEAN WHAT THEY MEAN WHERE THE ALIAS IS WRITTEN.** `Handler` is declared in
-`pkg/lib.maxon`, whose bare `StringArray` is its own file-private alias. `pkg/use.maxon` declares no
+`pkg/lib.maxon`, whose bare `StringArray` is its own unmarked alias. `pkg/use.maxon` declares no
 `StringArray`, so there the bare name would mean the library's `public` one. `apply` is written in
 `pkg/use.maxon`, but the `StringArray` it reaches through `Handler` is `pkg/lib.maxon`'s, and that is the
 declaration it is held against.
@@ -1156,13 +1133,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:5:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
-error E3167: pkg/<fragment>:8:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
+error E3167: pkg/<fragment>:5:18: exported typealias 'pkg.Handler' names unexported typealias 'StringArray' in its target
+error E3167: pkg/<fragment>:8:17: exported function 'pkg.apply' names unexported typealias 'StringArray' in the type of parameter 'h'
 ```
 
 <!-- test: error.a-function-alias-over-a-file-private-instance-element-is-refused -->
 A function alias's parameter that is a generic alias is asked like any other component. `Cb` is `export`,
-and its parameter `Secrets` is file-private, so `f` names a file-private alias. The walk stops at the first
+and its parameter `Secrets` is unmarked, so `f` names an unmarked alias. The walk stops at the first
 narrower declaration it reaches, so `Secret` inside `Secrets` is not reported as well.
 ```maxon
 // --- file: api/lib.maxon
@@ -1183,8 +1160,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:6:18: exported typealias 'api.Cb' names file-private typealias 'Secrets' in its target
-error E3167: api/<fragment>:8:17: exported function 'api.f' names file-private typealias 'Secrets' in the type of parameter 'cb'
+error E3167: api/<fragment>:6:18: exported typealias 'api.Cb' names unexported typealias 'Secrets' in its target
+error E3167: api/<fragment>:8:17: exported function 'api.f' names unexported typealias 'Secrets' in the type of parameter 'cb'
 ```
 
 <!-- test: error.a-file-private-tuple-alias-in-an-exported-signature-is-refused -->
@@ -1204,7 +1181,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:5:17: exported function 'api.first' names file-private typealias 'Pair' in the type of parameter 'p'
+error E3167: api/<fragment>:5:17: exported function 'api.first' names unexported typealias 'Pair' in the type of parameter 'p'
 ```
 
 ## A service MESSAGE is judged at its service type's tier
@@ -1216,10 +1193,10 @@ the word `export` — so a message is held to its service type's written tier. E
 the rule above: its own modifier is the bar.
 
 <!-- test: a-service-message-may-name-a-file-private-type -->
-⭐⭐ **THE MESSAGE'S `export` MEANS "MESSAGE", NOT "WIDER THAN THE TYPE".** `Worker` is file-private and so
+⭐⭐ **THE MESSAGE'S `export` MEANS "MESSAGE", NOT "WIDER THAN THE TYPE".** `Worker` is unmarked and so
 is `Report`, and the only spelling that can reach `run` is a handle produced by a `spawn` written in this
-same file — nothing outside it can name the type, hold the handle or see the reply. Judging `run` by its
-own modifier reports E3167 on a reply no other file can even receive, which would make every file-private
+same directory — nothing outside it can name the type, hold the handle or see the reply. Judging `run` by its
+own modifier reports E3167 on a reply no other directory can even receive, which would make every unmarked
 service's message surface unwritable over the service's own types.
 ```maxon
 // --- file: api/lib.maxon
@@ -1265,7 +1242,7 @@ end 'main'
 is the case above with `export` written on `type Worker`; every other byte is the same. Now any file may
 name `Worker`, spawn one and hold the handle `run` sits on — so `run`'s reply has to be nameable at that
 tier, and `Report` is not. A message exempt from the rule outright, rather than moved to its type's tier,
-would let an exported service hand a file-private record to a caller with no spelling for it.
+would let an exported service hand an unmarked record to a caller with no spelling for it.
 
 ⚠ `Worker` is named nowhere outside `api/lib.maxon`, which is E3092 — and `checkUnusedExports` audits only
 a program no other check has refused (`UnusedExportCheck`), so the stderr below is the whole of it.
@@ -1305,11 +1282,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:20:18: exported function 'api.Worker.run' names file-private type 'Report' in its return type
+error E3167: api/<fragment>:20:18: exported function 'api.Worker.run' names unexported type 'Report' in its return type
 ```
 
 <!-- test: error.a-contested-function-alias-is-named-as-written -->
-Two directories declare a file-private `Op` over two shapes, so each declaration is held under a name of its
+Two directories declare an unmarked `Op` over two shapes, so each declaration is held under a name of its
 own inside the compiler. The refusal still names `Op`, which is what the author wrote.
 ```maxon
 // --- file: aaa/a.maxon
@@ -1337,7 +1314,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: aaa/<fragment>:6:17: exported function 'aaa.twice' names file-private typealias 'Op' in the type of parameter 'f'
+error E3167: aaa/<fragment>:6:17: exported function 'aaa.twice' names unexported typealias 'Op' in the type of parameter 'f'
 ```
 
 ## A top-level binding is judged by its type
@@ -1361,36 +1338,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:12: exported constant 'api.BIG' names file-private enum 'Status' in its type
+error E3167: api/<fragment>:8:12: exported constant 'api.BIG' names unexported enum 'Status' in its type
 ```
 
-<!-- test: error.a-module-let-of-a-file-private-enum-type-is-refused -->
-The tier word follows the binding's own modifier, as a function's does.
-```maxon
-// --- file: api/lib.maxon
-enum Status
-	big
-	small
-end 'Status'
-
-module let BIG = Status.big
-
-// --- file: api/main.maxon
-function main() returns ExitCode
-	return 7 if BIG == BIG else 0
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:8:12: module constant 'api.BIG' names file-private enum 'Status' in its type
-```
-
-<!-- test: error.a-public-let-of-a-module-enum-is-refused -->
-`public` outranks every other tier, so a `public` binding may not hold even an `export` type, and a `module`
+<!-- test: error.a-public-let-of-an-unmarked-enum-is-refused -->
+`public` outranks every other tier, so a `public` binding may not hold even an `export` type, and an unmarked
 enum is two tiers short. The type here comes from the initializer: `Config.small` is the whole of what
 says what `DEFAULT` holds.
 ```maxon
 // --- file: api/config.maxon
-module enum Config
+enum Config
 	small
 	large
 end 'Config'
@@ -1403,7 +1360,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:12: public constant 'api.DEFAULT' names module enum 'Config' in its type
+error E3167: api/<fragment>:8:12: public constant 'api.DEFAULT' names unexported enum 'Config' in its type
 ```
 
 <!-- test: error.an-exported-let-of-an-inferred-file-private-enum-is-refused -->
@@ -1428,7 +1385,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:12: exported constant 'api.SHARED' names file-private enum 'Secret' in its type
+error E3167: api/<fragment>:8:12: exported constant 'api.SHARED' names unexported enum 'Secret' in its type
 ```
 
 <!-- test: error.an-export-static-let-of-a-file-private-enum-type-is-refused -->
@@ -1451,7 +1408,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:9:20: exported constant 'api.Holder.DEFAULT' names file-private enum 'Status' in its type
+error E3167: api/<fragment>:9:20: exported constant 'api.Holder.DEFAULT' names unexported enum 'Status' in its type
 ```
 
 <!-- test: error.an-exported-let-cast-to-a-file-private-alias-is-refused -->
@@ -1468,7 +1425,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:5:12: exported constant 'api.CAP' names file-private typealias 'Small' in its type
+error E3167: api/<fragment>:5:12: exported constant 'api.CAP' names unexported typealias 'Small' in its type
 ```
 
 <!-- test: error.an-exported-let-built-through-a-file-private-generic-alias-is-refused -->
@@ -1486,7 +1443,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:5:12: exported constant 'api.EMPTY' names file-private typealias 'Tallies' in its type
+error E3167: api/<fragment>:5:12: exported constant 'api.EMPTY' names unexported typealias 'Tallies' in its type
 ```
 
 <!-- test: an-exported-let-of-an-exported-enum-is-legal -->
@@ -1515,7 +1472,7 @@ end 'main'
 ```
 
 <!-- test: a-file-private-let-of-a-file-private-type-is-legal -->
-A binding no narrower than its type is not asked anything: both are file-private, and nothing outside
+A binding no narrower than its type is not asked anything: both are unmarked, and nothing outside
 `api/lib.maxon` can reach either.
 ```maxon
 // --- file: api/lib.maxon
@@ -1564,7 +1521,7 @@ hi3
 ```
 
 <!-- test: an-inferred-library-type-is-not-judged-as-a-same-named-private-one -->
-`api/lib.maxon` declares a file-private `HeapCensusMode` of its own, beside the library's `public` one. `MODE`
+`api/lib.maxon` declares an unmarked `HeapCensusMode` of its own, beside the library's `public` one. `MODE`
 holds `stdlib.HeapCensusMode.byTag`, so its type is the library's enum: the declaration the initializer
 reached, not whichever `HeapCensusMode` the binding's own file declares.
 ```maxon
@@ -1605,7 +1562,7 @@ end 'main'
 
 <!-- test: error.an-exported-let-of-a-private-enum-beside-the-librarys-is-refused -->
 The pair of the case above: the binding holds the file's own `HeapCensusMode`, and the refusal names the
-file-private declaration the initializer reached.
+unmarked declaration the initializer reached.
 ```maxon
 // --- file: api/lib.maxon
 enum HeapCensusMode
@@ -1621,12 +1578,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:12: exported constant 'api.MODE' names file-private enum 'HeapCensusMode' in its type
+error E3167: api/<fragment>:8:12: exported constant 'api.MODE' names unexported enum 'HeapCensusMode' in its type
 ```
 
 <!-- test: a-parameter-naming-the-librarys-type-is-not-judged-as-a-same-named-private-one -->
 A function's parameter type is judged by the declaration it names, the same as a binding's type:
-`stdlib.HeapCensusMode` is the library's `public` enum, and the file-private `HeapCensusMode` beside the
+`stdlib.HeapCensusMode` is the library's `public` enum, and the unmarked `HeapCensusMode` beside the
 function is another type.
 ```maxon
 // --- file: api/lib.maxon
@@ -1670,14 +1627,14 @@ end 'main'
 ```
 
 <!-- test: equal-tiers-are-legal-for-bindings -->
-Equal is enough for a binding too, at both tiers that name a type: `module` beside `module`, `public` beside
+Equal is enough for a binding too, at both tiers that name a type: unmarked beside unmarked, `public` beside
 `public`.
 ```maxon
 // --- file: api/lib.maxon
-module typealias Slot = int(0 to 100)
+typealias Slot = int(0 to 100)
 public typealias Score = int(0 to 100)
 
-module let FIRST = 3 as Slot
+let FIRST = 3 as Slot
 public let TOP = 9 as Score
 
 // --- file: api/main.maxon
@@ -1735,44 +1692,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:9:21: exported field 'api.Holder.mode' names file-private enum 'Mode' in its type
-```
-
-<!-- test: error.an-exported-field-of-a-module-enum-type-is-refused -->
-`module` is one tier short of `export`, and the tier word follows the type.
-```maxon
-// --- file: api/lib.maxon
-module enum Mode
-	fast
-	slow
-end 'Mode'
-
-export type Holder
-	export var mode as Mode
-
-	export static function create() returns Holder
-		return Holder{mode: Mode.fast}
-	end 'create'
-
-	export function code() returns ExitCode
-		return match self.mode 'which'
-			fast gives 7
-			slow gives 1
-		end 'which'
-	end 'code'
-end 'Holder'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return Holder.create().code()
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:9:21: exported field 'api.Holder.mode' names module enum 'Mode' in its type
+error E3167: api/<fragment>:9:21: exported field 'api.Holder.mode' names unexported enum 'Mode' in its type
 ```
 
 <!-- test: error.an-exported-field-typed-by-a-tuple-of-a-file-private-alias-is-refused -->
-A field's type is judged as a parameter's is, so a tuple spelled over a file-private alias is refused at the field: the element's alias is a declaration like any other.
+A field's type is judged as a parameter's is, so a tuple spelled over an unmarked alias is refused at the field: the element's alias is a declaration like any other.
 ```maxon
 // --- file: api/lib.maxon
 typealias Scores = Array with ExitCode
@@ -1791,7 +1715,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:5:13: exported field 'api.Holder.pair' names file-private typealias 'Scores' in its type
+error E3167: api/<fragment>:5:13: exported field 'api.Holder.pair' names unexported typealias 'Scores' in its type
 ```
 
 <!-- test: error.an-exported-field-typed-by-a-tuple-of-a-contested-file-private-alias-is-refused -->
@@ -1820,7 +1744,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:5:13: exported field 'api.Holder.pair' names file-private typealias 'Scores' in its type
+error E3167: api/<fragment>:5:13: exported field 'api.Holder.pair' names unexported typealias 'Scores' in its type
 ```
 
 <!-- test: error.an-exported-field-typed-by-a-contested-file-private-generic-alias-is-refused -->
@@ -1849,12 +1773,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:6:23: exported field 'api.Holder.scores' names file-private typealias 'Scores' in its type
+error E3167: api/<fragment>:6:23: exported field 'api.Holder.scores' names unexported typealias 'Scores' in its type
 ```
 
-<!-- test: error.a-module-field-is-judged-at-its-own-modifier -->
-⭐ **A FIELD'S OWN MODIFIER IS THE TIER, NOT ITS TYPE'S.** `Holder` is `export` and `mode` is `module`, so the
-field is held to `module`, and a file-private `Mode` is below it.
+<!-- test: an-unmarked-field-of-an-exported-type-read-in-its-directory-may-name-an-unmarked-enum -->
+The field and `Mode` are unmarked, and `Holder` is `export`. `api/other.maxon` reads `mode` from inside `api/`,
+and nothing outside `api/` can read it, so nothing outside needs to name `Mode`.
 ```maxon
 // --- file: api/lib.maxon
 enum Mode
@@ -1863,42 +1787,7 @@ enum Mode
 end 'Mode'
 
 export type Holder
-	module var mode as Mode
-
-	export static function create() returns Holder
-		return Holder{mode: Mode.fast}
-	end 'create'
-
-	export function code() returns ExitCode
-		return match self.mode 'which'
-			fast gives 7
-			slow gives 1
-		end 'which'
-	end 'code'
-end 'Holder'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return Holder.create().code()
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:9:21: module field 'api.Holder.mode' names file-private enum 'Mode' in its type
-```
-
-<!-- test: a-module-field-of-an-exported-type-may-name-a-module-enum -->
-The control: the field is `module`, `Mode` is `module`, and `Holder` is `export`. Nothing outside `api/` can read
-`mode`, so nothing outside needs to name `Mode`. `Mode` is not named outside `lib.maxon` at all — the field's
-demand is what keeps it from E3094.
-```maxon
-// --- file: api/lib.maxon
-module enum Mode
-	fast
-	slow
-end 'Mode'
-
-export type Holder
-	module var mode as Mode
+	var mode as Mode
 
 	export static function create() returns Holder
 		return Holder{mode: Mode.fast}
@@ -1922,20 +1811,20 @@ end 'main'
 7
 ```
 
-<!-- test: an-export-field-of-a-module-type-is-bounded-by-the-type -->
-The other half of the bound: `Holder` is `module`, so its `export` field reaches no further than `module`, and a
-`module` `Mode` is enough.
+<!-- test: an-export-field-of-an-unmarked-type-is-bounded-by-the-type -->
+The other half of the bound: `Holder` is unmarked, so its `export` field reaches no further than `api/`, and an
+unmarked `Mode` is enough.
 ```maxon
 // --- file: api/lib.maxon
-module enum Mode
+enum Mode
 	fast
 	slow
 end 'Mode'
 
-module type Holder
+type Holder
 	export var mode as Mode
 
-	module static function create() returns Holder
+	static function create() returns Holder
 		return Holder{mode: Mode.fast}
 	end 'create'
 end 'Holder'
@@ -1989,7 +1878,8 @@ end 'main'
 ```
 
 <!-- test: an-unmarked-field-of-an-exported-type-may-name-a-file-private-enum -->
-An unmarked field is private to its type, so no caller can read it and nothing is owed a spelling of its type.
+An unmarked field is visible only inside its type's directory, so no caller outside `api/` can read it and nothing
+there is owed a spelling of its type.
 ```maxon
 // --- file: api/lib.maxon
 enum Mode
@@ -2023,7 +1913,7 @@ end 'main'
 ```
 
 <!-- test: an-export-field-of-a-file-private-type-may-name-a-file-private-enum -->
-A file-private type bounds its `export` field to file-private, so the field and the enum sit at one tier.
+An unmarked type bounds its `export` field to its directory, so the field and the enum sit at one tier.
 ```maxon
 // --- file: api/lib.maxon
 enum Mode
@@ -2085,36 +1975,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:9:7: exported union case 'api.Result.ok' names file-private enum 'Mode' in the type of payload 'v'
-```
-
-<!-- test: error.an-exported-union-case-payload-of-a-module-enum-type-is-refused -->
-```maxon
-// --- file: api/lib.maxon
-module enum Mode
-	fast
-	slow
-end 'Mode'
-
-export union Result
-	ok(v Mode)
-	failed
-end 'Result'
-
-export function sample() returns Result
-	return Result.ok(Mode.fast)
-end 'sample'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return match sample() 'which'
-		ok(v) gives 7 if v == v else 0
-		failed gives 1
-	end 'which'
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:9:7: exported union case 'api.Result.ok' names module enum 'Mode' in the type of payload 'v'
+error E3167: api/<fragment>:9:7: exported union case 'api.Result.ok' names unexported enum 'Mode' in the type of payload 'v'
 ```
 
 <!-- test: an-exported-union-case-payload-of-an-exported-enum-is-legal -->
@@ -2193,26 +2054,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:18: exported typealias 'api.ModeArray' names file-private enum 'Mode' in its target
-```
-
-<!-- test: error.an-exported-generic-alias-over-a-module-enum-is-refused -->
-```maxon
-// --- file: api/lib.maxon
-module enum Mode
-	fast
-	slow
-end 'Mode'
-
-export typealias ModeArray = Array with Mode
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:8:18: exported typealias 'api.ModeArray' names module enum 'Mode' in its target
+error E3167: api/<fragment>:8:18: exported typealias 'api.ModeArray' names unexported enum 'Mode' in its target
 ```
 
 <!-- test: error.an-exported-function-alias-over-a-file-private-enum-is-refused -->
@@ -2231,7 +2073,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:18: exported typealias 'api.Chooser' names file-private enum 'Mode' in its target
+error E3167: api/<fragment>:8:18: exported typealias 'api.Chooser' names unexported enum 'Mode' in its target
 ```
 
 <!-- test: error.an-exported-tuple-alias-over-a-file-private-enum-is-refused -->
@@ -2250,7 +2092,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:18: exported typealias 'api.ModePair' names file-private enum 'Mode' in its target
+error E3167: api/<fragment>:8:18: exported typealias 'api.ModePair' names unexported enum 'Mode' in its target
 ```
 
 <!-- test: an-exported-generic-alias-over-an-exported-enum-is-legal -->
@@ -2274,15 +2116,15 @@ end 'main'
 7
 ```
 
-<!-- test: a-module-alias-over-a-module-enum-is-legal -->
+<!-- test: an-unmarked-alias-over-an-unmarked-enum-read-in-its-directory-is-legal -->
 ```maxon
 // --- file: api/lib.maxon
-module enum Mode
+enum Mode
 	fast
 	slow
 end 'Mode'
 
-module typealias ModeArray = Array with Mode
+typealias ModeArray = Array with Mode
 
 // --- file: api/main.maxon
 function main() returns ExitCode
@@ -2342,33 +2184,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:13: exported type 'api.Holder' names file-private interface 'Marker' in its implements clause
-```
-
-<!-- test: error.an-exported-type-implementing-a-module-interface-is-refused -->
-```maxon
-// --- file: api/lib.maxon
-module interface Marker
-	function code() returns ExitCode
-end 'Marker'
-
-export type Holder implements Marker
-	export function code() returns ExitCode
-		return 7
-	end 'code'
-
-	export static function create() returns Holder
-		return Holder{}
-	end 'create'
-end 'Holder'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return Holder.create().code()
-end 'main'
-```
-```maxoncstderr
-error E3167: api/<fragment>:7:13: exported type 'api.Holder' names module interface 'Marker' in its implements clause
+error E3167: api/<fragment>:7:13: exported type 'api.Holder' names unexported interface 'Marker' in its implements clause
 ```
 
 <!-- test: error.an-exported-type-binding-a-file-private-enum-in-its-implements-clause-is-refused -->
@@ -2407,7 +2223,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:12:13: exported type 'api.Holder' names file-private enum 'Mode' in its implements clause
+error E3167: api/<fragment>:12:13: exported type 'api.Holder' names unexported enum 'Mode' in its implements clause
 ```
 
 <!-- test: error.an-exported-enum-implementing-a-file-private-interface-is-refused -->
@@ -2432,7 +2248,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:13: exported enum 'api.Mode' names file-private interface 'Marker' in its implements clause
+error E3167: api/<fragment>:7:13: exported enum 'api.Mode' names unexported interface 'Marker' in its implements clause
 ```
 
 <!-- test: error.an-exported-type-constrained-by-a-file-private-interface-is-refused -->
@@ -2458,7 +2274,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:13: exported type 'api.Box' names file-private interface 'Marker' in its where clause
+error E3167: api/<fragment>:7:13: exported type 'api.Box' names unexported interface 'Marker' in its where clause
 ```
 
 <!-- test: error.an-exported-interface-extending-a-file-private-interface-is-refused -->
@@ -2478,7 +2294,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:18: exported interface 'api.Outer' names file-private interface 'Inner' in its extends clause
+error E3167: api/<fragment>:7:18: exported interface 'api.Outer' names unexported interface 'Inner' in its extends clause
 ```
 
 <!-- test: an-exported-type-implementing-an-exported-interface-is-legal -->
@@ -2657,11 +2473,12 @@ end 'main'
 7
 ```
 
-<!-- test: error.an-exported-interface-requirement-names-a-module-type -->
-An interface requirement takes the interface's tier (see above), and the module tier is judged the same way.
+<!-- test: error.an-exported-interface-requirement-names-an-unmarked-type -->
+An interface requirement takes the interface's tier (see above), so an `export` interface's requirement may not
+name an unmarked type.
 ```maxon
 // --- file: api/lib.maxon
-module typealias Count = int(0 to 100)
+typealias Count = int(0 to 100)
 
 export interface Sized
 	function size() returns Count
@@ -2673,7 +2490,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:6:11: exported function 'api.Sized.size' names module typealias 'Count' in its return type
+error E3167: api/<fragment>:6:11: exported function 'api.Sized.size' names unexported typealias 'Count' in its return type
 ```
 
 <!-- test: error.an-exported-enum-backed-by-a-file-private-record-is-refused -->
@@ -2700,7 +2517,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:13: exported enum 'api.Instruction' names file-private type 'OpMeta' in its backing record
+error E3167: api/<fragment>:7:13: exported enum 'api.Instruction' names unexported type 'OpMeta' in its backing record
 ```
 
 <!-- test: an-exported-enum-backed-by-an-exported-record-is-legal -->
@@ -2756,7 +2573,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:13:18: exported typealias 'api.WorkerArray' names file-private type 'Worker.handle' in its target
+error E3167: api/<fragment>:13:18: exported typealias 'api.WorkerArray' names unexported type 'Worker.handle' in its target
 ```
 
 <!-- test: an-exported-alias-over-an-exported-services-handle-credits-the-service -->
@@ -2883,7 +2700,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:17: exported function 'api.bigger' names file-private interface 'Marker' in its where clause
+error E3167: api/<fragment>:7:17: exported function 'api.bigger' names unexported interface 'Marker' in its where clause
 ```
 
 <!-- test: an-exported-generic-function-constrained-by-an-exported-interface-is-legal -->
@@ -2945,5 +2762,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:18: exported function 'api.Array.total' names file-private interface 'Marker' in its where clause
+error E3167: api/<fragment>:8:18: exported function 'api.Array.total' names unexported interface 'Marker' in its where clause
 ```

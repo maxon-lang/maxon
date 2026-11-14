@@ -29,7 +29,7 @@ The qualifying namespace is the declaring file's directory (joined with `.` for 
 
 A bare type name resolves in this order, and the first step that has a declaration decides:
 
-1. **The reading file's own directory's declaration.** A file that declares a private `Score`, or whose directory declares an exported one, means that one by its bare `Score`, whatever other directories export.
+1. **The reading file's own directory's declaration.** A file that declares an unmarked `Score`, or whose directory declares an exported one, means that one by its bare `Score`, whatever other directories export.
 2. **Else the project root's declaration.** A declaration in a root-level file is what a bare name means in every directory that declares none of its own.
 3. **Else the one visible declaration.** One author declaration the reader may name is the answer.
 4. **Else E3063.** Two or more visible declarations, none in the reader's directory or the root, are ambiguous at the reference.
@@ -39,8 +39,8 @@ The rule covers every kind of type name — ranged, function, generic and tuple 
 What is NOT a candidate:
 
 - **A standard-library declaration.** Beside an author declaration of the name, the bare name means the author's; `stdlib.Name` still reaches the library's.
-- **A file-private alias** (`typealias` with no modifier) is visible only in its declaring file.
-- **A declaration the reader may not see** — a `module` one outside its directory subtree, or a library declaration without `public`.
+- **An unmarked alias** (`typealias` with no modifier) outside the reader's directory subtree.
+- **A library declaration without `public`**, which the reader may not see.
 - **Author declarations, read from a library file.** A library file never sees them.
 
 Two declarations of one name in ONE directory, whatever their visibility, are refused where they are declared (E3061 for two aliases, E3006 otherwise), and so are two in one file, because a top-level name is declared once per directory. A directory whose path cannot be written as a qualifier is refused when the compile starts (E3182): a top-level piece that is `stdlib`, `export`, `runtime` or a keyword, or any piece that is not a name (`my-dir`).
@@ -233,11 +233,11 @@ end 'main'
 ```
 
 
-<!-- test: module-typealias-file-private-doesnt-collide -->
-A file-private `typealias` is invisible across files. When `app/types.maxon` declares a `module` `Score` and `legacy/util.maxon` a file-private `Score`, `app/main.maxon`'s bare `Score` resolves to the `module` one without ambiguity — the file-private alias isn't reachable from outside its declaring file. The `module` tier keeps `app/`'s declaration out of `legacy/util.maxon`'s sight, so neither declaring file sees the other's.
+<!-- test: two-unmarked-typealiases-in-two-directories-do-not-collide -->
+An unmarked `typealias` is visible only in its declaring directory and its subdirectories. When `app/types.maxon` and `legacy/util.maxon` each declare an unmarked `Score`, `app/main.maxon`'s bare `Score` resolves to its own directory's without ambiguity: `legacy/`'s alias is not reachable from `app/`, and neither declaring file sees the other's.
 ```maxon
 // --- file: app/types.maxon
-module typealias Score = int(0 to 100)
+typealias Score = int(0 to 100)
 
 // --- file: legacy/util.maxon
 typealias Score = int(0 to 999)
@@ -857,14 +857,14 @@ end 'main'
 error E3063: app/<fragment>:9:15: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
 ```
 
-<!-- test: two-library-module-aliases-no-reader-can-both-name-coexist -->
-Two `module` aliases of one name in two library directories neither of which contains the other: no file can
+<!-- test: two-unmarked-library-aliases-no-reader-can-both-name-coexist -->
+Two unmarked aliases of one name in two library directories neither of which contains the other: no file can
 name both, so neither is a duplicate of the other.
 ```maxon
 // --- stdlib-overlay: helpers/string/hash.maxon
-module typealias OverlayLocalWidth = int(0 to 7)
+typealias OverlayLocalWidth = int(0 to 7)
 // --- stdlib-overlay: helpers/hashtable/slotScan.maxon
-module typealias OverlayLocalWidth = int(0 to 9)
+typealias OverlayLocalWidth = int(0 to 9)
 // --- file: main.maxon
 function main() returns ExitCode
 	return 3

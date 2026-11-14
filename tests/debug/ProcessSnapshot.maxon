@@ -14,10 +14,10 @@ let SamplingMs = 30000
 let StateColumnCount = 4
 let StateRowSeparator = "; "
 let AliveStateRow = "alive"
-export let GoneStateRow = "gone"
+let GoneStateRow = "gone"
 
 typealias ListedProcesses = Array with ListedProcess
-export typealias ProcessIds = Array with Pid
+typealias ProcessIds = Array with Pid
 
 type ListedProcess
 	let line as String
@@ -178,7 +178,7 @@ function unlisted(failure SubprocessError) returns String
 	return "(the process listing could not run: {failure.displayReason()})"
 end 'unlisted'
 
-export function processSnapshot(matching String) returns String
+function processSnapshot(matching String) returns String
 	#if os(Windows)
 		return "(this host has no process listing to search for {matching})"
 	#else
@@ -192,7 +192,7 @@ export function processSnapshot(matching String) returns String
 	#endif
 end 'processSnapshot'
 
-export union ProcessPlace
+union ProcessPlace
 	absent
 	present(parentId Pid, defunct bool, heldByAStub bool)
 
@@ -218,7 +218,7 @@ export union ProcessPlace
 	end 'displayReason'
 end 'ProcessPlace'
 
-export function placeOf(process Pid) returns ProcessPlace
+function placeOf(process Pid) returns ProcessPlace
 	#if os(Windows)
 		panic("the gate could not run — this host has no process listing to place process {process} in")
 	#else
@@ -230,7 +230,7 @@ export function placeOf(process Pid) returns ProcessPlace
 	#endif
 end 'placeOf'
 
-export function defunctAmong(processes ProcessIds) returns StringArray
+function defunctAmong(processes ProcessIds) returns StringArray
 	#if os(Windows)
 		_ = processes
 
@@ -244,7 +244,7 @@ export function defunctAmong(processes ProcessIds) returns StringArray
 	#endif
 end 'defunctAmong'
 
-export function stateRowOf(process Pid) returns String
+function stateRowOf(process Pid) returns String
 	if not Process.isAlive(process) 'ended'
 		return GoneStateRow
 	end 'ended'
@@ -276,7 +276,7 @@ export function stateRowOf(process Pid) returns String
 	#endif
 end 'stateRowOf'
 
-export function sampledStubs() returns String
+function sampledStubs() returns String
 	#if os(Windows)
 		return "(this host has no debug stub to sample)"
 	#else
@@ -296,7 +296,7 @@ export function sampledStubs() returns String
 	#endif
 end 'sampledStubs'
 
-export function sampledStack(process Pid) returns String
+function sampledStack(process Pid) returns String
 	#if os(Windows)
 		return "(this host has no sampler to read process {process})"
 	#else

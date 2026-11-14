@@ -5,7 +5,7 @@ enum RecordKind
 	present
 end 'RecordKind'
 
-module union RecordWatch
+union RecordWatch
 	unlocatable
 	absent(record FilePath)
 	unreadable(record FilePath)
@@ -21,9 +21,9 @@ module union RecordWatch
 	end 'kind'
 end 'RecordWatch'
 
-module typealias RecordWatchMap = Map with (String, RecordWatch)
+typealias RecordWatchMap = Map with (String, RecordWatch)
 
-module function observeRecord(dir FilePath) returns RecordWatch
+function observeRecord(dir FilePath) returns RecordWatch
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
 	let record = try versionRecordPathOf(dir) otherwise return RecordWatch.unlocatable
 
@@ -34,7 +34,7 @@ module function observeRecord(dir FilePath) returns RecordWatch
 	end 'state'
 end 'observeRecord'
 
-module function recordWatchHolds(held RecordWatch) returns bool
+function recordWatchHolds(held RecordWatch) returns bool
 	return match held 'held'
 		unlocatable gives true
 		absent(record) gives recordKindHolds(held, record: record)

@@ -35,7 +35,7 @@
 // ⭐ **IS THIS FUNCTION LIBRARY SOURCE?** A `ByteArray` hash against that set. This is the question every
 // pass asks, and it stays true as the library grows from one module to all of it — nothing here depends
 // on WHICH files those are, only on their having come from a library root.
-export function isLibraryFunction(project Project, func IrFunction) returns bool
+function isLibraryFunction(project Project, func IrFunction) returns bool
 	return project.libraryFacts.libraryFunctions.contains(func.name)
 end 'isLibraryFunction'
 
@@ -157,7 +157,7 @@ end 'ScriptlibTier'
 // It THROWS rather than answering "none" for `locateStdlibDir`'s reason there; `TreeLock` reads the
 // throw as "no checkout above this path", which is a real and ordinary answer for a program compiled
 // in a temp directory.
-export function stdlibDirAbove(start FilePath) returns FilePath throws CompileError
+function stdlibDirAbove(start FilePath) returns FilePath throws CompileError
 	var dir = start
 
 	var depth = 0 as Count
@@ -513,7 +513,7 @@ export type SubstrateClaim
 	end 'precedes'
 end 'SubstrateClaim'
 
-module union SubstrateClaimMemo
+union SubstrateClaimMemo
 	unasked
 	reachesNone
 	reaches(claim SubstrateClaim)
@@ -636,9 +636,9 @@ type LibraryCallResults
 	end 'holds'
 end 'LibraryCallResults'
 
-module type WitnessCrossings
-	module var atFunction as SubstrateClaimMemo
-	module let opSites as OpIndexArray
+type WitnessCrossings
+	var atFunction as SubstrateClaimMemo
+	let opSites as OpIndexArray
 	let blamedOps as CrossingOpSet
 
 	static function none() returns Self
@@ -659,7 +659,7 @@ module type WitnessCrossings
 	end 'noteAtOp'
 end 'WitnessCrossings'
 
-module type WitnessEvidenceLedger
+type WitnessEvidenceLedger
 	var pendingImpls as NameRoster
 	let positions as NameRoster
 	let functionEvents as WitnessEventArray
@@ -819,7 +819,7 @@ module type WitnessEvidenceLedger
 		return credited.names
 	end 'implsOf'
 
-	module function liveImplsOf(funcName immutable ByteArray) returns NameRoster
+	function liveImplsOf(funcName immutable ByteArray) returns NameRoster
 		let impls = NameRoster.create(0)
 
 		for event in self.creditsOf(funcName) 'eachCredit'
@@ -1054,7 +1054,7 @@ export type LibraryFacts
 
 	let substrateNodes as NameRoster
 
-	module let witnessEvidence as WitnessEvidenceLedger
+	let witnessEvidence as WitnessEvidenceLedger
 
 	static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes NameRoster, witnessEvidence WitnessEvidenceLedger) returns LibraryFacts
 		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, substrateNodes: substrateNodes, witnessEvidence: witnessEvidence}
@@ -1114,7 +1114,7 @@ export type LibraryFacts
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
 	end 'withSubstrateEntriesOf'
 
-	module function witnessCrossingsOf(project Project, module MaxonModule, func IrFunction) returns WitnessCrossings
+	function witnessCrossingsOf(project Project, module MaxonModule, func IrFunction) returns WitnessCrossings
 		let crossings = WitnessCrossings.none()
 
 		for event in self.witnessEvidence.creditsOf(func.name) 'eachCredit'
@@ -1141,7 +1141,7 @@ export type LibraryFacts
 		crossings.noteAtOp(opIndex)
 	end 'noteCrossingAtOp'
 
-	module function claimAtOp(project Project, opIndex ElementIndex, callee ByteArray) returns SubstrateClaim throws AbsentError
+	function claimAtOp(project Project, opIndex ElementIndex, callee ByteArray) returns SubstrateClaim throws AbsentError
 		let site = siteOfOp(opIndex, ranges: project.opRanges)
 		var chosen = SubstrateClaimMemo.reachesNone
 
@@ -1170,7 +1170,7 @@ end 'LibraryFacts'
 // (`ProgramSignatures.globalInitCallees`), which is also what lets this run before the synthesis:
 // see that function for why the answer does not depend on the global liveness this derivation
 // decides.
-export function deriveLibraryFacts(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryFacts throws CompileError
+function deriveLibraryFacts(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryFacts throws CompileError
 	let reach = try libraryReachOf(project, module: module, signatures: signatures)
 
 	return match reach 'reach'
@@ -1184,13 +1184,13 @@ function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, sp
 	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, substrateNodes: substrateNodes, witnessEvidence: evidence)
 end 'libraryFactsOf'
 
-module union LibraryReach
+union LibraryReach
 	noLibrarySource
 	unreferenced(roster LibraryFunctionRoster, stdlib FunctionNameSet)
 	walked(roster LibraryFunctionRoster, stdlib FunctionNameSet, reachable FunctionNameSet, ledger WitnessEvidenceLedger)
 end 'LibraryReach'
 
-module function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSet
+function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSet
 	return match reach 'reach'
 		noLibrarySource or
 		unreferenced gives FunctionNameSet.create()
@@ -1198,7 +1198,7 @@ module function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSe
 	end 'reach'
 end 'reachedLibraryNamesOf'
 
-module function libraryReachOf(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryReach throws CompileError
+function libraryReachOf(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryReach throws CompileError
 	// Only an unreadable type universe skips the walk, because the library it would walk is half read.
 	// Any other program with errors is still walked: without its reach no library body is built, every
 	// library callee reads as worst-case, and the borrow checks bury the program's errors under
@@ -1256,7 +1256,7 @@ end 'libraryReachOf'
 // so the walk sees the user's own edges into stdlib and stops there; each later round has the
 // bodies the previous one demanded, so the walk goes one call deeper. It terminates because the
 // demand only ever grows and is bounded by the stdlib functions that exist.
-module function growStdlibBodyDemand(project Project, reach LibraryReach) returns bool throws CompileError
+function growStdlibBodyDemand(project Project, reach LibraryReach) returns bool throws CompileError
 	match reach 'reach'
 		noLibrarySource or
 		unreferenced then return false
@@ -1307,7 +1307,7 @@ end 'demandOneStdlibFileIfReached'
 // Every function the merged module got from library source, WITH the tier each one was declared in. The
 // two columns are built by ONE walk because the tier is a property of the FILE the first column is read
 // out of; asking it afterwards would need a name->path map nothing else here has a use for.
-module type LibraryFunctionRoster
+type LibraryFunctionRoster
 	// Every library function, in load order. A `NameRoster` rather than a set because the names are
 	// unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a dense ORDER
 	// for its node space as well as membership.
@@ -1386,7 +1386,7 @@ end 'collectOneLibraryFile'
 // it really does need what that arm installs.
 //
 // ⛔⛔ **IT IS BY FILE AND NOT BY NAME, AND THAT IS WHAT MAKES IT SOUND ON *BOTH* PATHS.** An installer's
-// call lands on an ENTRY POINT whose body then reaches that file's module-scoped helpers. On the precise
+// call lands on an ENTRY POINT whose body then reaches that file's unexported helpers. On the precise
 // path the walk would close over those for free, but `deriveLibraryFacts`' short-circuit hands
 // `classifyLibraryReach` an EMPTY reached set — and a program can allocate while naming no stdlib function
 // at all, because `__mm_alloc` is no stdlib declaration. A name roster would credit the eight entries there
@@ -1425,7 +1425,7 @@ end 'runtimeTierFileIsCompilerCalled'
 // The roster is walked rather than the path rebuilt from `project.runtimeDir`, because a constant is filed
 // under the identical `FilePath` the loader handed the parser. A path that differs only by a separator or a
 // normalisation misses every declaration in the file, and the lookup then accuses it of declaring nothing.
-export function librarySourcePath(project Project, fileName String) returns FilePath
+function librarySourcePath(project Project, fileName String) returns FilePath
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
 		let path = try project.librarySourcePaths.get(fileIndex) otherwise panic("librarySourcePath: fileIndex {fileIndex} is below project.librarySourcePaths.count()")
 
@@ -1437,7 +1437,7 @@ export function librarySourcePath(project Project, fileName String) returns File
 	panic("librarySourcePath: no library source is named '{fileName}' — `StdlibLoader.loadLibrarySources` loads the whole of `stdlib/` and `runtime/` before anything reads them, and refuses a root that contributes nothing")
 end 'librarySourcePath'
 
-export function runtimeSourcePath(project Project, fileName String) returns FilePath
+function runtimeSourcePath(project Project, fileName String) returns FilePath
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
 		let path = try project.librarySourcePaths.get(fileIndex) otherwise panic("runtimeSourcePath: fileIndex {fileIndex} is below project.librarySourcePaths.count()")
 
@@ -1942,7 +1942,7 @@ function witnessConstraintsOfReachedFunction(func IrFunction, signatures Program
 	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name))
 end 'witnessConstraintsOfReachedFunction'
 
-module function markOneReachable(name ByteArray, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markOneReachable(name ByteArray, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
 		return
 	end 'notAModuleFunction'
@@ -1996,7 +1996,7 @@ end 'markMaxonCallees'
 // A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
 // code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
 // already credited, and `maxonOpCalleeKind` answers `noCallee` for it.
-module function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
 		functionValue then markOneReachable(maxonOpCalleeName(op), byName: byName, reached: reached, worklist: worklist, names: names)

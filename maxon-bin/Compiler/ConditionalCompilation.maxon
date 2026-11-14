@@ -127,11 +127,11 @@ let FalseSpelling = b"false"
 // what lets the per-`Project` active-token memo omit them from its key; the process-wide memo carries
 // both through `QueryEngine.buildKeyOf`. A predicate over a fact NOT in here cannot be added without
 // extending this type, so the memo key and the evaluator cannot drift apart silently.
-export type ConditionFacts
+type ConditionFacts
 	export let target as Target
 	export let debugStream as bool
 
-	export static function create(target Target, debugStream bool) returns ConditionFacts
+	static function create(target Target, debugStream bool) returns ConditionFacts
 		return Self{target: target, debugStream: debugStream}
 	end 'create'
 end 'ConditionFacts'
@@ -144,7 +144,7 @@ end 'ConditionFacts'
 //
 // Cost is one pass over the tokens plus one output array. The frame stack is O(nesting depth), which
 // is the source's own bracket depth and not a function of file size.
-export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts) returns TokenArray throws DirectiveError
+function filterConditionalTokens(tokens TokenArray, facts ConditionFacts) returns TokenArray throws DirectiveError
 	// ⭐ **THE COMMON CASE IS A FILE WITH NO DIRECTIVES AT ALL, AND IT MUST NOT PAY FOR A COPY.**
 	// Every file in the scale corpus and all but four in `stdlib/` are in it. The probe is one linear
 	// scan of a scalar field — cheaper than the array it would otherwise build, and it returns the
@@ -260,7 +260,7 @@ end 'innermostFrame'
 // THE set of token kinds this pass owns, written down once. Read by the early-out probe below and
 // asserted against the filter's handler arms (see the `unhandledDirective` panic), so the two cannot
 // come to disagree about what a directive IS.
-export function isDirectiveToken(kind TokenKind) returns bool
+function isDirectiveToken(kind TokenKind) returns bool
 	return kind == TokenKind.hashIf or kind == TokenKind.hashElse or kind == TokenKind.hashEndif
 end 'isDirectiveToken'
 
@@ -477,7 +477,7 @@ end 'satisfyingArgument'
 // The accepted predicates as the diagnostics list them, in enum order and comma-separated with a
 // final `or`. Rendered from `allCases` rather than written out, so the sentence a reader is told
 // to obey and the set `predicateNamed` actually accepts are the same walk of the same enum.
-export function acceptedPredicateList() returns String
+function acceptedPredicateList() returns String
 	let finalIndex = ConditionPredicate.allCases.count() - 1
 	var rendered = ""
 	var index = 0 as Count

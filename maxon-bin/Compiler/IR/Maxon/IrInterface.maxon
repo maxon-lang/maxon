@@ -65,8 +65,8 @@ export typealias WitnessMethodIndex = int(0 to u16.max) implements ElementIndex
 //
 // ⚠ **THERE IS NO PARENT-TABLE POINTER.** Parent-interface requirements are PROJECTED INTO the
 // child table by `interfaceWitnessSlots`, so there is no runtime chain to follow.
-export let WitnessTableHeaderBytes = 40 as ByteOffset
-export let WitnessSlotBytes = 8 as ByteOffset
+let WitnessTableHeaderBytes = 40 as ByteOffset
+let WitnessSlotBytes = 8 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF** — the conformer's
 // `__destruct_<T>` / `__mm_decref` / `__str_decref`, or **0** when the conformer owns nothing droppable (an
@@ -205,7 +205,7 @@ let WitnessLabelSeparator = "."
 // The `.rdata` label of the witness table for `typeName` conforming to `interfaceName` —
 // `__witness_<Type>.<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
 // registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
-export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
+function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
 	requireSeparatorFreeLabelComponent(interfaceName, component: WitnessLabelComponent.interfaceName)
 
 	return "__witness_{String.from(typeName)}{WitnessLabelSeparator}{String.from(interfaceName)}"
@@ -244,7 +244,7 @@ end 'witnessSlotImplKey'
 // would put two distinct slots' adapters under one symbol — a silently mis-dispatched method, which is the
 // exact failure the separator exists to prevent. The prefix keeps the adapter's symbol out of the `.rdata`
 // label space the key it is built on belongs to, so a function and a blob can never contest a name.
-export function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns immutable ByteArray
+function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns immutable ByteArray
 	let symbol = "{String.from(WitnessSlotAdapterPrefix)}{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}"
 	return freeze symbol.toByteArray()
 end 'witnessSlotAdapterSymbol'
@@ -1012,7 +1012,7 @@ function requirementsAgree(first RequirementTypeArray, second RequirementTypeArr
 	return true
 end 'requirementsAgree'
 
-export function requirementAbiType(requirement RequirementType, readerFilePath FilePath, signatures ProgramSignatures) returns MaxonType
+function requirementAbiType(requirement RequirementType, readerFilePath FilePath, signatures ProgramSignatures) returns MaxonType
 	return match requirement.identity 'identity'
 		builtin(tag) gives builtinAbiType(tag)
 		nominal(name) gives MaxonType.float if signatures.isFloatAliasFor(name, readerFilePath: readerFilePath) else MaxonType.integer
@@ -2341,7 +2341,7 @@ end 'appendInterfaceWitnessSlots'
 // it is the property that must hold — but two lists of equal length whose slots are in different ORDERS
 // satisfy it and still recover a different requirement, and the names are already built and already in hand.
 // A strictly stronger check at the same cost.
-export function requireSameSlotNumbering(interfaceName ByteArray, parserSlots CollectedInterfaceMethodArray, mergedSlots CollectedInterfaceMethodArray)
+function requireSameSlotNumbering(interfaceName ByteArray, parserSlots CollectedInterfaceMethodArray, mergedSlots CollectedInterfaceMethodArray)
 	if parserSlots.count() != mergedSlots.count() 'countsDisagree'
 		panic("requireSameSlotNumbering: interface '{String.from(interfaceName)}' has {parserSlots.count()} witness slots in the signature index a dispatch was numbered against and {mergedSlots.count()} in the merged registry it resolves through — `methodIndex` would recover a different requirement and set the wrong calling convention for the call, on every target and with no diagnostic")
 	end 'countsDisagree'

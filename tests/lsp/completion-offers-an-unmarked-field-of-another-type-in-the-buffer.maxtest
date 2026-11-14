@@ -5,7 +5,7 @@ let BufferFieldsSelfCharacter = 20
 let BufferFieldsOtherTypeLine = 15
 let BufferFieldsOtherTypeCharacter = 21
 
-test 'completion offers no unexported field of another type declared in the buffer'
+test 'completion offers an unmarked field of another type declared in the buffer'
 	let ownBody = completionLabelsFor(bufferFieldsFixture(), line: BufferFieldsOwnBodyLine, character: BufferFieldsOwnBodyCharacter, after: "`other.`, inside the body of `Vault`, where `other` is a `Vault`")
 
 	Expect.isTrue(completionOffersLabel(ownBody, label: "secret"), message: "completion after `other.` inside `Vault`'s own body did not offer `secret`, which `Vault` declares with no visibility modifier: a type's own body reaches it.")
@@ -16,10 +16,10 @@ test 'completion offers no unexported field of another type declared in the buff
 
 	let otherType = completionLabelsFor(bufferFieldsFixture(), line: BufferFieldsOtherTypeLine, character: BufferFieldsOtherTypeCharacter, after: "`vault.`, inside the body of `Visitor`, where `vault` is a `Vault`")
 
-	Expect.isTrue(completionOffersLabel(otherType, label: "label"), message: "completion after `vault.` inside `Visitor` did not offer `label`, which `Vault` declares `export var`, so the negative below is passing on an empty list rather than on a filter.")
+	Expect.isTrue(completionOffersLabel(otherType, label: "label"), message: "completion after `vault.` inside `Visitor` did not offer `label`, which `Vault` declares `export var`.")
 
-	Expect.isFalse(completionOffersLabel(otherType, label: "secret"), message: "completion after `vault.` inside `Visitor` offered `secret`. `Vault` declares it with no visibility modifier, so only `Vault`'s own body may reach it and the compiler refuses the read from another type even in the same file (E3014).")
-end 'completion offers no unexported field of another type declared in the buffer'
+	Expect.isTrue(completionOffersLabel(otherType, label: "secret"), message: "completion after `vault.` inside `Visitor` did not offer `secret`. `Vault` declares it with no visibility modifier, so every body in the directory of the file that declares it reaches it.")
+end 'completion offers an unmarked field of another type declared in the buffer'
 
 function bufferFieldsFixture() returns String
 	return String.from(b"type Vault

@@ -75,7 +75,7 @@
 // Where the fixture projects live, relative to the checkout root — see the working-directory contract
 // above. This file sits beside that directory, but a path relative to THIS file is not something a
 // running binary has, so it is spelled from the root like every other path here.
-module let FixturesDir = "tests/test-fixtures"
+let FixturesDir = "tests/test-fixtures"
 
 // The two flags EVERY case is run with, here rather than in each fixture's `argv.txt` so they cannot
 // drift case by case. Both exist to make stdout byte-reproducible: `--no-timing` drops the per-test
@@ -104,11 +104,11 @@ let StagedCacheDirName = "cache"
 let PassedTestMarker = "✓ "
 let OnePassedTally = " 1 pass\n"
 let NoneFailedTally = " 0 fail\n"
-module let CleanExitCode = 0
-module let ListFlag = "--list"
-module let BuildFlag = "--build"
-module let JsonFlag = "--json"
-module let BinaryKey = "binary"
+let CleanExitCode = 0
+let ListFlag = "--list"
+let BuildFlag = "--build"
+let JsonFlag = "--json"
+let BinaryKey = "binary"
 
 // How many case directories one corpus walk found. Named because it is the number the coverage guard
 // reads, not a loop counter.
@@ -169,7 +169,7 @@ end 'no corpus directory holds a source that is not a test'
 // RUNNING ONE CASE
 // ============================================================================================
 
-export function runFixture(caseName String, extraArguments StringArray = StringArray.create(0)) returns CollectedOutput
+function runFixture(caseName String, extraArguments StringArray = StringArray.create(0)) returns CollectedOutput
 	let caseDir = fixtureDir("{FixturesDir}/{caseName}")
 	let argv = fixtureArgv(caseDir, caseName: caseName)
 
@@ -180,26 +180,26 @@ export function runFixture(caseName String, extraArguments StringArray = StringA
 	return spawnCompiler(argv, staged: Directory.currentPath(), what: "the '{caseName}' case")
 end 'runFixture'
 
-export function runTestCommandOn(subject FilePath, caseName String) returns CollectedOutput
+function runTestCommandOn(subject FilePath, caseName String) returns CollectedOutput
 	return spawnCompiler(testCommandArgv([subject.toString()]), staged: Directory.currentPath(), what: "the '{caseName}' case")
 end 'runTestCommandOn'
 
-export function runTestCommandOnTarget(target String, subject FilePath, caseName String) returns CollectedOutput
+function runTestCommandOnTarget(target String, subject FilePath, caseName String) returns CollectedOutput
 	return spawnCompiler(testCommandArgv([target, subject.toString()]), staged: Directory.currentPath(), what: "the '{caseName}' case")
 end 'runTestCommandOnTarget'
 
-export function runTestCommandWordIn(project FilePath, word String, caseName String) returns CollectedOutput
+function runTestCommandWordIn(project FilePath, word String, caseName String) returns CollectedOutput
 	return spawnCompiler(testCommandArgv([word]), staged: project, what: "the '{caseName}' case")
 end 'runTestCommandWordIn'
 
-export function runManifestBuildIn(project FilePath, caseName String) returns CollectedOutput
+function runManifestBuildIn(project FilePath, caseName String) returns CollectedOutput
 	let overrides = EnvMap.create()
 	overrides.upsert(CacheRootVariable, value: caseRootOf(project).join(StagedCacheDirName).toString())
 
 	return spawnCompiler([BuildCommandName], staged: project, what: "the '{caseName}' case", environment: Environment.inheritUpdating(overrides))
 end 'runManifestBuildIn'
 
-export function stagedCaseProject(caseName String) returns FilePath
+function stagedCaseProject(caseName String) returns FilePath
 	let caseRoot = freshCaseRoot(testScratchDir().join(caseName).toString())
 	stageStoredTree(fixtureDir("{FixturesDir}/{caseName}"), into: caseRoot)
 
@@ -212,7 +212,7 @@ export function stagedCaseProject(caseName String) returns FilePath
 	return project
 end 'stagedCaseProject'
 
-export function checkFixture(caseName String) throws TestFailure
+function checkFixture(caseName String) throws TestFailure
 	try checkFixtureRun(runFixture(caseName), caseName: caseName)
 end 'checkFixture'
 
@@ -225,7 +225,7 @@ end 'checkFixture'
 // its stdout is byte-identical to the correct run's. `no-tests-found` is the sharpest of these: a
 // zero-test run exits 1 on purpose, and a suite that has stopped containing tests reads exactly like one
 // where everything passed.
-export function checkFixtureRun(run CollectedOutput, caseName String) throws TestFailure
+function checkFixtureRun(run CollectedOutput, caseName String) throws TestFailure
 	let caseDir = fixtureDir("{FixturesDir}/{caseName}")
 
 	// Bound to locals first for `the fixture corpus is covered case for case`'s reason.
@@ -262,7 +262,7 @@ function testCommandArgv(words StringArray) returns StringArray
 	return argv
 end 'testCommandArgv'
 
-export function expectRanOnePassingTest(run CollectedOutput, testName String, caseName String) throws TestFailure
+function expectRanOnePassingTest(run CollectedOutput, testName String, caseName String) throws TestFailure
 	let report = "{run.stdout}{run.stderr}"
 	try Expect.equal(run.exitCode(), expected: CleanExitCode, message: "'{caseName}': `{TestCommandName}` exits {CleanExitCode} when its one test passed. It printed: {report}")
 	try Expect.contains(run.stdout, needle: "{PassedTestMarker}{testName}", message: "'{caseName}': the report shows `{testName}` passing. It printed: {report}")

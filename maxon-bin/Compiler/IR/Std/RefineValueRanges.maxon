@@ -98,7 +98,7 @@
 //   • a decided compare is rewritten only at its own definition (`applyCompareDecisions`).
 
 typealias FixpointRound = int(0 to u64.max)
-module typealias TrailMarkColumn = Array with ElementIndex
+typealias TrailMarkColumn = Array with ElementIndex
 
 // The rounds a function may take before every block arg is forced to the whole range. Widening moves
 // each side of a block arg at most once, so a chain of loops that hands a widened bound from one header
@@ -112,7 +112,7 @@ let ForcedRoundAllowance = 2
 
 // What kept an interval, a compare or a block arg at the whole range. Tallied for the pass summary so a
 // reader can tell what a wider model would buy before building it.
-module enum UnboundedReason
+enum UnboundedReason
 	// A binary op or block arg whose type is not `i64`/`u64`.
 	narrowType
 
@@ -135,7 +135,7 @@ module enum UnboundedReason
 	forcedByRoundCap
 end 'UnboundedReason'
 
-module function wordTyped(t StdType) returns bool
+function wordTyped(t StdType) returns bool
 	return t == StdType.i64 or t == StdType.u64
 end 'wordTyped'
 
@@ -334,7 +334,7 @@ type RangeFunction
 	end 'build'
 end 'RangeFunction'
 
-module union AnalyzedFunction
+union AnalyzedFunction
 	none
 	named(name immutable ByteArray)
 end 'AnalyzedFunction'
@@ -342,7 +342,7 @@ end 'AnalyzedFunction'
 // Everything a function's analysis writes into, created ONCE for the module: the interval columns, the
 // refinement trail, the walk and its per-block scopes, the decision list and the classification
 // records. `Array.clear` keeps capacity, so the second function's columns reuse the first's buffers.
-module type RangeScratch
+type RangeScratch
 	// Per value id: the interval and its symbolic bound; whether this round or an earlier one has
 	// written it; whether the pass MODELS it at all; and one past the position of the block that
 	// defines it. A value that is modelled but not yet written is a loop-carried input this round has
@@ -414,7 +414,7 @@ module type RangeScratch
 	export var undecidedThisRound = 0 as TallyCount
 	export var symbolicThisRound = 0 as TallyCount
 
-	module static function create(tally StdPassTally) returns RangeScratch
+	static function create(tally StdPassTally) returns RangeScratch
 		return Self{lo: FullRangeIntArray.create(0), hi: FullRangeIntArray.create(0), symBounded: BoolArray.create(0), symBaseId: ValueIdArray.create(0), symOffset: FullRangeIntArray.create(0), computed: BoolArray.create(0), modelled: BoolArray.create(0), defPosition: OptionalElementIndexColumn.create(), trailValue: ValueIdArray.create(0), trailLo: FullRangeIntArray.create(0), trailHi: FullRangeIntArray.create(0), trailSymBounded: BoolArray.create(0), trailSymBaseId: ValueIdArray.create(0), trailSymOffset: FullRangeIntArray.create(0), trailComputed: BoolArray.create(0), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(0), walkOpenedDead: BoolArray.create(0), blockDead: BoolArray.create(0), decisions: CompareDecisionArray.create(0), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), probeValues: ValueIdArray.create(0), probeBlocks: BlockIdArray.create(0), probeLo: FullRangeIntArray.create(0), probeHi: FullRangeIntArray.create(0), probeReached: BoolArray.create(0), probeHead: OptionalElementIndexColumn.create(), probeNext: OptionalElementIndexColumn.create(), tally: tally, analyzed: AnalyzedFunction.none}
 	end 'create'
 
@@ -428,7 +428,7 @@ module type RangeScratch
 		end 'analyzed'
 	end 'funcName'
 
-	module function endFunction()
+	function endFunction()
 		self.analyzed = AnalyzedFunction.none
 	end 'endFunction'
 
@@ -598,7 +598,7 @@ module type RangeScratch
 		self.changed = true
 	end 'recordBlockDead'
 
-	module function addProbe(value ValueId, block BlockId)
+	function addProbe(value ValueId, block BlockId)
 		self.probeValues.push(value)
 		self.probeBlocks.push(block)
 		self.probeLo.push(i64.min)
@@ -606,15 +606,15 @@ module type RangeScratch
 		self.probeReached.push(false)
 	end 'addProbe'
 
-	module function probeWasReached(ordinal ElementIndex) returns bool
+	function probeWasReached(ordinal ElementIndex) returns bool
 		return try self.probeReached.get(ordinal) otherwise panic("refineValueRanges: probeReached.get OOB at {ordinal}")
 	end 'probeWasReached'
 
-	module function probeLow(ordinal ElementIndex) returns FullRangeInt
+	function probeLow(ordinal ElementIndex) returns FullRangeInt
 		return try self.probeLo.get(ordinal) otherwise panic("refineValueRanges: probeLo.get OOB at {ordinal}")
 	end 'probeLow'
 
-	module function probeHigh(ordinal ElementIndex) returns FullRangeInt
+	function probeHigh(ordinal ElementIndex) returns FullRangeInt
 		return try self.probeHi.get(ordinal) otherwise panic("refineValueRanges: probeHi.get OOB at {ordinal}")
 	end 'probeHigh'
 
@@ -661,12 +661,12 @@ end 'RangeScratch'
 
 // The pass's summary line, from the tally its runs summed into (`StdPassPool`): over the
 // functions that hold an op in the fan-out, and over the band's functions in the appended band.
-module function refineValueRangesSummary(tally StdPassTally, funcCount ElementIndex) returns String
+function refineValueRangesSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "refineValueRanges: decided {tally.decidedCompares} compare(s) ({tally.symbolicDecisions} by a symbolic bound) and folded {tally.foldedBranches} branch(es) in {tally.touchedFunctions} of the {tally.visitedFunctions} function(s) visited of {funcCount}; unbounded: {tally.unboundedReasons.summary(UnboundedReason.allCaseNames)}"
 end 'refineValueRangesSummary'
 
 // Refine one function, in place, counting what it decided into the tally.
-module function refineValueRangesInFunc(module StdModule, func IrFunction, scratch RangeScratch)
+function refineValueRangesInFunc(module StdModule, func IrFunction, scratch RangeScratch)
 	scratch.tally.visitedFunctions = scratch.tally.visitedFunctions + 1
 	let foldedHere = refineOneFunction(module, func: func, scratch: scratch)
 	scratch.endFunction()
@@ -711,7 +711,7 @@ function refineOneFunction(module StdModule, func IrFunction, scratch RangeScrat
 	return applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
 end 'refineOneFunction'
 
-module function probeIntervals(module StdModule, func IrFunction, scratch RangeScratch)
+function probeIntervals(module StdModule, func IrFunction, scratch RangeScratch)
 	scratch.exactForwardJoins = true
 	scratch.indexProbesByBlock(func)
 	scratch.decisions.clear()

@@ -224,7 +224,7 @@ function unattributedRpcError(code RpcStandardErrorCode, message String) returns
 	return RpcReply.body(rpcErrorText(errDoc, idNode: nullId, code: code, message: message))
 end 'unattributedRpcError'
 
-export function handleRpcDocument(doc JsonDoc, exePath FilePath, devMode bool, debug DebugSessionSlot, driver CompileDriver.handle) returns RpcReply
+function handleRpcDocument(doc JsonDoc, exePath FilePath, devMode bool, debug DebugSessionSlot, driver CompileDriver.handle) returns RpcReply
 	let root = doc.root
 
 	if doc.get(root).kind != JsonKind.jsonObject 'notObj'
@@ -267,7 +267,7 @@ function answeredRpcMethod(doc JsonDoc, idNode JsonNodeId, method String, exePat
 end 'answeredRpcMethod'
 
 let RpcMethodKey = "method"
-export let RpcInitializeMethod = "initialize"
+let RpcInitializeMethod = "initialize"
 let RpcIdKey = "id"
 
 union RpcMethodRead
@@ -281,7 +281,7 @@ function rpcMethodOf(doc JsonDoc) returns RpcMethodRead
 	return RpcMethodRead.named(method)
 end 'rpcMethodOf'
 
-export function rpcNamesMethod(doc JsonDoc, method String) returns bool
+function rpcNamesMethod(doc JsonDoc, method String) returns bool
 	return match rpcMethodOf(doc) 'asked'
 		named(asked) gives asked.equals(method)
 		absent gives false
@@ -295,7 +295,7 @@ function rpcIdNodeOf(doc JsonDoc) returns JsonNodeId
 	end 'ir'
 end 'rpcIdNodeOf'
 
-export function rpcIsNotification(doc JsonDoc) returns bool
+function rpcIsNotification(doc JsonDoc) returns bool
 	return match resolveChildKey(doc, parent: doc.root, key: RpcIdKey) 'ir'
 		none gives true
 		some(id) gives doc.get(id).kind == JsonKind.jsonNull

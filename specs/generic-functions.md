@@ -47,7 +47,7 @@ constraining interface — and the methods of an `extension` of that interface, 
 visibility: the caller that passed the type granted the conformance. Any other member of the type — a
 method that is no requirement, or a field, even one named like a requirement — needs the type to be
 visible from the declaring file, because a type hidden from a file hides its members there (**E3008**). A generic
-function follows the visibility rules of any function, so a private one called from another file is
+function follows the visibility rules of any function, so an unmarked one called from another directory is
 **E3008**.
 
 A generic function and a non-generic one of the same name in one directory are two declarations of one name
@@ -212,9 +212,9 @@ error E3180: <fragment>:16:10: the arguments of 'larger' give type parameter 'T'
 ```
 
 <!-- test: error.two-files-same-range-limits-give-no-one-type -->
-Three files in three directories each declare a file-private `Limit`: `a/a.maxon` and `b/b.maxon` over one
+Three files in three directories each declare an unmarked `Limit`: `a/a.maxon` and `b/b.maxon` over one
 range, `c/c.maxon` over another. The first two are still two declarations, so a value of each gives `T`
-two types. The exported fields that carry those values name a file-private alias, which E3167 refuses too.
+two types. The exported fields that carry those values name an unmarked alias, which E3167 refuses too.
 ```maxon
 // --- file: a/a.maxon
 typealias Limit = int(0 to 9)
@@ -264,8 +264,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: a/<fragment>:6:18: exported field 'a.Ha.v' names file-private typealias 'Limit' in its type
-error E3167: b/<fragment>:17:18: exported field 'b.Hb.v' names file-private typealias 'Limit' in its type
+error E3167: a/<fragment>:6:18: exported field 'a.Ha.v' names unexported typealias 'Limit' in its type
+error E3167: b/<fragment>:17:18: exported field 'b.Hb.v' names unexported typealias 'Limit' in its type
 error E3180: <fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'a.Limit' and 'b.Limit' share no alias they both implement
 ```
 
@@ -493,7 +493,7 @@ end 'main'
 
 <!-- test: an-exported-generic-function-is-called-from-another-file -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export function larger(a T, b T) uses T returns T where T is Comparable
 	if a > b 'first'
 		return a
@@ -603,7 +603,7 @@ end 'main'
 
 <!-- test: an-exported-requirement-reached-only-through-an-instance-is-used -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export function smaller(a T, b T) uses T returns T where T is Comparable
 	if a < b 'first'
 		return a
@@ -612,7 +612,7 @@ export function smaller(a T, b T) uses T returns T where T is Comparable
 	return b
 end 'smaller'
 
-// --- file: point.maxon
+// --- file: point/point.maxon
 export typealias Rank = int(0 to 100)
 
 export type Point implements Comparable
@@ -657,7 +657,7 @@ export function weigh(a T, b T) uses T returns bool where T is Comparable
 	return b.heavy()
 end 'weigh'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Rank = int(0 to 100)
 
 type Point implements Comparable
@@ -694,7 +694,7 @@ A requirement the `where` clause names is the constraining interface's surface, 
 where the type that satisfies it is hidden.
 ```maxon
 // --- file: lib.maxon
-export function smaller(a T, b T) uses T returns T where T is Comparable
+function smaller(a T, b T) uses T returns T where T is Comparable
 	if a.compare(b) == Ordering.lessThan 'first'
 		return a
 	end 'first'
@@ -702,7 +702,7 @@ export function smaller(a T, b T) uses T returns T where T is Comparable
 	return b
 end 'smaller'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Rank = int(0 to 100)
 
 type Point implements Comparable
@@ -739,7 +739,7 @@ end 'main'
 A closure written in a generic function belongs to the copy it is written in, so it calls the requirement too.
 ```maxon
 // --- file: lib.maxon
-export function smallerVia(a T, b T) uses T returns T where T is Comparable
+function smallerVia(a T, b T) uses T returns T where T is Comparable
 	let firstIsSmaller = function() gives a.compare(b) == Ordering.lessThan
 
 	if firstIsSmaller() 'first'
@@ -749,7 +749,7 @@ export function smallerVia(a T, b T) uses T returns T where T is Comparable
 	return b
 end 'smallerVia'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Rank = int(0 to 100)
 
 type Point implements Comparable
@@ -787,9 +787,9 @@ An `extension` of the constraining interface is that interface's surface too, so
 type it may not name.
 ```maxon
 // --- file: lib.maxon
-export typealias Score = int(i64.min to i64.max)
+typealias Score = int(i64.min to i64.max)
 
-export interface Ranked
+interface Ranked
 	function rank() returns Score
 end 'Ranked'
 
@@ -799,11 +799,11 @@ extension Ranked
 	end 'doubledRank'
 end 'Ranked'
 
-export function doubled(a T) uses T returns Score where T is Ranked
+function doubled(a T) uses T returns Score where T is Ranked
 	return a.doubledRank()
 end 'doubled'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 type Point implements Ranked
 	var value as Score
 
@@ -825,24 +825,24 @@ end 'main'
 42
 ```
 
-<!-- test: an-extension-method-calls-a-file-private-requirement-of-a-conformer-in-another-file -->
+<!-- test: an-extension-method-calls-an-unmarked-requirement-of-a-conformer-in-a-subdirectory -->
 An `extension` body calls a requirement through the interface's surface, so the conformer's implementation may be
-private to the file that declares it.
+unmarked in a directory the extension cannot see.
 ```maxon
 // --- file: lib.maxon
-export typealias Score = int(i64.min to i64.max)
+typealias Score = int(i64.min to i64.max)
 
-export interface Ranked
+interface Ranked
 	function rank() returns Score
 end 'Ranked'
 
 extension Ranked
-	export function doubledRank() returns Score
+	function doubledRank() returns Score
 		return self.rank() * 2
 	end 'doubledRank'
 end 'Ranked'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 type Point implements Ranked
 	var value as Score
 
@@ -884,7 +884,7 @@ export function tallyOf(a T) uses T returns Score where T is Ranked
 	return a.tally
 end 'tallyOf'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 type Point implements Ranked
 	export var tally as Score
 
@@ -936,7 +936,7 @@ false true lib7
 ```
 
 <!-- test: error.two-files-of-one-directory-each-declare-a-private-generic-of-one-name -->
-Free functions are scoped by directory, so two files of one directory declare `pick` twice whether each is file-private or not.
+Free functions are scoped by directory, so two files of one directory declare `pick` twice whether each is unmarked or not.
 ```maxon
 // --- file: a.maxon
 function pick(a T) uses T returns T
@@ -963,7 +963,7 @@ error E3006: <fragment>:12:10: duplicate definition of 'pick' — already declar
 
 <!-- test: error.a-private-generic-is-not-callable-from-another-file -->
 ```maxon
-// --- file: a.maxon
+// --- file: a/a.maxon
 function pick(a T) uses T returns T
 	return a
 end 'pick'
@@ -983,7 +983,7 @@ error E3008: <fragment>:13:20: function 'pick' is not exported
 ```
 
 <!-- test: a-private-generic-is-bound-past-another-directorys-exported-generic-of-one-name -->
-`a/` calls its own private `larger`; the root sees only `b/`'s exported one, which returns the smaller argument so the binding shows.
+`a/` calls its own unmarked `larger`; the root sees only `b/`'s exported one, which returns the smaller argument so the binding shows.
 ```maxon
 // --- file: a/a.maxon
 function larger(a T, b T) uses T returns T where T is Comparable
@@ -1023,7 +1023,7 @@ main 2
 ```
 
 <!-- test: two-same-named-files-in-two-directories-each-bind-their-own-private-generic -->
-A file-private declaration coexists with anything, so two `util.maxon` files each call their own `larger`; `b/`'s returns the smaller argument so the binding shows.
+An unmarked declaration coexists with anything, so two `util.maxon` files each call their own `larger`; `b/`'s returns the smaller argument so the binding shows.
 ```maxon
 // --- file: a/util.maxon
 function larger(a T, b T) uses T returns T where T is Comparable
@@ -1111,11 +1111,12 @@ end 'main'
 error E3004: <fragment>:11:17: call to undefined function 'nope'
 ```
 
-<!-- test: two-same-named-files-in-two-directories-each-bind-their-own-module-generic -->
-The same pair at the `module` tier: one file name in two directories, one `module` generic of one name, one line and column.
+<!-- test: two-same-named-files-in-two-directories-each-bind-their-own-directorys-generic -->
+The same pair with the generic declared in a sibling file of its caller: one file name in two directories, one unmarked
+generic of one name, one line and column.
 ```maxon
 // --- file: a/util.maxon
-module function larger(a T, b T) uses T returns T where T is Comparable
+function larger(a T, b T) uses T returns T where T is Comparable
 	if a > b 'first'
 		return a
 	end 'first'
@@ -1129,7 +1130,7 @@ export function runA()
 end 'runA'
 
 // --- file: b/util.maxon
-module function larger(a T, b T) uses T returns T where T is Comparable
+function larger(a T, b T) uses T returns T where T is Comparable
 	if a > b 'first'
 		return a
 	end 'first'
@@ -1489,7 +1490,7 @@ error E3193: <fragment>:16:10: 'describe' is an instance method of 'Tally' and n
 
 <!-- test: a-generic-in-another-file-compares-and-quotes-the-callers-file-private-enum -->
 `Expect.equal` is declared in `stdlib/` and renders both values with `:q`. Rendering an enum value is a
-conversion the language makes, not a name the generic's author wrote, so the caller's file-private
+conversion the language makes, not a name the generic's author wrote, so the caller's unmarked
 `Shade` is no visibility question.
 ```maxon
 enum Shade
@@ -1509,11 +1510,11 @@ end 'main'
 <!-- test: a-generic-in-another-file-interpolates-the-callers-file-private-enum -->
 ```maxon
 // --- file: l.maxon
-module function describe(a T) uses T returns String
+function describe(a T) uses T returns String
 	return "{a}"
 end 'describe'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 enum Shade
 	light
 	dark
@@ -1534,11 +1535,11 @@ dark
 <!-- test: a-generic-in-another-file-quotes-the-callers-file-private-stringable-type -->
 ```maxon
 // --- file: l.maxon
-module function describe(a T) uses T returns String
+function describe(a T) uses T returns String
 	return "{a:q}"
 end 'describe'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Code = int(0 to 100)
 
 type Tag implements Stringable
@@ -1566,18 +1567,18 @@ tag7
 ```
 
 <!-- test: error.a-generic-in-another-file-matching-the-callers-file-private-enum-cases-is-refused -->
-The case names in `code`'s `match` are written by the generic's author, in `l.maxon`, outside the file
-`Shade` is private to: they are names crossing the file boundary, and they stay refused.
+The case names in `code`'s `match` are written by the generic's author, in `l.maxon`, outside the directory
+`Shade` is visible in: they are names crossing the directory boundary, and they stay refused.
 ```maxon
 // --- file: l.maxon
-module function code(a T) uses T returns ExitCode
+function code(a T) uses T returns ExitCode
 	return match a 'which'
 		light gives 1
 		dark gives 2
 	end 'which'
 end 'code'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 enum Shade
 	light
 	dark

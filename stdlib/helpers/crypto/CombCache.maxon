@@ -16,17 +16,17 @@ end 'CombModuli'
 public typealias CombTableBuild = function() returns WorkspaceLimbs mutates captures
 public typealias CombModuliBuild = function() returns CombModuli
 
-module union CombTableState
+union CombTableState
 	unbuilt
 	built(limbs WorkspaceLimbs)
 end 'CombTableState'
 
-module union CombModuliState
+union CombModuliState
 	unknown
 	known(moduli CombModuli)
 end 'CombModuliState'
 
-module union CombUpdate
+union CombUpdate
 	settled
 	replace(entry CombEntry)
 end 'CombUpdate'
@@ -34,11 +34,11 @@ end 'CombUpdate'
 typealias CombStep = function(CombEntry) returns CombUpdate mutates captures
 typealias CombEntries = Array with CombEntry
 
-module type CombEntry
-	module let table as CombTableState
-	module let moduli as CombModuliState
+type CombEntry
+	let table as CombTableState
+	let moduli as CombModuliState
 
-	module static function unbuilt() returns CombEntry
+	static function unbuilt() returns CombEntry
 		return Self{table: CombTableState.unbuilt, moduli: CombModuliState.unknown}
 	end 'unbuilt'
 
@@ -56,7 +56,7 @@ module type CombEntry
 		end 'moduli'
 	end 'copiedModuli'
 
-	module function copy() returns CombEntry
+	function copy() returns CombEntry
 		return Self{table: copiedTable(), moduli: copiedModuli()}
 	end 'copy'
 
@@ -68,14 +68,14 @@ module type CombEntry
 		return Self{table: copiedTable(), moduli: CombModuliState.known(CombModuli.create(replacement.prime, order: replacement.order))}
 	end 'withModuli'
 
-	module function tableUpdate(build CombTableBuild) returns CombUpdate
+	function tableUpdate(build CombTableBuild) returns CombUpdate
 		return match self.table 'table'
 			built gives CombUpdate.settled
 			unbuilt gives CombUpdate.replace(withTable(build()))
 		end 'table'
 	end 'tableUpdate'
 
-	module function moduliUpdate(build CombModuliBuild) returns CombUpdate
+	function moduliUpdate(build CombModuliBuild) returns CombUpdate
 		return match self.moduli 'moduli'
 			known gives CombUpdate.settled
 			unknown gives CombUpdate.replace(withModuli(build()))
@@ -86,9 +86,9 @@ end 'CombEntry'
 // One copy serves every caller in the process, which is sound only because each value is derived
 // from public curve constants. Anything derived from a key must stay out of it.
 public type CombCache
-	module let entries as CombEntries
+	let entries as CombEntries
 
-	module static function unbuilt() returns CombCache
+	static function unbuilt() returns CombCache
 		let entries = CombEntries.create(0)
 
 		for _ in CombCurve.allCases 'eachCurve'

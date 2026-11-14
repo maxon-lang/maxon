@@ -1,12 +1,12 @@
-module typealias GdbWireIndex = int(0 to u64.max)
+typealias GdbWireIndex = int(0 to u64.max)
 typealias GdbChecksumByte = int(0 to 0xFF)
-module typealias GdbPayloadBytes = int(1 to 0x4000000)
-module typealias GdbChunkBytes = int(1 to 0x2000000)
-module typealias GdbRegisterNumber = int(0 to 0xFFFF)
-module typealias GdbRegisterBytes = int(0 to 64)
-module typealias GdbSignalNumber = int(0 to 0xFF)
-module typealias GdbWaitMs = int(0 to 0xFFFFFFFF)
-module typealias GdbWireWord = int(0 to u64.max)
+typealias GdbPayloadBytes = int(1 to 0x4000000)
+typealias GdbChunkBytes = int(1 to 0x2000000)
+typealias GdbRegisterNumber = int(0 to 0xFFFF)
+typealias GdbRegisterBytes = int(0 to 64)
+typealias GdbSignalNumber = int(0 to 0xFF)
+typealias GdbWaitMs = int(0 to 0xFFFFFFFF)
+typealias GdbWireWord = int(0 to u64.max)
 
 let GdbDollarByte = 0x24
 let GdbHashByte = 0x23
@@ -30,18 +30,18 @@ let GdbPacketSizeFeature = "PacketSize="
 
 let GdbErrorPrefix = "E"
 
-module let GdbFieldSeparator = ";"
-module let GdbKeyValueSeparator = ":"
+let GdbFieldSeparator = ";"
+let GdbKeyValueSeparator = ":"
 
 let GdbRegisterInfoNameKey = "name"
 let GdbRegisterInfoBitsizeKey = "bitsize"
 let GdbRegisterInfoContainerKey = "container-regs"
 
-module enum GdbChunkError implements Error
+enum GdbChunkError implements Error
 	limitTooSmall
 end 'GdbChunkError'
 
-module union GdbAnswer
+union GdbAnswer
 	answered(payload String)
 	unsupported
 	failed(code String)
@@ -66,7 +66,7 @@ union GdbRegisterWidth
 	unusable
 end 'GdbRegisterWidth'
 
-module type GdbRegisterInfo
+type GdbRegisterInfo
 	export let name as String
 	export let number as GdbRegisterNumber
 	export let bytes as GdbRegisterBytes
@@ -76,9 +76,9 @@ module type GdbRegisterInfo
 	end 'create'
 end 'GdbRegisterInfo'
 
-module typealias GdbRegisterInfoArray = Array with GdbRegisterInfo
+typealias GdbRegisterInfoArray = Array with GdbRegisterInfo
 
-module type GdbRemoteConnection
+type GdbRemoteConnection
 	var socket as TcpClient
 	var pending as ByteArray
 	var searched as GdbWireIndex
@@ -87,20 +87,20 @@ module type GdbRemoteConnection
 	var suffixed as bool
 	var open as bool
 
-	module static function over(socket TcpClient) returns GdbRemoteConnection
+	static function over(socket TcpClient) returns GdbRemoteConnection
 		return Self{socket: socket, pending: ByteArray.create(0), searched: 0, acking: true, payloadLimit: GdbDefaultPayloadBytes, suffixed: false, open: true}
 	end 'over'
 
-	module function threadSuffixSupported() returns bool
+	function threadSuffixSupported() returns bool
 		return self.suffixed
 	end 'threadSuffixSupported'
 
 	// A reply is held to the same limit as a request, and carries each byte as two hex digits.
-	module function readChunk(remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
+	function readChunk(remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
 		return try gdbChunkWithin(self.payloadLimit as GdbWireIndex, remaining: remaining)
 	end 'readChunk'
 
-	module function writeChunk(address DebugAddress, remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
+	function writeChunk(address DebugAddress, remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
 		let limit = self.payloadLimit as GdbWireIndex
 		let ceiling = try gdbChunkWithin(limit, remaining: remaining)
 		let header = gdbWriteHeader(address, count: ceiling).byteLength() as GdbWireIndex
@@ -114,16 +114,16 @@ module type GdbRemoteConnection
 
 	// An over-limit request is refused rather than split: `P` and a `vCont` stepping several threads are
 	// single packets, and a packet past the stub's buffer must never be sent.
-	module function takes(payload String) returns bool
+	function takes(payload String) returns bool
 		return (payload.byteLength() as GdbWireIndex) <= (self.payloadLimit as GdbWireIndex)
 	end 'takes'
 
-	module function close()
+	function close()
 		self.open = false
 		self.socket.close()
 	end 'close'
 
-	module function ask(payload String) returns GdbAnswer
+	function ask(payload String) returns GdbAnswer
 		if not self.takes(payload) 'pastTheStubsBuffer'
 			return GdbAnswer.broken("the request '{payload}' is {payload.byteLength()} bytes and the debug stub takes packets of at most {self.payloadLimit}")
 		end 'pastTheStubsBuffer'
@@ -135,7 +135,7 @@ module type GdbRemoteConnection
 		return self.answerWithin(GdbReplyBudgetMs)
 	end 'ask'
 
-	module function answerWithin(budgetMs GdbWaitMs) returns GdbAnswer
+	function answerWithin(budgetMs GdbWaitMs) returns GdbAnswer
 		match self.readPacket(budgetMs) 'read'
 			timedOut then return GdbAnswer.timedOut
 			broken(reason) then return GdbAnswer.broken(reason)
@@ -143,7 +143,7 @@ module type GdbRemoteConnection
 		end 'read'
 	end 'answerWithin'
 
-	module function writePacket(payload String) returns bool
+	function writePacket(payload String) returns bool
 		if not self.takes(payload) 'pastTheStubsBuffer'
 			return false
 		end 'pastTheStubsBuffer'
@@ -159,7 +159,7 @@ module type GdbRemoteConnection
 		return self.ackRead()
 	end 'writePacket'
 
-	module function interrupt() returns bool
+	function interrupt() returns bool
 		let raw = ByteArray.create(1, zeroed: false)
 		raw.push(GdbInterruptByte)
 
@@ -311,7 +311,7 @@ module type GdbRemoteConnection
 
 	// --- the handshake ---
 
-	module function shakeHands() returns GdbHandshake
+	function shakeHands() returns GdbHandshake
 		_ = self.writeText(GdbAckText)
 
 		match self.ask("QStartNoAckMode") 'noAck'
@@ -393,7 +393,7 @@ module type GdbRemoteConnection
 	end 'registerRoster'
 end 'GdbRemoteConnection'
 
-module union GdbHandshake
+union GdbHandshake
 	shook(registers GdbRegisterInfoArray)
 	refused(reason String)
 end 'GdbHandshake'
@@ -403,14 +403,14 @@ union GdbRegisterRoster
 	refused(reason String)
 end 'GdbRegisterRoster'
 
-module union GdbHexRead
+union GdbHexRead
 	value(word GdbWireWord)
 	notHex
 end 'GdbHexRead'
 
 let GdbMaxRegisterRosterSize = 256
 
-module let GdbReplyBudgetMs = 20000
+let GdbReplyBudgetMs = 20000
 
 // `PacketSize` bounds the payload alone, not the `$`, `#` and checksum that frame it.
 function gdbPayloadLimitOf(size GdbWireWord) returns GdbPayloadBytes
@@ -437,7 +437,7 @@ function gdbChunkWithin(room GdbWireIndex, remaining BackendByteCount) returns G
 	return (carried if carried < wanted else wanted) as GdbChunkBytes
 end 'gdbChunkWithin'
 
-module function gdbWriteHeader(address DebugAddress, count GdbChunkBytes) returns String
+function gdbWriteHeader(address DebugAddress, count GdbChunkBytes) returns String
 	return "M{address:x},{count:x}:"
 end 'gdbWriteHeader'
 
@@ -578,7 +578,7 @@ end 'gdbChecksumOf'
 
 // --- the hex the protocol carries every number and every byte in ---
 
-module function gdbHexValueOf(text String) returns GdbHexRead
+function gdbHexValueOf(text String) returns GdbHexRead
 	if text.isEmpty() 'nothingToRead'
 		return GdbHexRead.notHex
 	end 'nothingToRead'
@@ -595,7 +595,7 @@ module function gdbHexValueOf(text String) returns GdbHexRead
 	return GdbHexRead.value(value)
 end 'gdbHexValueOf'
 
-module function gdbHexTextOf(bytes ByteArray) returns String
+function gdbHexTextOf(bytes ByteArray) returns String
 	var out = ""
 
 	for value in bytes 'eachByte'

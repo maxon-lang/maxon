@@ -1,22 +1,22 @@
-module union TlsGroupChoice
+union TlsGroupChoice
 	shared(share TlsKeyShare)
 	retry(group TlsGroupCode)
 end 'TlsGroupChoice'
 
-module type TlsServerChoice
-	module var suite as Tls13CipherSuite
-	module var scheme as TlsSignatureScheme
-	module var group as TlsGroupChoice
-	module var alpn as TlsAlpnChoice
-	module var acknowledgesName as bool
-	module var sessionId as ByteArray
+type TlsServerChoice
+	var suite as Tls13CipherSuite
+	var scheme as TlsSignatureScheme
+	var group as TlsGroupChoice
+	var alpn as TlsAlpnChoice
+	var acknowledgesName as bool
+	var sessionId as ByteArray
 
-	module static function create(suite Tls13CipherSuite, scheme TlsSignatureScheme, group TlsGroupChoice, alpn TlsAlpnChoice, acknowledgesName bool, sessionId ByteArray) returns TlsServerChoice
+	static function create(suite Tls13CipherSuite, scheme TlsSignatureScheme, group TlsGroupChoice, alpn TlsAlpnChoice, acknowledgesName bool, sessionId ByteArray) returns TlsServerChoice
 		return Self{suite: suite, scheme: scheme, group: group, alpn: alpn, acknowledgesName: acknowledgesName, sessionId: sessionId}
 	end 'create'
 end 'TlsServerChoice'
 
-module union TlsServerPhase
+union TlsServerPhase
 	awaitingClientHello
 	awaitingRetriedClientHello(choice TlsServerChoice, group TlsGroupCode)
 	awaitingClientCertificate
@@ -44,15 +44,15 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 		return Self{config: config, entropy: entropy, peer: peer, storedSession: session, phase: TlsServerPhase.awaitingClientHello, tls12: Tls12ServerFlow.create(config, entropy: entropy, peer: peer, session: session)}
 	end 'create'
 
-	module function receive(record ByteArray) throws TlsHandshakeError
+	function receive(record ByteArray) throws TlsHandshakeError
 		try storedSession.receive(record, handler: self)
 	end 'receive'
 
-	module function session() returns TlsSession
+	function session() returns TlsSession
 		return storedSession
 	end 'session'
 
-	module function dispatch(message ByteArray) throws TlsHandshakeError
+	function dispatch(message ByteArray) throws TlsHandshakeError
 		match phase 'phase'
 			awaitingClientHello then try onClientHello(message)
 			awaitingRetriedClientHello(choice, group) then try onRetriedClientHello(message, choice: choice, group: group)

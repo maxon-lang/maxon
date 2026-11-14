@@ -1,7 +1,7 @@
 ---
 feature: public-keyword
 status: stable
-keywords: [public, export, module, visibility, api]
+keywords: [public, export, visibility, api]
 category: infrastructure
 ---
 
@@ -9,8 +9,8 @@ category: infrastructure
 
 ## Documentation
 
-`public` is a visibility modifier, written where `export` and `module` are
-written and mutually exclusive with both. It makes a declaration visible to
+`public` is a visibility modifier, written where `export` is written and
+mutually exclusive with it. It makes a declaration visible to
 every file — exactly as `export` does — and additionally states that the
 declaration is **API surface**.
 
@@ -20,13 +20,12 @@ public function parse(text String) returns Config
 end 'parse'
 ```
 
-### The four tiers
+### The three tiers
 
-| modifier | visible to | audited by the unused-export family? |
+| modifier | visible to | audited by the unused-declaration checks? |
 |---|---|---|
-| *(none)* | the declaring FILE | — |
-| `module` | the declaring DIRECTORY and its subdirectories | yes (E3094) |
-| `export` | every file | yes (E3092, E3093) |
+| *(none)* | the declaring DIRECTORY and its subdirectories | yes (E3219) |
+| `export` | every file | yes (E3092) |
 | `public` | every file | **no** |
 
 ### `export` and `public` are the same visibility and a different claim
@@ -36,27 +35,19 @@ identically for the two. They differ in one thing only, which is what the
 author is saying about USE:
 
 - `export` — other files may see this, **and I expect this program to use
-  it**. If nothing outside the declaring file references it, that is a real
-  finding (E3092).
+  it**. If nothing outside the declaring directory's subtree references it, that is a
+  real finding (E3092).
 - `public` — this is **API surface**; do not ask who calls it. A shared
-  module may legitimately publish a symbol that this particular program
+  library may legitimately publish a symbol that this particular program
   never reaches, and "no caller in this compilation" is not the same fact
   as "dead".
 
-### There is deliberately no `module public`
-
-E3094 keeps its full force. A `module` declaration that wants exemption is
-promoted to `public`, which changes its visibility and says so. A tier plus
-a separate exemption flag would be two axes, and every reader would then
-have to know it must ask about both.
-
 ### The modifiers are mutually exclusive
 
-Any two of `export`, `module` and `public` on one declaration is **E2001**,
-positioned at the second one — the modifier that cannot be there is the one
-the message is about. The pair is named in a fixed order (`export`, then
-`module`, then `public`) whichever order the author wrote them in, so one
-illegal program has one diagnostic.
+`export` and `public` on one declaration is **E2001**, positioned at the second
+one — the modifier that cannot be there is the one the message is about. The
+pair is named in a fixed order (`export`, then `public`) whichever order the
+author wrote them in, so one illegal program has one diagnostic.
 
 ## Tests
 
@@ -206,7 +197,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:17: exported function 'api.neverCalledFromOutside' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:17: exported function 'api.neverCalledFromOutside' is never referenced outside its declaring directory
 ```
 
 ## The modifiers are mutually exclusive
@@ -243,21 +234,8 @@ end 'main'
 error E2001: <fragment>:2:8: 'export' and 'public' cannot be combined
 ```
 
-<!-- test: error.module-then-public-combined -->
-```maxon
-module public function bad() returns ExitCode
-	return 0
-end 'bad'
-
-function main() returns ExitCode
-	return bad()
-end 'main'
-```
-```maxoncstderr
-error E2001: <fragment>:2:8: 'module' and 'public' cannot be combined
-```
-
-<!-- test: error.public-then-module-combined -->
+<!-- test: error.module-after-public-is-a-stray-word -->
+`module` is no modifier, so after `public` it is a stray word where a declaration keyword belongs.
 ```maxon
 public module function bad() returns ExitCode
 	return 0
@@ -268,22 +246,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: <fragment>:2:8: 'module' and 'public' cannot be combined
-```
-
-<!-- test: error.module-then-export-combined -->
-The `module`/`export` pair, written `module` first.
-```maxon
-module export function bad() returns ExitCode
-	return 0
-end 'bad'
-
-function main() returns ExitCode
-	return bad()
-end 'main'
-```
-```maxoncstderr
-error E2001: <fragment>:2:8: 'export' and 'module' cannot be combined
+error E2001: <fragment>:2:8: Expected function declaration, got 'module'
+error E3004: <fragment>:7:9: call to undefined function 'bad'
 ```
 
 ## `public` is a keyword, and a keyword may still be a declared name

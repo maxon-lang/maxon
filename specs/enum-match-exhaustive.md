@@ -611,7 +611,7 @@ exhaustive match on `SmallOp` compiles cleanly.
 <!-- test: cross-file-shadowed-union -->
 ```maxon
 // --- file: ops.maxon
-export union BigOp
+union BigOp
 	condBr
 	br
 	cmp
@@ -619,7 +619,7 @@ export union BigOp
 	ret
 end 'BigOp'
 
-export union SmallOp
+union SmallOp
 	condBr
 	br
 end 'SmallOp'
@@ -669,7 +669,7 @@ exhaustive.
 <!-- test: cross-file-shadowed-union-range -->
 ```maxon
 // --- file: spans.maxon
-export union BigSpan
+union BigSpan
 	condBr
 	cmp
 	call
@@ -677,7 +677,7 @@ export union BigSpan
 	ret
 end 'BigSpan'
 
-export union SpanOp
+union SpanOp
 	condBr
 	br
 end 'SpanOp'
@@ -731,14 +731,14 @@ this exhaustive non-overlapping match compiles cleanly.
 <!-- test: cross-file-range-no-false-overlap -->
 ```maxon
 // --- file: ops.maxon
-export union WideOp
+union WideOp
 	call
 	ret
 	param
 	extra
 end 'WideOp'
 
-export union NarrowOp
+union NarrowOp
 	ret
 	call
 	param

@@ -7,22 +7,22 @@ let LibraryTierFilePathLine = "\tstatic function normalizeSeparators(path String
 let LibraryTierPrintFileName = "Print.maxon"
 let LibraryTierPrintLine = "public function print(value String)"
 let LibraryTierClockFileName = "Clock.maxon"
-let LibraryTierClockLine = "module function __uptime_ms() returns MachineWord"
+let LibraryTierClockLine = "function __uptime_ms() returns MachineWord"
 let LibraryTierStringName = "String"
 let LibraryTierMachineWordName = "MachineWord"
 
 let LibraryTierSingleFileCount = 1
 
-export enum LibraryTierAsking
+enum LibraryTierAsking
 	nothingBeyondTheOpen
 	aDefinitionInEach
 end 'LibraryTierAsking'
 
-export type LibraryTierDocument
-	module let uri as String
-	module let content as String
-	module let line as LspCoordinate
-	module let character as LspCoordinate
+type LibraryTierDocument
+	let uri as String
+	let content as String
+	let line as LspCoordinate
+	let character as LspCoordinate
 	export let tierDirName as String
 
 	static function at(tierDirName String, fileName String, lineNeedle String, name String) returns LibraryTierDocument
@@ -51,17 +51,17 @@ export type LibraryTierDocument
 	end 'opened'
 end 'LibraryTierDocument'
 
-export typealias LibraryTierDocumentArray = Array with LibraryTierDocument
+typealias LibraryTierDocumentArray = Array with LibraryTierDocument
 
-export function libraryTierFilePathDocument() returns LibraryTierDocument
+function libraryTierFilePathDocument() returns LibraryTierDocument
 	return LibraryTierDocument.at(LibraryTierStdlibDirName, fileName: LibraryTierFilePathFileName, lineNeedle: LibraryTierFilePathLine, name: LibraryTierStringName)
 end 'libraryTierFilePathDocument'
 
-export function libraryTierPrintDocument() returns LibraryTierDocument
+function libraryTierPrintDocument() returns LibraryTierDocument
 	return LibraryTierDocument.at(LibraryTierStdlibDirName, fileName: LibraryTierPrintFileName, lineNeedle: LibraryTierPrintLine, name: LibraryTierStringName)
 end 'libraryTierPrintDocument'
 
-export function libraryTierClockDocument() returns LibraryTierDocument
+function libraryTierClockDocument() returns LibraryTierDocument
 	return LibraryTierDocument.at(LibraryTierRuntimeDirName, fileName: LibraryTierClockFileName, lineNeedle: LibraryTierClockLine, name: LibraryTierMachineWordName)
 end 'libraryTierClockDocument'
 
@@ -72,14 +72,14 @@ function libraryTierDocuments(first LibraryTierDocument) returns LibraryTierDocu
 	return documents
 end 'libraryTierDocuments'
 
-export function libraryTierDocumentPair(first LibraryTierDocument, second LibraryTierDocument) returns LibraryTierDocumentArray
+function libraryTierDocumentPair(first LibraryTierDocument, second LibraryTierDocument) returns LibraryTierDocumentArray
 	let documents = libraryTierDocuments(first)
 	documents.push(second)
 
 	return documents
 end 'libraryTierDocumentPair'
 
-export function libraryTierSession(documents LibraryTierDocumentArray, asking LibraryTierAsking) returns ListProjectsProbe
+function libraryTierSession(documents LibraryTierDocumentArray, asking LibraryTierAsking) returns ListProjectsProbe
 	let opened = WorkspaceFolderDocumentArray.create(0)
 
 	for document in documents 'eachDocument'
@@ -89,7 +89,7 @@ export function libraryTierSession(documents LibraryTierDocumentArray, asking Li
 	return listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(Directory.currentPath())), documents: opened)
 end 'libraryTierSession'
 
-export function libraryTierProjects(session ListProjectsProbe) returns ListProjectsResult throws TestFailure
+function libraryTierProjects(session ListProjectsProbe) returns ListProjectsResult throws TestFailure
 	match session 'session'
 		answered(projects, _) then return projects
 		unanswered(detail) then try Expect.fail("the session broke before `maxon/listProjects` answered: {detail}")
@@ -98,7 +98,7 @@ export function libraryTierProjects(session ListProjectsProbe) returns ListProje
 	panic("library tier project: the `unanswered` arm always throws, so this line is unreachable")
 end 'libraryTierProjects'
 
-export function libraryTierNotices(session ListProjectsProbe) returns ProjectLoadingNoticeArray throws TestFailure
+function libraryTierNotices(session ListProjectsProbe) returns ProjectLoadingNoticeArray throws TestFailure
 	match session 'session'
 		answered(_, notices) then return notices
 		unanswered(detail) then try Expect.fail("the session broke before the `maxon/projectLoading` notices could be read: {detail}")
@@ -107,11 +107,11 @@ export function libraryTierNotices(session ListProjectsProbe) returns ProjectLoa
 	panic("library tier project: the `unanswered` arm always throws, so this line is unreachable")
 end 'libraryTierNotices'
 
-export function libraryTierDirTail(document LibraryTierDocument) returns String
+function libraryTierDirTail(document LibraryTierDocument) returns String
 	return "{PortablePathSeparator}{document.tierDirName}"
 end 'libraryTierDirTail'
 
-export function requireTheLibraryTierProject(project ProjectEntry, document LibraryTierDocument, note String) throws TestFailure
+function requireTheLibraryTierProject(project ProjectEntry, document LibraryTierDocument, note String) throws TestFailure
 	let expectedTail = libraryTierDirTail(document)
 
 	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(expectedTail), message: "{note} The project is rooted at {project.rootPath}, not at the `{document.tierDirName}/` directory: a library tier is ONE project, and a root naming a source file files every library document as a program of its own.")
@@ -119,7 +119,7 @@ export function requireTheLibraryTierProject(project ProjectEntry, document Libr
 	try Expect.isTrue(project.fileCount > LibraryTierSingleFileCount, message: "{note} The `{document.tierDirName}/` project reported {project.fileCount} files. Opening a document of the tier builds its project, so the count is the tier's own, and the tier holds many.")
 end 'requireTheLibraryTierProject'
 
-export function requireTheOnlyOpenedLibraryTierProject(document LibraryTierDocument) throws TestFailure
+function requireTheOnlyOpenedLibraryTierProject(document LibraryTierDocument) throws TestFailure
 	let note = "`{document.uri}` was opened in a session whose client named the checkout as its workspace folder, and nothing else was asked before `maxon/listProjects`. The document is clean, so no diagnostic correction reached the project either: the open alone is what builds it."
 	let session = libraryTierSession(libraryTierDocuments(document), asking: LibraryTierAsking.nothingBeyondTheOpen)
 	let project = try soleProject(try libraryTierProjects(session), note: note)

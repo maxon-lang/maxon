@@ -173,7 +173,7 @@ let PoisonFreedMarker = "<!-- PoisonFreed"
 // what the program allocated, retained and freed. `log` is the PROGRAM's own sentences, written through
 // the `__DebugStream` builtin. A case selects one; asking for both at once would need a block whose lines
 // interleave two families, which no reader has wanted.
-export enum TraceFamily
+enum TraceFamily
 	// The memory manager's own events — `mm_alloc` / `mm_incref` / `mm_decref` / `mm_free`.
 	mm
 
@@ -200,7 +200,7 @@ end 'TraceFamily'
 let MmTraceMarker = "<!-- MmTrace"
 let LogTraceMarker = "<!-- LogTrace"
 
-export function traceMarkerOf(family TraceFamily) returns String
+function traceMarkerOf(family TraceFamily) returns String
 	return match family 'f'
 		mm gives MmTraceMarker
 		log gives LogTraceMarker
@@ -343,9 +343,9 @@ let RunsAloneValue = "alone"
 let ProcessMarker = "<!-- process:"
 let ProcessOwnValue = "own"
 
-export let TierMarker = "<!-- tier:"
+let TierMarker = "<!-- tier:"
 let TierStdlibValue = "stdlib"
-export let TierSubdirectoryPrefix = "stdlib/"
+let TierSubdirectoryPrefix = "stdlib/"
 
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
@@ -452,7 +452,7 @@ let LogTraceFence = "```log-trace"
 
 // The fence a family's block lives in. Read by the parser (which claims the block) and by the splice
 // (which writes one), so the two cannot come to disagree about which fence holds which family.
-export function traceFenceOf(family TraceFamily) returns String
+function traceFenceOf(family TraceFamily) returns String
 	return match family 'f'
 		mm gives MmTraceFence
 		log gives LogTraceFence
@@ -516,14 +516,14 @@ let RequiredRuntimeFence = "```RequiredRuntime"
 let TargetIrFence = "```TargetIr"
 let TargetIrQualifiedFencePrefix = "```TargetIr:"
 
-export function targetIrFenceFor(target Target) returns String
+function targetIrFenceFor(target Target) returns String
 	return "{TargetIrQualifiedFencePrefix}{targetToString(target)}"
 end 'targetIrFenceFor'
 
 // The three-backtick delimiter. Markdown spells OPEN and CLOSE the same way, so one name serves
 // both readers: `readFence` looking for the end of a block, and `isUnimplementedFenceOpen` looking
 // at the start of one no arm reads.
-export let FenceDelimiter = "```"
+let FenceDelimiter = "```"
 
 // The one TAGGED fence a test region may open without claiming anything. A bare `FenceDelimiter`
 // block and a ```text one are PROSE — a quoted panic message, an illustrated diagnostic. Every
@@ -534,7 +534,7 @@ let ProseFenceOpen = "```text"
 // The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
 // block's first line. The header is why a file's line 1 is not the block's line 1 — see
 // `SpecSourceFile.mergedLineOffset`, and `SpecTestRunner.fragmentSource`, which writes it.
-export let FileMarker = "// --- file:"
+let FileMarker = "// --- file:"
 let FragmentHeaderLines = 1 as ElementIndex
 
 // ⭐⭐ **THE STDLIB-OVERLAY MARKER — how a case reaches a rule that only `<stdlibDir>/Builtins.maxon`
@@ -547,7 +547,7 @@ let FragmentHeaderLines = 1 as ElementIndex
 // reserved `__` prefix, only the files `Queries.declaresCompilerInternalNames` exempts may write
 // one, and a spec fragment can never be one of them.
 // A finding a suite cannot re-run is a check that cannot fail.
-export let StdlibOverlayMarker = "// --- stdlib-overlay:"
+let StdlibOverlayMarker = "// --- stdlib-overlay:"
 
 // ⭐⭐ **THE RUNTIME-FILE MARKER — how a case reaches a rule keyed on the `runtime/` SOURCE TIER.** Its
 // value is a path RELATIVE TO `runtime/`, and the section becomes a NEW file in the runner's private
@@ -558,7 +558,7 @@ export let StdlibOverlayMarker = "// --- stdlib-overlay:"
 // so that marker refuses a name the compiler does not load. The runtime tier's privileges are keyed on
 // the DIRECTORY, and its real contents are the language runtime — a file no case wants to prepend to —
 // so a name already present there is refused instead, and the section writes a file of its own.
-export let RuntimeFileMarker = "// --- runtime-file:"
+let RuntimeFileMarker = "// --- runtime-file:"
 
 // The prefix EVERY section marker shares, and therefore the shape a MISSPELLED one has. A line that
 // opens with it and matches no marker is refused rather than kept as source — without that,
@@ -574,9 +574,9 @@ let SectionMarkerPrefix = "// --- "
 // What would let a `// --- file:` marker escape the temp directory it is written into: a `.`/`..`
 // segment, a rooted name, or a Windows drive letter. Checked at the write
 // (SpecTestRunner.isSafeRelativeName), named here beside the marker they qualify.
-export let DotSegment = "."
-export let ParentSegment = ".."
-export let DriveLetterSeparator = ":"
+let DotSegment = "."
+let ParentSegment = ".."
+let DriveLetterSeparator = ":"
 
 // A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
 // value the runner reads back, so they compare without a cast. Exported so the
@@ -587,7 +587,7 @@ export typealias ExitCodeValue = int(0 to u32.max)
 // says nothing about stderr" and "this spec says stderr is EMPTY" are different claims,
 // and an empty String cannot tell them apart — it would be exactly the sentinel the
 // project forbids. Most tests pin nothing; the panic specs pin the diagnostic.
-export union SpecStderr
+union SpecStderr
 	unpinned
 	pinned(text String)
 end 'SpecStderr'
@@ -596,7 +596,7 @@ end 'SpecStderr'
 // reason: "this spec says nothing about stdout" and "this spec says stdout is EMPTY" are different
 // claims, and an empty String cannot tell them apart. `unpinned` is NOT "ignore stdout" — it asserts
 // the program printed nothing (see `checkRunStdout`), which is what a non-`print` program should do.
-export union SpecStdout
+union SpecStdout
 	unpinned
 	pinned(text String)
 end 'SpecStdout'
@@ -616,16 +616,16 @@ end 'SpecStdout'
 // (`SpecTestRunner.compareLinkedSection`) and the empty prefix matches every image ever linked —
 // `pinned("")` was as vacuous as `pinned` was expressive. An empty block is therefore REFUSED at
 // parse time (`refuseVacuousDirective`) rather than recorded as a claim nothing can fail.
-export type SpecSectionPin
+type SpecSectionPin
 	export let section as LinkedSectionKind
 	export let text as String
 
-	export static function create(section LinkedSectionKind, text String) returns SpecSectionPin
+	static function create(section LinkedSectionKind, text String) returns SpecSectionPin
 		return Self{section: section, text: text}
 	end 'create'
 end 'SpecSectionPin'
 
-export typealias SpecSectionPinArray = Array with SpecSectionPin
+typealias SpecSectionPinArray = Array with SpecSectionPin
 
 // (The emitted-runtime names a ```RequiredRuntime block lists are carried in
 // `RuntimeFunctionNameArray`, declared by the printer that consumes them — `TargetPrinter.maxon`.
@@ -648,7 +648,7 @@ export typealias SpecSectionPinArray = Array with SpecSectionPin
 //
 // ⇒ the exit code is now the same UNION the other three halves are, and the push condition is "a source
 // block and AT LEAST ONE result check".
-export union SpecExitCode
+union SpecExitCode
 	unpinned
 	pinned(value ExitCodeValue)
 end 'SpecExitCode'
@@ -668,7 +668,7 @@ end 'SpecExitCode'
 // stream but never both, which is precisely what those cases do assert. A success expectation carries
 // optional exit-code, stdout, stderr and `RequiredData` slots, mutually exclusive with a compile-error
 // expectation, and each slot's "unset" state is unrepresentable rather than a null.
-export union SpecExpectation
+union SpecExpectation
 	run(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray)
 	compilerError(text String)
 
@@ -684,7 +684,7 @@ end 'SpecExpectation'
 // `// --- stdlib-overlay: <name>` overlay. ONE type for both, because they carry the same three facts
 // and the runner applies `mergedLineOffset` to them identically; what differs is only WHERE the text
 // is written, which is the array a section lands in.
-export type SpecSourceFile
+type SpecSourceFile
 	// The path from the marker, RELATIVE (`app/main.maxon`) — to the test's own scratch directory for
 	// a file, to the staged `stdlib/` for an overlay. Written there, subdirectories and all.
 	export let name as String
@@ -702,22 +702,22 @@ export type SpecSourceFile
 	// fragment carries.
 	export let mergedLineOffset as ElementIndex
 
-	export static function create(name String, source String, mergedLineOffset ElementIndex) returns SpecSourceFile
+	static function create(name String, source String, mergedLineOffset ElementIndex) returns SpecSourceFile
 		return Self{name: name, source: source, mergedLineOffset: mergedLineOffset}
 	end 'create'
 end 'SpecSourceFile'
 
-export typealias SpecSourceFileArray = Array with SpecSourceFile
+typealias SpecSourceFileArray = Array with SpecSourceFile
 
 // The `targetToString` forms an `<!-- unsupported-targets: … -->` marker excludes a test from. EMPTY
 // means "excludes nothing" — the common case, and the literal count of targets a marker-less test
 // names — so it is not a sentinel. Named for its PURPOSE (the target keys), not its type.
-export typealias TargetKeyArray = Array with String
+typealias TargetKeyArray = Array with String
 
 // The arguments an `<!-- Args: … -->` marker hands the compiled program, in order. EMPTY means the
 // program is spawned with argv[0] alone — the ordinary case, and the literal count of arguments a
 // marker-less test names — so it is not a sentinel. Named for its PURPOSE, as `TargetKeyArray` is.
-export typealias ProgramArgArray = Array with String
+typealias ProgramArgArray = Array with String
 
 // ⭐⭐ **WHETHER A CASE ASSERTS A DEBUG-STREAM TRACE, WHICH FAMILY, AND WHAT IT EXPECTS — THREE STATES IN
 // ONE FIELD.** A case can be in capture MODE with no block yet (the authoring state: a bare
@@ -730,7 +730,7 @@ export typealias ProgramArgArray = Array with String
 // ⚠ **THE FAMILY RIDES BOTH LIVE ARMS AND NOT THE TEST**, because it is only meaningful when there is a
 // capture at all: a field beside this one would need a value for `off`, which is the same sentinel this
 // union exists to avoid one level up.
-export union SpecTraceCapture
+union SpecTraceCapture
 	// Not a capture case: built and run exactly as any other.
 	off
 
@@ -745,7 +745,7 @@ export union SpecTraceCapture
 	pinned(family TraceFamily, trace String, span TraceSlice)
 end 'SpecTraceCapture'
 
-export function traceSliceOf(capture SpecTraceCapture) returns TraceSlice
+function traceSliceOf(capture SpecTraceCapture) returns TraceSlice
 	return match capture 'mode'
 		off panic("traceSliceOf: a case not in capture mode has no capture block to write — ask `traceCaptureMode` before asking this")
 		unpinned(_, insertAt) gives insertAt
@@ -755,7 +755,7 @@ end 'traceSliceOf'
 
 // The family a capture case names. `off` has none — a caller that reaches here has already established
 // the case IS a capture (`SpecTestRunner.traceCaptureMode`), so an `off` here is a caller that did not.
-export function traceCaptureFamilyOf(capture SpecTraceCapture) returns TraceFamily
+function traceCaptureFamilyOf(capture SpecTraceCapture) returns TraceFamily
 	return match capture 'mode'
 		off panic("traceCaptureFamilyOf: a case not in capture mode names no family — ask `traceCaptureMode` before asking this")
 		unpinned(family, _) gives family
@@ -771,7 +771,7 @@ end 'traceCaptureFamilyOf'
 // distinction away at parse time, and every reader of it would then be asking a question the field can no
 // longer answer. It also makes every consumer's `match` total, which is how a new arm becomes a compile
 // error instead of a silently-selected case.
-export union SpecNetwork
+union SpecNetwork
 	// Reaches no external host. Selected by every run, which is every case not carrying the marker.
 	none
 
@@ -785,7 +785,7 @@ end 'SpecNetwork'
 // absence of the marker is a DIFFERENT claim from any number — it says the case takes the process default,
 // which `specs/sched-default-procs.md`'s first case exists to assert — and a sentinel would let a
 // reader confuse the two silently. It also makes every consumer's `match` total.
-export union SpecProcs
+union SpecProcs
 	// No marker: the program is spawned with the parent's environment unchanged, so
 	// `SchedRuntime.emitResolveMaxProcs` resolves the default — one P per processor the machine reports.
 	unset
@@ -801,7 +801,7 @@ end 'SpecProcs'
 // `off` — it says the program inherits the environment, so a stray `MAXON_PREEMPT` in the suite's own
 // environment reaches it, exactly as a stray `MAXON_MAX_PROCS` reaches an unmarked `procs` case — and it
 // makes every consumer's `match` total.
-export union SpecPreempt
+union SpecPreempt
 	// No marker: the program is spawned with the parent's environment unchanged.
 	unset
 
@@ -815,7 +815,7 @@ end 'SpecPreempt'
 // below is a third state rather than the negation of one, and every consumer's `match` is total — so a
 // new arm becomes a compile error instead of a silently-selected spawn. Every arm names what the child
 // actually gets, because that is what a case's expectation is written against.
-export union SpecStdin
+union SpecStdin
 	// No marker: the null device, which answers every read at once with EOF. This is `Subprocess`'s own
 	// default (`InputSource.none`) and the stdin every case in the corpus had before the marker existed.
 	closed
@@ -833,7 +833,7 @@ end 'SpecStdin'
 // ⭐ **WHETHER A CASE SHARES THE POOL — see `RunsMarker` for why this is a per-case fact.** It is also the key a
 // spec's selection is split into jobs by (`SpecTestRunner.testsThatRun`), so the parent's plan and the
 // worker's run divide one spec by one rule.
-export enum SpecRuns
+enum SpecRuns
 	// No marker: the program runs while other jobs' programs run.
 	shared
 
@@ -841,25 +841,25 @@ export enum SpecRuns
 	alone
 end 'SpecRuns'
 
-export enum SpecProcess
+enum SpecProcess
 	shared
 
 	own
 end 'SpecProcess'
 
-export union SpecTier
+union SpecTier
 	user
 	stdlib
 	stdlibSubdirectory(directory String)
 end 'SpecTier'
 
-export union SpecTargetIr
+union SpecTargetIr
 	unpinned(insertAt TraceSlice)
 	pinned(text String, span TraceSlice)
 end 'SpecTargetIr'
 
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
-export type SpecTest
+type SpecTest
 	export let name as String
 
 	// The block VERBATIM — markers and all. For a single-file test, this is what is compiled. It is
@@ -969,7 +969,7 @@ export type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
+	static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
 		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinnedLanes: pinnedLanes}
 	end 'create'
@@ -1047,7 +1047,7 @@ export type SpecTest
 	end 'pinsLinkedSection'
 end 'SpecTest'
 
-export typealias SpecTestArray = Array with SpecTest
+typealias SpecTestArray = Array with SpecTest
 
 // One fenced code block: its content (fence lines excluded), and the line index
 // immediately AFTER its closing ``` — the single unit the block reader returns
@@ -1123,12 +1123,12 @@ end 'TargetPreferredText'
 // deliberately NOT the treatment `<!-- unsupported-targets: … -->` gets — that marker decides whether the test is in
 // this run's SET at all, which is a selection the RUNNER owns and reports ("skipped"); this one decides
 // what the test's expectation IS, which is the parse's own answer.
-export function parseSpecFile(path FilePath, effectiveTargetKey String) returns ParsedSpec throws CompileError
+function parseSpecFile(path FilePath, effectiveTargetKey String) returns ParsedSpec throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	return ParsedSpec.create(content, tests: extractTests(specLinesOf(content), specPath: path, effectiveTargetKey: effectiveTargetKey))
 end 'parseSpecFile'
 
-export function requireEveryLanePinned(tests SpecTestArray, specPath FilePath)
+function requireEveryLanePinned(tests SpecTestArray, specPath FilePath)
 	if not specHoldsAnyPin(tests) 'notAnIrSpec'
 		return
 	end 'notAnIrSpec'
@@ -1167,7 +1167,7 @@ export function requireEveryLanePinned(tests SpecTestArray, specPath FilePath)
 	panic("SpecParser: {specPath.toString()}: this spec holds a `TargetIr:<target>` block, so it is an IR spec, and every case of one that compiles carries a block for each lane its `{UnsupportedTargetsMarker} … -->` does not exclude. A lane with no block is a lane nothing gates: a run on it compares nothing and passes whatever the compiler emits there. A lane the compiler refuses the case on (it answers E3104 there, so it renders no Target IR) is not owed a block: name it in the case's `{UnsupportedTargetsMarker} … -->` instead. Missing:\n{report.build()}\nA block is minted per lane, so run each of these (a run with `{UpdateRequiredFlag}` is not refused for the lanes still owed):\n{fixes.build()}")
 end 'requireEveryLanePinned'
 
-export function specHoldsAnyPin(tests SpecTestArray) returns bool
+function specHoldsAnyPin(tests SpecTestArray) returns bool
 	for test in tests 'eachTest'
 		if test.pinsTargetIr() 'aPin'
 			return true
@@ -1177,7 +1177,7 @@ export function specHoldsAnyPin(tests SpecTestArray) returns bool
 	return false
 end 'specHoldsAnyPin'
 
-export type ParsedSpec
+type ParsedSpec
 	export let text as String
 	export let tests as SpecTestArray
 
@@ -1188,7 +1188,7 @@ end 'ParsedSpec'
 
 // The one split a spec's line indices are counted in. The parse records every `TraceSlice` against
 // it and the re-mint splices through it, so a span names the same lines on both sides.
-export function specLinesOf(text String) returns StringArray
+function specLinesOf(text String) returns StringArray
 	return text.split(LineSeparator)
 end 'specLinesOf'
 
@@ -1320,11 +1320,11 @@ end 'scanTestFromMarker'
 // lines. The parse records it so `--update-required` needs no case-end rule of its own: a second
 // walker that disagreed about where a case ends would write the block into a neighbouring case or a
 // prose block.
-export type TraceSlice
+type TraceSlice
 	export let blockStart as ElementIndex
 	export let blockEnd as ElementIndex
 
-	module static function create(blockStart ElementIndex, blockEnd ElementIndex) returns TraceSlice
+	static function create(blockStart ElementIndex, blockEnd ElementIndex) returns TraceSlice
 		return Self{blockStart: blockStart, blockEnd: blockEnd}
 	end 'create'
 end 'TraceSlice'
@@ -2647,7 +2647,7 @@ end 'parseProgramArgs'
 // The one line terminator this harness builds and splits its text on. EXPORTED because three files
 // join lines with it and the runner splits captured output on it, and a bare `"\n"` is exactly the
 // kind of literal that gets retyped rather than referenced — one fact, one spelling.
-export let LineSeparator = "\n"
+let LineSeparator = "\n"
 
 // Parts joined by `LineSeparator`, with no leading and no trailing copy of it.
 //
@@ -2661,11 +2661,11 @@ export let LineSeparator = "\n"
 // `hasPart` is NOT `out.isEmpty()`. A first part that is itself EMPTY leaves the builder empty and must
 // still be separated from the part after it — a spec fence opening on a blank line is ordinary — so
 // inferring the flag from the buffer would silently eat that separator.
-export type TextJoiner
+type TextJoiner
 	var out as StringBuilder
 	var hasPart as bool
 
-	export static function create() returns TextJoiner
+	static function create() returns TextJoiner
 		return TextJoiner{out: StringBuilder.create(), hasPart: false}
 	end 'create'
 

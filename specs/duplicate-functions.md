@@ -315,16 +315,16 @@ error E3006: <fragment>:20:13: Duplicate field 'payload' in type 'Holder'
 ```
 
 <!-- test: error.two-free-functions-of-one-name-in-two-files-of-one-directory -->
-Two files of one directory declare `module function helper`, which every file of the directory sees: the
+Two files of one directory declare an unmarked `function helper`, which every file of the directory sees: the
 second declaration, in `b.maxon`, is refused.
 ```maxon
 // --- file: a.maxon
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return 1
 end 'helper'
 
 // --- file: b.maxon
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return 2
 end 'helper'
 
@@ -334,10 +334,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:8:17: duplicate definition of 'helper' — already declared as `function helper`
+error E3006: <fragment>:8:10: duplicate definition of 'helper' — already declared as `function helper`
 ```
 
-<!-- test: error.two-file-private-functions-of-one-name-and-different-arity-in-one-directory -->
+<!-- test: error.two-unmarked-functions-of-one-name-and-different-arity-in-one-directory -->
 A directory is one scope for free functions whatever their visibility, and a refused duplicate is reported
 without being resolved against the declaration that was kept, whose parameter count differs.
 ```maxon

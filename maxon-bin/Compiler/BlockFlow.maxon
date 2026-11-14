@@ -1,15 +1,15 @@
-module typealias BlockPositionRows = Array with EntryIndexArray
-module typealias OpPositionMap = Map with (ElementIndex, OriginKey)
-module typealias BlockReachMemo = Map with (ElementIndex, BoolArray)
+typealias BlockPositionRows = Array with EntryIndexArray
+typealias OpPositionMap = Map with (ElementIndex, OriginKey)
+typealias BlockReachMemo = Map with (ElementIndex, BoolArray)
 
-module type BlockFlow
+type BlockFlow
 	let func as IrFunction
-	module let blockIndex as BlockIndexById
-	module let successors as BlockPositionRows
+	let blockIndex as BlockIndexById
+	let successors as BlockPositionRows
 	let opPositions as OpPositionMap
 	let reachFrom as BlockReachMemo
 
-	module static function over(module MaxonModule, func IrFunction) returns BlockFlow
+	static function over(module MaxonModule, func IrFunction) returns BlockFlow
 		let blockIndex = BlockIndexById.create()
 		module.refillBlockIndexById(func, into: blockIndex)
 		let successors = BlockPositionRows.create(0)
@@ -36,23 +36,23 @@ module type BlockFlow
 		return Self{func: func, blockIndex: blockIndex, successors: successors, opPositions: opPositions, reachFrom: BlockReachMemo.create()}
 	end 'over'
 
-	module function positionOfOp(opIdx ElementIndex) returns OriginKey
+	function positionOfOp(opIdx ElementIndex) returns OriginKey
 		return try self.opPositions.get(opIdx) otherwise panic("BlockFlow.positionOfOp: op {opIdx} is no op of '{String.from(self.func.name)}'")
 	end 'positionOfOp'
 
-	module function blockPositionOfOp(opIdx ElementIndex) returns ElementIndex
+	function blockPositionOfOp(opIdx ElementIndex) returns ElementIndex
 		return highHalfOf(self.positionOfOp(opIdx))
 	end 'blockPositionOfOp'
 
-	module function positionOfBlock(blockId BlockId) returns ElementIndex
+	function positionOfBlock(blockId BlockId) returns ElementIndex
 		return try self.blockIndex.get(blockId) otherwise panic("BlockFlow.positionOfBlock: block {blockId} is not a block of '{String.from(self.func.name)}'")
 	end 'positionOfBlock'
 
-	module function blockReaches(from ElementIndex, to ElementIndex) returns bool
+	function blockReaches(from ElementIndex, to ElementIndex) returns bool
 		return try self.reachableFrom(from).get(to) otherwise panic("BlockFlow.blockReaches: block {to} is past the reach of '{String.from(self.func.name)}'")
 	end 'blockReaches'
 
-	module function mayReach(store ElementIndex, read ElementIndex) returns bool
+	function mayReach(store ElementIndex, read ElementIndex) returns bool
 		let stored = self.positionOfOp(store)
 		let reading = self.positionOfOp(read)
 

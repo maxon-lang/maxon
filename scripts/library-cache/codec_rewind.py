@@ -100,7 +100,7 @@ def rewind_plan(tree, path):
 
 
 def record_lines(op_keyed, rewinds):
-    lines = ["\tmodule function rewindTo(mark %s)" % config.ARTIFACT_MARK_TYPE, "\t\tlet %s = self.module.opCount()" % OP_LIMIT, ""]
+    lines = ["\tfunction rewindTo(mark %s)" % config.ARTIFACT_MARK_TYPE, "\t\tlet %s = self.module.opCount()" % OP_LIMIT, ""]
 
     # Inclusive of the op count: a site is filed at `opCount()` before its op is appended, so a site
     # keyed by the count itself belongs to the rewound region.
@@ -117,11 +117,11 @@ def record_lines(op_keyed, rewinds):
 
 def mark_lines(marks, requirements):
     mark_type = config.ARTIFACT_MARK_TYPE
-    lines = ["module type %s" % mark_type]
-    lines += ["\tmodule let %s as %s" % (mark.name, mark.type_text) for mark in marks]
-    lines += ["", "\tmodule static function of(artifact %s) returns %s" % (config.ARTIFACT_REWIND_TYPE, mark_type)]
+    lines = ["type %s" % mark_type]
+    lines += ["\tlet %s as %s" % (mark.name, mark.type_text) for mark in marks]
+    lines += ["", "\tstatic function of(artifact %s) returns %s" % (config.ARTIFACT_REWIND_TYPE, mark_type)]
     lines.append("\t\treturn Self{%s}" % ", ".join("%s: %s" % (mark.name, mark.capture) for mark in marks))
-    lines += ["\tend 'of'", "", "\tmodule function requireHeldBy(artifact %s)" % config.ARTIFACT_REWIND_TYPE]
+    lines += ["\tend 'of'", "", "\tfunction requireHeldBy(artifact %s)" % config.ARTIFACT_REWIND_TYPE]
     lines += ['\t\trequireRewoundCount("%s", now: %s, marked: self.%s)' % (requirement.label, requirement.now, requirement.marked) for requirement in requirements]
     lines += ["\tend 'requireHeldBy'", "end '%s'" % mark_type]
 

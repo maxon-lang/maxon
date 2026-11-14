@@ -1,0 +1,503 @@
+typealias CandidateIndexArray = Array with ElementIndex
+typealias CandidateAdjacency = Array with CandidateIndexArray
+typealias CandidateIndexByLineMap = Map with (LineNumber, CandidateIndexArray)
+typealias CandidateIndexByNameMap = Map with (ByteArray, CandidateIndexArray)
+typealias CandidateIndexByTokenMap = Map with (ElementIndex, ElementIndex)
+typealias CandidateIndexByTokenByFileMap = Map with (String, CandidateIndexByTokenMap)
+typealias CandidateNameMap = Map with (ElementIndex, immutable ByteArray)
+typealias CandidateLimitMap = Map with (ElementIndex, ElementIndex)
+typealias SpellingCountMap = Map with (ByteArray, SpellingCount)
+typealias WatchedNameSet = Set with ByteArray
+typealias AuditedPathSet = Set with String
+typealias UnexportedCandidateArray = Array with UnexportedCandidate
+typealias CandidatesByFileMap = Map with (String, CandidateIndexArray)
+typealias KnownPositionSet = Set with String
+
+union CandidateExtent
+	untilDeclarationEnd
+	initializer(limit ElementIndex)
+end 'CandidateExtent'
+
+union ExtentOwner
+	none
+	candidate(index ElementIndex)
+end 'ExtentOwner'
+
+type UnexportedCandidate
+	export let noun as String
+	export let filePath as FilePath
+	let scope as DirectoryScope
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let extent as CandidateExtent
+
+	static function create(noun String, filePath FilePath, scope DirectoryScope, nameLine LineNumber, nameColumn ColumnNumber, extent CandidateExtent) returns UnexportedCandidate
+		return Self{noun: noun, filePath: filePath, scope: scope, nameLine: nameLine, nameColumn: nameColumn, extent: extent}
+	end 'create'
+end 'UnexportedCandidate'
+
+type CandidatePool
+	export let candidates as UnexportedCandidateArray
+	export let byFile as CandidatesByFileMap
+	export let auditedPaths as AuditedPathSet
+	export let authorPaths as AuditedPathSet
+	export let known as KnownPositionSet
+	export let signatures as ProgramSignatures
+
+	static function create(auditedPaths AuditedPathSet, authorPaths AuditedPathSet, signatures ProgramSignatures) returns CandidatePool
+		return Self{candidates: UnexportedCandidateArray.create(0), byFile: CandidatesByFileMap.create(), auditedPaths: auditedPaths, authorPaths: authorPaths, known: KnownPositionSet.create(), signatures: signatures}
+	end 'create'
+
+	function isAuthorFile(path FilePath) returns bool
+		return self.authorPaths.contains(path.toString())
+	end 'isAuthorFile'
+
+	function audits(path FilePath) returns bool
+		return self.auditedPaths.contains(path.toString())
+	end 'audits'
+
+	function add(path FilePath, noun String, nameLine LineNumber, nameColumn ColumnNumber, extent CandidateExtent)
+		let key = path.toString()
+		let position = "{key}:{nameLine}:{nameColumn}"
+
+		if self.known.contains(position) 'theSameDeclaration'
+			return
+		end 'theSameDeclaration'
+
+		self.known.insert(position)
+		let inFile = try self.byFile.get(key) otherwise CandidateIndexArray.create(0)
+		inFile.push(self.candidates.count())
+		self.byFile.upsert(key, value: inFile)
+		self.candidates.push(UnexportedCandidate.create(noun, filePath: path, scope: self.signatures.scopeOf(path), nameLine: nameLine, nameColumn: nameColumn, extent: extent))
+	end 'add'
+end 'CandidatePool'
+
+type LocatedDeclarations
+	export let declarationAt as CandidateIndexByTokenByFileMap
+	export let candidatesNamed as CandidateIndexByNameMap
+	export let names as CandidateNameMap
+	export let limits as CandidateLimitMap
+
+	static function create() returns LocatedDeclarations
+		return Self{declarationAt: CandidateIndexByTokenByFileMap.create(), candidatesNamed: CandidateIndexByNameMap.create(), names: CandidateNameMap.create(), limits: CandidateLimitMap.create()}
+	end 'create'
+
+	function nameOf(index ElementIndex) returns immutable ByteArray
+		return try self.names.get(index) otherwise panic("LocatedDeclarations.nameOf: candidate {index} has no located name — locateDeclarations names every candidate")
+	end 'nameOf'
+
+	function ownerAt(owner ExtentOwner, at ElementIndex) returns ExtentOwner
+		match owner 'who'
+			none then return owner
+			candidate(index) then return ExtentOwner.none if at >= self.limitOf(index) else owner
+		end 'who'
+	end 'ownerAt'
+
+	function limitOf(index ElementIndex) returns ElementIndex
+		return try self.limits.get(index) otherwise panic("LocatedDeclarations.limitOf: candidate {index} has no extent limit — locateDeclarations bounds every candidate")
+	end 'limitOf'
+
+	function declaredInFile(path FilePath) returns CandidateIndexByTokenMap
+		return try self.declarationAt.get(path.toString()) otherwise CandidateIndexByTokenMap.create()
+	end 'declaredInFile'
+end 'LocatedDeclarations'
+
+type UsageGraph
+	export let live as BoolArray
+	export let usesOf as CandidateAdjacency
+
+	static function create(count ElementIndex) returns UsageGraph
+		let usesOf = CandidateAdjacency.create(count, zeroed: false)
+
+		for _ in 0 upto count 'eachCandidate'
+			usesOf.push(CandidateIndexArray.create(0))
+		end 'eachCandidate'
+
+		return Self{live: BoolArray.create(count), usesOf: usesOf}
+	end 'create'
+
+	function isLive(index ElementIndex) returns bool
+		return try self.live.get(index) otherwise panic("UsageGraph.isLive: candidate {index} is outside the {self.live.count()} the graph was made for")
+	end 'isLive'
+
+	function markLive(index ElementIndex)
+		try self.live.set(index, value: true) otherwise panic("UsageGraph.markLive: candidate {index} is outside the {self.live.count()} the graph was made for")
+	end 'markLive'
+
+	function recordUse(owner ExtentOwner, target ElementIndex)
+		match owner 'who'
+			none then self.markLive(target)
+			candidate(user) then self.addEdge(user, target: target)
+		end 'who'
+	end 'recordUse'
+
+	function addEdge(user ElementIndex, target ElementIndex)
+		let targets = self.usesBy(user)
+		targets.push(target)
+	end 'addEdge'
+
+	function usesBy(user ElementIndex) returns CandidateIndexArray
+		return try self.usesOf.get(user) otherwise panic("UsageGraph.usesBy: candidate {user} is outside the {self.usesOf.count()} the graph was made for")
+	end 'usesBy'
+
+	function propagate()
+		let followed = CandidateIndexArray.create(0)
+
+		for index in 0 upto self.live.count() 'eachCandidate'
+			if self.isLive(index) 'aSeed'
+				followed.push(index)
+			end 'aSeed'
+		end 'eachCandidate'
+
+		var next = 0 as ElementIndex
+
+		while next < followed.count() 'untilEveryLiveCandidateIsFollowed'
+			let user = try followed.get(next) otherwise panic("UsageGraph.propagate: queue position {next} is outside the {followed.count()} reached")
+			next = next + 1
+
+			for target in self.usesBy(user) 'eachUse'
+				if not self.isLive(target) 'newlyReached'
+					self.markLive(target)
+					followed.push(target)
+				end 'newlyReached'
+			end 'eachUse'
+		end 'untilEveryLiveCandidateIsFollowed'
+	end 'propagate'
+end 'UsageGraph'
+
+enum AuditScope
+	library
+	author
+	whole
+end 'AuditScope'
+
+type UnusedFinding
+	let noun as String
+	let name as String
+	let filePath as FilePath
+	let nameLine as LineNumber
+	let nameColumn as ColumnNumber
+
+	static function create(noun String, name String, filePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns UnusedFinding
+		return Self{noun: noun, name: name, filePath: filePath, nameLine: nameLine, nameColumn: nameColumn}
+	end 'create'
+end 'UnusedFinding'
+
+typealias UnusedFindingArray = Array with UnusedFinding
+
+function checkUnusedUnexported(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+	if projectHasErrors(project) 'aRefusedUseHidesAReader'
+		return
+	end 'aRefusedUseHidesAReader'
+
+	let sources = splitSourcePaths(project)
+	let entryPoints = try entryPointNamesOf(project, userFiles: sources.userFiles)
+
+	if signatures.libraryParseSharing != LibraryParseSharing.shareable 'theProgramShapesTheLibraryAudit'
+		reportUnusedFindings(project, findings: try auditUnexported(project, module: module, signatures: signatures, sources: sources, entryPoints: entryPoints, scope: AuditScope.whole))
+		return
+	end 'theProgramShapesTheLibraryAudit'
+
+	reportUnusedFindings(project, findings: try libraryFindingsOf(project, module: module, signatures: signatures, sources: sources, entryPoints: entryPoints))
+	reportUnusedFindings(project, findings: try auditUnexported(project, module: module, signatures: signatures, sources: sources, entryPoints: entryPoints, scope: AuditScope.author))
+end 'checkUnusedUnexported'
+
+function libraryFindingsOf(project Project, module MaxonModule, signatures ProgramSignatures, sources SourcePathSplit, entryPoints EntryPointNameSet) returns immutable UnusedFindingArray throws CompileError
+	if sources.stdlibFiles.isEmpty() 'noLibraryToAudit'
+		return freeze UnusedFindingArray.create(0)
+	end 'noLibraryToAudit'
+
+	let key = try libraryStateKeyOf(project)
+
+	if let held = try heldAuditFindings(project, key: key) 'alreadyAudited'
+		return held
+	end 'alreadyAudited'
+
+	let audited = try auditUnexported(project, module: module, signatures: signatures, sources: sources, entryPoints: entryPoints, scope: AuditScope.library)
+	let findings = freeze audited.clone()
+	persistAuditFindings(project, key: key, findings: findings)
+
+	return findings
+end 'libraryFindingsOf'
+
+function reportUnusedFindings(project Project, findings UnusedFindingArray)
+	for finding in findings 'eachFinding'
+		reportPositioned(project, code: ErrorCode.semanticUnusedUnexportedDeclaration, message: "unused {finding.noun}: '{finding.name}' is not exported and nothing live in its directory names it; delete it", line: finding.nameLine, column: finding.nameColumn, filePath: finding.filePath)
+	end 'eachFinding'
+end 'reportUnusedFindings'
+
+function authorFilesOf(sources SourcePathSplit, scope AuditScope) returns FilePathArray
+	return match scope 'scope'
+		library gives FilePathArray.create(0)
+		author or
+		whole gives sources.userFiles
+	end 'scope'
+end 'authorFilesOf'
+
+function libraryFilesOf(sources SourcePathSplit, scope AuditScope) returns FilePathArray
+	return match scope 'scope'
+		author gives FilePathArray.create(0)
+		library or
+		whole gives sources.stdlibFiles
+	end 'scope'
+end 'libraryFilesOf'
+
+function auditUnexported(project Project, module MaxonModule, signatures ProgramSignatures, sources SourcePathSplit, entryPoints EntryPointNameSet, scope AuditScope) returns UnusedFindingArray throws CompileError
+	let authorFiles = authorFilesOf(sources, scope: scope)
+	let auditedFiles = FilePathArray.create(0)
+	let auditedPaths = AuditedPathSet.create()
+	let authorPaths = AuditedPathSet.create()
+	let findings = UnusedFindingArray.create(0)
+
+	for path in authorFiles 'eachUserFile'
+		auditedFiles.push(path)
+		auditedPaths.insert(path.toString())
+		authorPaths.insert(path.toString())
+	end 'eachUserFile'
+
+	for path in libraryFilesOf(sources, scope: scope) 'eachLibraryFile'
+		auditedFiles.push(path)
+		auditedPaths.insert(path.toString())
+	end 'eachLibraryFile'
+
+	let pool = CandidatePool.create(auditedPaths, authorPaths: authorPaths, signatures: signatures)
+	gatherFunctionCandidates(module, signatures: signatures, entryPoints: entryPoints, pool: pool)
+	gatherTemplateCandidates(signatures, pool: pool)
+	gatherConstantCandidates(signatures, pool: pool)
+	try gatherTypeCandidates(project, signatures: signatures, files: authorFiles, pool: pool)
+
+	if pool.candidates.count() == 0 'nothingIsUnexported'
+		return findings
+	end 'nothingIsUnexported'
+
+	let located = LocatedDeclarations.create()
+
+	for path in auditedFiles 'eachFileDeclaring'
+		let inFile = try pool.byFile.get(path.toString()) otherwise continue
+		try requireStillWanted(project)
+		try locateInFile(project, signatures: signatures, path: path, indices: inFile, pool: pool, located: located)
+	end 'eachFileDeclaring'
+
+	if located.names.count() != pool.candidates.count() 'aDeclarationHasNoToken'
+		panic("auditUnexported: {pool.candidates.count()} unexported declarations are registered but {located.names.count()} of them name a token — a registry position the active tokens do not carry")
+	end 'aDeclarationHasNoToken'
+
+	let graph = UsageGraph.create(pool.candidates.count())
+
+	for path in auditedFiles 'eachReadingFile'
+		try requireStillWanted(project)
+		try traceFile(project, signatures: signatures, path: path, pool: pool, located: located, graph: graph)
+	end 'eachReadingFile'
+
+	graph.propagate()
+
+	for index in 0 upto pool.candidates.count() 'eachCandidate'
+		if graph.isLive(index) 'reached'
+			continue
+		end 'reached'
+
+		let candidate = try pool.candidates.get(index) otherwise panic("auditUnexported: candidate {index} is outside the {pool.candidates.count()} the pool holds")
+		findings.push(UnusedFinding.create(candidate.noun, name: String.from(located.nameOf(index)), filePath: candidate.filePath, nameLine: candidate.nameLine, nameColumn: candidate.nameColumn))
+	end 'eachCandidate'
+
+	return findings
+end 'auditUnexported'
+
+function gatherFunctionCandidates(module MaxonModule, signatures ProgramSignatures, entryPoints EntryPointNameSet, pool CandidatePool)
+	for func in module.functions 'eachFunc'
+		if func.visibility != Visibility.unexported or func.isCompilerBuilt() or not pool.audits(func.sourceFilePath) 'notAnAuthorsUnexportedFunction'
+			continue
+		end 'notAnAuthorsUnexportedFunction'
+
+		if not declaresAFreeFunction(signatures, name: func.name) 'aMemberOrUndeclared'
+			continue
+		end 'aMemberOrUndeclared'
+
+		if (entryPoints.contains(func.name) and pool.isAuthorFile(func.sourceFilePath)) or isTestFunctionName(func.name) or isSynthesizedName(signatures, name: func.name) or signatures.isGenericInstanceName(func.name) 'reachedWithoutASourceName'
+			continue
+		end 'reachedWithoutASourceName'
+
+		pool.add(func.sourceFilePath, noun: "function", nameLine: func.nameLine, nameColumn: func.nameColumn, extent: CandidateExtent.untilDeclarationEnd)
+	end 'eachFunc'
+end 'gatherFunctionCandidates'
+
+function declaresAFreeFunction(signatures ProgramSignatures, name ByteArray) returns bool
+	return match signatures.functionDeclaringType(name) 'declaring'
+		freeFunction gives true
+		method or
+		undeclared gives false
+	end 'declaring'
+end 'declaresAFreeFunction'
+
+function gatherTemplateCandidates(signatures ProgramSignatures, pool CandidatePool)
+	for template in signatures.genericTemplateRoster() 'eachTemplate'
+		if template.visibility != Visibility.unexported or not template.enclosingTypeName.isEmpty() or not pool.audits(template.declFilePath) or isSynthesizedName(signatures, name: template.key) 'notAnAuthorsUnexportedFunction'
+			continue
+		end 'notAnAuthorsUnexportedFunction'
+
+		pool.add(template.declFilePath, noun: "function", nameLine: template.line, nameColumn: template.column, extent: CandidateExtent.untilDeclarationEnd)
+	end 'eachTemplate'
+end 'gatherTemplateCandidates'
+
+function gatherConstantCandidates(signatures ProgramSignatures, pool CandidatePool)
+	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(i)
+
+		if decl.visibility != Visibility.unexported or decl.scope.isType() or not pool.audits(decl.declFilePath) or isSynthesizedName(signatures, name: decl.name) 'notAnAuthorsUnexportedConstant'
+			continue
+		end 'notAnAuthorsUnexportedConstant'
+
+		pool.add(decl.declFilePath, noun: "constant", nameLine: decl.nameLine, nameColumn: decl.nameColumn, extent: CandidateExtent.initializer(decl.initEnd))
+	end 'eachDecl'
+end 'gatherConstantCandidates'
+
+function gatherTypeCandidates(project Project, signatures ProgramSignatures, files FilePathArray, pool CandidatePool) throws CompileError
+	for path in files 'eachFile'
+		let artifact = try queryParseOps(project, path: path)
+
+		for decl in artifact.typeNameDecls 'eachTypeName'
+			if decl.claim.visibility != Visibility.unexported or isTypeAliasDecl(decl.claim.kind) or isSynthesizedName(signatures, name: decl.name) 'notAnAuthorsUnexportedType'
+				continue
+			end 'notAnAuthorsUnexportedType'
+
+			pool.add(path, noun: typeDeclKeyword(decl.claim.kind), nameLine: decl.nameLine, nameColumn: decl.nameColumn, extent: CandidateExtent.untilDeclarationEnd)
+		end 'eachTypeName'
+	end 'eachFile'
+end 'gatherTypeCandidates'
+
+function locateInFile(project Project, signatures ProgramSignatures, path FilePath, indices CandidateIndexArray, pool CandidatePool, located LocatedDeclarations) throws CompileError
+	let tokens = try queryActiveTokens(project, path: path)
+	let reader = structuralFileReader(project, signatures: signatures, path: path, tokens: tokens)
+	let onLine = CandidateIndexByLineMap.create()
+
+	for index in indices 'eachCandidate'
+		let candidate = candidateAt(pool, index: index)
+		let sharing = try onLine.get(candidate.nameLine) otherwise CandidateIndexArray.create(0)
+		sharing.push(index)
+		onLine.upsert(candidate.nameLine, value: sharing)
+	end 'eachCandidate'
+
+	let declarationAt = CandidateIndexByTokenMap.create()
+
+	for at in 0 upto tokens.count() 'eachToken'
+		let token = try tokens.get(at) otherwise panic("locateInFile: token {at} is outside the {tokens.count()} of {path.toString()}")
+
+		if not tokenCanBeAName(token) 'notAName'
+			continue
+		end 'notAName'
+
+		let sharing = try onLine.get(token.line) otherwise continue
+
+		for index in sharing 'eachOnThisLine'
+			let candidate = candidateAt(pool, index: index)
+
+			if candidate.nameColumn != token.column 'anotherName'
+				continue
+			end 'anotherName'
+
+			let named = try located.candidatesNamed.get(token.value) otherwise CandidateIndexArray.create(0)
+			named.push(index)
+			located.candidatesNamed.upsert(token.value, value: named)
+			declarationAt.upsert(at, value: index)
+			located.names.upsert(index, value: token.value)
+			located.limits.upsert(index, value: extentLimitOf(candidate.extent, nameAt: at, tokens: tokens, reader: reader))
+		end 'eachOnThisLine'
+	end 'eachToken'
+
+	located.declarationAt.upsert(path.toString(), value: declarationAt)
+end 'locateInFile'
+
+function candidateAt(pool CandidatePool, index ElementIndex) returns UnexportedCandidate
+	return try pool.candidates.get(index) otherwise panic("candidateAt: candidate {index} is outside the {pool.candidates.count()} the pool holds")
+end 'candidateAt'
+
+function extentLimitOf(extent CandidateExtent, nameAt ElementIndex, tokens TokenArray, reader mutable Parser) returns ElementIndex
+	match extent 'extent'
+		initializer(limit) then return limit
+		untilDeclarationEnd then return reader.typeBodyCloserAfter(nameAt - 1, membersHaveBodies: tokenKindAt(tokens, index: nameAt - 1) != TokenKind.interface) + 1
+	end 'extent'
+end 'extentLimitOf'
+
+function traceFile(project Project, signatures ProgramSignatures, path FilePath, pool CandidatePool, located LocatedDeclarations, graph UsageGraph) throws CompileError
+	let tokens = try queryActiveTokens(project, path: path)
+	let conditional = try conditionalSpellingsOf(project, path: path)
+	let watched = watchedNamesOf(located, conditional: conditional.names)
+	let activeCounts = SpellingCountMap.create()
+	let reader = signatures.scopeOf(path)
+
+	traceUsage(tokens, reader: reader, pool: pool, located: located, declaredHere: located.declaredInFile(path), watched: watched, activeCounts: activeCounts, graph: graph)
+
+	if watched.count() > 0 'someNameIsSpelledInAConditionalRegion'
+		creditNamesSpelledOutsideTheActiveArms(conditional, reader: reader, pool: pool, located: located, watched: watched, activeCounts: activeCounts, graph: graph)
+	end 'someNameIsSpelledInAConditionalRegion'
+end 'traceFile'
+
+function watchedNamesOf(located LocatedDeclarations, conditional NameRoster) returns WatchedNameSet
+	let watched = WatchedNameSet.create()
+
+	for spelling in conditional 'eachSpelling'
+		if located.candidatesNamed.contains(spelling) 'aCandidateName'
+			watched.insert(spelling)
+		end 'aCandidateName'
+	end 'eachSpelling'
+
+	return watched
+end 'watchedNamesOf'
+
+function traceUsage(tokens TokenArray, reader DirectoryScope, pool CandidatePool, located LocatedDeclarations, declaredHere CandidateIndexByTokenMap, watched WatchedNameSet, activeCounts SpellingCountMap, graph UsageGraph)
+	var owner = ExtentOwner.none
+
+	for at in 0 upto tokens.count() 'eachToken'
+		let token = try tokens.get(at) otherwise panic("traceUsage: token {at} is outside the {tokens.count()} it walks")
+
+		if not tokenCanBeAName(token) 'notAName'
+			continue
+		end 'notAName'
+
+		let targets = try located.candidatesNamed.get(token.value) otherwise continue
+
+		if watched.contains(token.value) 'countedAgainstTheRawStream'
+			countSpelling(activeCounts, name: token.value)
+		end 'countedAgainstTheRawStream'
+
+		if let declared = try declaredHere.get(at) 'itsDeclaration'
+			owner = ExtentOwner.candidate(declared)
+			continue
+		end 'itsDeclaration'
+
+		owner = located.ownerAt(owner, at: at)
+
+		for target in targets 'eachTarget'
+			if candidateAt(pool, index: target).scope.contains(reader) 'theReaderCanNameIt'
+				graph.recordUse(owner, target: target)
+			end 'theReaderCanNameIt'
+		end 'eachTarget'
+	end 'eachToken'
+end 'traceUsage'
+
+function countSpelling(counts SpellingCountMap, name ByteArray)
+	let seen = try counts.get(name) otherwise 0 as SpellingCount
+	counts.upsert(name, value: seen + 1)
+end 'countSpelling'
+
+function creditNamesSpelledOutsideTheActiveArms(conditional ConditionalSpellings, reader DirectoryScope, pool CandidatePool, located LocatedDeclarations, watched WatchedNameSet, activeCounts SpellingCountMap, graph UsageGraph)
+	for (iter, name) in conditional.names.withIterator() 'eachConditionalSpelling'
+		if not watched.contains(name) 'notACandidateName'
+			continue
+		end 'notACandidateName'
+
+		let activeCount = try activeCounts.get(name) otherwise 0 as SpellingCount
+
+		if conditional.rawCountAt(iter.index()) <= activeCount 'everySpellingIsActive'
+			continue
+		end 'everySpellingIsActive'
+
+		let targets = try located.candidatesNamed.get(name) otherwise panic("creditNamesSpelledOutsideTheActiveArms: watched name '{String.from(name)}' names no candidate")
+
+		for target in targets 'eachTarget'
+			if candidateAt(pool, index: target).scope.contains(reader) 'theReaderCanNameIt'
+				graph.markLive(target)
+			end 'theReaderCanNameIt'
+		end 'eachTarget'
+	end 'eachConditionalSpelling'
+end 'creditNamesSpelledOutsideTheActiveArms'

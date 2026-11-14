@@ -181,13 +181,13 @@ Function-backed enums may reference functions defined in other files.
 
 ```maxon
 // --- file: api/ops.maxon
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export function doubleFn(x Integer) returns Integer
+function doubleFn(x Integer) returns Integer
 	return x * 2
 end 'doubleFn'
 
-export function tripleFn(x Integer) returns Integer
+function tripleFn(x Integer) returns Integer
 	return x * 3
 end 'tripleFn'
 
@@ -209,7 +209,7 @@ end 'main'
 
 <!-- test: function-backing.contested-name-resolves-at-the-declaring-file -->
 A case's function name is resolved where the ENUM is declared, under the bare-call rule: `doubleFn` is
-declared in `alpha/` (file-private) and in `beta/` (exported), so from `api/dispatch.maxon` it means
+declared in `alpha/` (unmarked) and in `beta/` (exported), so from `api/dispatch.maxon` it means
 beta's. The read happens inside `alpha/a.maxon`, where alpha's own `doubleFn` is visible — so a name
 resolved at the reader would answer 30 + 3 instead of 20 + 3.
 

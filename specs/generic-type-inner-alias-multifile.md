@@ -18,49 +18,49 @@ When a generic type declares an inner typealias using its type parameter (e.g., 
 <!-- test: inner-alias-cross-file -->
 ```maxon
 // --- file: types.maxon
-export typealias Count = int(0 to u64.max)
-export typealias Integer = int(i64.min to i64.max)
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export type Item
-	export var value as Integer
-	export static function create(value Integer) returns Self
+type Item
+	var value as Integer
+	static function create(value Integer) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Item'
 
-export typealias ItemArray = Array with Item
+typealias ItemArray = Array with Item
 
-export type GenericModule uses Op
-	export typealias OpArray = Array with Op
+type GenericModule uses Op
+	typealias OpArray = Array with Op
 
-	export var ops as OpArray
-	export var items as ItemArray
+	var ops as OpArray
+	var items as ItemArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{
 			ops: OpArray.create(0),
 			items: ItemArray.create(0)
 		}
 	end 'create'
 
-	export function pushOp(op Op)
+	function pushOp(op Op)
 		self.ops.push(op)
 	end 'pushOp'
 
-	export function pushItem(item Item)
+	function pushItem(item Item)
 		self.items.push(item)
 	end 'pushItem'
 
-	export function opCount() returns Count
+	function opCount() returns Count
 		return self.ops.count()
 	end 'opCount'
 
-	export function itemCount() returns Count
+	function itemCount() returns Count
 		return self.items.count()
 	end 'itemCount'
 end 'GenericModule'
 
-export typealias IntModule = GenericModule with Integer
+typealias IntModule = GenericModule with Integer
 
 // --- file: main.maxon
 typealias ExitCode = int(0 to 125)
@@ -87,7 +87,7 @@ end 'main'
 <!-- test: inner-alias-interpolation -->
 ```maxon
 // --- file: types.maxon
-export typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max)
 export typealias Integer = int(i64.min to i64.max)
 
 public type Item
@@ -97,35 +97,35 @@ public type Item
 	end 'create'
 end 'Item'
 
-export typealias ItemArray = Array with Item
+typealias ItemArray = Array with Item
 
-export type GenericModule uses Op
-	export typealias OpArray = Array with Op
+type GenericModule uses Op
+	typealias OpArray = Array with Op
 
-	export var ops as OpArray
-	export var items as ItemArray
+	var ops as OpArray
+	var items as ItemArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{
 			ops: OpArray.create(0),
 			items: ItemArray.create(0)
 		}
 	end 'create'
 
-	export function pushOp(op Op)
+	function pushOp(op Op)
 		self.ops.push(op)
 	end 'pushOp'
 
-	export function opCount() returns Count
+	function opCount() returns Count
 		return self.ops.count()
 	end 'opCount'
 
-	export function itemCount() returns Count
+	function itemCount() returns Count
 		return self.items.count()
 	end 'itemCount'
 end 'GenericModule'
 
-export typealias IntModule = GenericModule with Integer
+typealias IntModule = GenericModule with Integer
 
 // --- file: main.maxon
 typealias ExitCode = int(0 to 125)

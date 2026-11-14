@@ -63,7 +63,7 @@ using_clause  = 'using' NAME interface_type { ',' NAME interface_type }
 provide_stmt  = 'provide' NAME '=' expression        (* any statement position *)
 ```
 
-Clause order is `returns` → `throws` → `using`. Follow the **`module` contextual-keyword precedent**
+Clause order is `returns` → `throws` → `using`. Follow the **`test` contextual-keyword precedent**
 ([LANGUAGE_REFERENCE.md:166](docs/LANGUAGE_REFERENCE.md:166)): recognize `using` and `provide` only in their
 unambiguous positions so neither breaks existing code using them as identifiers. Both are absent from the
 keyword map and unused as identifiers repo-wide.

@@ -38,7 +38,7 @@ let DiagnosticSourceName = "maxon"
 // not locate `stdlib/`, or was handed a uri spelling no path, has checked nothing and knows
 // nothing. Saying nothing leaves the editor showing what it already had, which is what "not
 // checked" looks like.
-module function publishBufferDiagnostics(workspace LspWorkspaceState, uri String, text String, arrival BufferArrival) returns BufferPublish
+function publishBufferDiagnostics(workspace LspWorkspaceState, uri String, text String, arrival BufferArrival) returns BufferPublish
 	match lspDocumentOf(workspace, uri: uri) 'document'
 		resolved(document) then return publishedDocumentDiagnostics(workspace, uri: uri, document: document, text: text, arrival: arrival)
 		notAPath then return BufferPublish.unchecked
@@ -63,12 +63,12 @@ function publishedDocumentDiagnostics(workspace LspWorkspaceState, uri String, d
 	end 'buffer'
 end 'publishedDocumentDiagnostics'
 
-module union BufferPublish
+union BufferPublish
 	published(reader LspReaderSearch, root WorkspaceRoot, path FilePath, fast DiagnosticArray)
 	unchecked
 end 'BufferPublish'
 
-module enum BufferArrival
+enum BufferArrival
 	opened
 	edited
 end 'BufferArrival'
@@ -128,7 +128,7 @@ end 'RefusalRoad'
 typealias SiblingVerdictMap = Map with (ByteArray, bool)
 
 // Tell the editor this document has nothing on it — the notification a closed document is owed.
-module function clearPublishedDiagnostics(writer LspStdoutWriter.handle, uri String)
+function clearPublishedDiagnostics(writer LspStdoutWriter.handle, uri String)
 	submitToLspWriter(writer, command: LspWriterCommand.write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(0), doc: JsonDoc.create())))
 end 'clearPublishedDiagnostics'
 
@@ -332,7 +332,7 @@ function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringA
 	return (refusal, notice)
 end 'projectFileSaid'
 
-module function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray, notices StringArray) returns String
+function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray, notices StringArray) returns String
 	let doc = JsonDoc.create()
 	let index = LspLineIndex.build(text)
 	let items = JsonNodeIdArray.create(0)
@@ -366,7 +366,7 @@ function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns Di
 	return kept
 end 'thisDocumentsOwn'
 
-module function attributedTo(diagnostics DiagnosticArray, path FilePath, alone DiagnosticArray) returns DiagnosticArray
+function attributedTo(diagnostics DiagnosticArray, path FilePath, alone DiagnosticArray) returns DiagnosticArray
 	let kept = DiagnosticArray.create(0)
 
 	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
@@ -591,7 +591,7 @@ end 'identifierSubjectAt'
 // nothing to narrow BY, so a road that ever reports over more than this document owes its own
 // narrowing before it gets here. One naming ANOTHER file is a library's, and painting it into the
 // author's document would put a squiggle on a line they did not write.
-module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
+function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
 	return namesTheSameFile(try diagnostic.anchor.anchoredFile() otherwise return true, other: path)
 end 'reportsOn'
 
@@ -600,7 +600,7 @@ end 'reportsOn'
 // rule). A text compare drops every one of those diagnostics and publishes an empty array, which reads
 // as "this document is clean". The name test spares two physical lookups per pair, and it is sound
 // because an entry's identity keeps the entry's own name (`entryIdentityPathOf`).
-module function namesTheSameFile(one FilePath, other FilePath) returns bool
+function namesTheSameFile(one FilePath, other FilePath) returns bool
 	if one.filename().toLower() != other.filename().toLower() 'differentNames'
 		return false
 	end 'differentNames'
@@ -664,7 +664,7 @@ end 'diagnosticNode'
 //     so every punctuator carries `startByte == endByte == 0` (`LspCursor.maxon` states the same fact
 //     from the other side) — `tokenSpanAt` finds one by line and column and hands back a span that is
 //     empty, which is exactly the signal to fall back.
-module function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
+function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
 	return match diagnostic.anchor 'anchor'
 		programWide or
 		file gives documentStartSpan()
@@ -687,7 +687,7 @@ function anchoredSpan(line LineNumber, column ColumnNumber, source String, index
 end 'anchoredSpan'
 
 // The first byte of a document, where a diagnostic with no position of its own in it is placed.
-module function documentStartSpan() returns LspSpan
+function documentStartSpan() returns LspSpan
 	return LspSpan.create(0, endByte: 1)
 end 'documentStartSpan'
 

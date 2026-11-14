@@ -24,16 +24,16 @@ end 'compareBytesOrdinally'
 
 // Order two discovered paths by their spelling. A `FilePath` is not `Comparable`, and the ordering wanted
 // here is the filesystem-neutral one — the bytes, not a locale's idea of them (`compareBytesOrdinally`).
-module function comparePathSpelling(left FilePath, right FilePath) returns Ordering
+function comparePathSpelling(left FilePath, right FilePath) returns Ordering
 	return compareBytesOrdinally(left.toString().toByteArray(), right: right.toString().toByteArray())
 end 'comparePathSpelling'
 
-module function comparePathIdentity(path FilePath, other FilePath) returns Ordering
+function comparePathIdentity(path FilePath, other FilePath) returns Ordering
 	let workingDirectory = Directory.currentPath()
 	return compareBytesOrdinally(pathIdentity(path, workingDirectory: workingDirectory), right: pathIdentity(other, workingDirectory: workingDirectory))
 end 'comparePathIdentity'
 
-module function precedesInPathOrder(path FilePath, other FilePath) returns bool
+function precedesInPathOrder(path FilePath, other FilePath) returns bool
 	return comparePathIdentity(path, other: other) == Ordering.lessThan
 end 'precedesInPathOrder'
 
@@ -41,7 +41,7 @@ end 'precedesInPathOrder'
 // beside an absolute stdlib path, `maxon build a.maxon` beside `maxon build .`, `\` (0x5C, between the
 // uppercase letters and `_`) where `/` (0x2F) sorts before both, and the `c:` the MCP server hands beside
 // a `C:` would each otherwise change the answer.
-module function pathIdentity(path FilePath, workingDirectory FilePath) returns ByteArray
+function pathIdentity(path FilePath, workingDirectory FilePath) returns ByteArray
 	let spelled = path.resolve(workingDirectory).toString().replace(FilePath.separator(), with: PortablePathSeparator).toByteArray()
 
 	if spelled.count() < DrivePrefixLength 'noDrivePrefix'

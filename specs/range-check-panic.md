@@ -407,7 +407,7 @@ function main() returns ExitCode
   return 1
 end 'main'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 typealias Item = int(0 to 3)
 
 export function isEmpty() returns bool
@@ -420,7 +420,7 @@ end 'isEmpty'
 ```
 
 <!-- test: range-check-panic.witness-literal-argument-checks-the-interface-files-alias -->
-A literal argument through an interface-typed receiver is checked against the alias the interface's own file declares, not against a file-private alias of the same name in a later file.
+A literal argument through an interface-typed receiver is checked against the alias the interface's own file declares, not against an unmarked alias of the same name in another directory.
 ```maxon
 // --- file: a.maxon
 typealias Item = int(0 to 100)
@@ -477,7 +477,7 @@ end 'tiny'
 ```
 
 <!-- test: range-check-panic.error.an-exported-field-of-a-file-private-alias-is-refused -->
-Two file-private `Item` aliases coexist in two directories. A literal stored to `Box.item` from another file would have to be checked against the alias the field was declared with, and the field is refused where it is declared: an exported field cannot be typed by a file-private alias.
+Two unmarked `Item` aliases coexist in two directories. A literal stored to `Box.item` from another file would have to be checked against the alias the field was declared with, and the field is refused where it is declared: an exported field cannot be typed by an unmarked alias.
 ```maxon
 // --- file: a/a.maxon
 typealias Item = int(0 to 255)
@@ -504,7 +504,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: a/<fragment>:6:22: exported field 'a.Box.item' names file-private typealias 'Item' in its type
+error E3167: a/<fragment>:6:22: exported field 'a.Box.item' names unexported typealias 'Item' in its type
 ```
 
 <!-- test: range-check-panic.witness-literal-argument-to-a-base-interfaces-associated-type -->
@@ -562,9 +562,9 @@ end 'main'
 An interface call's result is typed by the interface file's alias, so returning it where another file's alias is declared converts between two aliases and carries that alias's guard.
 ```maxon
 // --- file: a.maxon
-export typealias Fill = int(0 to 100)
+typealias Fill = int(0 to 100)
 
-export interface Gauge
+interface Gauge
   function read() returns Fill
 end 'Gauge'
 
@@ -580,7 +580,7 @@ type Tank implements Gauge
   end 'read'
 end 'Tank'
 
-export function makeTank() returns Gauge
+function makeTank() returns Gauge
   return Tank.create()
 end 'makeTank'
 
@@ -607,7 +607,7 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.an-alias-beside-a-same-named-type-is-named-as-its-file-spells-it -->
-A file's own alias that shares its name with another directory's file-private type is named in the panic exactly
+A file's own alias that shares its name with another directory's unmarked type is named in the panic exactly
 as the file writes it.
 ```maxon
 // --- file: a/t.maxon

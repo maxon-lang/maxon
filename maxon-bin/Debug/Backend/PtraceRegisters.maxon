@@ -1,4 +1,4 @@
-module typealias PtraceRegOffsetArray = Array with BackendWord
+typealias PtraceRegOffsetArray = Array with BackendWord
 
 #if arch(arm64)
 	let StatusWordOffset = 264
@@ -29,31 +29,31 @@ module typealias PtraceRegOffsetArray = Array with BackendWord
 	let UserRegsRdi = 112
 #endif
 
-module function ptraceBlockWord(block RegisterBlock, at BackendWord) returns BackendWord
+function ptraceBlockWord(block RegisterBlock, at BackendWord) returns BackendWord
 	return (try block.word(at as RegisterOffset) otherwise panic("PtraceRegisters.ptraceBlockWord: the word at {at} is outside the register block or off a word boundary, and every displacement this backend reads is one of the record's fixed fields")) as BackendWord
 end 'ptraceBlockWord'
 
-module function ptraceStackPointerOf(block RegisterBlock) returns BackendWord
+function ptraceStackPointerOf(block RegisterBlock) returns BackendWord
 	return ptraceBlockWord(block, at: TraceStackPointerOffset)
 end 'ptraceStackPointerOf'
 
-module function ptraceProgramCounterOf(block RegisterBlock) returns BackendWord
+function ptraceProgramCounterOf(block RegisterBlock) returns BackendWord
 	return ptraceBlockWord(block, at: TraceProgramCounterOffset)
 end 'ptraceProgramCounterOf'
 
-module function ptraceStatusWordOf(block RegisterBlock) returns BackendWord
+function ptraceStatusWordOf(block RegisterBlock) returns BackendWord
 	return ptraceBlockWord(block, at: StatusWordOffset)
 end 'ptraceStatusWordOf'
 
-module function ptraceVectorLaneOf(block RegisterBlock, lane BackendWord) returns BackendWord
+function ptraceVectorLaneOf(block RegisterBlock, lane BackendWord) returns BackendWord
 	return ptraceBlockWord(block, at: VectorLaneBase + lane * VectorLaneBytes)
 end 'ptraceVectorLaneOf'
 
-module function ptraceWithProgramCounter(block RegisterBlock, address BackendWord) returns RegisterBlock throws DebuggeeError
+function ptraceWithProgramCounter(block RegisterBlock, address BackendWord) returns RegisterBlock throws DebuggeeError
 	return try block.with(TraceProgramCounterOffset as RegisterOffset, word: address as RegisterWord)
 end 'ptraceWithProgramCounter'
 
-module function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
+function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
 	let offsets = PtraceRegOffsetArray.create(0)
 
 	#if arch(arm64)

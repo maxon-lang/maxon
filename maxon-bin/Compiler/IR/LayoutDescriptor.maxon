@@ -51,9 +51,8 @@
 let LAYOUT_DESCRIPTOR_BYTE_SIZE = LAYOUT_OFFSET_ELEMENT_STRIDE + LAYOUT_FIELD_BYTES
 
 // The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the block's type
-// arg. `sizeof(T)` inside a shared generic body lowers to a load of `[T's block + this]`. `module`
-// rather than `export`: its one reader, `LowerMaxonToStd`, is inside this directory.
-module let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
+// arg. `sizeof(T)` inside a shared generic body lowers to a load of `[T's block + this]`.
+let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 
 export let LayoutWordName = b"__layout_word"
 
@@ -126,20 +125,20 @@ export let LAYOUT_OFFSET_RETAIN_FUNC = 64 as ByteOffset
 // The byte offset of the `elementStride` slot, the block's last word. `LAYOUT_DESCRIPTOR_BYTE_SIZE` is
 // derived from it, so a word appended after it must move this constant too; `encodeLayoutDescriptor`
 // panics when the encoded length disagrees.
-module let LAYOUT_OFFSET_ELEMENT_STRIDE = 72 as ByteOffset
+let LAYOUT_OFFSET_ELEMENT_STRIDE = 72 as ByteOffset
 
 // The number of little-endian bytes in one descriptor field.
 let LAYOUT_FIELD_BYTES = 8
 
 // The alignment (`alignment@8`) every trivial-arg generic box takes — one machine word. The box is a
 // row of 8-byte slots (`StructLayout` lays fields out at 8-byte strides), so it aligns to 8.
-module let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
+let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 
 // The storage width of the single type argument in the box (`elementSize@16`) — an opaque `T` slot is
 // one machine word whatever the argument, which is DISTINCT from `elementLogicalSize@56` (the argument's
 // full SOURCE size). For a `bool` argument they diverge (8 vs 1), exactly where the descriptor header
 // says the two concepts must stay separate.
-module let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
+let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
 
 // The MACHINE WORD every value with no narrower home occupies — a bare `int`, a `float`, a function
 // pointer, a managed box's pointer, and a ranged alias whose range does not fit a narrower slot. Named
@@ -415,7 +414,7 @@ export function elementStampOf(stride ElementStride, signed bool) returns Elemen
 	return stride as ElementStamp
 end 'elementStampOf'
 
-module function elementStrideOfStamp(stamp ElementStamp) returns ElementStride
+function elementStrideOfStamp(stamp ElementStamp) returns ElementStride
 	if stamp < 0 'subBytePacked'
 		return stamp as ElementStride
 	end 'subBytePacked'
@@ -735,26 +734,26 @@ let LAYOUT_ZERO_SLOTS_TAIL = 1 as ByteOffset
 // is the arg's STORAGE width in the box (8 for an opaque `T` slot, whatever the arg), the second is
 // the arg's full SOURCE size (bool=1, Pair=16). For a trivial arg they diverge (8 vs 1) exactly where
 // the header says they must.
-module type LayoutDescriptor
+type LayoutDescriptor
 	export let size as MachineWord
 	export let alignment as MachineWord
 	export let elementSize as MachineWord
 
-	module static function create(size MachineWord, alignment MachineWord, elementSize MachineWord) returns LayoutDescriptor
+	static function create(size MachineWord, alignment MachineWord, elementSize MachineWord) returns LayoutDescriptor
 		return Self{size: size, alignment: alignment, elementSize: elementSize}
 	end 'create'
 end 'LayoutDescriptor'
 
-module type ArgumentDictionary
+type ArgumentDictionary
 	export let logicalSize as ByteOffset
 	export let elementStamp as ElementStamp
 
-	module static function create(logicalSize ByteOffset, elementStamp ElementStamp) returns ArgumentDictionary
+	static function create(logicalSize ByteOffset, elementStamp ElementStamp) returns ArgumentDictionary
 		return Self{logicalSize: logicalSize, elementStamp: elementStamp}
 	end 'create'
 end 'ArgumentDictionary'
 
-module typealias ArgumentDictionaryArray = Array with ArgumentDictionary
+typealias ArgumentDictionaryArray = Array with ArgumentDictionary
 
 // Encode a LayoutDescriptor as one block of little-endian machine words per entry of
 // `dictionaries`, which is in type-parameter order: block `i` is what `sizeof` of
@@ -762,7 +761,7 @@ module typealias ArgumentDictionaryArray = Array with ArgumentDictionary
 // retainFunc) and the field-offsets slot (+48) are zero on disk for a trivial instance: it has no
 // thunk, owes no reference and has no field-offset blob, so nothing patches them and the blob needs
 // no relocation.
-module function encodeLayoutDescriptor(d LayoutDescriptor, dictionaries ArgumentDictionaryArray) returns ByteArray
+function encodeLayoutDescriptor(d LayoutDescriptor, dictionaries ArgumentDictionaryArray) returns ByteArray
 	let buf = ByteArray.create(layoutDescriptorBytesFor(dictionaries.count() as ElementIndex), zeroed: false)
 
 	for dictionary in dictionaries 'eachTypeParam'
@@ -824,13 +823,13 @@ export function layoutBlockOffsetFor(position ElementIndex) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (position as ByteOffset)
 end 'layoutBlockOffsetFor'
 
-module function appendLayoutTableSlots(buf ByteArray, entryCount ElementIndex)
+function appendLayoutTableSlots(buf ByteArray, entryCount ElementIndex)
 	for _ in 0 upto entryCount 'eachEntry'
 		appendLittleEndianScalar(buf, value: 0, byteCount: LAYOUT_FIELD_BYTES)
 	end 'eachEntry'
 end 'appendLayoutTableSlots'
 
-module function layoutTableSlotOffset(typeParamCount ElementIndex, entry ElementIndex) returns ByteOffset
+function layoutTableSlotOffset(typeParamCount ElementIndex, entry ElementIndex) returns ByteOffset
 	return layoutDescriptorBytesFor(typeParamCount) + LAYOUT_FIELD_BYTES * (entry as ByteOffset)
 end 'layoutTableSlotOffset'
 
@@ -844,29 +843,29 @@ end 'layoutTableSlotOffset'
 // `GenericInstanceRegistry`.
 typealias LayoutLabelMap = Map with (GenericInstanceId, String)
 
-module type LayoutDescriptorRegistry
+type LayoutDescriptorRegistry
 	var labels as LayoutLabelMap
 
-	module static function create() returns LayoutDescriptorRegistry
+	static function create() returns LayoutDescriptorRegistry
 		return Self{labels: LayoutLabelMap.create()}
 	end 'create'
 
 	// Has a descriptor already been emitted for `gid`? Callers gate `record` on this so the blob is
 	// registered exactly once per instance.
-	module function contains(gid GenericInstanceId) returns bool
+	function contains(gid GenericInstanceId) returns bool
 		return self.labels.contains(gid)
 	end 'contains'
 
 	// The `.rdata` label naming `gid`'s descriptor blob. Precondition: a descriptor was emitted for it
 	// (`contains(gid)`) — a miss is a lowering-order bug (a call site reached before the emitter ran),
 	// not a state to paper over with a sentinel label.
-	module function labelFor(gid GenericInstanceId) returns String
+	function labelFor(gid GenericInstanceId) returns String
 		return try self.labels.get(gid) otherwise panic("LayoutDescriptorRegistry.labelFor: no descriptor emitted for generic instance {gid} — the descriptor emitter must run before a call site references it")
 	end 'labelFor'
 
 	// Record that `gid`'s descriptor blob is registered under `label`. Idempotent by construction:
 	// callers gate on `contains`, so a gid is recorded once.
-	module function record(gid GenericInstanceId, label String)
+	function record(gid GenericInstanceId, label String)
 		self.labels.upsert(gid, value: label)
 	end 'record'
 end 'LayoutDescriptorRegistry'

@@ -1,18 +1,18 @@
-module union Tls12ClientProof
+union Tls12ClientProof
 	anonymous
 	certified(key X509PublicKey)
 end 'Tls12ClientProof'
 
-module type Tls12ServerContext
-	module var parameters as Tls12Parameters
-	module var secret as TlsKeySecret
+type Tls12ServerContext
+	var parameters as Tls12Parameters
+	var secret as TlsKeySecret
 
-	module static function create(parameters Tls12Parameters, secret TlsKeySecret) returns Tls12ServerContext
+	static function create(parameters Tls12Parameters, secret TlsKeySecret) returns Tls12ServerContext
 		return Self{parameters: parameters, secret: secret}
 	end 'create'
 end 'Tls12ServerContext'
 
-module union Tls12ServerPhase
+union Tls12ServerPhase
 	idle
 	awaitingClientCertificate(context Tls12ServerContext)
 	awaitingClientKeyExchange(context Tls12ServerContext, proof Tls12ClientProof)
@@ -22,32 +22,32 @@ module union Tls12ServerPhase
 end 'Tls12ServerPhase'
 
 type Tls12ServerChoice
-	module var suite as Tls12CipherSuite
-	module var scheme as TlsSignatureScheme
-	module var group as TlsGroupCode
-	module var alpn as TlsAlpnChoice
-	module var acknowledgesName as bool
-	module var extendedMasterSecret as bool
-	module var secureRenegotiation as bool
-	module var answersPointFormats as bool
+	var suite as Tls12CipherSuite
+	var scheme as TlsSignatureScheme
+	var group as TlsGroupCode
+	var alpn as TlsAlpnChoice
+	var acknowledgesName as bool
+	var extendedMasterSecret as bool
+	var secureRenegotiation as bool
+	var answersPointFormats as bool
 
 	static function create(suite Tls12CipherSuite, scheme TlsSignatureScheme, group TlsGroupCode, alpn TlsAlpnChoice, hello TlsClientHello, scan TlsExtensionScan) returns Tls12ServerChoice
 		return Self{suite: suite, scheme: scheme, group: group, alpn: alpn, acknowledgesName: scan.types.contains(TlsExtensionKind.serverName.code()), extendedMasterSecret: scan.types.contains(TlsExtensionKind.extendedMasterSecret.code()), secureRenegotiation: scan.types.contains(TlsExtensionKind.renegotiationInfo.code()) or hello.cipherSuites().contains(tlsRenegotiationScsv), answersPointFormats: scan.types.contains(TlsExtensionKind.ecPointFormats.code())}
 	end 'create'
 end 'Tls12ServerChoice'
 
-module type Tls12ServerFlow implements TlsMessageHandler
+type Tls12ServerFlow implements TlsMessageHandler
 	var config as TlsServerConfig
 	var entropy as TlsServerEntropy
 	var peer as TlsPeerAuthenticator
 	var session as TlsSession
 	var phase as Tls12ServerPhase
 
-	module static function create(config TlsServerConfig, entropy TlsServerEntropy, peer TlsPeerAuthenticator, session TlsSession) returns Tls12ServerFlow
+	static function create(config TlsServerConfig, entropy TlsServerEntropy, peer TlsPeerAuthenticator, session TlsSession) returns Tls12ServerFlow
 		return Self{config: config, entropy: entropy, peer: peer, session: session, phase: Tls12ServerPhase.idle}
 	end 'create'
 
-	module function begin(raw ByteArray, hello TlsClientHello, scan TlsExtensionScan) throws TlsHandshakeError
+	function begin(raw ByteArray, hello TlsClientHello, scan TlsExtensionScan) throws TlsHandshakeError
 		let choice = try tls12Negotiate(config, hello: hello, scan: scan)
 		let secret = try entropy.secret(choice.group)
 		let parameters = Tls12Parameters.create(choice.suite, clientRandom: hello.random(), serverRandom: tls12ServerRandom(config, entropy: entropy), extendedMasterSecret: choice.extendedMasterSecret)
@@ -79,7 +79,7 @@ module type Tls12ServerFlow implements TlsMessageHandler
 		end 'authentication'
 	end 'begin'
 
-	module function dispatch(message ByteArray) throws TlsHandshakeError
+	function dispatch(message ByteArray) throws TlsHandshakeError
 		match phase 'phase'
 			idle then throw TlsHandshakeError.internalError
 			awaitingClientCertificate(context) then try acceptClientCertificate(message, context: context)

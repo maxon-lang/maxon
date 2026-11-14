@@ -56,8 +56,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'continue'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
 
-Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `module` (directly
-before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
+Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
 type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
 `sendable` (after `is` in a `constraint`), `mutates` and `captures` (the `mutates_clause` ending a
 `function_type`), `modify` (a `modify_stmt`: at the start of a statement, followed by an IDENTIFIER or `self`,
@@ -224,17 +223,15 @@ top_level_decl
 ### 2.1 Visibility
 
 ```
-visibility_prefix = [ 'export' | 'public' | 'module' ]
+visibility_prefix = [ 'export' | 'public' ]
 ```
 
-Any top-level declaration may be preceded by `export` or `public` to make it visible
-everywhere in the compilation, or by `module` to make it visible to every
-file in the declaring directory subtree (same directory + any subdirectory).
+A declaration with no prefix is visible to every file in its declaring directory and that directory's
+subdirectories. Any top-level declaration may be preceded by `export` or `public` to make it visible
+everywhere in the compilation.
 `public` has exactly the visibility of `export` and additionally marks the declaration as API
-surface, which exempts it from the unused-export diagnostics (E3092/E3093).
+surface, which exempts it from the unused-export diagnostic (E3092).
 At most one modifier may be written — combining two is E2001.
-`module` is a contextual keyword: it is recognised only when followed by a
-declaration token; in any other position it lexes as an identifier.
 
 A `test_decl` takes no `visibility_prefix` — a test is never referenced by name,
 so there is nothing for a visibility modifier to control.

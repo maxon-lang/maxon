@@ -537,7 +537,7 @@ export type ShadowSpellingRoster
 	end 'authorSpelledText'
 
 	// @generated library-cache begin
-	module function cacheWrite(writer LibraryCacheWriter)
+	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteStdlibShadowSpellingArray(writer, value: self.spellings)
 		cacheWriteWrittenMintSet(writer, value: self.mints)
 		self.authorRespellings.cacheWrite(writer)
@@ -545,7 +545,7 @@ export type ShadowSpellingRoster
 		cacheWriteSpellingPositionByMint(writer, value: self.positionByMint)
 	end 'cacheWrite'
 
-	module static function cacheRead(reader LibraryCacheReader) returns ShadowSpellingRoster throws LibraryCacheDamage
+	static function cacheRead(reader LibraryCacheReader) returns ShadowSpellingRoster throws LibraryCacheDamage
 		let f_spellings = try cacheReadStdlibShadowSpellingArray(reader)
 		let f_mints = try cacheReadWrittenMintSet(reader)
 		let f_authorRespellings = try ShadowRespellings.cacheRead(reader)
@@ -562,7 +562,7 @@ export type ShadowSpellingRoster
 	// @generated library-cache end
 end 'ShadowSpellingRoster'
 
-module function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellings
+function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellings
 	let respellings = ShadowRespellingArray.create(0)
 
 	for spelling in spellings 'eachSpelling'
@@ -576,7 +576,7 @@ module function shadowRespellings(spellings StdlibShadowSpellingArray, reader Sh
 	return ShadowRespellings.of(respellings)
 end 'shadowRespellings'
 
-module function libraryNameRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellings
+function libraryNameRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellings
 	let respellings = ShadowRespellingArray.create(0)
 
 	for spelling in spellings 'eachSpelling'
@@ -609,7 +609,7 @@ function withIdentifierRespelled(text String, identifier ByteArray, spelling Byt
 	return String.from(respelled)
 end 'withIdentifierRespelled'
 
-module function textMentionsIdentifier(text String, identifier ByteArray) returns bool
+function textMentionsIdentifier(text String, identifier ByteArray) returns bool
 	let bytes = text.toByteArray()
 
 	for at in 0 upto bytes.count() 'eachByte'
@@ -681,7 +681,7 @@ export union LibraryBlame
 end 'LibraryBlame'
 
 // @generated library-cache begin
-module function cacheWriteLibraryBlame(writer LibraryCacheWriter, value LibraryBlame)
+function cacheWriteLibraryBlame(writer LibraryCacheWriter, value LibraryBlame)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
@@ -696,7 +696,7 @@ function cacheWriteLibraryBlameUserSite(writer LibraryCacheWriter, a0 FilePath, 
 	writer.unsigned(a2 as CacheUnsigned)
 end 'cacheWriteLibraryBlameUserSite'
 
-module function cacheReadLibraryBlame(reader LibraryCacheReader) returns LibraryBlame throws LibraryCacheDamage
+function cacheReadLibraryBlame(reader LibraryCacheReader) returns LibraryBlame throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
@@ -935,7 +935,7 @@ end 'Diagnostic'
 export typealias DiagnosticArray = Array with Diagnostic
 
 // @generated library-cache begin
-module function cacheWriteDiagnosticArray(writer LibraryCacheWriter, value DiagnosticArray)
+function cacheWriteDiagnosticArray(writer LibraryCacheWriter, value DiagnosticArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -943,7 +943,7 @@ module function cacheWriteDiagnosticArray(writer LibraryCacheWriter, value Diagn
 	end 'eachItem'
 end 'cacheWriteDiagnosticArray'
 
-module function cacheReadDiagnosticArray(reader LibraryCacheReader) returns DiagnosticArray throws LibraryCacheDamage
+function cacheReadDiagnosticArray(reader LibraryCacheReader) returns DiagnosticArray throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = DiagnosticArray.create(count, zeroed: false)
 
@@ -1068,23 +1068,23 @@ export enum CompileFailure
 	driverFailed
 end 'CompileFailure'
 
-export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
+function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportPositioned'
 
-module enum SecondaryFlush
+enum SecondaryFlush
 	beforeLowering
 	beforeBackend
 end 'SecondaryFlush'
 
-module union FindingStanding
+union FindingStanding
 	primary
 	secondary(flush SecondaryFlush)
 end 'FindingStanding'
 
 // A secondary finding prints only while no primary error stands: stacked on one it would make one
 // mistake read as two, and the primary error alone keeps the program from compiling.
-module function findingStandingOf(code ErrorCode) returns FindingStanding
+function findingStandingOf(code ErrorCode) returns FindingStanding
 	if code == ErrorCode.semanticUnneededCast or isTargetRefusal(code) 'beforeLowering'
 		return FindingStanding.secondary(SecondaryFlush.beforeLowering)
 	end 'beforeLowering'
@@ -1096,15 +1096,15 @@ module function findingStandingOf(code ErrorCode) returns FindingStanding
 	return FindingStanding.primary
 end 'findingStandingOf'
 
-module function isTargetRefusal(code ErrorCode) returns bool
+function isTargetRefusal(code ErrorCode) returns bool
 	return code == ErrorCode.targetUnsupportedConstruct or code == ErrorCode.semanticSubprocessUnsupportedTarget
 end 'isTargetRefusal'
 
-module function fileSecondary(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
+function fileSecondary(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
 	fileSecondaryFinding(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'fileSecondary'
 
-module function fileSecondaryFinding(project Project, diagnostic Diagnostic)
+function fileSecondaryFinding(project Project, diagnostic Diagnostic)
 	match secondaryFlushOf(diagnostic.code) 'dueAt'
 		beforeLowering or
 		beforeBackend then break
@@ -1113,11 +1113,11 @@ module function fileSecondaryFinding(project Project, diagnostic Diagnostic)
 	project.secondaryDiagnostics.push(diagnostic)
 end 'fileSecondaryFinding'
 
-module function resetSecondaryFindings(project Project)
+function resetSecondaryFindings(project Project)
 	project.secondaryDiagnostics = DiagnosticArray.create(0)
 end 'resetSecondaryFindings'
 
-module function reportSecondaryFindings(project Project, flush SecondaryFlush) returns bool
+function reportSecondaryFindings(project Project, flush SecondaryFlush) returns bool
 	if projectHasErrors(project) 'aPrimaryErrorStands'
 		return false
 	end 'aPrimaryErrorStands'
@@ -1173,31 +1173,31 @@ export union FunctionDisplay
 	end 'memberQuoted'
 end 'FunctionDisplay'
 
-export function closureSiteDisplay(authoredPath FilePath, line LineNumber, column ColumnNumber) returns FunctionDisplay
+function closureSiteDisplay(authoredPath FilePath, line LineNumber, column ColumnNumber) returns FunctionDisplay
 	return FunctionDisplay.closure("the closure at {authoredPath.toString()}:{line}:{column}")
 end 'closureSiteDisplay'
 
-export function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)
+function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)
 	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
 end 'reportAtFunctionName'
 
-module function letReassignedMessage(name String) returns String
+function letReassignedMessage(name String) returns String
 	return "'{name}' is a let and cannot be reassigned"
 end 'letReassignedMessage'
 
-module function letFieldReassignedMessage(name String) returns String
+function letFieldReassignedMessage(name String) returns String
 	return "'{name}' is a let field and cannot be reassigned"
 end 'letFieldReassignedMessage'
 
-module function unneededAliasCastMessage(sourceName ByteArray, targetName ByteArray) returns String
+function unneededAliasCastMessage(sourceName ByteArray, targetName ByteArray) returns String
 	return unneededCastMessage("'{sourceSpelledAliasText(sourceName)}'", fits: unneededCastTarget(targetName))
 end 'unneededAliasCastMessage'
 
-module function unneededLiteralCastMessage(cast LiteralCast) returns String
+function unneededLiteralCastMessage(cast LiteralCast) returns String
 	return unneededCastMessage("the literal {cast.spelledText()}", fits: unneededCastTarget(cast.target.name))
 end 'unneededLiteralCastMessage'
 
-module function unneededLetCastMessage(cast LiteralCast, name ByteArray) returns String
+function unneededLetCastMessage(cast LiteralCast, name ByteArray) returns String
 	return unneededCastMessage("the literal {cast.spelledText()}", fits: "every use of '{String.from(name)}'")
 end 'unneededLetCastMessage'
 
@@ -1301,7 +1301,7 @@ end 'terminatedDiagnosticLine'
 extension Project
 	// A whole-program claim is withheld from the buffer, so beside one alone the secondary findings are
 	// published. Only the before-lowering flush has run: those claims stop the build before the Std tier.
-	module function reportSecondaryFindingsBesideClaims()
+	function reportSecondaryFindingsBesideClaims()
 		if self.onlyWholeProgramClaimsStand() 'noRealErrorStands'
 			_ = reportFindingsDueAt(self, flush: SecondaryFlush.beforeLowering)
 		end 'noRealErrorStands'
@@ -1325,8 +1325,8 @@ end 'Project'
 // A single-buffer compile cannot honestly publish a whole-program claim: it holds one file plus the
 // library tiers, so each claim here is true of what this server compiled and false of the program the
 // author is editing. "This program declares no entry point" would sit on the first line of every
-// library file an editor opens. The unused-export family (E3092/E3093/E3094) says nothing else in the
-// program references a declaration, and none of the program's other files is in this compile. The
+// library file an editor opens. The unused-declaration family (E3092, E3219, E3062) says nothing else in
+// the program references a declaration, and none of the program's other files is in this compile. The
 // corpus does not rescue either: it is lexed and folded, never checked. `attributedTo` reads this same
 // filter, so the project check withholds these codes too.
 //
@@ -1334,6 +1334,6 @@ end 'Project'
 // about this file hides a real error, which is worse than the squiggle it removes; the leading digit
 // cannot stand in for the question, because it names the stage that raised a diagnostic rather than
 // the scope it claims.
-module function claimsAboutTheWholeProgram(code ErrorCode) returns bool
-	return code == ErrorCode.noMainFunction or code == ErrorCode.semanticUnusedExportedSymbol or code == ErrorCode.semanticExportableAsModule or code == ErrorCode.semanticUnusedModuleSymbol
+function claimsAboutTheWholeProgram(code ErrorCode) returns bool
+	return code == ErrorCode.noMainFunction or code == ErrorCode.semanticUnusedExportedSymbol or code == ErrorCode.semanticUnusedUnexportedDeclaration or code == ErrorCode.semanticUnusedTypeAlias
 end 'claimsAboutTheWholeProgram'

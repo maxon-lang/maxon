@@ -1,36 +1,36 @@
 // One tier order resolves a bare name of every kind: types, bindings and free functions each tally
 // the tiers of the declarations the reader may name, and the highest tier decides.
-module typealias ScopeTier = int(0 to 5)
+typealias ScopeTier = int(0 to 5)
 
-module let ScopeTierHidden = 0
-module let ScopeTierLibrary = 1
+let ScopeTierHidden = 0
+let ScopeTierLibrary = 1
 let ScopeTierElsewhere = 2 as ScopeTier
-module let ScopeTierRoot = 3 as ScopeTier
-module let ScopeTierReadersDirectory = 4 as ScopeTier
-module let ScopeTierReadersFile = 5
+let ScopeTierRoot = 3 as ScopeTier
+let ScopeTierReadersDirectory = 4 as ScopeTier
+let ScopeTierReadersFile = 5
 
-module union ScopeHolding
+union ScopeHolding
 	vacant
 	held(index ElementIndex, tier ScopeTier)
 	contested
 end 'ScopeHolding'
 
-module union NameScopeVerdict
+union NameScopeVerdict
 	nowhere
 	meant(index ElementIndex, tier ScopeTier)
 	ambiguous
 end 'NameScopeVerdict'
 
-module type NameScopeTally
-	module var bestTier as ScopeTier
+type NameScopeTally
+	var bestTier as ScopeTier
 	var bestAt as ElementIndex
 	var atBest as ElementIndex
 
-	module static function create() returns NameScopeTally
+	static function create() returns NameScopeTally
 		return Self{bestTier: ScopeTierHidden, bestAt: 0, atBest: 0}
 	end 'create'
 
-	module function note(tier ScopeTier, at ElementIndex)
+	function note(tier ScopeTier, at ElementIndex)
 		if tier == ScopeTierHidden 'aDeclarationTheReaderCannotName'
 			return
 		end 'aDeclarationTheReaderCannotName'
@@ -47,7 +47,7 @@ module type NameScopeTally
 		end 'asNearAsTheBest'
 	end 'note'
 
-	module function verdict() returns NameScopeVerdict
+	function verdict() returns NameScopeVerdict
 		if self.atBest == 0 'nothingIsNameable'
 			return NameScopeVerdict.nowhere
 		end 'nothingIsNameable'
@@ -62,7 +62,7 @@ module type NameScopeTally
 	end 'verdict'
 end 'NameScopeTally'
 
-module function heldIfNameable(index ElementIndex, tier ScopeTier) returns ScopeHolding
+function heldIfNameable(index ElementIndex, tier ScopeTier) returns ScopeHolding
 	return ScopeHolding.vacant if tier == ScopeTierHidden else ScopeHolding.held(index, tier: tier)
 end 'heldIfNameable'
 
@@ -71,7 +71,7 @@ end 'heldIfNameable'
 // answers, which stays the fallback for `vacant` and `contested`. A contested own directory is
 // returned without consulting the root: the root is farther than any declaration of the reader's
 // directory, so a root declaration must not win over an ambiguity nearer than it.
-module function nearNameScope(readersDirectory ScopeHolding, theRoot ScopeHolding) returns ScopeHolding
+function nearNameScope(readersDirectory ScopeHolding, theRoot ScopeHolding) returns ScopeHolding
 	match readersDirectory 'readersDirectory'
 		held or
 		contested then return readersDirectory
@@ -81,13 +81,13 @@ module function nearNameScope(readersDirectory ScopeHolding, theRoot ScopeHoldin
 	return theRoot
 end 'nearNameScope'
 
-module enum DirectoryNearness
+enum DirectoryNearness
 	elsewhere
 	theRoot
 	theReadersOwn
 end 'DirectoryNearness'
 
-module function nearnessOfDirectory(declDirectory String, readerDirectory String) returns DirectoryNearness
+function nearnessOfDirectory(declDirectory String, readerDirectory String) returns DirectoryNearness
 	if declDirectory.equals(readerDirectory) 'theReadersOwnDirectory'
 		return DirectoryNearness.theReadersOwn
 	end 'theReadersOwnDirectory'
@@ -95,7 +95,15 @@ module function nearnessOfDirectory(declDirectory String, readerDirectory String
 	return DirectoryNearness.theRoot if declDirectory.isEmpty() else DirectoryNearness.elsewhere
 end 'nearnessOfDirectory'
 
-module function tierOfNearness(nearness DirectoryNearness) returns ScopeTier
+function nearnessOfLibraryDirectory(declDirectory String, readerDirectory String) returns DirectoryNearness
+	if declDirectory.equals(readerDirectory) 'theReadersOwnDirectory'
+		return DirectoryNearness.theReadersOwn
+	end 'theReadersOwnDirectory'
+
+	return DirectoryNearness.elsewhere if declDirectory.contains(PortablePathSeparator) else DirectoryNearness.theRoot
+end 'nearnessOfLibraryDirectory'
+
+function tierOfNearness(nearness DirectoryNearness) returns ScopeTier
 	return match nearness 'nearness'
 		theReadersOwn gives ScopeTierReadersDirectory
 		theRoot gives ScopeTierRoot

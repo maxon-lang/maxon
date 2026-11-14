@@ -1,4 +1,4 @@
-module enum QualifierVerdict
+enum QualifierVerdict
 	plainName
 	capabilityQualifier
 end 'QualifierVerdict'
@@ -31,17 +31,17 @@ typealias QualifierEntryStack = Array with ElementIndex
 let CapabilityQualifierByte = 1
 let ReceiverPrefixWithoutSeparator = 3
 
-module type TypeQualifierPositions
+type TypeQualifierPositions
 	let verdicts as ByteArray
 
-	module static function over(tokens TokenArray) returns TypeQualifierPositions
+	static function over(tokens TokenArray) returns TypeQualifierPositions
 		let machine = QualifierMachine.begin(tokens)
 		machine.run()
 
 		return Self{verdicts: machine.verdicts}
 	end 'over'
 
-	module function verdictAt(index ElementIndex) returns QualifierVerdict
+	function verdictAt(index ElementIndex) returns QualifierVerdict
 		let found = try self.verdicts.get(index) otherwise return QualifierVerdict.plainName
 
 		if found == CapabilityQualifierByte 'capability'
@@ -51,7 +51,7 @@ module type TypeQualifierPositions
 		return QualifierVerdict.plainName
 	end 'verdictAt'
 
-	module function qualifiesAt(index ElementIndex) returns bool
+	function qualifiesAt(index ElementIndex) returns bool
 		return self.verdictAt(index) != QualifierVerdict.plainName
 	end 'qualifiesAt'
 end 'TypeQualifierPositions'
@@ -63,7 +63,7 @@ end 'TypeQualifierPositions'
 // head such as `as`, `returns` or `with`).
 type QualifierMachine
 	let tokens as TokenArray
-	module var verdicts as ByteArray
+	var verdicts as ByteArray
 	var groups as QualifierGroupStack
 	var entries as QualifierEntryStack
 	var labels as NameRoster
@@ -507,7 +507,7 @@ function receiverHeadAt(tokens TokenArray, wordIndex ElementIndex) returns bool
 	return after == TokenKind.comma or after == TokenKind.rightParen
 end 'receiverHeadAt'
 
-module function parameterListStartIn(tokens TokenArray, open ElementIndex) returns ElementIndex
+function parameterListStartIn(tokens TokenArray, open ElementIndex) returns ElementIndex
 	if tokenKindAt(tokens, index: open) != TokenKind.leftParen or not receiverHeadAt(tokens, wordIndex: open + 1) 'noReceiverCapability'
 		return open + 1
 	end 'noReceiverCapability'
@@ -517,7 +517,7 @@ module function parameterListStartIn(tokens TokenArray, open ElementIndex) retur
 	return afterReceiver + 1 if tokenKindAt(tokens, index: afterReceiver) == TokenKind.comma else afterReceiver
 end 'parameterListStartIn'
 
-module function functionKeywordWritesAType(tokens TokenArray, at ElementIndex) returns bool
+function functionKeywordWritesAType(tokens TokenArray, at ElementIndex) returns bool
 	let open = at + 1
 
 	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'aDeclaration'

@@ -23,7 +23,7 @@ That is a wrong ANSWER, and its shape depends on which declaration the cascade h
   consequence of the collision, describing nothing the author could act on.
 - Across files it is worse than order-dependent, it is unconditional: a `type Box` in **any** file
   would beat a `typealias Box` in the reader's **own** file, because the struct registry is consulted bare
-  and first while the alias registry is the only one that is file-scoped.
+  and first while the alias registry is the only one that is directory-scoped.
 
 **The rule: a type name is declared exactly once in any one scope.** A collision is reported at the **later**
 declaration — its own file, its own name token — naming the kind the incumbent declared, which is the
@@ -240,12 +240,12 @@ error E3006: <fragment>:5:6: duplicate definition of 'Box' — already declared 
 `lib/main.maxon` means the STRUCT `Box`, while `b.maxon` means its own ranged alias by the same spelling. A `Box` struct handed to a ranged parameter is a record meeting a number, which no `as` converts, so the refusal names no cast.
 ```maxon
 // --- file: lib/a.maxon
-module typealias Small = int(0 to 100)
+typealias Small = int(0 to 100)
 
-module type Box
+type Box
 	export var v as Small
 
-	module static function create(v Small) returns Box
+	static function create(v Small) returns Box
 		return Self{v: v}
 	end 'create'
 end 'Box'
@@ -257,7 +257,7 @@ function useIt() returns Box
 	return 5
 end 'useIt'
 
-module function fromB() returns ExitCode
+function fromB() returns ExitCode
 	return useIt() as ExitCode
 end 'fromB'
 
@@ -277,33 +277,32 @@ error E3005: lib/<fragment>:32:10: argument type mismatch for 's': expected 'Sma
 ```
 
 <!-- test: crossfile-type-and-file-private-typealias-coexist -->
-Across files, with a FILE-PRIVATE alias — and this is the direction file scoping rescues. The struct
-registry is bare, so if it were consulted first `b.maxon`'s own `typealias Box` would be unreachable
-from `b.maxon` itself: the cast below would be rejected with `E3009: Cannot cast from int to struct`,
-against a `type` declared in a file it never names, and an `E3006` would blame the pair as a duplicate.
+Across directories, with an unmarked alias at the root. The struct registry is bare, so if it were
+consulted first `b.maxon`'s own `typealias Box` would be unreachable from `b.maxon` itself: the cast below
+would be rejected with `E3009: Cannot cast from int to struct`, against a `type` declared in a directory it
+never names, and an `E3006` would blame the pair as a duplicate.
 
-**Neither declaration is a duplicate of anything.** A non-exported `typealias` is file-local, so
-`lib/a.maxon`'s `module type Box` cannot see it, and `b.maxon`, outside `lib/`, cannot see the struct —
-no file sees both. `b.maxon`'s cast resolves against `b.maxon`'s own alias, which is the reader-file rule
-the ranged registry applies, applied to the CASCADE that picks which registry answers. The exported pair
-that genuinely does collide is the next test.
+**Neither declaration is a duplicate of anything.** Directories are separate scopes: the alias is the root's
+and the struct is `lib/`'s. A file in `lib/` sees both and means its own directory's, and `b.maxon`, outside
+`lib/`, cannot see the struct. `b.maxon`'s cast resolves against `b.maxon`'s own alias, which is the
+reader-file rule the ranged registry applies, applied to the CASCADE that picks which registry answers. The
+exported pair that genuinely does collide is the next test.
 
-`lib/main.maxon` names `Box` too, and means the STRUCT — the only declaration it can see — while
+`lib/main.maxon` names `Box` too, and means the STRUCT — its own directory's declaration — while
 `b.maxon` means its own alias by the same spelling in the same program. That is the whole claim, and it
 is why main constructs one rather than merely calling into `b.maxon`: a case where nobody outside
 `lib/a.maxon` names `Box` would be answered by the compiler without ever deciding which declaration it meant.
 
-⚠ `b.maxon`'s door returns `ExitCode` and its private `Box` is read inside `useIt`: a file-private type
-may not be named in a signature another file calls (E3167). The struct is `module`, so a file that sees
-it never also declares a `Box` of its own, which would make the bare name E3063 there.
+⚠ `b.maxon`'s door returns `ExitCode` and its `Box` is read inside `useIt`, so no signature `lib/` calls
+names the alias.
 ```maxon
 // --- file: lib/a.maxon
-module typealias Small = int(0 to 100)
+typealias Small = int(0 to 100)
 
-module type Box
+type Box
 	export var v as Small
 
-	module static function create(v Small) returns Box
+	static function create(v Small) returns Box
 		return Self{v: v}
 	end 'create'
 end 'Box'
@@ -315,7 +314,7 @@ function useIt() returns Box
 	return 5
 end 'useIt'
 
-module function fromB() returns ExitCode
+function fromB() returns ExitCode
 	return useIt() as ExitCode
 end 'fromB'
 
@@ -503,7 +502,7 @@ error E3006: <fragment>:8:6: duplicate definition of 'Box' — already declared 
 
 
 <!-- test: error.duplicate-type-crossfile -->
-The same duplicate across two files. A `type` has no file-local form to fall back on — the registry
+The same duplicate across two files. A `type` has no directory-local form to fall back on — the registry
 is bare and whole-program — so this is a collision wherever the two declarations sit.
 ```maxon
 // --- file: a.maxon
@@ -569,7 +568,7 @@ Two copies of a `type` that declares a generic-instance alias, in two directorie
 `extension` of an interface both implement that declares the same alias. Each extension publishes `Items` onto both
 directories' `Box`, after the two `type` declarations have already contested it, and the second extension reads
 `Items` while the first extension's declaration is filed. The exported methods the extensions publish name a
-file-private alias, so the program is refused with E3167 for each pair of method and type, and the compiler does not
+unmarked alias, so the program is refused with E3167 for each pair of method and type, and the compiler does not
 abort.
 ```maxon
 // --- file: seq.maxon
@@ -630,14 +629,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: a/<fragment>:35:18: exported function 'a.Box.all' names file-private typealias 'Items' in its return type
-error E3167: a/<fragment>:35:18: exported function 'a.b.Box.all' names file-private typealias 'Items' in its return type
-error E3167: b/<fragment>:46:18: exported function 'b.a.Box.twice' names file-private typealias 'Items' in its return type
-error E3167: b/<fragment>:46:18: exported function 'b.Box.twice' names file-private typealias 'Items' in its return type
+error E3167: a/<fragment>:35:18: exported function 'a.Box.all' names unexported typealias 'Items' in its return type
+error E3167: a/<fragment>:35:18: exported function 'a.b.Box.all' names unexported typealias 'Items' in its return type
+error E3167: b/<fragment>:46:18: exported function 'b.a.Box.twice' names unexported typealias 'Items' in its return type
+error E3167: b/<fragment>:46:18: exported function 'b.Box.twice' names unexported typealias 'Items' in its return type
 ```
 
 <!-- test: two-directories-each-declare-a-private-type-of-one-name -->
-Two FILE-PRIVATE `type Box` declarations in two directories are two types: each file means its own, and the
+Two UNMARKED `type Box` declarations in two directories are two types: each file means its own, and the
 program prints each one's field.
 ```maxon
 // --- file: a/a.maxon
@@ -800,7 +799,7 @@ error E3061: b/<fragment>:11:11: Duplicate typealias 'L'
 
 
 <!-- test: error.duplicate-generic-alias-same-file-while-another-file-declares-it -->
-The same hole for the GENERIC-INSTANCE form. The file-local carve-out must not hand a generic alias
+The same hole for the GENERIC-INSTANCE form. The directory-local carve-out must not hand a generic alias
 a way to stay unchecked for duplication.
 ```maxon
 // --- file: base/base.maxon
@@ -830,7 +829,7 @@ error E3061: b/<fragment>:15:11: Duplicate typealias 'G'
 
 
 <!-- test: crossfile-ranged-and-function-alias-coexist -->
-Two directories, one name, two alias FORMS, each private to its file — legal, and the forms do not decide
+Two directories, one name, two alias FORMS, each unmarked in its directory — legal, and the forms do not decide
 it. Neither file sees the other's declaration, so each declaring file means its own: `alpha/a.maxon`'s
 `pick` returns its `int` alias and `beta/b.maxon`'s `runIt` takes its function alias. A bare, whole-program
 function-alias registry would answer for `alpha/a.maxon` too, rejecting its own `Handler` with
@@ -875,8 +874,8 @@ end 'main'
 
 
 <!-- test: crossfile-generic-alias-same-name-still-legal -->
-The guard against overreach: two files each declaring one FILE-PRIVATE generic-instance alias is the
-file-local case, the same as two ranged aliases, and it is legal.
+The guard against overreach: two files each declaring one UNMARKED generic-instance alias is the
+directory-local case, the same as two ranged aliases, and it is legal.
 ```maxon
 // --- file: base/base.maxon
 
@@ -927,17 +926,17 @@ here and may not become wrong: `take` is resolved by name, its parameter is chec
 it actually has, and 7 comes back.
 ```maxon
 // --- file: a.maxon
-export function makeA() returns ByteArray
+function makeA() returns ByteArray
 	let xs = ByteArray.create(0)
 	xs.push(7)
 	return xs
 end 'makeA'
 
-export function take(t ByteArray) returns ExitCode
+function take(t ByteArray) returns ExitCode
 	return (try t.get(0) otherwise 0) as ExitCode
 end 'take'
 
-// --- file: b.maxon
+// --- file: b/b.maxon
 typealias ByteArray = Array with String
 
 export function fromB() returns ExitCode
@@ -1055,7 +1054,7 @@ error E3062: a/<fragment>:16:11: unused typealias: 'Thing'
 
 <!-- test: error.crossfile-generic-and-ranged-alias-a-third-file-spells-it -->
 In both pairs above the file that spells `Thing` also declares one of the two forms, so the reader's
-own declaration answers. Here `c.maxon` declares neither, and both declarations are file-private, so
+own declaration answers. Here `c.maxon` declares neither, and both declarations are unmarked, so
 no declaration of `Thing` is visible to it. A non-exported alias is unreachable from another file:
 the spelling in `c.maxon` is refused with the hidden-name refusal, it credits neither declaration,
 and both are reported unused.
@@ -1498,27 +1497,27 @@ can see tells it that `Box_String` is taken, and nothing `b.maxon` can see tells
 instantiation wants the name.
 ```maxon
 // --- file: a.maxon
-export typealias Num = int(0 to 100)
+typealias Num = int(0 to 100)
 
-export type Box uses T
-	export var v as T
-	export static function create(v T) returns Self
+type Box uses T
+	var v as T
+	static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
-	export function tag() returns Num
+	function tag() returns Num
 		return 7
 	end 'tag'
 end 'Box'
 
-export typealias SBox = Box with String
+typealias SBox = Box with String
 
 // --- file: b.maxon
-export type Box_String
-	export var a as String
-	export static function make() returns Self
+type Box_String
+	var a as String
+	static function make() returns Self
 		return Self{a: "x"}
 	end 'make'
-	export function tag() returns Num
+	function tag() returns Num
 		return 8
 	end 'tag'
 end 'Box_String'
@@ -2305,17 +2304,17 @@ end 'main'
 <!-- test: crossfile-return-type-is-the-declaring-files-meaning -->
 ⭐⭐ **A CALLEE'S RETURN TYPE IS A SLOT OF THE FILE THAT DECLARED IT, NEVER OF THE FILE CALLING IT** —
 the shape neither of the coexistence cases above reaches, and the one where getting it wrong is SILENT.
-`a.maxon` means a file-private `int(0 to 5)` by `Widget` and `lib/b.maxon` a `module type` of the same name;
-the two coexist because no file sees both. `lib/main.maxon` declares NEITHER, and the
+`a.maxon` means an unmarked root `int(0 to 5)` by `Widget` and `lib/b.maxon` an unmarked `type` of the same name;
+the two coexist because they belong to two directories. `lib/main.maxon` declares NEITHER, and the
 RECORD `fromB` hands it has to be read as `lib/b.maxon`'s `Widget` — a name folded whole-program, or resolved
 in the caller's scope, would give `lib/main.maxon` the integer meaning and dereference a record through it.
 
 Read with the caller's file it would be **a false `E3005` return-type mismatch**, and through the field read below it would dereference the integer as a record — **exit 139,
 clean compile, no diagnostic.**
 
-⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.
+⚠ `a.maxon` reads its own name INSIDE the body and hands the boundary an `ExitCode`, so the root's meaning never crosses a signature. The contested pair is unchanged: one name, two files, two meanings.
 
-⚠ `lib/b.maxon`'s declarations are `module` and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
+⚠ `lib/b.maxon`'s declarations are unmarked and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
 ```maxon
 // --- file: a.maxon
 typealias Widget = int(0 to 5)
@@ -2324,23 +2323,23 @@ function seed() returns ExitCode
 	return 3
 end 'seed'
 
-module function fromA() returns ExitCode
+function fromA() returns ExitCode
 	let w = seed() as Widget
 	return w as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
-module typealias Slot = int(0 to 100)
+typealias Slot = int(0 to 100)
 
-module type Widget
+type Widget
 	export var value as Slot
 
-	module static function create(value Slot) returns Widget
+	static function create(value Slot) returns Widget
 		return Self{value: value}
 	end 'create'
 end 'Widget'
 
-module function fromB() returns Widget
+function fromB() returns Widget
 	return Widget.create(9)
 end 'fromB'
 
@@ -2363,9 +2362,9 @@ against a TUPLE alias in another. It is a different code path (a tuple alias res
 the tuple `fromB` returns would be read as `lib/main.maxon`'s meaning of `Pair`, and a caller that folded the
 name would bind an integer to a two-slot destructuring.
 
-⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.
+⚠ `a.maxon` reads its own name INSIDE the body and hands the boundary an `ExitCode`, so the root's meaning never crosses a signature. The contested pair is unchanged: one name, two files, two meanings.
 
-⚠ `lib/b.maxon`'s declarations are `module` and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
+⚠ `lib/b.maxon`'s declarations are unmarked and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
 ```maxon
 // --- file: a.maxon
 typealias Pair = int(0 to 5)
@@ -2374,15 +2373,15 @@ function seed() returns ExitCode
 	return 4
 end 'seed'
 
-module function fromA() returns ExitCode
+function fromA() returns ExitCode
 	let p = seed() as Pair
 	return p as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
-module typealias Pair = (ExitCode, ExitCode)
+typealias Pair = (ExitCode, ExitCode)
 
-module function fromB() returns Pair
+function fromB() returns Pair
 	return (7, 9)
 end 'fromB'
 
@@ -2405,7 +2404,7 @@ THE RANGE AND THE VALUE CAME FROM DIFFERENT DECLARATIONS.** `a.maxon` means a ra
 resolved to `b.maxon`'s enum and stored **200** into a slot `a.maxon` declares as `int(0 to 5)` — the
 range from one declaration, the value from the other, **compiling clean and exiting 201.**
 
-`a.maxon` means the ALIAS by `Status` — `b.maxon`'s enum is file-private, so it is the only `Status`
+`a.maxon` means the ALIAS by `Status` — `b/`'s enum is unmarked, so it is the only `Status`
 `a.maxon` sees — and a ranged alias declares no members. So the access is refused as a member the alias
 does not have, naming the alias for what it is, instead of silently reaching the other one.
 ```maxon
@@ -2469,9 +2468,8 @@ end 'main'
 
 
 <!-- test: error.crossfile-enum-constant-keeps-its-value-in-an-alias-slot-it-does-not-fit -->
-The other road to a constant of an enum: `b.maxon` EXPORTS a constant of its own `export enum Status` —
-a constant may not be more visible than its type (E3167), so the enum is as visible as the constant — and
-`a.maxon` reads it. The constant is the enum's case — its raw value, 200, decays into an alias slot as any
+The other road to a constant of an enum: `b.maxon` declares a constant of its own `enum Status`, and
+`a.maxon`, in the same directory, reads it. The constant is the enum's case — its raw value, 200, decays into an alias slot as any
 enum's does — and the slot's range is `a.maxon`'s own, so storing it into a `Narrow` is refused at the
 store, with the value that case holds, exactly as `s = Level.big` is when the enum and the alias are
 declared in one file.
@@ -2479,19 +2477,19 @@ declared in one file.
 // --- file: a.maxon
 typealias Narrow = int(0 to 5)
 
-export function pick() returns ExitCode
+function pick() returns ExitCode
 	var s = 1 as Narrow
 	s = BIG
 	return s as ExitCode
 end 'pick'
 
 // --- file: b.maxon
-export enum Status
+enum Status
 	small = 1
 	big = 200
 end 'Status'
 
-export let BIG = Status.big
+let BIG = Status.big
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -2516,7 +2514,7 @@ function seed() returns Narrow
 	return 3
 end 'seed'
 
-export function widened() returns ExitCode
+function widened() returns ExitCode
 	var w = 1 as Wide
 	w = BIG
 
@@ -2524,12 +2522,12 @@ export function widened() returns ExitCode
 end 'widened'
 
 // --- file: b.maxon
-export enum Status
+enum Status
 	small = 1
 	big = 200
 end 'Status'
 
-export let BIG = Status.big
+let BIG = Status.big
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -2548,7 +2546,7 @@ resolution (`resolveNamedStruct` normalizes a struct, `resolveNamedAlias` the fu
 `resolveFloatAliasType` a float alias — none of them touches an enum), so a repair that erases whatever is
 still `named` at the crossing erases them too, **even when the reader and the declaring file agree.**
 
-⚠ `lib/b.maxon`'s declarations are `module` and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
+⚠ `lib/b.maxon`'s declarations are unmarked and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
 ```maxon
 // --- file: a.maxon
 typealias Level = int(0 to 5)
@@ -2557,22 +2555,22 @@ function seed() returns ExitCode
 	return 3
 end 'seed'
 
-module function fromA() returns ExitCode
+function fromA() returns ExitCode
 	let l = seed() as Level
 	return l as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
-module enum Level
+enum Level
 	low = 1
 	high = 9
 end 'Level'
 
-module function fromB() returns Level
+function fromB() returns Level
 	return Level.high
 end 'fromB'
 
-module function rankOf(l Level) returns ExitCode
+function rankOf(l Level) returns ExitCode
 	return l.rawValue
 end 'rankOf'
 
@@ -2592,7 +2590,7 @@ gives the union a heap box, so the caller adopts the result and drops it once. E
 crossing and the box is never enrolled — no diagnostic, no output, **exit 139** — which is why this case
 returns a value that depends on the payload rather than merely compiling.
 
-⚠ `lib/b.maxon`'s declarations are `module` and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
+⚠ `lib/b.maxon`'s declarations are unmarked and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
 ```maxon
 // --- file: a.maxon
 typealias Container = int(0 to 5)
@@ -2601,22 +2599,22 @@ function seed() returns ExitCode
 	return 2
 end 'seed'
 
-module function fromA() returns ExitCode
+function fromA() returns ExitCode
 	let c = seed() as Container
 	return c as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
-module union Container
+union Container
 	empty
 	holds(s String)
 end 'Container'
 
-module function makeB() returns Container
+function makeB() returns Container
 	return Container.holds("xyzz")
 end 'makeB'
 
-module function widthOf(c Container) returns ExitCode
+function widthOf(c Container) returns ExitCode
 	match c 'kind'
 		empty then return 0
 		holds(s) then return s.count() as ExitCode
@@ -2639,28 +2637,28 @@ A FLOAT ranged alias in the contest. `resolveFloatAliasType` reaches the ranged 
 own `returns Level` would be resolved against `a.maxon`'s float alias, and the refusal would land
 **inside `lib/b.maxon`, about a declaration its author never saw.**
 
-⚠ `lib/b.maxon`'s declarations are `module` and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
+⚠ `lib/b.maxon`'s declarations are unmarked and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
 ```maxon
 // --- file: a.maxon
 typealias Level = float(0.0 to 5.0)
 
-module function scaledA() returns ExitCode
+function scaledA() returns ExitCode
 	let v = 2.5 as Level
 
 	return trunc(v * 2.0) as ExitCode
 end 'scaledA'
 
 // --- file: lib/b.maxon
-module enum Level
+enum Level
 	low = 1
 	high = 9
 end 'Level'
 
-module function fromB() returns Level
+function fromB() returns Level
 	return Level.high
 end 'fromB'
 
-module function rankOf(l Level) returns ExitCode
+function rankOf(l Level) returns ExitCode
 	return l.rawValue
 end 'rankOf'
 
@@ -2680,7 +2678,7 @@ is a slot of the file that declared the ALIAS, not of the file making the call �
 declares neither `Token` nor `Cb`, so a call scoped by the caller resolved `Token` to `lib/b.maxon`'s struct
 and handed back the integer 3 wearing a record's type.
 
-⚠ `callIt` is `export` and its parameter's type `Cb` returns `Token`, so `ext/a.maxon`'s `Token` must be `export` too (E3167). `lib/b.maxon` then sees both declarations, and its bare `Token` is its own, the one in its directory. `ext/a.maxon`, outside `lib/`, never sees `lib/b.maxon`'s `module` declarations, so its bare `Token` is its own.
+⚠ `callIt` is `export` and its parameter's type `Cb` returns `Token`, so `ext/a.maxon`'s `Token` must be `export` too (E3167). `lib/b.maxon` then sees both declarations, and its bare `Token` is its own, the one in its directory. `ext/a.maxon`, outside `lib/`, never sees `lib/b.maxon`'s unmarked declarations, so its bare `Token` is its own.
 ```maxon
 // --- file: ext/a.maxon
 export typealias Token = int(0 to 5)
@@ -2696,17 +2694,17 @@ export function goA() returns ExitCode
 end 'goA'
 
 // --- file: lib/b.maxon
-module typealias Slot = int(0 to 100)
+typealias Slot = int(0 to 100)
 
-module type Token
+type Token
 	export var value as Slot
 
-	module static function create(value Slot) returns lib.Token
+	static function create(value Slot) returns lib.Token
 		return Self{value: value}
 	end 'create'
 end 'Token'
 
-module function fromB() returns lib.Token
+function fromB() returns lib.Token
 	return lib.Token.create(9)
 end 'fromB'
 
@@ -2738,17 +2736,17 @@ by the whole-program enum registry, it would find `lib/b.maxon`'s BOXED union, a
 whose own file has no union in it. **Exit 139, clean compile, no output**, against a control that differs
 only in the name.
 
-⚠ `lib/b.maxon`'s declarations are `module` and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
+⚠ `lib/b.maxon`'s declarations are unmarked and the files that read them sit in `lib/`, so `a.maxon`, outside `lib/`, never sees them, and a file that sees both means the one in its own directory.
 ```maxon
 // --- file: a.maxon
 typealias Container = int(0 to 5)
 
-module function fromA() returns ExitCode
+function fromA() returns ExitCode
 	return 2 as Container
 end 'fromA'
 
 // --- file: lib/b.maxon
-module union Container
+union Container
 	empty
 	holds(s String)
 end 'Container'
@@ -2756,12 +2754,12 @@ end 'Container'
 // `main.maxon` DISCARDS this function's result, which is the whole shape this case is about — so the
 // callee must have an effect, or the discard is E3064 (`specs/discarded-results.md`) and the
 // program never reaches the union it exists to exercise.
-module function fromB(fromBCalls mutable Count) returns Container
+function fromB(fromBCalls mutable Count) returns Container
 	fromBCalls = fromBCalls + 1
 	return Container.holds("hi")
 end 'fromB'
 
-module function valueOf(c Container) returns ExitCode
+function valueOf(c Container) returns ExitCode
 	match c 'pick'
 		empty then return 0
 		holds(s) then return 3 if s.equals("hi") else 0
@@ -2830,7 +2828,7 @@ end 'main'
 
 <!-- test: error.crossfile-ranged-alias-beside-a-float-backed-enum-is-not-a-float -->
 ⭐ **A NAME HELD BY A RANGED ALIAS IN ONE FILE AND A FLOAT-BACKED ENUM IN ANOTHER IS AN INTEGER IN THE FIRST.**
-`b.maxon`'s file-private `enum W` is float-backed and `a.maxon`'s `W` is `int(0 to 5)`, so `3 as W` in
+`b.maxon`'s unmarked `enum W` is float-backed and `a.maxon`'s `W` is `int(0 to 5)`, so `3 as W` in
 `a.maxon` is an integer that no `float` parameter accepts. Were the value read as the other file's enum, the
 argument would pass as a double's bit pattern and print `1.5e-323`. The enum's own file still passes it.
 ```maxon
@@ -2872,8 +2870,8 @@ error E3005: a/<fragment>:12:10: argument type mismatch for 'f': expected 'Real'
 
 
 <!-- test: crossfile-a-private-alias-beside-a-visible-export-is-its-own-files-bare-name -->
-⭐ **A FILE'S OWN PRIVATE ALIAS WINS OVER ANOTHER FILE'S VISIBLE EXPORT OF THE SAME NAME.**
-`b.maxon`'s `export union Container` is visible in `a.maxon`, which declares a file-private
+⭐ **A DIRECTORY'S OWN UNMARKED ALIAS WINS OVER ANOTHER DIRECTORY'S VISIBLE EXPORT OF THE SAME NAME.**
+`b.maxon`'s `export union Container` is visible in `a.maxon`, which declares an unmarked
 `typealias Container` of its own. `a.maxon`'s bare `Container` is its own alias, the nearer scope, so `4 as
 Container` is an integer there while `b.maxon` reads its own union bare.
 ```maxon
@@ -2950,7 +2948,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: beta/<fragment>:6:18: exported typealias 'Integer' is never referenced outside its declaring file
+error E3092: beta/<fragment>:6:18: exported typealias 'Integer' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.an-unused-exported-alias-beside-a-nominal-of-its-name-is-reported -->
@@ -2985,7 +2983,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: ranks/<fragment>:3:18: exported typealias 'Score' is never referenced outside its declaring file
+error E3092: ranks/<fragment>:3:18: exported typealias 'Score' is never referenced outside its declaring directory
 ```
 
 <!-- test: a-qualified-ranged-field-beside-a-nominal-of-its-name-is-one-type -->
@@ -3083,7 +3081,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: tags/<fragment>:19:18: exported typealias 'Level' is never referenced outside its declaring file
+error E3092: tags/<fragment>:19:18: exported typealias 'Level' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.an-unused-function-alias-export-beside-another-directorys-is-reported -->
@@ -3114,7 +3112,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: b/<fragment>:14:18: exported typealias 'Handler' is never referenced outside its declaring file
+error E3092: b/<fragment>:14:18: exported typealias 'Handler' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.an-unused-generic-alias-export-beside-another-directorys-is-reported -->
@@ -3141,7 +3139,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: b/<fragment>:14:18: exported typealias 'Rows' is never referenced outside its declaring file
+error E3092: b/<fragment>:14:18: exported typealias 'Rows' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.a-reached-signature-does-not-credit-the-other-directorys-same-named-alias -->
@@ -3165,7 +3163,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: beta/<fragment>:10:18: exported typealias 'Integer' is never referenced outside its declaring file
+error E3092: beta/<fragment>:10:18: exported typealias 'Integer' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.an-instance-argument-reached-through-an-alias-credits-its-own-files-declaration -->
@@ -3192,7 +3190,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: c/<fragment>:3:18: exported typealias 'Byte' is never referenced outside its declaring file
+error E3092: c/<fragment>:3:18: exported typealias 'Byte' is never referenced outside its declaring directory
 ```
 
 <!-- test: error.an-inner-alias-use-does-not-credit-a-file-scope-alias-of-its-name -->
@@ -3226,14 +3224,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: x/<fragment>:3:18: exported typealias 'Idx' is never referenced outside its declaring file
+error E3092: x/<fragment>:3:18: exported typealias 'Idx' is never referenced outside its declaring directory
 ```
 
-<!-- test: error.a-module-type-beside-a-function-alias-reached-through-a-field-is-reported -->
-The same audit when one claimant is a NOMINAL type and the use is a call through a struct FIELD. `a/` exports
-the function alias `Handler` and a `Box` whose field holds one; `k/` declares a `module type Handler` that no
-other file names. `main.maxon` calls through `Box`'s field, which reaches `a`'s alias and nothing of `k`'s,
-so `k`'s module type earns E3094.
+<!-- test: error.an-unused-type-beside-a-function-alias-reached-through-a-field-is-reported -->
+The unused-declaration audit answers the same way when one claimant is a NOMINAL type and the use is a call
+through a struct FIELD. `a/` exports
+the function alias `Handler` and a `Box` whose field holds one; `k/` declares an unmarked `type Handler` that
+nothing in `k/` names. `main.maxon` calls through `Box`'s field, which reaches `a`'s alias and nothing of
+`k`'s, so `k`'s type earns E3219.
 ```maxon
 // --- file: num/num.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -3254,7 +3253,7 @@ export type Box
 end 'Box'
 
 // --- file: k/handler.maxon
-module type Handler
+type Handler
 	let n as ExitCode
 end 'Handler'
 
@@ -3265,7 +3264,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3094: k/<fragment>:21:13: module type 'Handler' is never referenced outside its declaring file
+error E3219: k/<fragment>:21:6: unused type: 'Handler' is not exported and nothing live in its directory names it; delete it
 ```
 
 
@@ -3276,11 +3275,11 @@ and `b.maxon` writes all three over declarations of its own that no other file c
 four diagnostics, in signature order: the two parameters, the return type, then the throws clause.
 
 ⛔ **E3167 STANDS IN FRONT OF E3113 HERE, AND THE E3113 ROAD IS NOT REACHABLE FROM A LEGAL PROGRAM.**
-`b.maxon`'s ranged `Fault` names no enum or union, while `a.maxon`'s file-private `enum Fault` is a
+`b.maxon`'s ranged `Fault` names no enum or union, while `a.maxon`'s unmarked `enum Fault` is a
 declaration `b.maxon` cannot name, so E3113 would refuse the clause even though an `enum Fault` exists in
 the program. That shape cannot be rebuilt around E3167 in one directory: an EXPORTED `typealias Fault`
 beside an `enum Fault` there is a duplicate definition (E3006), so the throws clause cannot name a visible
-ranged `Fault` while the enum exists. The enum is file-private so `b.maxon` cannot see it at all: the ranged `Fault` is the only one
+ranged `Fault` while the enum exists. The enum is unmarked so `b.maxon` cannot see it at all: the ranged `Fault` is the only one
 `b.maxon` can name.
 `ServiceCompanions.serviceReplyErrorLayout` resolves the clause's `Fault` in any file rather than through
 the message's reader, and is harmless only while a refusal holds here; the refusal is E3167's.
@@ -3316,10 +3315,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names file-private typealias 'Integer' in the type of parameter 'n'
-error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names file-private typealias 'Integer' in the type of parameter 'by'
-error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names file-private typealias 'Integer' in its return type
-error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names file-private typealias 'Fault' in its throws clause
+error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names unexported typealias 'Integer' in the type of parameter 'n'
+error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names unexported typealias 'Integer' in the type of parameter 'by'
+error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names unexported typealias 'Integer' in its return type
+error E3167: b/<fragment>:19:18: exported function 'b.Calc.divide' names unexported typealias 'Fault' in its throws clause
 ```
 
 <!-- test: a-service-throws-an-enum-qualified-past-another-directorys-alias -->
@@ -3588,9 +3587,10 @@ end 'main'
 error E3063: app/<fragment>:22:12: Ambiguous type name 'Box': more than one visible declaration matches it. Qualify it as one of: a.Box, b.Box
 ```
 
-<!-- test: a-root-private-type-and-a-subdirectorys-of-one-name-coexist -->
-`main.maxon` at the root and `sub/box.maxon` each declare a file-private `type Box`. Neither file can see the
-other's, so each file's bare `Box` is its own, and both run.
+<!-- test: a-root-unmarked-type-and-a-subdirectorys-of-one-name-coexist -->
+`main.maxon` at the root and `sub/box.maxon` each declare an unmarked `type Box`. `sub/` sees the root's too, but a
+bare name means the reading file's own directory's declaration first, so each file's bare `Box` is its own, and
+both run.
 ```maxon
 // --- file: main.maxon
 type Box
@@ -3622,15 +3622,15 @@ end 'runSub'
 42
 ```
 
-<!-- test: a-root-module-type-and-a-subdirectorys-export-of-one-name-are-both-qualified -->
-The root declares a `module type Box` and `sub/` exports another. `other/o.maxon` sees both, so it qualifies:
+<!-- test: a-root-unmarked-type-and-a-subdirectorys-export-of-one-name-are-both-qualified -->
+The root declares an unmarked `type Box` and `sub/` exports another. `other/o.maxon` sees both, so it qualifies:
 the root's is `export.Box` and the subdirectory's `sub.Box`.
 ```maxon
 // --- file: main.maxon
-module type Box
+type Box
 	export var v as ExitCode
 
-	module static function create() returns Self
+	static function create() returns Self
 		return Self{v: 40}
 	end 'create'
 end 'Box'
@@ -4290,11 +4290,11 @@ end 'main'
 error E3008: <fragment>:7:21: type 'OverlayPrivateProtocol' is not exported
 ```
 
-<!-- test: error.a-module-scoped-library-interface-cannot-constrain-an-author-function -->
-A `module` library interface is visible inside its own directory of the library and nowhere else.
+<!-- test: error.an-unmarked-library-interface-cannot-constrain-an-author-function -->
+An unmarked library interface is visible inside its own directory of the library and nowhere else.
 ```maxon
 // --- stdlib-overlay: helpers/string/hash.maxon
-module interface OverlayModuleProtocol
+interface OverlayModuleProtocol
 	function poke() returns bool
 end 'OverlayModuleProtocol'
 // --- file: main.maxon
@@ -4307,11 +4307,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:7:52: type 'OverlayModuleProtocol' is module-scoped and not visible from this directory
+error E3008: <fragment>:7:52: type 'OverlayModuleProtocol' is not exported
 ```
 
 <!-- test: error.a-hidden-qualified-construction-head-is-refused-at-top-level -->
-A file-private typealias named through its directory as the head of a top-level `from` construction: the qualified spelling reaches the declaration without making it visible.
+An unmarked typealias named through its directory as the head of a top-level `from` construction: the qualified spelling reaches the declaration without making it visible.
 ```maxon
 // --- file: lib/codes.maxon
 typealias Codes = Array with Byte
@@ -4621,15 +4621,15 @@ end 'main'
 error E3008: <fragment>:11:9: type 'OverlayPrivateThing' is not exported
 ```
 
-<!-- test: error.a-module-type-named-through-its-directory-in-a-signature-is-refused -->
-A `module` type written through its directory in a parameter and a return type, from outside that directory: the
+<!-- test: error.an-unmarked-type-named-through-its-directory-in-a-signature-is-refused -->
+An unmarked type written through its directory in a parameter and a return type, from outside that directory: the
 qualified spelling reaches the declaration without making it visible.
 ```maxon
 // --- file: b/thing.maxon
-module type Thing
+type Thing
 	export let size as ExitCode
 
-	module static function create() returns Thing
+	static function create() returns Thing
 		return Self{size: 1}
 	end 'create'
 end 'Thing'
@@ -4644,12 +4644,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: a/<fragment>:12:17: type 'b.Thing' is module-scoped and not visible from this directory
-error E3088: a/<fragment>:12:34: type 'b.Thing' is module-scoped and not visible from this directory
+error E3008: a/<fragment>:12:17: type 'b.Thing' is not exported
+error E3008: a/<fragment>:12:34: type 'b.Thing' is not exported
 ```
 
-<!-- test: error.a-file-private-type-named-through-its-directory-as-a-call-base-is-refused -->
-A file-private type written through its directory as the base of a static call, from another directory.
+<!-- test: error.an-unmarked-type-named-through-its-directory-as-a-call-base-is-refused -->
+An unmarked type written through its directory as the base of a static call, from another directory.
 ```maxon
 // --- file: b/thing.maxon
 type Thing
@@ -4667,14 +4667,14 @@ end 'main'
 error E3008: a/<fragment>:11:9: type 'b.Thing' is not exported
 ```
 
-<!-- test: error.a-module-type-named-through-its-directory-is-refused-at-top-level -->
-A `module` type written through its directory as a top-level factory head, from outside that directory.
+<!-- test: error.an-unmarked-type-named-through-its-directory-is-refused-at-top-level -->
+An unmarked type written through its directory as a top-level factory head, from outside that directory.
 ```maxon
 // --- file: b/thing.maxon
-module type Thing
+type Thing
 	export let size as ExitCode
 
-	module static function create() returns Thing
+	static function create() returns Thing
 		return Self{size: 1}
 	end 'create'
 end 'Thing'
@@ -4687,17 +4687,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: a/<fragment>:12:9: type 'b.Thing' is module-scoped and not visible from this directory
+error E3008: a/<fragment>:12:9: type 'b.Thing' is not exported
 ```
 
-<!-- test: error.a-module-type-named-bare-outside-its-subtree-is-refused -->
+<!-- test: error.an-unmarked-type-named-bare-outside-its-subtree-is-refused -->
 The bare name is held to the same tier as the qualified one.
 ```maxon
 // --- file: b/thing.maxon
-module type Thing
+type Thing
 	export let size as ExitCode
 
-	module static function create() returns Thing
+	static function create() returns Thing
 		return Self{size: 1}
 	end 'create'
 end 'Thing'
@@ -4712,18 +4712,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: a/<fragment>:12:17: type 'Thing' is module-scoped and not visible from this directory
-error E3088: a/<fragment>:12:32: type 'Thing' is module-scoped and not visible from this directory
+error E3008: a/<fragment>:12:17: type 'Thing' is not exported
+error E3008: a/<fragment>:12:32: type 'Thing' is not exported
 ```
 
-<!-- test: a-module-type-named-through-its-directory-is-reachable-from-a-subdirectory -->
-Inside the declaring directory's subtree the qualified spelling of a `module` type reaches it.
+<!-- test: an-unmarked-type-named-through-its-directory-is-reachable-from-a-subdirectory -->
+Inside the declaring directory's subtree the qualified spelling of an unmarked type reaches it.
 ```maxon
 // --- file: b/thing.maxon
-module type Thing
+type Thing
 	export let size as ExitCode
 
-	module static function create() returns Thing
+	static function create() returns Thing
 		return Self{size: 1}
 	end 'create'
 end 'Thing'
@@ -4785,7 +4785,7 @@ error E3005: app/<fragment>:10:12: Value 70 is outside the range of 'legacy.Scor
 ```
 
 <!-- test: error.a-hidden-directory-qualified-alias-is-refused-as-a-top-level-cast-target -->
-A file-private typealias named through its directory as a top-level cast target, from another directory.
+An unmarked typealias named through its directory as a top-level cast target, from another directory.
 ```maxon
 // --- file: lib/score.maxon
 typealias Score = int(0 to 100)

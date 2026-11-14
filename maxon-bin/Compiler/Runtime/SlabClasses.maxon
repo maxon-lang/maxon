@@ -26,31 +26,31 @@
 
 // A class's slot size in bytes. Class 0 is Go's sentinel (size 0) and serves no allocation; it is kept
 // so a class id indexes its own slot with no off-by-one on any path.
-export typealias SlabClassSize = int(0 to 32768)
+typealias SlabClassSize = int(0 to 32768)
 
 // A class id. The range is the table's own bound, so a value that escaped the ladder cannot be stored.
-export typealias SlabClassIndex = int(0 to 67) implements ElementIndex
+typealias SlabClassIndex = int(0 to 67) implements ElementIndex
 
 // Pages in one span of a class. Go's table spans 1..10; 0 belongs to the sentinel class alone.
-export typealias SlabSpanPages = int(0 to 10)
-export typealias SlabClassSizeArray = Array with SlabClassSize
-export typealias SlabSpanPagesArray = Array with SlabSpanPages
+typealias SlabSpanPages = int(0 to 10)
+typealias SlabClassSizeArray = Array with SlabClassSize
+typealias SlabSpanPagesArray = Array with SlabSpanPages
 
 // Requests above this go OS-direct: one mapping each, released whole.
-export let SlabMaxSmallSize = 32768
+let SlabMaxSmallSize = 32768
 
 // The boundary between the two reverse-lookup tables, and their strides.
-export let SlabSmallSizeMax = 1024
-export let SlabSmallSizeDiv = 8
-export let SlabLargeSizeDiv = 128
+let SlabSmallSizeMax = 1024
+let SlabSmallSizeDiv = 8
+let SlabLargeSizeDiv = 128
 
 // One page. `SlabPageShift` and `SlabChunkBytes` are ONE fact written twice by necessity (a shift and
 // its value); `checkSlabClassTable` asserts they agree rather than trusting the pair.
-export let SlabPageShift = 13
-export let SlabChunkBytes = 8192
+let SlabPageShift = 13
+let SlabChunkBytes = 8192
 
 // Slot size per class. Go's `SizeClassToSize`, verbatim.
-export function slabClassSizes() returns SlabClassSizeArray
+function slabClassSizes() returns SlabClassSizeArray
 	let out = SlabClassSizeArray.create(68, zeroed: false)
 	out.push(0)
 	out.push(8)
@@ -125,7 +125,7 @@ end 'slabClassSizes'
 
 // Pages per span per class. Go's `SizeClassToNPages`, verbatim. It is NOT constant, and that
 // variation IS the tail-waste term the header above says a waste bound alone cannot see.
-export function slabClassPages() returns SlabSpanPagesArray
+function slabClassPages() returns SlabSpanPagesArray
 	let out = SlabSpanPagesArray.create(68, zeroed: false)
 	out.push(0)
 	out.push(1)

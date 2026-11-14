@@ -13,8 +13,8 @@ category: crypto
 the ClientHello selects TLS 1.2: it hands the rest of the handshake to `Tls12ServerFlow`, which shares the machine's
 `TlsSession`. A ClientHello selects TLS 1.2 when its supported_versions lists 0x0303 and TLS 1.3 is not selected, or
 when it has no supported_versions and a legacy_version of 0x0303 or more, and the configuration enables TLS 1.2; TLS 1.3
-is preferred when both sides allow it. It is `module` code in `stdlib/`, so a program outside `stdlib/` cannot name it
-(E3088); the cases here are library-tier (`<!-- tier: stdlib/helpers/tls -->`) and reach it, and the test seams, as a stdlib source
+is preferred when both sides allow it. It is unexported code in `stdlib/`, so a program outside `stdlib/` cannot name it
+(E3008); the cases here are library-tier (`<!-- tier: stdlib/helpers/tls -->`) and reach it, and the test seams, as a stdlib source
 file does.
 
 It follows the canra `tls12-handshake` contract. It negotiates in the contract's order and the server's own order of

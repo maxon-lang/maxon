@@ -44,7 +44,8 @@ child the program starts begins with the default `SIGPIPE` action.
 - A file contains top-level declarations: functions, types, enums, unions, interfaces, extensions,
   typealiases, variables and — in `*.maxtest` files — tests. There are no top-level statements.
 - A file's namespace comes from its directory (see [Namespaces](/docs/language/namespaces/)).
-- Declarations are private to their file unless marked `export`, `public` or `module`.
+- An unmarked declaration is visible to its directory and that directory's subdirectories; `export` and
+  `public` make it visible to every file (see [Visibility](/docs/language/namespaces/#visibility)).
 - Declaration order does not matter: a function may call one declared later or in another file.
 - The standard library is available to every file. A program that is one file also compiles your
   scriptlib packages ([The scriptlib directory](/docs/cli/#the-scriptlib-directory)).
@@ -215,7 +216,6 @@ else:
 
 | Word | Special when |
 |------|--------------|
-| `module` | directly before a declaration, as a visibility modifier |
 | `test` | at the top level, followed by a quoted name (see [Testing](/docs/language/testing/)) |
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](/docs/language/async/#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |

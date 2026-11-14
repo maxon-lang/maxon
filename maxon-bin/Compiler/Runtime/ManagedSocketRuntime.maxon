@@ -54,7 +54,7 @@ export let ManagedSocketBoxBytes = 8 as FullRangeInt
 // (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`) is shared with two families where a descriptor of 0 is
 // ordinary, so the ENCODING has to be one encoding. A POSIX `socket(2)` answers the lowest free descriptor
 // exactly as `open(2)` does, so this is also the same latent defect one library over.
-export let ManagedSocketClosedHandle = 0 as FullRangeInt
+let ManagedSocketClosedHandle = 0 as FullRangeInt
 
 // A POSIX lane answers `-errno` where Winsock answers -1, so `< 0` is the one failure test right on
 // both routes. Winsock's -1 is negative only because `PeWriter.importAnswerOf` sign-extends an
@@ -66,7 +66,7 @@ export let ManagedSocketClosedHandle = 0 as FullRangeInt
 // (`X64LinuxRuntime.x64LinuxEmitErrnoToWin32`, `Arm64PosixRuntime.arm64EmitErrnoToWin32`) that maps
 // five file-shaped errnos and answers `ERROR_GENERIC_FAILURE` for the rest, so "not yet" and
 // "never" would arrive as one code.
-export function emitSocketCallFailed(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
+function emitSocketCallFailed(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
 	return emitCompareWithConstant(module, block: block, value: answer, pred: StdCmpPred.lt, against: 0, ids: ids)
 end 'emitSocketCallFailed'
 
@@ -88,7 +88,7 @@ let SockaddrInBytes = 16
 
 // `sizeof(struct sockaddr_in6)`, the length given for an IPv6 address and the size of the block
 // `emitSockaddrFor` allocates for either family, so the IPv4 path never reads past it.
-export let SockaddrIn6Bytes = 28
+let SockaddrIn6Bytes = 28
 
 // `struct sockaddr_in6`: the first word packs the family, the port and a zero `sin6_flowinfo` as
 // `emitSockaddrInWord` packs a `sockaddr_in`'s first three fields, the 16 address bytes follow as two
@@ -111,7 +111,7 @@ export let SendRecvNoFlags = 0
 // ⭐⭐⭐ **HOW A SOCKET CALL THAT CANNOT FINISH AT ONCE WAITS — the second fact this family forks its Std graph
 // on, and `SocketResolveShape`'s exact arrangement.** Each answer builds a COMPLETE graph, so nothing below
 // the fork asks which target it is compiling for.
-export enum SocketWaitShape
+enum SocketWaitShape
 	// Every POSIX lane: the descriptor is non-blocking from birth and registered with the scheduler's poller, so
 	// a call that answers `EAGAIN`/`EINPROGRESS` PARKS the green thread on that descriptor's record and retries
 	// when the poller says it is ready. The green thread holds no machine while it waits.
@@ -132,7 +132,7 @@ end 'SocketWaitShape'
 // ⚠ **IT IS THE POLLER'S SHAPE ASKED ONCE**, rather than a second list of targets: a lane whose poller is a
 // completion port reports an OPERATION where the other two report a READINESS, and `NetpollRuntime` answers
 // that question for the registration verb as well.
-export function socketWaitShape(target Target) returns SocketWaitShape
+function socketWaitShape(target Target) returns SocketWaitShape
 	return match netpollShape(target) 'poller'
 		completionPort gives SocketWaitShape.overlapped
 
@@ -150,15 +150,15 @@ end 'emitSocketWouldBlock'
 
 // Winsock's twin of `emitSocketWouldBlock`: `WSAEINTR` joins `WSAEWOULDBLOCK` for the reason
 // `EINTR` joins there.
-module function emitWinsockNotFinished(module StdModule, block IrBlock, reason ValueId, ids ValueMinter) returns ValueId
+function emitWinsockNotFinished(module StdModule, block IrBlock, reason ValueId, ids ValueMinter) returns ValueId
 	return emitCodeIsOneOf(module, block: block, code: reason, codes: [WinsockError.wouldBlock.rawValue, WinsockError.interrupted.rawValue], ids: ids)
 end 'emitWinsockNotFinished'
 
-module function emitErrnoOfAnswer(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
+function emitErrnoOfAnswer(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
 	return emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: answer, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitErrnoOfAnswer'
 
-module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, codes FullRangeIntArray, ids ValueMinter) returns ValueId
+function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, codes FullRangeIntArray, ids ValueMinter) returns ValueId
 	let matches = ValueIdArray.create(codes.count(), zeroed: false)
 
 	for candidate in codes 'eachCode'
@@ -255,7 +255,7 @@ let WsaDataBytes = 408
 // ⛔ **IT IS NOT A PARK SITE.** It calls `WSAStartup` only until one succeeds and never touches the network, so
 // a park here would report a blocking operation that does not block — see `emitIoPark` for why the unit is the
 // blocking operation and not the function.
-export function emitWinsockStartup(module StdModule, func IrFunction, block IrBlock, ready IrBlock, notReady IrBlock, ids ValueMinter)
+function emitWinsockStartup(module StdModule, func IrFunction, block IrBlock, ready IrBlock, notReady IrBlock, ids ValueMinter)
 	let startup = module.addBlock(func, label: b"mswsa", heat: BlockHeat.normal)
 	let markStarted = module.addBlock(func, label: b"mswsaok", heat: BlockHeat.normal)
 
@@ -335,7 +335,7 @@ let TestNet1NetOrder = 0x010200C0
 
 // The three "the call succeeded" readings. `WSAStartup` and `getaddrinfo` answer a plain int where 0 is
 // success (`getaddrinfo` returns an EAI_* code otherwise), and `connect` answers 0 or `SOCKET_ERROR`.
-export let WinsockCallOk = 0 as FullRangeInt
+let WinsockCallOk = 0 as FullRangeInt
 
 // ⭐ **THE `__ManagedSocketError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime`/`ManagedDirectoryRuntime` discipline, and the ordinals are positional facts about the
@@ -395,7 +395,7 @@ export let ManagedSocketDestructName = b"__ms_destruct"
 // Which `__ManagedSocket` callees throw — the composer behind `GtRuntime.isThrowingRuntimeCallee`.
 // Held to the builders by the bidirectional drift guard in `installManagedSocketRuntime`, because a
 // predicate and a `throws` stamp are one fact in two places.
-export function isThrowingManagedSocketRuntimeCallee(callee ByteArray) returns bool
+function isThrowingManagedSocketRuntimeCallee(callee ByteArray) returns bool
 	// Two entry points are absent on purpose:
 	// - `__ms_close`: `specs/managed-socket.md` documents `close()` as "Idempotent. Also called
 	//   automatically via destructor. Does not throw.", so naming it would make a `try` required on
@@ -411,7 +411,7 @@ end 'isThrowingManagedSocketRuntimeCallee'
 // `isThrowingManagedSocketRuntimeCallee`, and `installManagedSocketRuntime`'s drift guard asks it
 // for every throwing `__ms_` builder it installs, so a missing arm fails at install and never in
 // front of a user's missing `try`.
-export function managedSocketSourceMethodName(callee ByteArray) returns immutable ByteArray
+function managedSocketSourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedSocketTcpConnectName) 'tcpConnect'
 		return ManagedSocketTcpConnectMethod
 	end 'tcpConnect'
@@ -443,7 +443,7 @@ end 'managedSocketSourceMethodName'
 // `managedFileThrows`/`managedDirectoryThrows`. `ProgramSignatures.throwsOf` answers with it for a callee no
 // file declares, which is what types an `otherwise (e)` binding and therefore what makes `match e` see an
 // enum instead of a scalar; the throwing builders stamp it as their `throws` clause.
-export function managedSocketThrows() returns ThrowsClause
+function managedSocketThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedSocketErrorTypeName))
 end 'managedSocketThrows'
 
@@ -462,7 +462,7 @@ end 'emitLiveSocketOrThrow'
 //
 // ⚠ Both values are COMPILE-TIME here, so the packing is folded into a single `emitConst` rather than emitted
 // as a shift and an or.
-export function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low FullRangeInt, high FullRangeInt, ids ValueMinter)
+function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low FullRangeInt, high FullRangeInt, ids ValueMinter)
 	let packed = emitConst(module, block: block, value: low + (high * ByteFourScale), ids: ids)
 	emitStoreField(module, block: block, record: record, offset: offset, value: packed)
 end 'emitStoreDwordPair'
@@ -499,7 +499,7 @@ function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip Va
 	return emitBin(module, block: block, a: familyAndPort, b: addrPlaced, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSockaddrInWord'
 
-export type BuiltSockaddr
+type BuiltSockaddr
 	export let addr as ValueId
 	export let length as ValueId
 
@@ -508,7 +508,7 @@ export type BuiltSockaddr
 	end 'create'
 end 'BuiltSockaddr'
 
-export function emitSockaddrFor(module StdModule, func IrFunction, entry IrBlock, joined IrBlock, address ResolvedAddress, port ValueId, target Target, ids ValueMinter) returns BuiltSockaddr
+function emitSockaddrFor(module StdModule, func IrFunction, entry IrBlock, joined IrBlock, address ResolvedAddress, port ValueId, target Target, ids ValueMinter) returns BuiltSockaddr
 	let build4 = module.addBlock(func, label: b"msaddr4", heat: BlockHeat.normal)
 	let build6 = module.addBlock(func, label: b"msaddr6", heat: BlockHeat.normal)
 
@@ -550,7 +550,7 @@ end 'emitSockaddrFor'
 // of the ring: everything a re-issue reads (the descriptor, the buffer, the length) is computed in
 // a block that dominates it, so the trace reports one yield/resume pair per blocking operation
 // however many times the call is re-issued.
-export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, gen ValueId, mode FullRangeInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
+function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, gen ValueId, mode FullRangeInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
 	let failedCall = emitSocketCallFailed(module, block: attempt, answer: answer, ids: ids)
 
 	// The retry is unconditional because the OVERLAPPED lane has no call that can reach here — its transfers go
@@ -604,7 +604,7 @@ end 'emitSocketWaitReady'
 // The mark is stored only into the life of the record the operation began in (`gen`): this block
 // runs after a park of the thread's own, and by then the descriptor may name another socket's life
 // of the same record (`NetpollRuntime.PdOffTimedOut`).
-module function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, gen ValueId, failureFlag FullRangeInt, ids ValueMinter) returns IrBlock
+function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, gen ValueId, failureFlag FullRangeInt, ids ValueMinter) returns IrBlock
 	let late = module.addBlock(func, label: b"mslate", heat: BlockHeat.normal)
 	emitNetpollPdMarkTimedOut(module, block: late, source: pollKey, gen: gen, ids: ids)
 	emitErrorReturn(module, block: late, flag: failureFlag, ids: ids)
@@ -620,7 +620,7 @@ end 'emitSocketLateExit'
 //
 // ⚠ **THE RECORD INDEX AND THE DESCRIPTOR ARE TWO ARGUMENTS BECAUSE THEY ARE NOT ALWAYS ONE NUMBER** — see
 // `NetpollRuntime.emitNetpollDescriptorIndex`, which carries why.
-export function emitSocketPollerOpen(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, ids ValueMinter)
+function emitSocketPollerOpen(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdOpenName, args: twoArgs(pollKey, second: socket)))
 end 'emitSocketPollerOpen'
 
@@ -647,7 +647,7 @@ end 'emitSocketPollerRelease'
 // be that written TWICE, once per Linux arch, with two chances to get a label-length check wrong. Written
 // here it is one body compiled by the isel that already lowers every op it uses, which is the same
 // arrangement that lets `mrt_host_proc_reap` serve both POSIX lanes from one place.
-export enum SocketResolveShape
+enum SocketResolveShape
 	// Windows and macOS: `GetAddrInfoW` / `getaddrinfo` fills a linked list of `addrinfo` and the graph
 	// reads the first entry's `ai_addr`. ⚠ **THE `ai_addr` OFFSET IS THE SAME 32 ON BOTH, AND THAT IS MEASURED RATHER
 	// THAN ASSUMED** — Darwin orders `ai_canonname` before `ai_addr` exactly as Win64 does (`offsetof` on
@@ -663,7 +663,7 @@ end 'SocketResolveShape'
 // Wasi answers `addrInfoList` as a shape, not a capability claim: `wasi:sockets`'s `ip-name-lookup`
 // answers a list of addresses. What that lane lacks is any lowering for the band, and
 // `targetProvidesFacility` is where that refusal lives.
-export function socketResolveShape(target Target) returns SocketResolveShape
+function socketResolveShape(target Target) returns SocketResolveShape
 	return match target.os 'os'
 		windows or
 		macos or
@@ -675,7 +675,7 @@ end 'socketResolveShape'
 // The block arguments of `resolved`. `family` selects which of the others is meaningful: `ip` is an
 // IPv4 `sin_addr` in network order, and `low` and `high` are the 16 bytes of an IPv6 literal as two
 // words in memory order. The unused ones are zero.
-export type ResolvedAddress
+type ResolvedAddress
 	export let ip as ValueId
 	export let family as ValueId
 	export let low as ValueId
@@ -704,7 +704,7 @@ end 'ResolvedAddress'
 //
 // A host holding a colon is only ever an IPv6 literal, so one that fails to parse is `resolveFailed`
 // and is never handed to a resolver. Names resolve to IPv4 addresses alone.
-export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, renounced IrBlock, host ValueId, shape SocketResolveShape, park GtIoOperation, target Target, ids ValueMinter) returns ResolvedAddress
+function emitResolveHostIp(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, renounced IrBlock, host ValueId, shape SocketResolveShape, park GtIoOperation, target Target, ids ValueMinter) returns ResolvedAddress
 	let unnamed = module.addBlock(func, label: b"msnoname", heat: BlockHeat.normal)
 	let named = module.addBlock(func, label: b"mshasname", heat: BlockHeat.normal)
 	let literal = module.addBlock(func, label: b"msiplit", heat: BlockHeat.normal)
@@ -1057,17 +1057,17 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	module.setTerminator(dropEventLate, op: StdOp.branch(late.id))
 end 'emitSocketWatchedDial'
 
-export function emitSocketWatchGiveBack(module StdModule, block IrBlock, socket ValueId, event ValueId, ids ValueMinter)
+function emitSocketWatchGiveBack(module StdModule, block IrBlock, socket ValueId, event ValueId, ids ValueMinter)
 	emitSocketOverlappedOnly(module, block: block, verb: SocketOverlappedVerb.stopWatching, socket: socket, ids: ids)
 	module.appendOp(block, op: StdOp.osCloseHandle(event))
 end 'emitSocketWatchGiveBack'
 
-export function emitSocketOverlappedOnly(module StdModule, block IrBlock, verb SocketOverlappedVerb, socket ValueId, ids ValueMinter)
+function emitSocketOverlappedOnly(module StdModule, block IrBlock, verb SocketOverlappedVerb, socket ValueId, ids ValueMinter)
 	let unused = emitConst(module, block: block, value: 0, ids: ids)
 	module.appendOp(block, op: StdOp.osSocketOverlapped(ids.mint(), verb: verb, a0Id: socket, a1Id: unused, a2Id: unused, a3Id: unused))
 end 'emitSocketOverlappedOnly'
 
-module enum WinsockError
+enum WinsockError
 	// Winsock's answer for a non-blocking `connect` that is running — `WSAEWOULDBLOCK`, where a POSIX lane says
 	// `EINPROGRESS`.
 	wouldBlock = 10035
@@ -1931,7 +1931,7 @@ function emitStoreConstByte(module StdModule, block IrBlock, base ValueId, offse
 end 'emitStoreConstByte'
 
 // Its dual — one byte at a CONSTANT offset, zero-extended.
-export function emitLoadConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+function emitLoadConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let loaded = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: base, offset: offset, valueType: StdType.u8))
 	return loaded

@@ -115,7 +115,7 @@ let ZeroFloatHash = 0
 // djb2 over `String`'s bytes: `h = Djb2Seed`, then `h = h * Djb2Multiplier + b` per byte. The two magic
 // numbers of the algorithm, named rather than bare so the loop reads as djb2. `""` -> `5381`, `"abc"` ->
 // `193485963`, `"hi"` -> `5863446`.
-export let Djb2Seed = 5381
+let Djb2Seed = 5381
 let Djb2Multiplier = 33
 
 // Install the synthesized builtin-type conformance impls when — and only when — a witness table references
@@ -520,7 +520,7 @@ end 'emitHighHalf'
 // `stdlib/PrimitiveExtensions.maxon`'s `int.hash` before its mask, op for op. The native array hash
 // folds this term where the stdlib `Array.hash` folds `item.hash()`, so a change to either spelling
 // alone gives equal arrays different hashes on the two paths.
-export function emitIntHashTerm(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
+function emitIntHashTerm(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let highHalf = emitHighHalf(module, block: block, value: value, opcode: StdBinOpcode.shr, ids: ids)
 	let signShift = emitConst(module, block: block, value: IntHashSignShift, ids: ids)
 	let sign = emitBin(module, block: block, a: value, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
@@ -580,7 +580,7 @@ function buildFloatHash(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildFloatHash'
 
-export function emitFloatHashInto(module StdModule, func IrFunction, entry IrBlock, bits ValueId, join IrBlock, ids ValueMinter) returns ValueId
+function emitFloatHashInto(module StdModule, func IrFunction, entry IrBlock, bits ValueId, join IrBlock, ids ValueMinter) returns ValueId
 	let negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
 	let folded = module.addBlock(func, label: b"floatfold", heat: BlockHeat.normal)
 
@@ -602,7 +602,7 @@ end 'emitFloatHashInto'
 // `block` is the block the value is live in and becomes the returning block, which is why the
 // caller passes it rather than this minting one: `int.hash` ends in its entry, `String.hash` and
 // the array hashes in their loop exit.
-export function returnLow32Masked(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
+function returnLow32Masked(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
 	module.setTerminator(block, op: StdOp.ret(emitLow32Masked(module, block: block, value: value, ids: ids)))
 end 'returnLow32Masked'
 
@@ -858,7 +858,7 @@ end 'buildFloatCompare'
 // bound carried instead of an accumulator, because the bound is chosen by a BRANCH (the shorter of the two
 // lengths) rather than computed. Both `argType`s are set explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
-export function buildByteRecordCompare(module StdModule, name ByteArray, ordering EnumLayout)
+function buildByteRecordCompare(module StdModule, name ByteArray, ordering EnumLayout)
 	let func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
 	let ids = ValueMinter.create(2)
 
@@ -984,7 +984,7 @@ end 'emitDjb2Step'
 //
 // ⚠ The three block LABELS are emitted into every `jmp` the rendered Target IR shows, so renaming
 // them rewrites that IR while the code stays the same.
-export function emitArrayHashStepTail(module StdModule, block IrBlock, header IrBlock, i ValueId, h ValueId, term ValueId, ids ValueMinter)
+function emitArrayHashStepTail(module StdModule, block IrBlock, header IrBlock, i ValueId, h ValueId, term ValueId, ids ValueMinter)
 	let hNext = emitDjb2Step(module, block: block, h: h, value: term, ids: ids)
 	let one = emitConst(module, block: block, value: 1, ids: ids)
 	let iNext = emitBin(module, block: block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)

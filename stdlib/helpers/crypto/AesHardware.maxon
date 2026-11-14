@@ -4,7 +4,7 @@
 
 	let aesHardwareKeyWordShift = 2
 	let aesHardwareScheduleRoundBytes = 32
-	module let aesHardwareFirstByte = 0
+	let aesHardwareFirstByte = 0
 	let aesHardwareCounterBytes = 4
 	let aesHardwareWidestGroup = 8
 	let aesHardwareMaskLead = 1
@@ -31,7 +31,7 @@
 
 	// The refit condition is spelled in each `*Into`: leaf inlining does not cascade, so one predicate
 	// for the whole condition would be a second flat leaf and add a setcc and a cmp to the hot path.
-	module function aesHardwareEncryptInto(schedule AesSchedule, block ByteArray, output ByteArray, at ElementIndex) throws AesError
+	function aesHardwareEncryptInto(schedule AesSchedule, block ByteArray, output ByteArray, at ElementIndex) throws AesError
 		if block.count() != aesBlockBytes or aesOutputIsShort(output, at: at) 'refit'
 			try aesHardwareCryptRefitted(schedule, block: block, output: output, at: at, direction: AesDirection.encrypt)
 			return
@@ -40,7 +40,7 @@
 		__Builtins.aesEncryptBlock(output, at, schedule, block, aesHardwareFirstByte)
 	end 'aesHardwareEncryptInto'
 
-	module function aesHardwareDecryptInto(schedule AesSchedule, block ByteArray, output ByteArray, at ElementIndex) throws AesError
+	function aesHardwareDecryptInto(schedule AesSchedule, block ByteArray, output ByteArray, at ElementIndex) throws AesError
 		if block.count() != aesBlockBytes or aesOutputIsShort(output, at: at) 'refit'
 			try aesHardwareCryptRefitted(schedule, block: block, output: output, at: at, direction: AesDirection.decrypt)
 			return
@@ -101,14 +101,14 @@
 		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, data: data, blocks: blocks)
 	end 'aesHardwareXorKeyStreamAppend'
 
-	module function aesHardwareXorKeyStream(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
+	function aesHardwareXorKeyStream(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
 		let output = ByteArray.create(0)
 		try aesHardwareXorKeyStreamAppend(output, schedule: schedule, nonce: nonce, counter: counter, data: data)
 
 		return output
 	end 'aesHardwareXorKeyStream'
 
-	module function aesHardwareXorKeyStreamPastFirstBlock(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
+	function aesHardwareXorKeyStreamPastFirstBlock(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
 		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
 		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks + aesHardwareMaskLead)
 		let mask = ByteArray.create(aesBlockBytes)

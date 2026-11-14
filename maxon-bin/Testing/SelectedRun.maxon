@@ -1,7 +1,7 @@
 // A list of run indices — what a `--select=` value is rendered from, and what one process launch is
 // asked to run. Its own alias because the ORDER is the run's declaration order rather than an
 // incidental one: it is what the report reads back, index for index.
-export typealias TestRunIndexArray = Array with ElementIndex
+typealias TestRunIndexArray = Array with ElementIndex
 
 // ⭐ **THE OPTION THE BINARY READS ITS SELECTION FROM. SELECTION IS A RUNTIME ARGUMENT, NEVER A
 // COMPILE-TIME ONE:** every discovered test is compiled in every time, which is what lets a `--filter`
@@ -30,7 +30,7 @@ let TestSelectIndexBracket = "|"
 // allocates a String would run its initializer outside any test's ownership, which is why every
 // other constant in this file is a literal (the shape `SpecTestRunner.guestBatchProbeScript`
 // already has).
-export function testSelectFlag() returns String
+function testSelectFlag() returns String
 	return "--{TestSelectOptionName}="
 end 'testSelectFlag'
 
@@ -41,7 +41,7 @@ end 'testSelectFlag'
 // ⚠ **AN EMPTY LIST PRODUCES AN EMPTY VALUE, WHICH SELECTS NOTHING** — deliberately distinct from
 // `TestSelectAll`. See that constant: with absence and emptiness collapsed, a shard whose filter
 // matched none of its tests would run all of them.
-export function formatTestSelection(indices TestRunIndexArray) returns String
+function formatTestSelection(indices TestRunIndexArray) returns String
 	var value = ""
 
 	for index in indices 'eachIndex'
@@ -55,13 +55,13 @@ export function formatTestSelection(indices TestRunIndexArray) returns String
 	return value
 end 'formatTestSelection'
 
-module function soleIndex(index ElementIndex) returns TestRunIndexArray
+function soleIndex(index ElementIndex) returns TestRunIndexArray
 	let only = TestRunIndexArray.create(1, zeroed: false)
 	only.push(index)
 	return only
 end 'soleIndex'
 
-module function selectionMembersSource(indexAlias String) returns String
+function selectionMembersSource(indexAlias String) returns String
 	let selectionNeedle = "{TestSelectIndexBracket}\{index\}{TestSelectIndexBracket}"
 
 	var source = "\t// The run's selection, read once. ABSENT means every one — what a human running this\n"
@@ -80,13 +80,13 @@ module function selectionMembersSource(indexAlias String) returns String
 	return source
 end 'selectionMembersSource'
 
-module union SelectedLaunch
+union SelectedLaunch
 	ran(exitCode ExitCodeValue, stdout String, stderr String, leftovers StringArray)
 	deadlineExpired(stdout String, stderr String)
 	couldNotStart(reason String)
 end 'SelectedLaunch'
 
-module function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs WaitDeadlineMs, workingDirectory WorkingDirectory, projectScratchRoot FilePath, tracksDescendants bool) returns SelectedLaunch
+function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs WaitDeadlineMs, workingDirectory WorkingDirectory, projectScratchRoot FilePath, tracksDescendants bool) returns SelectedLaunch
 	let argv = leadingArguments.clone()
 	let serial = Clock.nowMs() as ElementIndex
 
@@ -121,13 +121,13 @@ function launchFailureOf(error SubprocessError) returns SelectedLaunch
 	end 'why'
 end 'launchFailureOf'
 
-module type GeneratedBuild
+type GeneratedBuild
 	export let root as FilePath
 	export var buildTargets as MaxonSourcePathArray
 	export var compilerWrittenSources as CompilerWrittenSourceArray
 	export var stagedSourceOrigins as StagedSourceOriginArray
 
-	module static function begin(stagingRoot FilePath) returns GeneratedBuild throws TestStagingError
+	static function begin(stagingRoot FilePath) returns GeneratedBuild throws TestStagingError
 		if not Directory.create(stagingRoot) 'noStagingRoot'
 			throw TestStagingError.refused("could not create the staging directory {stagingRoot.toString()}")
 		end 'noStagingRoot'
@@ -136,7 +136,7 @@ module type GeneratedBuild
 		return Self{root: stagingRoot, buildTargets: MaxonSourcePathArray.create(0), compilerWrittenSources: CompilerWrittenSourceArray.create(0), stagedSourceOrigins: StagedSourceOriginArray.create(0)}
 	end 'begin'
 
-	module function addSource(stagedPath FilePath, content String, mintedNames NameRoster) throws TestStagingError
+	function addSource(stagedPath FilePath, content String, mintedNames NameRoster) throws TestStagingError
 		try writeStagedFile(stagedPath, content: content)
 		self.buildTargets.push(stagedPath)
 
@@ -145,13 +145,13 @@ module type GeneratedBuild
 		end 'generated'
 	end 'addSource'
 
-	module function recordOrigin(origin StagedSourceOrigin)
+	function recordOrigin(origin StagedSourceOrigin)
 		self.stagedSourceOrigins.push(origin)
 	end 'recordOrigin'
 
 	// LAST, so every file is registered before the walk reaches it and the walk finds nothing new —
 	// the directory is here to fix the project ROOT, not to contribute a unit.
-	module function fixRoot()
+	function fixRoot()
 		self.buildTargets.push(self.root)
 	end 'fixRoot'
 end 'GeneratedBuild'

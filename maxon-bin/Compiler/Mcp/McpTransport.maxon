@@ -1,27 +1,27 @@
 // JSON-RPC 2.0 envelopes, and the JSON shapes every tool answers in.
 
-export let McpProtocolVersion = "2024-11-05"
+let McpProtocolVersion = "2024-11-05"
 
-export enum McpError implements Error
+enum McpError implements Error
 	notFound
 end 'McpError'
 
 // A notification is owed no reply, which is not an empty body: stdio prints nothing and HTTP
 // answers 202 rather than 200.
-export union RpcReply
+union RpcReply
 	none
 	body(text String)
 end 'RpcReply'
 
 // A `JsonNodeId` that may be absent. A JSON null is a VALUE the protocol distinguishes from an
 // omitted key — a request carrying `"id": null` is a notification — so absence needs its own case.
-export union OptionalNode
+union OptionalNode
 	some(id JsonNodeId)
 	none
 end 'OptionalNode'
 
 // JSON-RPC 2.0 reserves -32768..-32000 for protocol errors; these are the five this server emits.
-export enum RpcStandardErrorCode
+enum RpcStandardErrorCode
 	parseError = -32700
 	invalidRequest = -32600
 	methodNotFound = -32601
@@ -31,7 +31,7 @@ end 'RpcStandardErrorCode'
 
 // A tool answer is capped so one runaway subprocess cannot flood the transport. Enough for a
 // summary plus a handful of failure lines.
-export let RawTailMaxBytes = 4096 as BytePos
+let RawTailMaxBytes = 4096 as BytePos
 
 // =============================================================================
 // Object building
@@ -85,7 +85,7 @@ end 'JsonObjectBuilder'
 
 // Responses are assembled in a fresh document, so an id taken from the REQUEST and a result built by
 // a tool must both be transplanted into the envelope's arena before they can be referenced there.
-export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
 	let node = src.get(srcId)
 	return match node.kind 'k'
 		jsonNull gives dst.add(JsonNode.nullNode())
@@ -134,12 +134,12 @@ function findChildKey(doc JsonDoc, parent JsonNodeId, key String) returns JsonNo
 	throw McpError.notFound
 end 'findChildKey'
 
-export function resolveChildKey(doc JsonDoc, parent JsonNodeId, key String) returns OptionalNode
+function resolveChildKey(doc JsonDoc, parent JsonNodeId, key String) returns OptionalNode
 	let childId = try findChildKey(doc, parent: parent, key: key) otherwise return OptionalNode.none
 	return OptionalNode.some(childId)
 end 'resolveChildKey'
 
-export function objectHasKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
+function objectHasKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
 	let node = doc.get(parent)
 
 	for k in node.keys 'scan'
@@ -158,39 +158,39 @@ end 'objectHasKey'
 // A read defaults, or answers absent, on a miss. That is sound only because `validateToolArguments`
 // has already refused any key the tool does not declare and any value of the wrong shape.
 
-export union ActingTree
+union ActingTree
 	host
 	tree(root String)
 end 'ActingTree'
 
-export function statedStringArg(doc JsonDoc, args OptionalNode, key String) returns String throws AbsentError
+function statedStringArg(doc JsonDoc, args OptionalNode, key String) returns String throws AbsentError
 	match args 'a'
 		none then throw AbsentError.absent
 		some(id) then return try doc.getString(id, key: key) otherwise throw AbsentError.absent
 	end 'a'
 end 'statedStringArg'
 
-export function requiredStringArg(doc JsonDoc, args OptionalNode, key String) returns String
+function requiredStringArg(doc JsonDoc, args OptionalNode, key String) returns String
 	return try statedStringArg(doc, args: args, key: key) otherwise panic("requiredStringArg: `{key}` is a required argument, and `validateToolArguments` refuses a call that omits one")
 end 'requiredStringArg'
 
-export function statedTextArg(doc JsonDoc, args OptionalNode, key String) returns StatedText
+function statedTextArg(doc JsonDoc, args OptionalNode, key String) returns StatedText
 	return StatedText.stated(try statedStringArg(doc, args: args, key: key) otherwise return StatedText.unstated)
 end 'statedTextArg'
 
-export function getOptionalStringArg(doc JsonDoc, args OptionalNode, key String, defaultVal String) returns String
+function getOptionalStringArg(doc JsonDoc, args OptionalNode, key String, defaultVal String) returns String
 	return match args 'a'
 		none gives defaultVal
 		some(id) gives (try doc.getString(id, key: key) otherwise defaultVal)
 	end 'a'
 end 'getOptionalStringArg'
 
-export union WholeArgument
+union WholeArgument
 	absent
 	given(value JsonInt)
 end 'WholeArgument'
 
-export function optionalWholeArg(doc JsonDoc, args OptionalNode, key String) returns WholeArgument
+function optionalWholeArg(doc JsonDoc, args OptionalNode, key String) returns WholeArgument
 	match args 'a'
 		none then return WholeArgument.absent
 		some(id) then return wholeArgumentIn(doc, node: id, key: key)
@@ -207,14 +207,14 @@ function wholeArgumentIn(doc JsonDoc, node JsonNodeId, key String) returns Whole
 	return WholeArgument.given(value)
 end 'wholeArgumentIn'
 
-export function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, defaultVal bool) returns bool
+function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, defaultVal bool) returns bool
 	return match args 'a'
 		none gives defaultVal
 		some(id) gives (try doc.getBool(id, key: key) otherwise defaultVal)
 	end 'a'
 end 'getOptionalBoolArg'
 
-export function getOptionalStringListArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
+function getOptionalStringListArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
 	match args 'a'
 		none then return StringArray.create(0)
 		some(argsId) then return stringListArgIn(doc, argsId: argsId, key: key)
@@ -258,7 +258,7 @@ end 'stringListAt'
 // Responses
 // =============================================================================
 
-export function rpcResultText(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId) returns String
+function rpcResultText(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId) returns String
 	let envelope = JsonDoc.create()
 	let response = JsonObjectBuilder.create()
 	response.addString(envelope, key: "jsonrpc", value: "2.0")
@@ -269,7 +269,7 @@ export function rpcResultText(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonD
 	return Json.stringify(envelope)
 end 'rpcResultText'
 
-export function rpcErrorText(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandardErrorCode, message String) returns String
+function rpcErrorText(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandardErrorCode, message String) returns String
 	let envelope = JsonDoc.create()
 
 	let err = JsonObjectBuilder.create()
@@ -285,7 +285,7 @@ export function rpcErrorText(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandard
 	return Json.stringify(envelope)
 end 'rpcErrorText'
 
-export function toolResultText(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool) returns String
+function toolResultText(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool) returns String
 	let envelope = JsonDoc.create()
 
 	let item = JsonObjectBuilder.create()
@@ -317,7 +317,7 @@ function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot Act
 	end 'tree'
 end 'addRepoRootIfKnown'
 
-export function toolErrorPayload(doc JsonDoc, message String, repoRoot ActingTree) returns JsonObjectBuilder
+function toolErrorPayload(doc JsonDoc, message String, repoRoot ActingTree) returns JsonObjectBuilder
 	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: message)
@@ -326,20 +326,20 @@ export function toolErrorPayload(doc JsonDoc, message String, repoRoot ActingTre
 	return payload
 end 'toolErrorPayload'
 
-export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot ActingTree) returns String
+function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot ActingTree) returns String
 	let doc = JsonDoc.create()
 	let payload = toolErrorPayload(doc, message: message, repoRoot: repoRoot)
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
 end 'toolErrorText'
 
-export function addRunFields(doc JsonDoc, payload JsonObjectBuilder, command String, repoRoot ActingTree, res CollectedOutput)
+function addRunFields(doc JsonDoc, payload JsonObjectBuilder, command String, repoRoot ActingTree, res CollectedOutput)
 	payload.addString(doc, key: "command", value: command)
 	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
 	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
 end 'addRunFields'
 
-export function formatSubprocessResult(res CollectedOutput, command String, repoRoot ActingTree) returns String
+function formatSubprocessResult(res CollectedOutput, command String, repoRoot ActingTree) returns String
 	let doc = JsonDoc.create()
 	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
@@ -370,7 +370,7 @@ function byteAt(bytes ByteArray, at BytePos) returns Byte
 	return try bytes.get(at) otherwise panic("byteAt: {at} is outside a range derived from the array's own length")
 end 'byteAt'
 
-export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
+function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
 	let out = ByteArray.create(until - from, zeroed: false)
 
 	for i in from upto until 'copy'
@@ -437,7 +437,7 @@ export function firstBytes(s String, max BytePos) returns String
 	return sliceBytes(bytes, from: 0, until: cutPosition(boundaryAtOrBefore(bytes, at: max), raw: max))
 end 'firstBytes'
 
-export function lastBytes(s String, max BytePos) returns String
+function lastBytes(s String, max BytePos) returns String
 	let bytes = s.toByteArray()
 	let n = bytes.count() as BytePos
 
@@ -452,7 +452,7 @@ function truncationMarker(dropped BytePos) returns String
 	return "{TruncationMarkerOpen}{dropped}{TruncationMarkerClose}"
 end 'truncationMarker'
 
-module function firstBytesMarked(s String, max BytePos) returns String
+function firstBytesMarked(s String, max BytePos) returns String
 	if s.byteLength() <= max 'fits'
 		return s
 	end 'fits'

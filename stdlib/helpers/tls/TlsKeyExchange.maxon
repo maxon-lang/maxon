@@ -1,19 +1,19 @@
-module enum TlsNamedGroup
+enum TlsNamedGroup
 	secp256r1 = 0x0017
 	x25519 = 0x001D
 
-	module function code() returns TlsGroupCode
+	function code() returns TlsGroupCode
 		return self.rawValue as TlsGroupCode
 	end 'code'
 
-	module function publicKey(privateKey ByteArray) returns ByteArray throws TlsHandshakeError
+	function publicKey(privateKey ByteArray) returns ByteArray throws TlsHandshakeError
 		return match self 'group'
 			secp256r1 gives try EcdhP256.publicKey(privateKey) otherwise throw TlsHandshakeError.internalError
 			x25519 gives try X25519.publicKey(privateKey) otherwise throw TlsHandshakeError.internalError
 		end 'group'
 	end 'publicKey'
 
-	module function sharedSecret(privateKey ByteArray, peerShare ByteArray) returns ByteArray throws TlsHandshakeError
+	function sharedSecret(privateKey ByteArray, peerShare ByteArray) returns ByteArray throws TlsHandshakeError
 		return match self 'group'
 			secp256r1 gives try sharedSecretP256(privateKey, peerShare: peerShare)
 			x25519 gives try sharedSecretX25519(privateKey, peerShare: peerShare)

@@ -121,7 +121,7 @@ A bare `try` with no `otherwise` compiles inside a test body. Outside a function
 `throws` that is E2001, so this is positive evidence of the implied `throws TestFailure`.
 ```maxon
 // --- file: assertions.maxon
-export function assertTrue(ok bool) throws TestFailure
+function assertTrue(ok bool) throws TestFailure
 	if not ok 'bad'
 		throw TestFailure.assertion
 	end 'bad'
@@ -146,7 +146,7 @@ A bare assertion in a test body compiles, because the test body is an implied `t
 `TestFailure` is the test's own error, so it propagates plainly, with no report.
 ```maxon
 // --- file: assertions.maxon
-export function assertTrue(ok bool) throws TestFailure
+function assertTrue(ok bool) throws TestFailure
 	if not ok 'bad'
 		throw TestFailure.assertion
 	end 'bad'

@@ -10,19 +10,19 @@ let SnippetExtension = ".maxon"
 let SnippetStagedSeparator = "."
 let FromArgument = "from"
 
-module let ChildTimeoutOption = "timeoutSeconds"
-module let WorkersOption = "workers"
-module let ShardOption = "shard"
-module let MaxFailuresOption = "maxFailures"
-module let CasesOption = "cases"
-module let RungsOption = "rungs"
-module let RepeatOption = "repeat"
-module let FilterOption = "filter"
-module let TargetOption = "target"
-module let RebuildOption = "rebuild"
-module let LogOption = "log"
-module let NoteOption = "note"
-module let EmitCorpusOption = "emitCorpus"
+let ChildTimeoutOption = "timeoutSeconds"
+let WorkersOption = "workers"
+let ShardOption = "shard"
+let MaxFailuresOption = "maxFailures"
+let CasesOption = "cases"
+let RungsOption = "rungs"
+let RepeatOption = "repeat"
+let FilterOption = "filter"
+let TargetOption = "target"
+let RebuildOption = "rebuild"
+let LogOption = "log"
+let NoteOption = "note"
+let EmitCorpusOption = "emitCorpus"
 
 // =============================================================================
 // Spawning
@@ -31,7 +31,7 @@ module let EmitCorpusOption = "emitCorpus"
 // `repoRootLabel` is `host` exactly when the tool acts in the host's working directory: there is no
 // tree to name, and every answer leaves the key out rather than reporting an empty one
 // (`addRepoRootIfKnown`).
-module type ToolContext
+type ToolContext
 	export let compiler as FilePath
 	export let workingDir as FilePath
 	export var repoRootLabel as ActingTree
@@ -54,7 +54,7 @@ typealias ToolAnswer = function(StringArray, CollectedOutput, DurationMs) return
 
 // An enum rather than a function type: the tool bodies write `reqDoc`, which a function value
 // converted to a function type may not do (E3210).
-module enum ToolWithin
+enum ToolWithin
 	build
 	execute
 	test
@@ -82,7 +82,7 @@ function runAndReport(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv S
 	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: what, answer: function(ranArgv StringArray, res CollectedOutput, _ DurationMs) gives reportSubprocess(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res))
 end 'runAndReport'
 
-module function withinContext(context TreeContext, reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, tool ToolWithin) returns String
+function withinContext(context TreeContext, reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, tool ToolWithin) returns String
 	return match context 'tree'
 		answered(reply) gives reply
 		usable(ctx) gives runToolWithin(tool, reqDoc: reqDoc, idNode: idNode, args: args, ctx: ctx.boundedBy(childTimeoutMsOf(reqDoc, args: args, unasked: ctx.timeoutMs)))
@@ -187,7 +187,7 @@ enum StagedFamily
 	end 'reserveIn'
 end 'StagedFamily'
 
-export function sweepStaleSnippets()
+function sweepStaleSnippets()
 	let root = try hostCacheRoot() otherwise return
 	sweepLeftoversOfEndedOwners(StagedFamily.snippet.directoryUnder(root), livenessOf: function(name) gives StagedFamily.snippet.livenessOf(name), keyOf: snippetSourceOf, discardKeyed: discardSnippet)
 end 'sweepStaleSnippets'
@@ -328,7 +328,7 @@ function treeCompilerOf(reqDoc JsonDoc, args OptionalNode) returns TreeCompiler
 	return TreeCompiler.named(fromArg)
 end 'treeCompilerOf'
 
-module function buildToolContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, devMode bool) returns TreeContext
+function buildToolContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, devMode bool) returns TreeContext
 	if not devMode 'hostOnly'
 		return TreeContext.usable(ToolContext.hostRelative(exePath))
 	end 'hostOnly'
@@ -401,14 +401,14 @@ function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Option
 	return target.answeredWith(runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "the program"))
 end 'executeExecuteToolWithin'
 
-module function numberAskOf(reqDoc JsonDoc, args OptionalNode, key String) returns NumberAsk
+function numberAskOf(reqDoc JsonDoc, args OptionalNode, key String) returns NumberAsk
 	return match args 'a'
 		none gives NumberAsk.absent
 		some(id) gives (try numberAskIn(reqDoc, node: id, key: key) otherwise panic("numberAskOf: `{key}` passed the roster's number check before it was read"))
 	end 'a'
 end 'numberAskOf'
 
-module function childTimeoutMsOf(reqDoc JsonDoc, args OptionalNode, unasked WaitDeadlineMs) returns WaitDeadlineMs
+function childTimeoutMsOf(reqDoc JsonDoc, args OptionalNode, unasked WaitDeadlineMs) returns WaitDeadlineMs
 	return match numberAskOf(reqDoc, args: args, key: ChildTimeoutOption) 'bound'
 		absent gives unasked
 		given(seconds) gives stopTimeoutMsOf(boundSecondsOf(targetSecondsReading(seconds.value as AskedSeconds))) as WaitDeadlineMs
@@ -554,7 +554,7 @@ function addInProcessAttribution(doc JsonDoc, payload JsonObjectBuilder, exePath
 	payload.addString(doc, key: "stdlibRoot", value: stdlibRootLabel())
 end 'addInProcessAttribution'
 
-export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, driver CompileDriver.handle) returns String
+function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, driver CompileDriver.handle) returns String
 	let doc = JsonDoc.create()
 	let payload = JsonObjectBuilder.create()
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false, driver: driver))
@@ -563,7 +563,7 @@ export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeCheckTool'
 
-export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, driver CompileDriver.handle) returns String
+function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, driver CompileDriver.handle) returns String
 	let doc = JsonDoc.create()
 	let payload = JsonObjectBuilder.create()
 	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true, driver: driver)
@@ -579,7 +579,7 @@ export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args Option
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeDumpIrTool'
 
-export function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FilePath) returns String
+function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FilePath) returns String
 	let doc = JsonDoc.create()
 	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: true)
@@ -593,7 +593,7 @@ export function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FileP
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
 end 'executeInfoTool'
 
-export function executeBreakingChangesTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode) returns String
+function executeBreakingChangesTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode) returns String
 	let pathArg = requiredStringArg(reqDoc, args: args, key: "path")
 
 	let path = try FilePath.from(pathArg) otherwise return toolErrorText(reqDoc, idNode: idNode, message: "`{pathArg}` is not a valid filesystem path", repoRoot: ActingTree.host)
@@ -670,19 +670,19 @@ end 'breakingChangeArray'
 // Contributor tools
 // =============================================================================
 
-module union TreeContext
+union TreeContext
 	usable(ctx ToolContext)
 	answered(reply String)
 end 'TreeContext'
 
-module union TreeCompiler
+union TreeCompiler
 	ownSlot
 	named(spelling String)
 end 'TreeCompiler'
 
 // The tree's own compiler unless `from` names one: this server's binary run against another tree's
 // sources would compile them against this checkout's `stdlib/` and `runtime/`.
-module function resolveTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, compiler TreeCompiler) returns TreeContext
+function resolveTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, compiler TreeCompiler) returns TreeContext
 	let root = resolveTargetRepoRoot(reqDoc, args: args, exePath: exePath)
 
 	if not root.ok() 'badRoot'
@@ -718,7 +718,7 @@ end 'namedCompilerContext'
 // ⚠ An absent `repoRoot` means the host's working directory, not this server's own checkout:
 // `execute`, `test` and `fmt` resolve their paths against the caller's cwd, so falling back to the
 // tree this binary sits in would run the command somewhere the argument was never written for.
-module function hostOrTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath) returns TreeContext
+function hostOrTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath) returns TreeContext
 	if not statedTextArg(reqDoc, args: args, key: "repoRoot").isStated() 'noTreeNamed'
 		return TreeContext.usable(ToolContext.hostRelative(exePath))
 	end 'noTreeNamed'

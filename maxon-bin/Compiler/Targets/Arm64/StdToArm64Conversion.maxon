@@ -37,7 +37,7 @@
 // `arm64ArgRegisters[k]` = x0..x7, and an integer value returns in x0. The array LENGTH is this file's
 // REGISTER capacity (`arm64RegisterArgCapacity`); an argument past it travels in an outgoing STACK slot at
 // `[SP + k*8]`, the AAPCS64 layout.
-export let arm64ArgRegisters = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7]
+let arm64ArgRegisters = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7]
 
 // The AAPCS64 FLOAT argument registers, in slot order: a FLOAT parameter/argument travels in
 // `arm64FpArgRegisters[fpSlot]` = d0..d7, where `fpSlot` is counted by a SEPARATE FP counter from the
@@ -46,11 +46,11 @@ export let arm64ArgRegisters = [Arm64Register.x0, Arm64Register.x1, Arm64Registe
 // x0 is both the first integer arg register and the integer return register. The whole SIMD file is
 // caller-saved for d0..d7 (see `arm64CallerSavedMask`), so a float live across a call is spilled by the
 // allocator with no hand-holding.
-export let arm64FpArgRegisters = [Arm64Register.d0, Arm64Register.d1, Arm64Register.d2, Arm64Register.d3, Arm64Register.d4, Arm64Register.d5, Arm64Register.d6, Arm64Register.d7]
+let arm64FpArgRegisters = [Arm64Register.d0, Arm64Register.d1, Arm64Register.d2, Arm64Register.d3, Arm64Register.d4, Arm64Register.d5, Arm64Register.d6, Arm64Register.d7]
 
 // The primary integer return register (AAPCS64) — where `lowerReturn` moves an integer result, and
 // where `lowerCall` reads a callee's integer result from.
-export let Arm64IntReturnReg = Arm64Register.x0
+let Arm64IntReturnReg = Arm64Register.x0
 
 // The primary FLOAT return register (AAPCS64) — a float result returns in d0, not x0.
 let Arm64FloatReturnReg = Arm64Register.d0
@@ -60,7 +60,7 @@ let Arm64FloatReturnReg = Arm64Register.d0
 // not an argument register, so no return/argument conflict" choice. A `tryCall` reads the callee's flag
 // from here; an `errorReturn` writes it here. ⚠ arm64 error tests are per-target gated OUT of this
 // machine's suite, so this path is verified by the arm64 BUILD, not by execution.
-export let Arm64FlagReturnReg = Arm64Register.x9
+let Arm64FlagReturnReg = Arm64Register.x9
 
 // The `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
 // MAP_ANON|MAP_PRIVATE, -1, 0)`. The POSIX-shared parameters (`MmapKernelChoosesBase`/`MmapProtReadWrite`/
@@ -73,7 +73,7 @@ export let Arm64FlagReturnReg = Arm64Register.x9
 // HERE because x64 never targets macOS, so arm64 is the only backend that needs it; the Linux word is
 // shared. A blanket value would map a FILE on one OS and hand the slab a mapping that is neither
 // anonymous nor zeroed.
-module let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
+let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
 
 // ⭐ **THE ONE PLACE THE `_SC_` NUMBER IS WRITTEN, AND WHY THERE IS NO SECOND ONE.**
 // `_SC_NPROCESSORS_ONLN`, the `sysconf` parameter naming "logical processors currently online", read from
@@ -104,7 +104,7 @@ let MadviseFreeMacos = 0x5  // Darwin: MADV_FREE — reclaimable, and NOT promis
 
 // The anonymous-private mapping flag word for `os`. Routed through `arm64OsCallKind` rather than a
 // second `match os`, so the set of OSes this backend serves is stated in exactly one place.
-export function mmapAnonPrivateFlags(os Os) returns MachineWord
+function mmapAnonPrivateFlags(os Os) returns MachineWord
 	return match arm64OsCallKind(os) 'route'
 		importCall gives MmapAnonPrivateMacos
 		syscall gives MmapAnonPrivateLinux
@@ -185,7 +185,7 @@ end 'Arm64MemOperand'
 // (x0, d0, x16, …) as `Arm64Register`s; this maps one to its neutral `RegNum` — the number the unified
 // vreg carries — in ONE place. The `.rawValue` is bound to a local first for the reason `x64PhysReg`
 // states at its own declaration.
-export function arm64PhysReg(reg Arm64Register) returns TargetVReg
+function arm64PhysReg(reg Arm64Register) returns TargetVReg
 	let n = reg.rawValue as RegNum
 	return TargetVReg.physical(n)
 end 'arm64PhysReg'
@@ -232,21 +232,21 @@ end 'arm64RegisterArgCapacity'
 // grow past 504 while x29 is placed with an STP offset); the wider fields' assertions are backstops
 // behind that one and their advice is not the first thing to do. Recorded here rather than at any of the
 // three, because this is the number a reader who is raising the ceiling comes to find.
-export function arm64OutgoingArgRegionBytes() returns StackSize
+function arm64OutgoingArgRegionBytes() returns StackSize
 	return ((MaxAbiArgs as StackSize) - (arm64RegisterArgCapacity() as StackSize)) * SpillSlotBytes
 end 'arm64OutgoingArgRegionBytes'
 
 // The physical register integer argument slot `index` occupies. A slot past the file means the placement
 // rule said "register" where the file has none, so it is a compiler-invariant break here, not a user error:
 // every caller tests `abiArgIsOnStack` first.
-export function arm64ArgRegisterAt(index ParamCount) returns Arm64Register
+function arm64ArgRegisterAt(index ParamCount) returns Arm64Register
 	return try arm64ArgRegisters.get(index) otherwise panic("arm64ArgRegisterAt: argument index {index} exceeds the {arm64ArgRegisters.count()} register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'arm64ArgRegisterAt'
 
 // The physical SIMD register FP argument slot `index` occupies — the float twin of
 // `arm64ArgRegisterAt`, a compiler-invariant break past the file for the same reason. It must reject
 // cleanly here rather than mis-storing from the wrong file.
-export function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
+function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
 	return try arm64FpArgRegisters.get(index) otherwise panic("arm64FpArgRegisterAt: float argument slot {index} exceeds the {arm64FpArgRegisters.count()} SIMD register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'arm64FpArgRegisterAt'
 

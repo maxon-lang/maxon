@@ -633,7 +633,7 @@ end 'typeParamIdOf'
 // `nameOf(UnnamedTypeId)` is `EmptySourceText` rather than the first real name a file interned.
 export let UnnamedTypeId = 0 as TypeNameId
 
-export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) returns ParamCount
+function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) returns ParamCount
 	var n = 0 as ParamCount
 
 	for pt in paramTypes 'each'
@@ -702,7 +702,7 @@ export function layoutDescriptorSlotValueId(paramCount ParamCount) returns Value
 	return valueIdAtParamPosition(paramCount - LayoutSlotWidth)
 end 'layoutDescriptorSlotValueId'
 
-export function hiddenBlockEndOf(func IrFunction, carriesALayoutSlot bool) returns ParamCount
+function hiddenBlockEndOf(func IrFunction, carriesALayoutSlot bool) returns ParamCount
 	return func.paramCount - LayoutSlotWidth if carriesALayoutSlot else func.paramCount
 end 'hiddenBlockEndOf'
 
@@ -873,8 +873,8 @@ end 'OpCategory'
 // ⭐ **DOES THIS OP REACH ANOTHER BODY — by calling it, spawning it or suspending on it?** Three bands
 // answer yes and every other band answers no, which is one question about the union's own SHAPE and so is
 // asked here, beside the metadata, rather than at the door that needs it (`Parser.statementCallsOrAwaits`,
-// E3067's `_ = <rhs>` test — `MaxonOpMeta` is this file's, and reaching through `rawValue` from another
-// file cannot see it). A band added later decides its own answer here rather than inheriting `false`
+// E3067's `_ = <rhs>` test — `MaxonOpMeta` is unexported here, and reaching through `rawValue` from
+// outside this directory cannot see it). A band added later decides its own answer here rather than inheriting `false`
 // from an arm that never heard of it.
 export function opCallsOrSuspends(op MaxonOp) returns bool
 	return match op.rawValue.category 'reachesAnotherBody'
@@ -1200,7 +1200,7 @@ end 'SignExtendSlot'
 // `signExtendFromSlotBytes` below DERIVES the opposite direction from it rather than restating the widths —
 // see there for why that asymmetry is the whole point. Exhaustive over the enum, so a new unary op has to be
 // classified here rather than falling silently into the 1:1 opcode rename that cannot serve this family.
-export function signExtendSlotOf(op MaxonUnaryOp) returns SignExtendSlot
+function signExtendSlotOf(op MaxonUnaryOp) returns SignExtendSlot
 	return match op 'o'
 		neg or
 		bitNot or

@@ -9,7 +9,7 @@ category: language
 
 ## Documentation
 
-FIVE of `String`'s methods are `module`-visible in the corpus (`stdlib/String.maxon`) rather than
+FIVE of `String`'s methods are unmarked in the corpus (`stdlib/String.maxon`) rather than
 exported: `addressableBytes()`, which hands out a live view of the string's own UTF-8 bytes;
 `byteAt(index)` and `byteAtOrPanic(index)`, which read one of those bytes — the first throwing
 `__ManagedMemoryError`, the second with no catchable failure at all; `setByte(index, value:)`, the only
@@ -19,15 +19,15 @@ forced the first two, `stdlib/helpers/string/{utf8,hash,grapheme}.maxon` forced 
 `String.mapAsciiCase` is `setByte`'s one caller — and none is part of the language a user program may
 write.
 
-⭐⭐ **ALL FIVE ARE REFUSED BY ONE MECHANISM.** Every one of them is `E3088`, raised by `SemanticCheck`
-off the corpus's own `module` keyword: each is an ordinary call to an ordinary declared function, and
+⭐⭐ **ALL FIVE ARE REFUSED BY ONE MECHANISM.** Every one of them is `E3008`, raised by `SemanticCheck`
+off the visibility the corpus declares: each is an ordinary call to an ordinary declared function, and
 `SemanticCheck.calleeVisibleFrom` -> `ProgramSignatures.isVisibleFrom` applies the visibility the
 corpus WROTE. No second statement of it exists to disagree, and no refusal sentence enumerates the
 members, so none can omit one.
 
 A member the compiler SYNTHESIZES would be answered by an arm that runs *ahead* of the corpus
 (`memberBelongsToTheCorpus` is consulted only for names the roster does NOT carry), so the declaration
-whose `module` keyword could answer would never be reached. Such a member needs a location gate or it
+whose visibility could answer would never be reached. Such a member needs a location gate or it
 has no gate at all. None of the five is synthesized.
 
 `setByte` WRITES its receiver, and `Parser.receiverOwnerMask` derives that bit from the ENVELOPE
@@ -43,8 +43,7 @@ and it touches `@40` nowhere.
 
 ⚠ Some case names below say "pair". They are IDs; the count that matters is what the refusals themselves render.
 
-A user call to any of the five is refused as module-scoped and not visible from this directory
-(`E3088`).
+A user call to any of the five is refused as not exported (`E3008`).
 
 ⚠ The expected stderr below must keep
 it that way. A 4-digit code written outside `ErrorCodeRegistry.maxon` is a copy of the number space,
@@ -78,7 +77,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:12: function 'String.addressableBytes' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:12: function 'String.addressableBytes' is not exported
 ```
 
 <!-- test: error.byte-at-or-panic-is-stdlib-only -->
@@ -88,7 +87,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:15: function 'String.byteAtOrPanic' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:15: function 'String.byteAtOrPanic' is not exported
 ```
 
 <!-- test: error.byte-at-is-stdlib-only -->
@@ -98,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:19: function 'String.byteAt' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:19: function 'String.byteAt' is not exported
 ```
 
 <!-- test: error.has-single-byte-graphemes-is-stdlib-only -->
@@ -111,7 +110,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:11: function 'String.hasSingleByteGraphemes' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:11: function 'String.hasSingleByteGraphemes' is not exported
 ```
 
 <!-- test: error.set-byte-is-stdlib-only -->
@@ -130,7 +129,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:4:8: function 'String.setByte' is module-scoped and not visible from this directory
+error E3008: <fragment>:4:8: function 'String.setByte' is not exported
 ```
 
 <!-- test: error.addressable-bytes-on-a-string-variable-is-stdlib-only -->
@@ -143,7 +142,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:5:8: function 'String.addressableBytes' is module-scoped and not visible from this directory
+error E3008: <fragment>:5:8: function 'String.addressableBytes' is not exported
 ```
 
 A NEAR MISS of a served member — `addressableByte` for `addressableBytes` — is a typo and must be

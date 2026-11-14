@@ -362,7 +362,7 @@ end 'buildArm64GtTrampolineChunk'
 // array is at the masked thread pointer and `pthread_getspecific(key)` is `tsd[key]`; measured on this host,
 // `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`. `StdToArm64Conversion.lowerTlsSlotLoad` carries the measurement
 // and the assertion that keeps it honest — this is the same read, one tier down.
-module function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
+function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
 	emitArm64LoadCurrentMOrBail(asm, dest: mDest, scratch: scratch, bail: bail, os: os)
 	arm64EmitLoadWord64At(asm, dest: gtDest, base: mDest, byteOffset: MOffCurrentGt as MachineWord)
 	arm64EmitCbzTo(asm, reg: gtDest, label: bail)
@@ -372,7 +372,7 @@ end 'emitArm64LoadCurrentGtOrBail'
 // `stackBase` of 0 — an M's scheduler context, on a real OS-thread stack — and to `elsewhere` for an address off
 // a stack the green thread owns. Past both bails `scratch` holds the stack's top and `gt` its size. UNSIGNED
 // compares: these are addresses. The twin of `X64GtRuntime.emitGtBailUnlessOnItsOwnStack`.
-module function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, addr Arm64Register, onOsStack BlockId, elsewhere BlockId)
+function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, addr Arm64Register, onOsStack BlockId, elsewhere BlockId)
 	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase as MachineWord)
 	arm64EmitCbzTo(asm, reg: scratch, label: onOsStack)
 	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
@@ -389,7 +389,7 @@ function emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail
 	emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, onOsStack: bail, elsewhere: elsewhere)
 end 'emitArm64DarwinLoadMachineOnItsOwnStackOrBail'
 
-module function emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
+function emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
 	emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: bail, elsewhere: bail)
 	arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffCurrentGt as MachineWord)
 end 'emitArm64DarwinLoadGtOnItsOwnStackOrBail'
@@ -854,7 +854,7 @@ let Arm64GuardScratchReg = Arm64Register.x13
 // It emits into the function's own byte stream with a guard-local branch table, exactly as the x64
 // twin does, so it is invisible to the rendered Target IR and is verified by the run plus a
 // disassembly instead.
-export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
+function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let top = asm.newLabel()
 	let skip = asm.newLabel()
@@ -1015,7 +1015,7 @@ end 'emitArm64LoadCurrentMOrBailless'
 // road alone.
 let DarwinLibcCallName = b"mrt_darwin_libc_call"
 
-export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns FunctionCodeChunk
+function buildArm64DarwinLibcCallChunk(greenThreads bool) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let direct = asm.newLabel()
 	let elsewhere = asm.newLabel()
@@ -1127,7 +1127,7 @@ function emitArm64DarwinBranchUnlessOnTheSignalStack(asm Arm64RuntimeAsm, onIt B
 	arm64EmitBranchTo(asm, label: onIt)
 end 'emitArm64DarwinBranchUnlessOnTheSignalStack'
 
-module function buildArm64GtSystemStackFatalChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
+function buildArm64GtSystemStackFatalChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 	let reason = RuntimeAbortReason.fatal(RuntimeFatal.systemCallFromOutsideEveryKnownStack)
 
@@ -1155,7 +1155,7 @@ end 'emitArm64ShimLockDepthStep'
 // door destroys them as any call destroys the caller-saved file (`TargetDialect.arm64ImportCall`'s
 // `implicitDefs`). The low/high pair is also the shuttle for the copied stack words.
 let Arm64DoorMReg = Arm64Register.x10
-module let Arm64DoorGtReg = Arm64Register.x11
+let Arm64DoorGtReg = Arm64Register.x11
 let Arm64DoorSpReg = Arm64Register.x12
 let Arm64DoorLowReg = Arm64Register.x13
 let Arm64DoorHighReg = Arm64Register.x14
@@ -1163,14 +1163,14 @@ let Arm64DoorHighReg = Arm64Register.x14
 // A libSystem call through the system-stack door: the import's address into x16, then `bl` the door. Every
 // libSystem call on arm64-macOS takes it, except a green-thread-free program's compiled calls and the entry
 // stub's `_exit`, which run only on OS-thread stacks.
-export function arm64EmitLibcCall(code ByteArray, iatRelocs RelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
+function arm64EmitLibcCall(code ByteArray, iatRelocs RelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
 	arm64EmitLoadImportAddress(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 	arm64EmitBranchLink(code, callFixups: callFixups, targetName: DarwinLibcCallName)
 end 'arm64EmitLibcCall'
 
 // A compiled function's `arm64ImportCall`: through the door in a green-thread program, and direct in one with
 // no green threads, whose every stack is an OS thread's.
-export function emitArm64GtGatedImportCall(code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex, greenThreads bool)
+function emitArm64GtGatedImportCall(code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex, greenThreads bool)
 	if greenThreads 'throughTheDoor'
 		arm64EmitLibcCall(code, iatRelocs: iatRelocs, callFixups: callFixups, slotIndex: slotIndex)
 	end 'throughTheDoor' else 'direct'
@@ -1640,7 +1640,7 @@ end 'arm64SavedFileOffsets'
 // carries the scheduler, on the same `usesGt` bit `installGtRuntime` was gated on rather than a probe of
 // the module. They lay out above user code like every other runtime chunk, so `mrt_start` keeps `.text`
 // offset 0.
-export function appendArm64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target)
+function appendArm64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target)
 	chunks.push(buildArm64GtContextSwitchChunk(target))
 	chunks.push(buildArm64GtTrampolineChunk())
 	chunks.push(buildArm64GtGuardTrippedChunk())

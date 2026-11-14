@@ -519,7 +519,6 @@ let ExtensionConformanceHostDecl = "interface WarmRebuildProbeMarker\n\tfunction
 let ExtensionConformanceEditBefore = "extension WarmRebuildProbeMarked\n\tfunction warmRebuildProbeMark() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMark'\nend 'WarmRebuildProbeMarked'"
 let ExtensionConformanceEditAfter = "extension WarmRebuildProbeMarked implements WarmRebuildProbeMarker\n\tfunction warmRebuildProbeMark() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMark'\nend 'WarmRebuildProbeMarked'"
 
-let ModuleModifierText = "module "
 let ExportModifierText = "export "
 let PublicModifierText = "public "
 let NoModifierText = ""
@@ -579,11 +578,8 @@ function measureVisibilityFlips(warm WarmSession, editedPath FilePath, original 
 		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(NoModifierText)}\n")
 		_ = try probedMisses(warm)
 
-		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(ModuleModifierText)}\n")
-		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module`", probe: try probedMisses(warm)))
-
 		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(ExportModifierText)}\n")
-		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module` to `export`", probe: try probedMisses(warm)))
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `export`", probe: try probedMisses(warm)))
 
 		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(PublicModifierText)}\n")
 		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `export` to `public`", probe: try probedMisses(warm)))
@@ -719,7 +715,7 @@ let MinFilesForInvalidation = 2 as Count
 //       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore`,
 //       and `UnionPayloadEditBefore`.
 //   (f) EDIT A DECLARATION'S VISIBILITY ⇒ EVERY file's parse must be invalidated, at each step
-//       from no modifier to `module`, `module` to `export`, and `export` to `public`, for every
+//       from no modifier to `export`, and `export` to `public`, for every
 //       declaration kind in `visibilityFlipProbes`. No name and no value moves; another file's
 //       parse admits or refuses the name on it.
 //   (g) MOVE A DECLARATION TO ANOTHER FILE ⇒ EVERY file's parse must be invalidated. The program
@@ -964,7 +960,7 @@ end 'reportWarmFail'
 // --- Property 5: library parses reused across programs ---
 
 // The probe's function is `public` because nothing in the program it is appended to calls it, and a
-// file-private function nothing live names is E3219.
+// unexported function nothing live names is E3219.
 let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\npublic function libraryReuseProbe() returns bool\n\tlet records = LibraryReuseProbeRecords.create(0)\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
 let LibraryReusedClause = "library parses reused across programs"
 

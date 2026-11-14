@@ -529,7 +529,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: another-files-bare-byte-is-the-library-byte-past-a-file-private-author-byte -->
-A declaration a file cannot see never counts in its name resolution, so `b/`'s bare `byte` is the library's while `a/` keeps its own file-private `type byte`.
+A declaration a file cannot see never counts in its name resolution, so `b/`'s bare `byte` is the library's while `a/` keeps its own unmarked `type byte`.
 ```maxon
 // --- file: a/a.maxon
 typealias Integer = int(i64.min to i64.max)

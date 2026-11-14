@@ -115,7 +115,7 @@ end 'reportColorChoices'
 // instead, `maxon` STOPPED CROSS-COMPILING for arm64-macOS: `Testing/` is ordinary user code, the
 // E3104 gate is reachability-blind for user code by design, and one call in a test REPORTER took the whole
 // compiler down for a lane. Do not reintroduce a refusal here or there.
-export function reportColorEnabled(mode ReportColorMode) returns bool
+function reportColorEnabled(mode ReportColorMode) returns bool
 	return match mode 'setting'
 		auto gives Console.stdoutWantsColor()
 		always gives true
@@ -151,7 +151,7 @@ end 'painted'
 //
 // `showTiming` is FALSE under `--no-timing`, which is what makes stdout byte-reproducible: a duration is
 // the one thing in this report that differs between two runs of identical code.
-export function testFileBlock(file TestFileResults, color bool, showTiming bool) returns String
+function testFileBlock(file TestFileResults, color bool, showTiming bool) returns String
 	var block = "{painted(reportPathDisplay(file.file), code: SgrBold, color: color)}:\n"
 
 	for result in file.results 'eachResult'
@@ -234,7 +234,7 @@ function durationText(nanos DurationNanos) returns String
 end 'durationText'
 
 // ⭐ **THE TAIL OF A RUN: one detail block per failure, then the counts, then the footer.**
-export function testRunSummary(report TestRunReport, color bool, showTiming bool) returns String
+function testRunSummary(report TestRunReport, color bool, showTiming bool) returns String
 	var summary = ""
 
 	for file in report.files 'eachFile'
@@ -334,7 +334,7 @@ end 'testCountLine'
 // Reads the same discovery and selection a run does, so a listed test and a run test cannot come
 // from different answers to "what is a test". A file with no selected test is skipped entirely,
 // header included, so the listing shows the run rather than the project.
-export function testListText(groups TestFileGroupArray, selected TestSelection, color bool, binary TestBinaryListing) returns String
+function testListText(groups TestFileGroupArray, selected TestSelection, color bool, binary TestBinaryListing) returns String
 	var listing = ""
 	var tests = 0 as ReportedTestCount
 	var files = 0 as ReportedTestCount
@@ -373,7 +373,7 @@ end 'testListText'
 
 let TestBinaryLinePrefix = " binary: "
 
-export union TestBinaryListing
+union TestBinaryListing
 	notBuilt
 	built(path FilePath)
 end 'TestBinaryListing'
@@ -381,7 +381,7 @@ end 'TestBinaryListing'
 // ⭐ The line a run that found NOTHING TO DO prints. It is a FAILURE, and it says why in the report's
 // own voice rather than as an error, because nothing went wrong with the harness — there is simply
 // nothing green to claim. Yellow for that reason: it is a warning about the RUN, not a broken tool.
-export function testEmptyRunNote(reason String, color bool) returns String
+function testEmptyRunNote(reason String, color bool) returns String
 	return "{painted(reason, code: SgrYellow, color: color)}\n"
 end 'testEmptyRunNote'
 
@@ -389,7 +389,7 @@ end 'testEmptyRunNote'
 // JSON
 // ============================================================================================
 
-export union TestRunEmptiness
+union TestRunEmptiness
 	hasResults
 	nothingRan(reason String)
 end 'TestRunEmptiness'
@@ -404,7 +404,7 @@ end 'TestRunEmptiness'
 // `emptiness` says WHY a run has no results, when it has none. It is carried because the text face says it and this
 // must not say less: "no tests exist" and "no test matched the filter" are different problems with the
 // same exit code, and a machine reader that cannot tell them apart cannot act.
-export function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmptiness) returns String
+function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmptiness) returns String
 	let doc = JsonDoc.create()
 	let keys = StringArray.create(0)
 	let children = JsonNodeIdArray.create(0)
@@ -494,7 +494,7 @@ function pushThrownNode(doc JsonDoc, keys StringArray, children JsonNodeIdArray,
 end 'pushThrownNode'
 
 // The roster a machine reads, over the same selection `testListText` walks.
-export function testListJson(groups TestFileGroupArray, selected TestSelection, binary TestBinaryListing) returns String
+function testListJson(groups TestFileGroupArray, selected TestSelection, binary TestBinaryListing) returns String
 	let doc = JsonDoc.create()
 	let listed = JsonNodeIdArray.create(0)
 

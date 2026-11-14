@@ -1,7 +1,7 @@
 let StubProxyFixtureName = "stubproxy"
-export let ProxiedSessionBoundMs = 60000
+let ProxiedSessionBoundMs = 60000
 
-export let DebugServerName = "debugserver"
+let DebugServerName = "debugserver"
 let RealStubVariable = "MAXON_PROXY_REAL_STUB"
 let InjectAfterVariable = "MAXON_PROXY_INJECT_AFTER"
 let InjectPayloadVariable = "MAXON_PROXY_INJECT"
@@ -17,13 +17,13 @@ let ProbeSwallowMode = "probe-swallow"
 let SmallBufferMode = "small-buffer"
 let AdvertiseYes = "yes"
 let AdvertiseNo = "no"
-export let ProxyRefusedMarker = "refused "
-export let ProxyAnsweredMarker = "answered "
-export let ProxySawMarker = "saw "
-export let ProxySwallowedMarker = "swallowed "
-export let ProxyInterruptWording = "interrupt"
-export let ProxyResumeRequest = "vCont"
-export let ProxyDetachRequest = "D\n"
+let ProxyRefusedMarker = "refused "
+let ProxyAnsweredMarker = "answered "
+let ProxySawMarker = "saw "
+let ProxySwallowedMarker = "swallowed "
+let ProxyInterruptWording = "interrupt"
+let ProxyResumeRequest = "vCont"
+let ProxyDetachRequest = "D\n"
 let PathVariableName = "PATH"
 let PathEntrySeparator = ":"
 
@@ -32,7 +32,7 @@ let DeveloperDirectoryCommand = "xcode-select"
 let DeveloperDirectoryOption = "--print-path"
 let DeveloperStubTail = "/../SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
 
-export function stubProxyDirectory(caseLabel String) returns FilePath
+function stubProxyDirectory(caseLabel String) returns FilePath
 	let staged = builtFixture("{caseLabel}-proxy", fixture: StubProxyFixtureName)
 	let bytes = try File.readBinary(builtExecutable(staged)) otherwise panic("the gate could not run — the built stub proxy cannot be read.")
 
@@ -41,7 +41,7 @@ export function stubProxyDirectory(caseLabel String) returns FilePath
 	return staged
 end 'stubProxyDirectory'
 
-export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String, answer String) returns Environment
+function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String, answer String) returns Environment
 	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: AnswerMode)
 	overrides.upsert(InjectAfterVariable, value: after)
 	overrides.upsert(InjectPayloadVariable, value: answer)
@@ -49,21 +49,21 @@ export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePat
 	return Environment.inheritUpdating(overrides)
 end 'answeringProxyEnvironment'
 
-export function silentProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String) returns Environment
+function silentProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String) returns Environment
 	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SilentMode)
 	overrides.upsert(InjectAfterVariable, value: after)
 
 	return Environment.inheritUpdating(overrides)
 end 'silentProxyEnvironment'
 
-export typealias ProxiedPacketBytes = int(1 to 0xFFFF)
+typealias ProxiedPacketBytes = int(1 to 0xFFFF)
 
-export enum ProxiedAdvertising
+enum ProxiedAdvertising
 	advertised
 	unadvertised
 end 'ProxiedAdvertising'
 
-export function smallBufferProxyEnvironment(proxyDirectory FilePath, trace FilePath, packetBytes ProxiedPacketBytes, advertising ProxiedAdvertising) returns Environment
+function smallBufferProxyEnvironment(proxyDirectory FilePath, trace FilePath, packetBytes ProxiedPacketBytes, advertising ProxiedAdvertising) returns Environment
 	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SmallBufferMode)
 	overrides.upsert(PacketSizeVariable, value: "{packetBytes}")
 	overrides.upsert(AdvertiseVariable, value: AdvertiseYes if advertising == ProxiedAdvertising.advertised else AdvertiseNo)
@@ -71,22 +71,22 @@ export function smallBufferProxyEnvironment(proxyDirectory FilePath, trace FileP
 	return Environment.inheritUpdating(overrides)
 end 'smallBufferProxyEnvironment'
 
-export function traceAfterTheInterrupt(traced String) returns String
+function traceAfterTheInterrupt(traced String) returns String
 	return try traced.split("{ProxySawMarker}{ProxyInterruptWording}\n").get(1) otherwise ""
 end 'traceAfterTheInterrupt'
 
-export function probeAnsweredProxyEnvironment(proxyDirectory FilePath, trace FilePath, answer String) returns Environment
+function probeAnsweredProxyEnvironment(proxyDirectory FilePath, trace FilePath, answer String) returns Environment
 	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: ProbeAnswerMode)
 	overrides.upsert(InjectPayloadVariable, value: answer)
 
 	return Environment.inheritUpdating(overrides)
 end 'probeAnsweredProxyEnvironment'
 
-export function probeSwallowedProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
+function probeSwallowedProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
 	return Environment.inheritUpdating(proxyOverrides(proxyDirectory, trace: trace, mode: ProbeSwallowMode))
 end 'probeSwallowedProxyEnvironment'
 
-export function lateHaltProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
+function lateHaltProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
 	return Environment.inheritUpdating(proxyOverrides(proxyDirectory, trace: trace, mode: LateHaltMode))
 end 'lateHaltProxyEnvironment'
 

@@ -25,8 +25,8 @@ let ConditionWord = " if "
 export let BreakpointSetAction = "set"
 let BreakpointClearedAction = "cleared"
 let BreakpointNotSetAction = "not-set"
-module let BreakpointConditionUnsupportedAction = "condition-unsupported"
-module let BreakpointConditionInvalidAction = "condition-invalid"
+let BreakpointConditionUnsupportedAction = "condition-unsupported"
+let BreakpointConditionInvalidAction = "condition-invalid"
 
 let GreenSelectEventName = "gt-select"
 let GreenParkEventName = "gt-park"
@@ -44,10 +44,10 @@ let SteppingUnderASelectionMessage = "stepping is refused while a gt selection i
 export let PauseStopReasonName = "pause"
 export let TrapStopReasonName = "trap"
 export let FaultStopReasonName = "fault"
-export let BreakpointNoCodeAction = "no-code"
-export let BreakpointAmbiguousAction = "ambiguous"
-export let BreakpointNoMatchAction = "no-match"
-export let BreakpointRefusedAction = "refused"
+let BreakpointNoCodeAction = "no-code"
+let BreakpointAmbiguousAction = "ambiguous"
+let BreakpointNoMatchAction = "no-match"
+let BreakpointRefusedAction = "refused"
 
 export let EntryStopReasonName = "entry"
 export let BreakpointStopReasonName = "breakpoint"
@@ -73,21 +73,21 @@ let StillWalkingMessage = "a step is still walking: pause it before moving the p
 let NoLocalsWhileRunningMessage = "the program is running: there are no locals until it stops"
 let DetachRoundCap = 64
 let OffsetListSeparator = ", "
-module let WordGap = " "
+let WordGap = " "
 
-export type DebugCommandRow
+type DebugCommandRow
 	export var canonical as String
 	export var aliases as StringArray
 	export let completesAFunctionName as bool
 
-	export static function create(canonical String, aliases StringArray, completesAFunctionName bool) returns DebugCommandRow
+	static function create(canonical String, aliases StringArray, completesAFunctionName bool) returns DebugCommandRow
 		return Self{canonical: canonical, aliases: aliases, completesAFunctionName: completesAFunctionName}
 	end 'create'
 end 'DebugCommandRow'
 
-export typealias DebugCommandRowArray = Array with DebugCommandRow
+typealias DebugCommandRowArray = Array with DebugCommandRow
 
-export function debugCommandRows() returns DebugCommandRowArray
+function debugCommandRows() returns DebugCommandRowArray
 	let rows = DebugCommandRowArray.create(0)
 	rows.push(DebugCommandRow.create(BreakCommandWord, aliases: ["b"], completesAFunctionName: true))
 	rows.push(DebugCommandRow.create(ClearCommandWord, aliases: StringArray.create(0), completesAFunctionName: true))
@@ -114,7 +114,7 @@ export function debugCommandRows() returns DebugCommandRowArray
 	return rows
 end 'debugCommandRows'
 
-export function debugCommandVocabulary() returns StringArray
+function debugCommandVocabulary() returns StringArray
 	let words = StringArray.create(0)
 
 	for row in debugCommandRows() 'eachRow'
@@ -185,7 +185,7 @@ let UnnamedFaultWords = "hardware fault"
 // ⛔ **A FAULT ARRIVES AS THE HOST'S OWN CODE, AND THE TWO HOSTS DO NOT SPEAK ONE.** A debug port hands over
 // an NTSTATUS and a ptrace stop hands over a signal number, so the reading is the HOST's — which is sound
 // because `vouchedDebugImage` refuses an image built for any other.
-module function debugFaultDescription(code DebugAddress) returns String
+function debugFaultDescription(code DebugAddress) returns String
 	let os = detectHostTarget().os
 
 	for kind in HardwareFaultKind.allCases 'eachStoppingFault'

@@ -20,24 +20,24 @@ let FirstLoopStamp = 0
 //
 // A GENERATION STAMP costs nothing to reset: entering a loop bumps one counter, and an entry stamped
 // with an older generation reads as absent.
-module type LoopValueStamps
+type LoopValueStamps
 	var stampOf as LoopStampColumn
 	var current as LoopStamp
 
-	module static function create() returns LoopValueStamps
+	static function create() returns LoopValueStamps
 		return Self{stampOf: LoopStampColumn.create(), current: FirstLoopStamp}
 	end 'create'
 
-	module function beginLoop()
+	function beginLoop()
 		self.current = self.current + 1
 	end 'beginLoop'
 
-	module function insert(valueId ValueId)
+	function insert(valueId ValueId)
 		self.stampOf.growAbsent((valueId + 1) as ElementIndex)
 		self.stampOf.set(valueId, value: self.current)
 	end 'insert'
 
-	module function contains(valueId ValueId) returns bool
+	function contains(valueId ValueId) returns bool
 		if valueId >= self.stampOf.count() as ValueId 'neverStamped'
 			return false
 		end 'neverStamped'
@@ -50,7 +50,7 @@ end 'LoopValueStamps'
 // proven coverage per address, `unswitchInvariantGuards`' canonical per hoisted value. Two columns for
 // one map — presence and payload — because every payload value is a legitimate one and a single column
 // would need one of them to mean "absent"; a payload beneath a stale stamp is never read.
-module type LoopValueMap uses Payload
+type LoopValueMap uses Payload
 	typealias PayloadColumn = Array with Payload
 
 	var present as LoopValueStamps
@@ -59,26 +59,26 @@ module type LoopValueMap uses Payload
 	// What the payload column grows filled with — never read, since a slot is read only under a live stamp.
 	var fill as Payload
 
-	module static function create(fill Payload) returns Self
+	static function create(fill Payload) returns Self
 		return Self{present: LoopValueStamps.create(), payloads: PayloadColumn.create(0), fill: fill}
 	end 'create'
 
-	module function beginLoop()
+	function beginLoop()
 		self.present.beginLoop()
 	end 'beginLoop'
 
-	module function insert(valueId ValueId, payload Payload)
+	function insert(valueId ValueId, payload Payload)
 		self.present.insert(valueId)
 		self.payloads.growFilled(((valueId + 1) as ElementIndex), value: self.fill)
 		try self.payloads.set(valueId, value: payload) otherwise panic("LoopValueMap.insert: payloads.set OOB at {valueId}")
 	end 'insert'
 
-	module function contains(valueId ValueId) returns bool
+	function contains(valueId ValueId) returns bool
 		return self.present.contains(valueId)
 	end 'contains'
 
 	// The payload this loop wrote for `valueId`. Panics for a value it did not — callers ask `contains`.
-	module function payloadOf(valueId ValueId) returns Payload
+	function payloadOf(valueId ValueId) returns Payload
 		if not self.present.contains(valueId) 'absent'
 			panic("LoopValueMap.payloadOf: value {valueId} was not mapped in this loop — ask `contains` first")
 		end 'absent'
@@ -94,7 +94,7 @@ end 'LoopValueMap'
 // iterations"; and `tryCall`/`witnessTryCall` write a result AND an error flag. Missing the flag makes
 // its consumers appear to read a value defined outside the loop. `stdOpDefinedValue` reports both
 // halves, so there is nothing here to forget.
-module function collectLoopDefs(module StdModule, func IrFunction, members LoopMembership, definedInLoop LoopValueStamps, def StdDefinedValues)
+function collectLoopDefs(module StdModule, func IrFunction, members LoopMembership, definedInLoop LoopValueStamps, def StdDefinedValues)
 	for position in members.blocks 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
 
@@ -128,7 +128,7 @@ end 'recordDefsOf'
 
 // Whether one operand is loop-invariant: either the loop does not define it at all, or the pass has
 // already proved the op that does.
-module function operandIsInvariant(valueId ValueId, definedInLoop LoopValueStamps, invariant LoopValueStamps) returns bool
+function operandIsInvariant(valueId ValueId, definedInLoop LoopValueStamps, invariant LoopValueStamps) returns bool
 	return not definedInLoop.contains(valueId) or invariant.contains(valueId)
 end 'operandIsInvariant'
 
@@ -144,7 +144,7 @@ end 'operandIsInvariant'
 // member hangs below a non-member. That is what makes the prune below sound and the walk O(the loop)
 // instead of O(the function). Children are pushed in the tree's order and popped last first — the
 // order both passes' outputs are laid out in.
-module function recordLoopPreorder(tree StdDominatorTree, members LoopMembership, header ElementIndex, into BlockPositionColumn)
+function recordLoopPreorder(tree StdDominatorTree, members LoopMembership, header ElementIndex, into BlockPositionColumn)
 	let stack = BlockPositionColumn.create(0)
 	stack.push(header)
 

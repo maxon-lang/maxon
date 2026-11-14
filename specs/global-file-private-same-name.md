@@ -1,33 +1,33 @@
 ---
 feature: global-file-private-same-name
 status: stable
-keywords: var, global, file-private, visibility, data-section, aliasing
+keywords: let, global, unmarked, visibility, directory, data-section, aliasing
 category: language
 ---
 # File-Private Globals With The Same Name
 
 ## Documentation
 
-A top-level `var` that is not `export`ed is **file-private**: it is visible only inside its
-declaring file. Two files in different directories may therefore each declare a `var` of the same
-bare name with different values, and each file's reads and writes resolve to its OWN storage.
+A top-level binding that is not `export`ed is visible only inside its declaring directory and its
+subdirectories. Two files in different directories may therefore each declare a binding of the same
+bare name with different values, and each file's reads and writes resolve to its OWN directory's storage.
 Two files of ONE directory may not: a top-level name is declared once per directory, whatever its
 visibility (`top-level-name-scope.md`), and the second declaration is E3006.
 
-This mirrors the rule `top-level-let.md` states for a file-private `let`
-(`file-private-same-name-cross-file`), and it is the same rule: the name resolver is
-file-scoped, and the directory is the scope a name is declared in.
+This mirrors the rule `top-level-let.md` states for an unmarked `let`
+(`unmarked-same-name-cross-file`), and it is the same rule: the directory is the scope a name is
+declared in and resolved from.
 
-The distinction a `var` adds is that its storage is REAL. A `let` inlines as a literal at every
-use, so there is no slot for two constants to collide in; a `var` has a `.data` slot, and that
-slot's identity must be per-FILE, exactly as the name resolution is. A compiler whose resolver
-is file-scoped while its data label is global-by-name will alias the two declarations onto one
-slot and silently return a wrong number.
+The distinction a binding with storage adds is that its storage is REAL. A scalar `let` inlines as a
+literal at every use, so there is no slot for two constants to collide in; a managed binding has a `.data`
+slot, and that slot's identity must be per-DIRECTORY, exactly as the name resolution is. A compiler whose
+resolver is directory-scoped while its data label is global-by-name will alias the two declarations onto
+one slot and silently return a wrong number.
 
 ## Tests
 
 <!-- test: file-private-same-name-in-two-directories-through-a-generic-instance -->
-Two files in two DIRECTORIES each declare a file-private `limit`, `tag` and `calls` (a `SharedValue` cell). A generic type
+Two files in two DIRECTORIES each declare an unmarked `limit`, `tag` and `calls` (a `SharedValue` cell). A generic type
 declared in `a.maxon` has a method that reads them, and `app/main.maxon` instantiates it and calls that method
 from beside its own three declarations of the same names. The method reads `a.maxon`'s declarations
 whichever file instantiated it or called it, and bumps `a.maxon`'s `calls`, never `main.maxon`'s.
@@ -124,12 +124,12 @@ error E3095: app/<fragment>:10:9: Ambiguous bare-name read of 'LIMIT': more than
 ```
 
 <!-- test: a-root-binding-owns-the-bare-name-beside-a-subdirectorys -->
-The root declares a `module let LIMIT` and `sub/` exports another. A file in a third directory reads the bare name as
+The root declares an unmarked `let LIMIT` and `sub/` exports another. A file in a third directory reads the bare name as
 the root's (40) and the subdirectory's as `sub.LIMIT` (2), as a bare call reaches the root's function before any
 directory's.
 ```maxon
 // --- file: main.maxon
-module let LIMIT = 40
+let LIMIT = 40
 
 function main() returns ExitCode
 	return fromOther()
@@ -169,8 +169,8 @@ error E3006: lib/<fragment>:6:12: duplicate definition of 'LIMIT' — already de
 ```
 
 <!-- test: global-file-private-same-name.error.two-files-of-one-directory-each-declare-a-private-helper-of-one-name -->
-Each file declares a file-private `pick` and calls its own, and the two share one directory, so the name is
-declared twice there: the later in path order is refused at its name, however private either is.
+Each file declares an unmarked `pick` and calls its own, and the two share one directory, so the name is
+declared twice there: the later in path order is refused at its name.
 ```maxon
 // --- file: a.maxon
 function pick(s String) returns String
@@ -234,7 +234,7 @@ hi
 ```
 
 <!-- test: global-file-private-same-name.two-private-helpers-of-one-name-in-two-directories-returning-different-managed-types -->
-The `stripTrailingCR` shape: two files of two directories, one private helper name, parameter types that differ
+The `stripTrailingCR` shape: two files of two directories, one unmarked helper name, parameter types that differ
 AND return types that differ — and both of them MANAGED, so the divergence is not one any later retype could
 repair. A result typed from the wrong member here is a leak in one direction and a drop of a record the
 callee never wrote in the other, which is why the pair is pinned by `exitcode` and not by `stdout` alone.
@@ -552,4 +552,118 @@ end 'main'
 ```
 ```exitcode
 79
+```
+
+<!-- test: two-library-directories-each-read-their-own-unmarked-scalar-let-of-one-name -->
+The library root and `helpers/string/` each declare an unmarked `Limit`, and each directory's public function
+reads its own: the nearer declaration is the one a bare read in `helpers/string/` means.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+let Limit = 7
+
+public function overlayLimitA() returns Count
+	return Limit
+end 'overlayLimitA'
+// --- stdlib-overlay: helpers/string/hash.maxon
+let Limit = 900
+
+public function overlayLimitB() returns Count
+	return Limit
+end 'overlayLimitB'
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{overlayLimitA()} {overlayLimitB()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 900
+```
+
+<!-- test: two-sibling-library-directories-each-read-their-own-unmarked-scalar-let-of-one-name -->
+`helpers/string/` and `helpers/hashtable/` each declare an unmarked `Limit`; neither directory contains the other,
+so no file can name both, and each public function reads its own directory's.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+let Limit = 7
+
+public function overlayLimitA() returns Count
+	return Limit
+end 'overlayLimitA'
+// --- stdlib-overlay: helpers/hashtable/slotScan.maxon
+let Limit = 900
+
+public function overlayLimitB() returns Count
+	return Limit
+end 'overlayLimitB'
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{overlayLimitA()} {overlayLimitB()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 900
+```
+
+<!-- test: two-library-directories-each-read-their-own-unmarked-managed-let-of-one-name -->
+The same shape with a managed binding, which owns a `.data` slot per directory rather than inlining.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+let Tagline = "alpha"
+
+public function overlayTaglineA() returns String
+	return Tagline
+end 'overlayTaglineA'
+// --- stdlib-overlay: helpers/string/hash.maxon
+let Tagline = "be"
+
+public function overlayTaglineB() returns String
+	return Tagline
+end 'overlayTaglineB'
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{overlayTaglineA()} {overlayTaglineB()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha be
+```
+
+<!-- test: two-sibling-library-directories-each-read-their-own-unmarked-managed-let-of-one-name -->
+The managed binding in two sibling library directories.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+let Tagline = "alpha"
+
+public function overlayTaglineA() returns String
+	return Tagline
+end 'overlayTaglineA'
+// --- stdlib-overlay: helpers/hashtable/slotScan.maxon
+let Tagline = "be"
+
+public function overlayTaglineB() returns String
+	return Tagline
+end 'overlayTaglineB'
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{overlayTaglineA()} {overlayTaglineB()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha be
 ```

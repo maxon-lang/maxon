@@ -1,34 +1,35 @@
-module typealias FrozenParseArray = Array with immutable HeldParse
-module typealias FrozenFileParseMap = Map with (HashDigest, immutable FileParses)
-module typealias FrozenBaselineArray = Array with immutable HeldBaseline
-module typealias FrozenPackMap = Map with (String, immutable LibraryPack)
-module typealias RecentDigestArray = Array with HashDigest
-module typealias RecentNameArray = Array with String
+typealias FrozenParseArray = Array with immutable HeldParse
+typealias FrozenFileParseMap = Map with (HashDigest, immutable FileParses)
+typealias RetainedBaselines = RetainedEntries with immutable HeldBaseline
+typealias RetainedAudits = RetainedEntries with immutable HeldAudit
+typealias FrozenPackMap = Map with (String, immutable LibraryPack)
+typealias RecentDigestArray = Array with HashDigest
+typealias RecentNameArray = Array with String
 
 let MostSharedFiles = 512
-let MostSharedInstalledBaselines = 4
-let MostSharedStagedBaselines = 2
+let MostSharedInstalledStates = 4
+let MostSharedStagedStates = 2
 let MostSharedPacks = 24
-module let MostKeysPerLibraryParse = 6
+let MostKeysPerLibraryParse = 6
 let MostStagedKeysPerLibraryParse = 1
 
-module type HeldParse
-	module let entryClass as LibraryEntryClass
-	module let parse as immutable SharedLibraryParse
+type HeldParse
+	let entryClass as LibraryEntryClass
+	let parse as immutable SharedLibraryParse
 
-	module static function of(entryClass LibraryEntryClass, parse immutable SharedLibraryParse) returns HeldParse
+	static function of(entryClass LibraryEntryClass, parse immutable SharedLibraryParse) returns HeldParse
 		return Self{entryClass: entryClass, parse: parse}
 	end 'of'
 end 'HeldParse'
 
-module type FileParses
+type FileParses
 	let parses as FrozenParseArray
 
-	module static function none() returns FileParses
+	static function none() returns FileParses
 		return Self{parses: FrozenParseArray.create(0)}
 	end 'none'
 
-	module function answering(variant HashDigest, key HashDigest) returns immutable SharedLibraryParse throws SharedMemoMiss
+	function answering(variant HashDigest, key HashDigest) returns immutable SharedLibraryParse throws SharedMemoMiss
 		for held in self.parses 'eachHeld'
 			if held.parse.answers(variant, wantedKey: key) 'thisParse'
 				return held.parse
@@ -38,7 +39,7 @@ module type FileParses
 		throw SharedMemoMiss.notHeld
 	end 'answering'
 
-	module function countOf(variants HashDigestSet) returns ElementIndex
+	function countOf(variants HashDigestSet) returns ElementIndex
 		var held = 0 as ElementIndex
 
 		for entry in self.parses 'eachParse'
@@ -50,7 +51,7 @@ module type FileParses
 		return held
 	end 'countOf'
 
-	module static function adding(existing FileParses, parse immutable SharedLibraryParse, entryClass LibraryEntryClass) returns immutable FileParses
+	static function adding(existing FileParses, parse immutable SharedLibraryParse, entryClass LibraryEntryClass) returns immutable FileParses
 		let next = FileParses.none() as isolated FileParses
 
 		modify next 'fill'
@@ -94,19 +95,19 @@ module type FileParses
 	end 'adding'
 end 'FileParses'
 
-module type FileParseTable
+type FileParseTable
 	let parses as FrozenFileParseMap
 	let recency as RecentDigestArray
 
-	module static function empty() returns FileParseTable
+	static function empty() returns FileParseTable
 		return Self{parses: FrozenFileParseMap.create(), recency: RecentDigestArray.create(0)}
 	end 'empty'
 
-	module function holding(contentHash HashDigest) returns immutable FileParses throws SharedMemoMiss
+	function holding(contentHash HashDigest) returns immutable FileParses throws SharedMemoMiss
 		return try self.parses.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 	end 'holding'
 
-	module function adding(contentHash HashDigest, parse immutable SharedLibraryParse, entryClass LibraryEntryClass) returns FileParseTable
+	function adding(contentHash HashDigest, parse immutable SharedLibraryParse, entryClass LibraryEntryClass) returns FileParseTable
 		let nextParses = FrozenFileParseMap.create()
 		let nextRecency = RecentDigestArray.create(0)
 
@@ -132,67 +133,66 @@ module type FileParseTable
 	end 'adding'
 end 'FileParseTable'
 
-function mostSharedBaselinesOf(entryClass LibraryEntryClass) returns ElementIndex
+function mostSharedStatesOf(entryClass LibraryEntryClass) returns ElementIndex
 	return match entryClass 'class'
-		installed gives MostSharedInstalledBaselines
-		staged gives MostSharedStagedBaselines
+		installed gives MostSharedInstalledStates
+		staged gives MostSharedStagedStates
 	end 'class'
-end 'mostSharedBaselinesOf'
+end 'mostSharedStatesOf'
 
-module type BaselineTable
-	let held as FrozenBaselineArray
+interface ClassedLibraryEntry
+	function entryClassOf() returns LibraryEntryClass
+	function supersedes(older Self) returns bool
+end 'ClassedLibraryEntry'
 
-	module static function empty() returns BaselineTable
-		return Self{held: FrozenBaselineArray.create(0)}
+type RetainedEntries uses Entry where Entry is ClassedLibraryEntry
+	typealias EntryArray = Array with Entry
+	typealias EntryTest = function(Entry) returns bool
+
+	let held as EntryArray
+
+	static function empty() returns RetainedEntries
+		return Self{held: EntryArray.create(0)}
 	end 'empty'
 
-	module function baselineFor(key HashDigest, kind LibraryEntryKind) returns immutable HeldBaseline throws LibraryEntryMiss
+	function entryWhere(admits EntryTest) returns Entry throws LibraryEntryMiss
 		for candidate in self.held 'eachHeld'
-			if candidate.key == key and candidate.kind == kind 'thisLibrary'
+			if admits(candidate) 'thisEntry'
 				return candidate
-			end 'thisLibrary'
+			end 'thisEntry'
 		end 'eachHeld'
 
 		throw LibraryEntryMiss.absent
-	end 'baselineFor'
+	end 'entryWhere'
 
-	module function manifestFor(key HashDigest) returns immutable LibraryManifest throws LibraryEntryMiss
-		for candidate in self.held 'eachHeld'
-			if candidate.key == key 'thisLibrary'
-				return candidate.declarations.manifest
-			end 'thisLibrary'
-		end 'eachHeld'
-
-		throw LibraryEntryMiss.absent
-	end 'manifestFor'
-
-	module function keeping(newest immutable HeldBaseline) returns BaselineTable
-		let kept = FrozenBaselineArray.create(0)
+	function keeping(newest Entry) returns RetainedEntries
+		let kept = EntryArray.create(0)
+		let newestClass = newest.entryClassOf()
 		var ofClass = 1 as ElementIndex
 
 		for earlier in self.held 'eachHeld'
-			if earlier.key == newest.key and earlier.kind == newest.kind 'replaced'
+			if newest.supersedes(earlier) 'replaced'
 				continue
 			end 'replaced'
 
-			kept.push(earlier)
-
-			if earlier.entryClass == newest.entryClass 'sameClass'
+			if earlier.entryClassOf() == newestClass 'sameClass'
 				ofClass = ofClass + 1
 			end 'sameClass'
+
+			kept.push(earlier)
 		end 'eachHeld'
 
-		let most = mostSharedBaselinesOf(newest.entryClass)
+		let most = mostSharedStatesOf(newestClass)
 		var surplus = 0 as ElementIndex
 
 		if ofClass > most 'overTheCap'
 			surplus = ofClass - most
 		end 'overTheCap'
 
-		let next = FrozenBaselineArray.create(0)
+		let next = EntryArray.create(0)
 
 		for candidate in kept 'eachKept'
-			if surplus > 0 and candidate.entryClass == newest.entryClass 'oldestOfTheClass'
+			if surplus > 0 and candidate.entryClassOf() == newestClass 'oldestOfTheClass'
 				surplus = surplus - 1
 				continue
 			end 'oldestOfTheClass'
@@ -204,21 +204,83 @@ module type BaselineTable
 
 		return Self{held: next}
 	end 'keeping'
+end 'RetainedEntries'
+
+type BaselineTable
+	let retained as RetainedBaselines
+
+	static function empty() returns BaselineTable
+		return Self{retained: RetainedBaselines.empty()}
+	end 'empty'
+
+	function baselineFor(key HashDigest, kind LibraryEntryKind) returns immutable HeldBaseline throws LibraryEntryMiss
+		return try self.retained.entryWhere(function(held) gives held.isFor(key, wantedKind: kind))
+	end 'baselineFor'
+
+	function manifestFor(key HashDigest) returns immutable LibraryManifest throws LibraryEntryMiss
+		let found = try self.retained.entryWhere(function(held) gives held.key == key)
+
+		return found.declarations.manifest
+	end 'manifestFor'
+
+	function keeping(newest immutable HeldBaseline) returns BaselineTable
+		return Self{retained: self.retained.keeping(newest)}
+	end 'keeping'
 end 'BaselineTable'
 
-module type PackTable
+type HeldAudit implements ClassedLibraryEntry
+	let key as HashDigest
+	let entryClass as LibraryEntryClass
+	let findings as immutable UnusedFindingArray
+
+	static function create(key HashDigest, entryClass LibraryEntryClass, findings immutable UnusedFindingArray) returns HeldAudit
+		return Self{key: key, entryClass: entryClass, findings: findings}
+	end 'create'
+
+	function entryClassOf() returns LibraryEntryClass
+		return self.entryClass
+	end 'entryClassOf'
+
+	function isFor(wantedKey HashDigest) returns bool
+		return self.key == wantedKey
+	end 'isFor'
+
+	function supersedes(older HeldAudit) returns bool
+		return older.isFor(self.key)
+	end 'supersedes'
+end 'HeldAudit'
+
+type AuditTable
+	let retained as RetainedAudits
+
+	static function empty() returns AuditTable
+		return Self{retained: RetainedAudits.empty()}
+	end 'empty'
+
+	function findingsFor(key HashDigest) returns immutable UnusedFindingArray throws LibraryEntryMiss
+		let found = try self.retained.entryWhere(function(held) gives held.isFor(key))
+
+		return found.findings
+	end 'findingsFor'
+
+	function keeping(newest immutable HeldAudit) returns AuditTable
+		return Self{retained: self.retained.keeping(newest)}
+	end 'keeping'
+end 'AuditTable'
+
+type PackTable
 	let opened as FrozenPackMap
 	let recency as RecentNameArray
 
-	module static function empty() returns PackTable
+	static function empty() returns PackTable
 		return Self{opened: FrozenPackMap.create(), recency: RecentNameArray.create(0)}
 	end 'empty'
 
-	module function packNamed(name String) returns immutable LibraryPack throws LibraryEntryMiss
+	function packNamed(name String) returns immutable LibraryPack throws LibraryEntryMiss
 		return try self.opened.get(name) otherwise throw LibraryEntryMiss.absent
 	end 'packNamed'
 
-	module function keeping(name String, pack immutable LibraryPack) returns PackTable
+	function keeping(name String, pack immutable LibraryPack) returns PackTable
 		let nextOpened = FrozenPackMap.create()
 		let nextRecency = RecentNameArray.create(0)
 
@@ -243,7 +305,7 @@ module type PackTable
 		return Self{opened: nextOpened, recency: nextRecency}
 	end 'keeping'
 
-	module function without(name String) returns PackTable
+	function without(name String) returns PackTable
 		let nextOpened = FrozenPackMap.create()
 		let nextRecency = RecentNameArray.create(0)
 
@@ -263,39 +325,42 @@ module type PackTable
 	end 'without'
 end 'PackTable'
 
-module union SharedLibraryChange
+union SharedLibraryChange
 	parse(contentHash HashDigest, held immutable SharedLibraryParse, entryClass LibraryEntryClass)
 	baseline(held immutable HeldBaseline)
+	audit(held immutable HeldAudit)
 	pack(name String, opened immutable LibraryPack)
 	withoutPack(name String)
 end 'SharedLibraryChange'
 
-module type SharedLibraryCache
-	module let files as immutable FileParseTable
-	module let baselines as immutable BaselineTable
-	module let packs as immutable PackTable
+type SharedLibraryCache
+	let files as immutable FileParseTable
+	let baselines as immutable BaselineTable
+	let audits as immutable AuditTable
+	let packs as immutable PackTable
 
-	module static function empty() returns SharedLibraryCache
-		return Self{files: freeze FileParseTable.empty(), baselines: freeze BaselineTable.empty(), packs: freeze PackTable.empty()}
+	static function empty() returns SharedLibraryCache
+		return Self{files: freeze FileParseTable.empty(), baselines: freeze BaselineTable.empty(), audits: freeze AuditTable.empty(), packs: freeze PackTable.empty()}
 	end 'empty'
 
-	static function over(files immutable FileParseTable, baselines immutable BaselineTable, packs immutable PackTable) returns SharedLibraryCache
-		return Self{files: files, baselines: baselines, packs: packs}
+	static function over(files immutable FileParseTable, baselines immutable BaselineTable, audits immutable AuditTable, packs immutable PackTable) returns SharedLibraryCache
+		return Self{files: files, baselines: baselines, audits: audits, packs: packs}
 	end 'over'
 
-	module function applying(change SharedLibraryChange) returns SharedLibraryCache
+	function applying(change SharedLibraryChange) returns SharedLibraryCache
 		return match change 'change'
-			parse(contentHash, held, entryClass) gives SharedLibraryCache.over(freeze self.files.adding(contentHash, parse: held, entryClass: entryClass), baselines: self.baselines, packs: self.packs)
-			baseline(held) gives SharedLibraryCache.over(self.files, baselines: freeze self.baselines.keeping(held), packs: self.packs)
-			pack(name, opened) gives SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.keeping(name, pack: opened))
-			withoutPack(name) gives SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.without(name))
+			parse(contentHash, held, entryClass) gives SharedLibraryCache.over(freeze self.files.adding(contentHash, parse: held, entryClass: entryClass), baselines: self.baselines, audits: self.audits, packs: self.packs)
+			baseline(held) gives SharedLibraryCache.over(self.files, baselines: freeze self.baselines.keeping(held), audits: self.audits, packs: self.packs)
+			audit(held) gives SharedLibraryCache.over(self.files, baselines: self.baselines, audits: freeze self.audits.keeping(held), packs: self.packs)
+			pack(name, opened) gives SharedLibraryCache.over(self.files, baselines: self.baselines, audits: self.audits, packs: freeze self.packs.keeping(name, pack: opened))
+			withoutPack(name) gives SharedLibraryCache.over(self.files, baselines: self.baselines, audits: self.audits, packs: freeze self.packs.without(name))
 		end 'change'
 	end 'applying'
 end 'SharedLibraryCache'
 
 default SharedLibraryCache = SharedLibraryCache.empty()
 
-module function emptySharedLibrary()
+function emptySharedLibrary()
 	while true 'untilItLands'
 		if SharedLibraryCache.register(SharedLibraryCache.empty(), replacing: SharedLibraryCache.current()) 'landed'
 			return
@@ -303,7 +368,7 @@ module function emptySharedLibrary()
 	end 'untilItLands'
 end 'emptySharedLibrary'
 
-module function publishToSharedLibrary(change SharedLibraryChange)
+function publishToSharedLibrary(change SharedLibraryChange)
 	while true 'untilItLands'
 		let old = SharedLibraryCache.current()
 

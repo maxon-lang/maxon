@@ -88,9 +88,7 @@ export typealias FuncIndexByName = Map with (ByteArray, ElementIndex)
 
 // The index, or the position of the function whose name collided with an earlier one. A union rather than
 // a throw, so `build`'s caller decides whether a duplicate is ITS refusal to raise — see `build`.
-// ⚠ `module`, not `export`: nothing outside `Compiler/IR/` reaches this result, and `checkUnusedExports`
-// (E3093) refuses an export nothing reads.
-module union FunctionNameIndexBuild
+union FunctionNameIndexBuild
 	duplicateAt(laterIndex ElementIndex)
 	built(index FunctionNameIndex)
 end 'FunctionNameIndexBuild'
@@ -145,7 +143,7 @@ export type FunctionNameIndex
 	// differ only in who is told. A caller that hand-rolled its own `Map with (ByteArray, ElementIndex)` to get
 	// a non-throwing build would have been the eleventh such map and the third tie-break, which is what this
 	// exists to prevent.
-	module static function build(functions IrFunctionArray) returns FunctionNameIndexBuild
+	static function build(functions IrFunctionArray) returns FunctionNameIndexBuild
 		let byName = FuncIndexByName.create()
 
 		for i in 0 upto functions.count() 'eachFunc'

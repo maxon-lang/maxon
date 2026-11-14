@@ -1,19 +1,19 @@
-module let tlsFallbackScsv = 0x5600
-module let tlsRenegotiationScsv = 0x00FF
-module let tlsDowngradeSentinelTls12 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01]
-module let tlsDowngradeSentinelTls11 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x00]
-module let tlsDowngradeSentinelOffset = 24
+let tlsFallbackScsv = 0x5600
+let tlsRenegotiationScsv = 0x00FF
+let tlsDowngradeSentinelTls12 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01]
+let tlsDowngradeSentinelTls11 = ByteArray from [0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x00]
+let tlsDowngradeSentinelOffset = 24
 
-module enum Tls12CertificateType
+enum Tls12CertificateType
 	rsaSign = 1
 	ecdsaSign = 64
 
-	module function code() returns Byte
+	function code() returns Byte
 		return self.rawValue as Byte
 	end 'code'
 end 'Tls12CertificateType'
 
-module function tls12CertificateTypeOf(algorithm X509KeyAlgorithm) returns Tls12CertificateType
+function tls12CertificateTypeOf(algorithm X509KeyAlgorithm) returns Tls12CertificateType
 	return match algorithm 'algorithm'
 		rsa gives Tls12CertificateType.rsaSign
 		ecP256 or
@@ -22,17 +22,17 @@ module function tls12CertificateTypeOf(algorithm X509KeyAlgorithm) returns Tls12
 	end 'algorithm'
 end 'tls12CertificateTypeOf'
 
-module type Tls12Parameters
-	module var suite as Tls12CipherSuite
-	module var clientRandom as ByteArray
-	module var serverRandom as ByteArray
-	module var extendedMasterSecret as bool
+type Tls12Parameters
+	var suite as Tls12CipherSuite
+	var clientRandom as ByteArray
+	var serverRandom as ByteArray
+	var extendedMasterSecret as bool
 
-	module static function create(suite Tls12CipherSuite, clientRandom ByteArray, serverRandom ByteArray, extendedMasterSecret bool) returns Tls12Parameters
+	static function create(suite Tls12CipherSuite, clientRandom ByteArray, serverRandom ByteArray, extendedMasterSecret bool) returns Tls12Parameters
 		return Self{suite: suite, clientRandom: clientRandom, serverRandom: serverRandom, extendedMasterSecret: extendedMasterSecret}
 	end 'create'
 
-	module function signedParameters(group TlsGroupCode, publicKey ByteArray) returns ByteArray throws TlsHandshakeError
+	function signedParameters(group TlsGroupCode, publicKey ByteArray) returns ByteArray throws TlsHandshakeError
 		let parameters = try tlsServerKeyExchangeParameters(group, publicKey: publicKey) otherwise throw TlsHandshakeError.internalError
 		let signed = clientRandom.clone()
 		signed.append(serverRandom)
@@ -50,26 +50,26 @@ module type Tls12Parameters
 	end 'masterSecret'
 end 'Tls12Parameters'
 
-module type Tls12Secrets
-	module var parameters as Tls12Parameters
+type Tls12Secrets
+	var parameters as Tls12Parameters
 	var master as ByteArray
 	var block as Tls12KeyBlock
 
-	module static function derive(parameters Tls12Parameters, preMasterSecret ByteArray, sessionHash ByteArray) returns Tls12Secrets throws TlsHandshakeError
+	static function derive(parameters Tls12Parameters, preMasterSecret ByteArray, sessionHash ByteArray) returns Tls12Secrets throws TlsHandshakeError
 		let master = try parameters.masterSecret(preMasterSecret, sessionHash: sessionHash)
 		let block = try Tls12Prf.keyBlock(parameters.suite, masterSecret: master, clientRandom: parameters.clientRandom, serverRandom: parameters.serverRandom) otherwise throw TlsHandshakeError.internalError
 
 		return Self{parameters: parameters, master: master, block: block}
 	end 'derive'
 
-	module function cipher(sender Tls12Sender) returns TlsTls12Cipher throws TlsHandshakeError
+	function cipher(sender Tls12Sender) returns TlsTls12Cipher throws TlsHandshakeError
 		return match sender 'sender'
 			client gives try TlsTls12Cipher.create(parameters.suite, key: block.clientWriteKey, iv: block.clientWriteIv)
 			server gives try TlsTls12Cipher.create(parameters.suite, key: block.serverWriteKey, iv: block.serverWriteIv)
 		end 'sender'
 	end 'cipher'
 
-	module function sendFinished(sender Tls12Sender, session TlsSession) throws TlsHandshakeError
+	function sendFinished(sender Tls12Sender, session TlsSession) throws TlsHandshakeError
 		let message = try tlsEncodedMessage(TlsHandshakeMessage.finished(try finishedData(sender, session: session)))
 
 		session.writer.writeChangeCipherSpecOnce()
@@ -78,7 +78,7 @@ module type Tls12Secrets
 		try session.writer.writeHandshake(message)
 	end 'sendFinished'
 
-	module function requireFinished(sender Tls12Sender, session TlsSession, verifyData ByteArray) throws TlsHandshakeError
+	function requireFinished(sender Tls12Sender, session TlsSession, verifyData ByteArray) throws TlsHandshakeError
 		if verifyData.count() != tls12VerifyDataBytes 'length'
 			throw TlsHandshakeError.decodeError
 		end 'length'

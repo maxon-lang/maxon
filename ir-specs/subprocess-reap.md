@@ -1471,7 +1471,7 @@ func @main {
     x64.retIndirect
   tryerr#278:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_170]  ; "panic at String.maxon:302: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_170]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1484,7 +1484,7 @@ func @main {
     x64.retIndirect
   tryerr#258:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_170]  ; "panic at String.maxon:302: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_170]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -3066,7 +3066,7 @@ func @main {
     arm64.retIndirect
   tryerr#405:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:302: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3083,7 +3083,7 @@ func @main {
     arm64.retIndirect
   tryerr#385:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:302: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4683,7 +4683,7 @@ func @main {
     arm64.retIndirect
   tryerr#405:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:302: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4700,7 +4700,7 @@ func @main {
     arm64.retIndirect
   tryerr#385:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:302: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_170  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22

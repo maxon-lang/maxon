@@ -12,8 +12,8 @@ category: crypto
 `TlsServerHandshake` is the TLS 1.3 server (RFC 8446) as a state machine over records, with no socket, and the
 counterpart of `TlsClientHandshake` (`specs/tls-handshake.md`): `receive` takes one inbound record, and the
 `TlsSession` it exposes through `session()` gives back the records to send (`takeRecords`), the application data
-received (`takeReceived`), and `write` and `close` for the connected state. It is `module` code in `stdlib/`, so a
-program outside `stdlib/` cannot name it (E3088); the cases here are library-tier (`<!-- tier: stdlib/helpers/tls -->`) and
+received (`takeReceived`), and `write` and `close` for the connected state. It is unexported code in `stdlib/`, so a
+program outside `stdlib/` cannot name it (E3008); the cases here are library-tier (`<!-- tier: stdlib/helpers/tls -->`) and
 reach it, and the test seams, as a stdlib source file does.
 
 It follows the canra `tls-handshake-server` contract. It negotiates in the contract's order, in the server's own
@@ -4500,7 +4500,7 @@ p256-server-rsa-client server connected=true version=772 suite=4865 group=29 alp
 ```
 
 <!-- test: tls-handshake-server.a-user-program-cannot-name-the-server-replay -->
-A program outside `stdlib/` cannot name `TlsServerReplay`, the test seam's driver: it is `module` code, reached only by library-tier source.
+A program outside `stdlib/` cannot name `TlsServerReplay`, the test seam's driver: it is unexported code, reached only by library-tier source.
 ```maxon
 function main() returns ExitCode
 	let seam = TlsServerReplay.create()
@@ -4509,11 +4509,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:13: type 'TlsServerReplay' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:13: type 'TlsServerReplay' is not exported
 ```
 
 <!-- test: tls-handshake-server.a-user-program-cannot-name-the-loopback -->
-A program outside `stdlib/` cannot name `TlsLoopback`, the driver that connects a client to a server in memory: it is `module` code, reached only by library-tier source.
+A program outside `stdlib/` cannot name `TlsLoopback`, the driver that connects a client to a server in memory: it is unexported code, reached only by library-tier source.
 ```maxon
 function main() returns ExitCode
 	let seam = TlsLoopback.create()
@@ -4522,6 +4522,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:13: type 'TlsLoopback' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:13: type 'TlsLoopback' is not exported
 ```
 

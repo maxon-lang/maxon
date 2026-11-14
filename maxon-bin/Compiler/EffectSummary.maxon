@@ -130,33 +130,33 @@ function joinOrigins(a ValueOriginCode, b ValueOriginCode) returns ValueOriginCo
 	return OriginUnknown
 end 'joinOrigins'
 
-module type MergeEdges
+type MergeEdges
 	var phis as ValueIdArray
 	var incomings as ValueIdArray
 
-	module static function create() returns MergeEdges
+	static function create() returns MergeEdges
 		return Self{phis: ValueIdArray.create(0), incomings: ValueIdArray.create(0)}
 	end 'create'
 
-	module function note(phi ValueId, incoming ValueId)
+	function note(phi ValueId, incoming ValueId)
 		self.phis.push(phi)
 		self.incomings.push(incoming)
 	end 'note'
 
-	module function count() returns ElementIndex
+	function count() returns ElementIndex
 		return self.phis.count()
 	end 'count'
 
-	module function phiAt(index ElementIndex) returns ValueId
+	function phiAt(index ElementIndex) returns ValueId
 		return try self.phis.get(index) otherwise panic("MergeEdges.phiAt: {index} is below count()")
 	end 'phiAt'
 
-	module function incomingAt(index ElementIndex) returns ValueId
+	function incomingAt(index ElementIndex) returns ValueId
 		return try self.incomings.get(index) otherwise panic("MergeEdges.incomingAt: {index} is below count()")
 	end 'incomingAt'
 end 'MergeEdges'
 
-module function noteMergeEdges(module MaxonModule, func IrFunction, into MergeEdges)
+function noteMergeEdges(module MaxonModule, func IrFunction, into MergeEdges)
 	let positions = OptionalElementIndexColumn.absent(func.nextBlockId)
 
 	for position in 0 upto func.blockRefs.count() 'indexBlocks'
@@ -1286,7 +1286,7 @@ end 'EffectNodes'
 // consumer refuses a program on a true, so everything this walk cannot see reads as an effect — an
 // undeclared callee, a spawn, an await, a write whose target is not known — and the cost of that is a
 // missed diagnostic, never a refused legal program.
-module function buildEffectFreeSummary(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
+function buildEffectFreeSummary(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
 	let builder = EffectSummaryBuilder.create(project.funcSignatures, signatures: signatures, typeNames: project.typeNames, funcNames: funcNames, runtimeTier: project.libraryFacts.runtimeTier)
 	return builder.build(module, functions: funcNames.functions, calleesFirst: calleesFirstOrder(module, funcNames: funcNames))
 end 'buildEffectFreeSummary'
@@ -2213,15 +2213,15 @@ type EffectSummaryBuilder
 	end 'verdicts'
 end 'EffectSummaryBuilder'
 
-module function emptySummaryColumn(funcCount ElementIndex) returns ParamPositionMaskArray
+function emptySummaryColumn(funcCount ElementIndex) returns ParamPositionMaskArray
 	return ParamPositionMaskArray.create(funcCount)
 end 'emptySummaryColumn'
 
-module function summaryMaskAt(column ParamPositionMaskArray, index ElementIndex) returns ParamPositionMask
+function summaryMaskAt(column ParamPositionMaskArray, index ElementIndex) returns ParamPositionMask
 	return try column.get(index) otherwise panic("summaryMaskAt: function index {index} is outside the column — it is built over `funcNames.functions`")
 end 'summaryMaskAt'
 
-module function widenSummaryColumn(column ParamPositionMaskArray, index ElementIndex, by ParamPositionMask) returns bool
+function widenSummaryColumn(column ParamPositionMaskArray, index ElementIndex, by ParamPositionMask) returns bool
 	let before = summaryMaskAt(column, index: index)
 	let after = before or by
 

@@ -59,8 +59,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A method carries its own visibility — `export`, `module` or `public` — and is file-private without one,
-  whatever the enum's own visibility. Calling a private method from another file is **E3008**.
+- A method carries its own visibility — `export` or `public` — and is visible to its declaring directory's
+  subtree without one, whatever the enum's own visibility. Calling an unmarked method from another directory
+  is **E3008**.
 - Inside a method, `self.name`, `self.ordinal` and `self.rawValue` read the case, and a
   [struct-backed](#struct-backed-enums) enum's backing field reads through `self` (`self.latency`). Any other
   `self.x`, and any assignment through `self`, is **E2015**.

@@ -1,6 +1,6 @@
 // The shape this process's own environment arrives in: the platforms hand it over in genuinely
 // different data structures.
-export enum EnvironmentSnapshotShape
+enum EnvironmentSnapshotShape
 	// Windows: `GetEnvironmentStringsW` answers ONE BLOCK — NUL-terminated `NAME=VALUE` entries back to
 	// back, ended by one more NUL — and it is a COPY the caller owes `FreeEnvironmentStringsW`.
 	nulSeparatedBlock
@@ -18,7 +18,7 @@ end 'EnvironmentSnapshotShape'
 
 // ⚠ **KEYED ON THE OS**: which shape a process's environment is published in is an ABI fact about the
 // platform and not about the instruction set.
-export function environmentSnapshotShape(target Target) returns EnvironmentSnapshotShape
+function environmentSnapshotShape(target Target) returns EnvironmentSnapshotShape
 	return match target.os 'os'
 		windows gives EnvironmentSnapshotShape.nulSeparatedBlock
 		linux or
@@ -51,7 +51,7 @@ let EnvBlock = 16
 let EnvWalkBytes = 24
 
 // One `char *`. Both lanes that answer `pointerVector` are 64-bit.
-export let EnvPointerStride = 8
+let EnvPointerStride = 8
 let EnvironmentRecordBytes = CanonicalPairBytes * 2
 
 export function isEnvironmentRuntimeCallee(callee ByteArray) returns bool

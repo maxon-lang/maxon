@@ -73,7 +73,7 @@ let SlabOsDirectPointerNotOursExit = 87 as MachineWord
 let SlabStateReadBeforeCommitExit = 124 as MachineWord
 
 // `__slab_os_direct_alloc(size) -> ptr` — one mapping for one request, with its length in a prefix.
-module function __slab_os_direct_alloc(size MachineWord) returns MachineWord
+function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	let withPrefix = (size as SlabWord) + OsDirectPrefixBytes
 	let total = (withPrefix + SlabPageMask) and SlabPageAlignMask
 
@@ -93,7 +93,7 @@ end '__slab_os_direct_alloc'
 // ⚠ **THE RELEASE IS THE ARM THAT IS SPELLED, NOT THE GUARD**, which is the opposite of
 // `runtime/SlabArena.maxon`'s guard-first shape and is deliberate: a body written as *"refuse, then
 // release"* lays the abort out as the FALL-THROUGH and puts a taken branch on every large free.
-module function __slab_os_direct_free(ptr MachineWord)
+function __slab_os_direct_free(ptr MachineWord)
 	let base = (ptr as SlabWord) - OsDirectPrefixBytes
 
 	if __Raw.loadWord(base as MachineWord, offset: OsDirectMagicOffset) == OsDirectMagic 'ours'
@@ -248,7 +248,7 @@ let SlabClassGeomSlotMask = 0xFFFFFFFF
 // ⚠ **THE COMMIT IS THE ARM THAT FALLS THROUGH, NOT THE GUARD.** This function is reached from the inline
 // probe's COLD arm, so the uncommitted case is the one that arrives here; a guard-first shape would put the
 // taken branch on it. `__slab_os_direct_free` above makes the same argument the other way round.
-module function __slab_state_base() returns MachineWord
+function __slab_state_base() returns MachineWord
 	let stateAddr = __Raw.slabStateAddr() as MachineWord
 	let current = __Raw.loadWord(stateAddr, offset: 0) as MachineWord
 
@@ -267,7 +267,7 @@ end '__slab_state_base'
 // `__slab_state_committed() -> base` — the state for a reader that only runs once an allocation has
 // committed it, so it carries no commit path of its own; a reader that arrives first exits with
 // `SlabStateReadBeforeCommitExit`.
-module function __slab_state_committed() returns MachineWord
+function __slab_state_committed() returns MachineWord
 	let state = __Raw.loadWord(__Raw.slabStateAddr(), offset: 0)
 
 	if (state as SlabWord) == SlabStateUncommitted 'beforeTheFirstAllocation'
@@ -292,7 +292,7 @@ end '__slab_state_committed'
 // ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`.** The bump cursor and the free list are shared by every
 // P, and every caller is already inside the lock — so taking it here would be a recursive re-entry paying
 // for a fact the caller has established.
-module function __slab_meta_alloc() returns MachineWord
+function __slab_meta_alloc() returns MachineWord
 	let state = __slab_state_committed()
 
 	// POP FIRST, AND THE BUMP IS THE ARM THAT FALLS THROUGH. The list is tested first because a recycled
@@ -342,7 +342,7 @@ end '__slab_meta_alloc'
 //
 // ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`** — see `__slab_meta_alloc`, whose cursor this list
 // shares.
-module function __slab_meta_free(span MachineWord)
+function __slab_meta_free(span MachineWord)
 	let state = __slab_state_committed()
 
 	__Raw.storeWord(span, offset: MspanBaseAddrOffset, value: __Raw.loadWord(state, offset: SlabStateMetaFreeOffset))
@@ -397,7 +397,7 @@ let SlabCensusTallyUnsoundExit = 119 as MachineWord
 // Precondition: the caller holds `__slab_lock`. The metadata slab, the mcache rows and the arena bitmaps
 // are all written by a P inside it, so an unlocked walk reads a span header between `__slab_meta_alloc` and
 // the refill that fills it in. `SlabRuntime.buildSlabCensusEntry` is the caller that takes it.
-module function __slab_census(kind MachineWord) returns MachineWord
+function __slab_census(kind MachineWord) returns MachineWord
 	if (kind as SlabWord) == SlabCensusCommittedBytes 'committed'
 		return ((__slab_arena_committed_bytes() as SlabWord) + (__Raw.loadWord(__slab_state_committed(), offset: SlabStateOsDirectBytesOffset) as SlabWord)) as MachineWord
 	end 'committed'
@@ -510,17 +510,17 @@ function slabSpanFreeSlots(span SlabWord) returns SlabWord
 	return (__Raw.loadWord(span as MachineWord, offset: MspanFreeCountOffset) as SlabWord) + (__Raw.loadWord(span as MachineWord, offset: MspanRemoteCountOffset) as SlabWord)
 end 'slabSpanFreeSlots'
 
-module function __slab_census_tally_walk(mode MachineWord) returns MachineWord
+function __slab_census_tally_walk(mode MachineWord) returns MachineWord
 	__Raw.memFill(slabCensusTableBase() as MachineWord, byteCount: SlabCensusTableBytes as MachineWord, value: 0)
 
 	return slabWalkSpans(slabCensusWalkOfMode(mode as SlabWord)) as MachineWord
 end '__slab_census_tally_walk'
 
-module function __slab_census_bucket_count(index MachineWord) returns MachineWord
+function __slab_census_bucket_count(index MachineWord) returns MachineWord
 	return slabCensusBucketWord(index as SlabWord, word: SlabCensusBucketCountWord)
 end '__slab_census_bucket_count'
 
-module function __slab_census_bucket_bytes(index MachineWord) returns MachineWord
+function __slab_census_bucket_bytes(index MachineWord) returns MachineWord
 	return slabCensusBucketWord(index as SlabWord, word: SlabCensusBucketBytesWord)
 end '__slab_census_bucket_bytes'
 

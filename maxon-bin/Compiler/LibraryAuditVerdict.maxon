@@ -1,0 +1,53 @@
+function auditEntryNameOf(project Project, key HashDigest) returns String
+	let library = project.session.fileMemos.library
+
+	return libraryEntryName(LibraryEntryKind.audit, entryClass: library.entryClassOf(project), parts: [key])
+end 'auditEntryNameOf'
+
+function holdAuditFindings(project Project, key HashDigest, findings immutable UnusedFindingArray)
+	let library = project.session.fileMemos.library
+
+	if not library.retainsWhatItLoads() 'aOneCompileCache'
+		return
+	end 'aOneCompileCache'
+
+	publishToSharedLibrary(SharedLibraryChange.audit(HeldAudit.create(key, entryClass: library.entryClassOf(project), findings: findings)))
+end 'holdAuditFindings'
+
+function heldAuditFindings(project Project, key HashDigest) returns immutable UnusedFindingArray throws LibraryEntryMiss
+	let library = project.session.fileMemos.library
+
+	if library.retainsWhatItLoads() 'retaining'
+		if let held = try SharedLibraryCache.current().audits.findingsFor(key) 'heldInMemory'
+			return held
+		end 'heldInMemory'
+	end 'retaining'
+
+	let name = auditEntryNameOf(project, key: key)
+	let reader = try library.open(project.target, name: name, tally: project.db.libraryTally)
+
+	let decoded = try decodedAuditFindings(reader, key: key) otherwise (damage) 'damaged'
+		throw rejecting(project, name: name, damage: damage)
+	end 'damaged'
+
+	let findings = freeze decoded.clone()
+	project.db.libraryTally.loaded = project.db.libraryTally.loaded + 1
+	holdAuditFindings(project, key: key, findings: findings)
+
+	return findings
+end 'heldAuditFindings'
+
+function persistAuditFindings(project Project, key HashDigest, findings immutable UnusedFindingArray)
+	let library = project.session.fileMemos.library
+	holdAuditFindings(project, key: key, findings: findings)
+
+	if not library.persistsFor(project) 'noDiskTier'
+		return
+	end 'noDiskTier'
+
+	let name = auditEntryNameOf(project, key: key)
+
+	if library.write(project.target, name: name, image: encodedAuditFindings(findings, key: key), tally: project.db.libraryTally) 'written'
+		library.trimEntries(project.target, kind: LibraryEntryKind.audit, entryClass: library.entryClassOf(project), kept: name, most: MostEntriesOfAKind)
+	end 'written'
+end 'persistAuditFindings'

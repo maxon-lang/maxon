@@ -14,7 +14,7 @@
 // drifted shows up as a test that never ended — reported as a crash, loudly, with this text attached.
 
 // ⭐ ONE LINE THE TEST BINARY REPORTED. Ordering between events is meaningful; see the header.
-export union TestEvent
+union TestEvent
 	// A test is about to run. Written BEFORE the body, which is what makes a process death
 	// attributable at all.
 	began(index ElementIndex)
@@ -31,7 +31,7 @@ export union TestEvent
 	outputLine(text String)
 end 'TestEvent'
 
-export typealias TestEventArray = Array with TestEvent
+typealias TestEventArray = Array with TestEvent
 
 // How many parts splitting a well-formed protocol line on the wrapper yields: the empty text before
 // the opening wrapper, the body, and the empty text after the closing one.
@@ -44,7 +44,7 @@ let ThrewFieldCount = 4
 
 // ⭐⭐ **READ A TEST BINARY'S STDERR AS ONE ORDERED STREAM** — protocol lines and the program's own
 // output interleaved exactly as it wrote them.
-export function parseTestEvents(stderr String) returns TestEventArray
+function parseTestEvents(stderr String) returns TestEventArray
 	let pieces = stderr.split("\n")
 	let events = TestEventArray.create(pieces.count(), zeroed: false)
 

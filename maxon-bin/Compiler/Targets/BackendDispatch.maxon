@@ -290,7 +290,7 @@ end 'programStartedGlobals'
 // drops the column it reads. It is the whole-module twin of the check the allocator's private module runs,
 // and it sits after the encode because the runtime band mints ops once the pool has handed
 // everything back.
-module function releaseEncodedTargetModule(project Project, targetModule TargetModule)
+function releaseEncodedTargetModule(project Project, targetModule TargetModule)
 	targetModule.spans.requireParallelTo(targetModule.ops.count(), what: "after the encode")
 
 	if project.rendersTargetIr 'thePrinterStillWalksIt'
@@ -414,7 +414,7 @@ end 'finishX64Backend'
 // Function/chunk name → the byte offset that chunk starts at in `.text`. Declared ONCE, here, because
 // it is one fact: x64 and arm64 each carried an identical typealias under its own name, and both concat
 // passes key exactly this map with exactly this meaning.
-module typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
+typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 
 // ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME.**
 //
@@ -438,7 +438,7 @@ module typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 // The count trick is `FunctionNameIndex.create`'s, for its reason: this is called with `laidOut` labels
 // already in the map, so the height IS `laidOut + 1` afterwards unless one insert collapsed two names —
 // one integer compare, and no second hash probe on a per-chunk loop.
-module function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut EntryCount, project Project, funcNames FunctionNameIndex) throws CompileError
+function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut EntryCount, project Project, funcNames FunctionNameIndex) throws CompileError
 	labelOffsets.upsert(name, value: offset)
 
 	if labelOffsets.count() != laidOut + 1 'duplicateChunkName'
@@ -448,7 +448,7 @@ end 'recordChunkLabel'
 
 // Runs before anything keys the chunks by name, the unguarded-chain walk among them: a duplicate that
 // reached the walk first would panic there instead of reporting E4015.
-module function requireChunkNamesAreClaimedOnce(chunks FunctionCodeChunkArray, project Project, funcNames FunctionNameIndex) throws CompileError
+function requireChunkNamesAreClaimedOnce(chunks FunctionCodeChunkArray, project Project, funcNames FunctionNameIndex) throws CompileError
 	let claimed = FunctionNameSet.create()
 
 	for chunk in chunks 'eachChunk'

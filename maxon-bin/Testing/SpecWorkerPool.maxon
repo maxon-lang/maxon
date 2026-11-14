@@ -184,7 +184,7 @@ let ProtocolFieldSep = ":"
 // files: local work, no subprocess, and the whole of it for the corpus's largest spec (161 tests)
 // sits inside the grace `TestProgressDeadlineMs` carries for exactly this. A step kind whose whole
 // pass is cheaper than the noise on the bound would be a line per test that bought nothing.
-export union WorkerStep
+union WorkerStep
 	compile
 	run
 end 'WorkerStep'
@@ -781,7 +781,7 @@ end 'runSpecJob'
 //
 // It is EXPORTED because the runner emits it and the pool decodes it: one spelling, in the file that
 // owns the wire.
-export function emitWorkerStep(step WorkerStep, label String)
+function emitWorkerStep(step WorkerStep, label String)
 	print("{WorkerStepMarker}{stepToken(step)}{ProtocolFieldSep}{label}\n")
 end 'emitWorkerStep'
 
@@ -905,7 +905,7 @@ end 'decodeRecordPayload'
 //
 // It deliberately does NOT trim: what follows a FAIL record's markers is the failure reason
 // VERBATIM, and trimming it would quietly rewrite the text a spec author reads.
-module function sliceAfterPrefix(line String, prefix String) returns String
+function sliceAfterPrefix(line String, prefix String) returns String
 	var pos = line.startIndex()
 
 	for _ in 0 upto prefix.byteLength() 'skipPrefix'

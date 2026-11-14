@@ -58,7 +58,7 @@ end 'x64OsCallKind'
 // static ELF set FS base by `arch_prctl` (158), read the value back with `ARCH_GET_FS`, and read a magic word
 // through BOTH addressing forms — `mov rax, fs:[disp32]` and `mov rax, fs:[reg]`. All four steps answered
 // correctly, so the translation layer models the segment base rather than ignoring it.
-export enum X64ThreadPointerSegment
+enum X64ThreadPointerSegment
 	// Windows: GS is the TIB.
 	gs
 
@@ -71,7 +71,7 @@ end 'X64ThreadPointerSegment'
 // Exported: the ONE door both tiers ask — the isel has no say (a segment override is not an OS call), so the
 // question is answered where the bytes are chosen (`X64Backend.emitTargetOp`) and where the runtime chunks
 // spell their own reads (`X64GtRuntime`). The macho/wasi arms panic for `x64OsCallKind`'s reasons.
-export function x64ThreadPointerSegment(os Os) returns X64ThreadPointerSegment
+function x64ThreadPointerSegment(os Os) returns X64ThreadPointerSegment
 	return match os 'os'
 		windows gives X64ThreadPointerSegment.gs
 		linux gives X64ThreadPointerSegment.fs
@@ -93,8 +93,8 @@ end 'x64ThreadPointerSegment'
 // the end of `main` would end the calling thread and leave every parked M running. `exit` terminates the
 // calling THREAD and `exit_group` the whole thread group, which is what `main` returning means and what a C
 // `_exit` invokes. The arm64 side makes the same choice with its own pair (94 not 93).
-export let X64LinuxSyscallWrite = 1
-export let X64LinuxSyscallMmap = 9
+let X64LinuxSyscallWrite = 1
+let X64LinuxSyscallMmap = 9
 export let X64LinuxSyscallExitGroup = 231
 
 // The page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
@@ -102,14 +102,14 @@ export let X64LinuxSyscallExitGroup = 231
 // AArch64 (`Arm64Runtime`'s twin block), so an unprefixed name is a collision that silently miscompiles
 // this backend. There is deliberately NO recommit number — a `MADV_DONTNEED`ed page refaults on the next touch,
 // and re-backing a range is `lowerOsCommitPages`, a `MAP_FIXED` `mmap` on this lane.
-export let X64LinuxSyscallMunmap = 11
-export let X64LinuxSyscallMadvise = 28
+let X64LinuxSyscallMunmap = 11
+let X64LinuxSyscallMadvise = 28
 let X64LinuxSyscallMremap = 25
 
 // `gettid` answers the kernel thread id `tgkill` addresses a preemption signal by
 // (`__gt_preempt_self_register`). 186 on x86-64, 178 on AArch64 (`Arm64Runtime`'s twin), which is exactly why
 // these numbers wear the arch prefix.
-export let X64LinuxSyscallGettid = 186
+let X64LinuxSyscallGettid = 186
 
 // --- The clocks, the identity, the machine query and the green-thread floor ---
 //
@@ -130,7 +130,7 @@ let X64LinuxSyscallReadlinkat = 267
 
 // ⭐ **`getpid` NEEDS NO CHUNK AND SO NEEDS NO GATE** — no operands, no out-param, one `syscall` lowered
 // inline (`StdToX64Conversion.lowerOsGetPidLinux`). Exported for that isel; 39 here and 172 on AArch64.
-export let X64LinuxSyscallGetPid = 39
+let X64LinuxSyscallGetPid = 39
 
 // ⛔⛔ **THE TWO PRIORITY CALLS ARE SWAPPED BETWEEN THE ARCHES — SAME NUMBERS, OPPOSITE VERBS.** x86-64
 // numbers them from its own table (`getpriority` 140, `setpriority` 141) while AArch64 takes
@@ -140,8 +140,8 @@ export let X64LinuxSyscallGetPid = 39
 // ⚠ VERIFIED by invoking both on an x86-64 guest: `syscall(140, 0, 0)` answered 20 in a fresh process,
 // `syscall(141, 0, 0, 7)` answered 0, and the next `syscall(140, 0, 0)` answered 13 — the read moved by
 // exactly the nice value the write asked for, biased by `LinuxGetPriorityBias`.
-export let X64LinuxSyscallGetPriority = 140
-export let X64LinuxSyscallSetPriority = 141
+let X64LinuxSyscallGetPriority = 140
+let X64LinuxSyscallSetPriority = 141
 
 // ⚠ **16 HERE AND 29 ON AArch64.** VERIFIED by invoking it: 16 with `TCGETS` answered 0 on a pty and
 // `-ENOTTY` on a pipe, a regular file and `/dev/null`, while syscall 17 with the identical arguments
@@ -186,7 +186,7 @@ let X64LinuxSyscallPpoll = 271
 
 // `tgkill(tgid, tid, sig)` — the one delivery that names a THREAD. `kill` names a process and lets the
 // kernel pick any thread with the signal unblocked, which is every machine.
-export let X64LinuxSyscallTgkill = 234
+let X64LinuxSyscallTgkill = 234
 
 // --- The process-trace band ---
 let X64LinuxSyscallPtrace = 101
@@ -250,9 +250,9 @@ let X64LinuxSyscallFcntl = 72
 // runtime would declare its own, and an unprefixed name here is a collision that silently miscompiles
 // this backend. The signal NUMBER is not one of them: `LinuxSignalFpe` is arch-neutral and lives in
 // `Targets/Shared/LinuxRuntime` beside `LinuxSigsetBytes`, which is the same case.
-export let X64LinuxSyscallRtSigaction = 13
-export let X64LinuxSyscallRtSigreturn = 15
-export let X64LinuxSyscallSigaltstack = 131
+let X64LinuxSyscallRtSigaction = 13
+let X64LinuxSyscallRtSigreturn = 15
+let X64LinuxSyscallSigaltstack = 131
 
 // sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000)
 // | SA_ONSTACK (0x08000000 — the handler runs on the thread's `SignalStackInstallName` stack, not on a green
@@ -264,7 +264,7 @@ export let X64LinuxSyscallSigaltstack = 131
 // ERROR.** The monitor aims at a RUNNING machine, but a machine may enter a kernel call between the decision
 // and the delivery; a restartable call then resumes instead of failing. The fault handler inherits the flag
 // and is untouched by it — it never returns.
-export let X64LinuxSigactionFlags = 0x1C000004
+let X64LinuxSigactionFlags = 0x1C000004
 
 // STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/StdLoweringShared.StderrFd`. It
 // is not an x64-Linux fact: arm64's two OSes name the same descriptor from their own panic runtime.
@@ -272,9 +272,9 @@ export let X64LinuxSigactionFlags = 0x1C000004
 // x86-64 `ucontext_t` offsets to the general registers a backtrace needs. `uc_mcontext` sits at offset 40
 // (past uc_flags/uc_link/uc_stack) and its `gregs[]` array starts there; the greg indices are REG_RBP=10,
 // REG_RSP=15, REG_RIP=16, i.e. `40 + index*8` into the ucontext the handler receives in rdx.
-export let X64LinuxUContextRipOffset = 168  // 40 + REG_RIP(16)*8 — the faulting instruction pointer.
-export let X64LinuxUContextRbpOffset = 120  // 40 + REG_RBP(10)*8 — the faulting frame pointer (seeds the walk).
-export let X64LinuxUContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulting stack pointer (bounds the walk).
+let X64LinuxUContextRipOffset = 168  // 40 + REG_RIP(16)*8 — the faulting instruction pointer.
+let X64LinuxUContextRbpOffset = 120  // 40 + REG_RBP(10)*8 — the faulting frame pointer (seeds the walk).
+let X64LinuxUContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulting stack pointer (bounds the walk).
 
 // ==========================================================================
 // THE HOST SURFACE — the file, directory and standard-input bodies
@@ -310,7 +310,7 @@ export let X64LinuxUContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulti
 // removed a real directory and file. That is the discipline `X64LinuxOpenDirectoryFlags` below exists to
 // enforce, and it is why the arch prefix is on every name (see the page-lifecycle block above).
 let X64LinuxSyscallRead = 0
-export let X64LinuxSyscallClose = 3
+let X64LinuxSyscallClose = 3
 let X64LinuxSyscallFstat = 5
 let X64LinuxSyscallFsync = 74
 
@@ -340,25 +340,25 @@ let X64LinuxSyscallRenameat = 264
 // address a connected stream socket does not use (`LinuxSocketNoPeerAddress`). Both Linux lanes are
 // constrained the same way here and the macOS lane is constrained the opposite way, which is why the two
 // isels name an import slot AND a syscall number at every transfer site.
-export let X64LinuxSyscallSocket = 41
+let X64LinuxSyscallSocket = 41
 
 // `getsockopt` — the verdict of a non-blocking connect (`StdOp.osSocketError`).
-export let X64LinuxSyscallGetsockopt = 55
-export let X64LinuxSyscallConnect = 42
-export let X64LinuxSyscallSendto = 44
-export let X64LinuxSyscallRecvfrom = 45
+let X64LinuxSyscallGetsockopt = 55
+let X64LinuxSyscallConnect = 42
+let X64LinuxSyscallSendto = 44
+let X64LinuxSyscallRecvfrom = 45
 
 // --- The SERVER side of the socket band ---
-export let X64LinuxSyscallBind = 49
-export let X64LinuxSyscallListen = 50
-export let X64LinuxSyscallGetsockname = 51
-export let X64LinuxSyscallShutdown = 48
+let X64LinuxSyscallBind = 49
+let X64LinuxSyscallListen = 50
+let X64LinuxSyscallGetsockname = 51
+let X64LinuxSyscallShutdown = 48
 
 // Plain `accept` (43) also answers a live descriptor but ignores the flags argument, so a check of
 // this number that reads only "did it answer a descriptor" passes on the wrong call. The accepted
 // descriptor's `O_NONBLOCK` is what tells them apart, and a blocking one holds a machine on its
 // first `recv`.
-export let X64LinuxSyscallAccept4 = 288
+let X64LinuxSyscallAccept4 = 288
 
 // ⛔⛔ **`O_DIRECTORY` IS THE asm-generic `0o200000` HERE, NOT THE `0o40000` AArch64 USES.**
 // `arch/arm64/include/uapi/asm/fcntl.h` overrides four flags before including the generic header and
@@ -386,7 +386,7 @@ end 'x64LinuxRuntimeGlobals'
 // scheduler's own keys start at `LinuxTlsFirstKey` so that a slot offset of 0 keeps meaning *"the scheduler
 // has not started"* to every current-P reader, and the word that offset addresses is therefore free for this.
 // Both Linux lanes reserve it the same way.
-module let X64LinuxErrnoSlotOffset = 0
+let X64LinuxErrnoSlotOffset = 0
 
 // ==========================================================================
 // struct stat (x86-64)
@@ -424,7 +424,7 @@ end 'x64LinuxStatLayout'
 // `firstSlot`. Slots grow DOWNWARD from rbp, so a structure's lowest address is its LAST slot's — the same
 // arrangement `buildLinuxRuntimeInitChunk` lays its `struct sigaction` out in, stated once here because
 // three chunks below place a `struct stat` or a path buffer this way.
-module function x64LinuxBufferDisp(asm X64RuntimeAsm, firstSlot StackSize, slotCount StackSize) returns Imm32
+function x64LinuxBufferDisp(asm X64RuntimeAsm, firstSlot StackSize, slotCount StackSize) returns Imm32
 	return asm.slotDisp(firstSlot + slotCount - 1)
 end 'x64LinuxBufferDisp'
 
@@ -470,11 +470,11 @@ function x64LinuxEmitLoadErrnoDataWord(asm X64RuntimeAsm, destReg X64Register)
 	encodeLoadRegBaseDisp(asm.code, destReg: destReg, base: destReg, disp: 0, wide: true)
 end 'x64LinuxEmitLoadErrnoDataWord'
 
-module function x64LinuxEmitReadThreadSlot(code ByteArray, dest X64Register, slotOffset FullRangeInt)
+function x64LinuxEmitReadThreadSlot(code ByteArray, dest X64Register, slotOffset FullRangeInt)
 	encodeMovRegSegAbs(code, dest: dest, disp: slotOffset as Imm32, wide: true, segment: x64ThreadPointerSegment(Os.linux))
 end 'x64LinuxEmitReadThreadSlot'
 
-module function x64LinuxEmitWriteThreadSlot(code ByteArray, srcReg X64Register, slotOffset FullRangeInt)
+function x64LinuxEmitWriteThreadSlot(code ByteArray, srcReg X64Register, slotOffset FullRangeInt)
 	encodeMovSegAbsReg(code, disp: slotOffset as Imm32, srcReg: srcReg, wide: true, segment: x64ThreadPointerSegment(Os.linux))
 end 'x64LinuxEmitWriteThreadSlot'
 
@@ -501,7 +501,7 @@ function x64LinuxEmitBranchIfEintr(asm X64RuntimeAsm, whenInterrupted BlockId)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: whenInterrupted)
 end 'x64LinuxEmitBranchIfEintr'
 
-module function x64LinuxEmitDieIfBrokenPipe(asm X64RuntimeAsm)
+function x64LinuxEmitDieIfBrokenPipe(asm X64RuntimeAsm)
 	let alive = asm.newLabel()
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.brokenPipe.rawValue) as Imm32)
@@ -512,7 +512,7 @@ module function x64LinuxEmitDieIfBrokenPipe(asm X64RuntimeAsm)
 end 'x64LinuxEmitDieIfBrokenPipe'
 
 // Re-issuing needs no reload: `syscall` preserves every argument register and clobbers only rax, rcx and r11.
-module function x64LinuxEmitSyscallRestartingOnEintr(asm X64RuntimeAsm, number MachineWord)
+function x64LinuxEmitSyscallRestartingOnEintr(asm X64RuntimeAsm, number MachineWord)
 	let issue = asm.newLabel()
 
 	asm.placeLabel(issue)
@@ -596,7 +596,7 @@ end 'x64LinuxEmitCopyCStringBounded'
 // ⭐ **ZERO `slotCount` CONSECUTIVE FRAME SLOTS.** The walk zeroes its `struct stat` before an `fstatat`
 // whose verdict may be DISCARDED (a dangling symbolic link is a real directory entry that Win32 reports),
 // so the PREVIOUS entry's size and timestamps cannot be published for it. Clobbers rax, rsi and rdi.
-module function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
+function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
 	let step = asm.newLabel()
 	let zeroed = asm.newLabel()
 
@@ -2190,7 +2190,7 @@ end 'buildX64LinuxEnvReadChunk'
 // Where the LENGTH of a mapping comes from. A fixed-size host object knows it when the chunk is built, while
 // `__gt_morestack`'s next stack is computed at run time and arrives in a register; the rest of the mapping
 // ABI is the same either way, so the difference is one union rather than a second copy of the marshalling.
-export union X64MapLength
+union X64MapLength
 	fixed(byteSize MachineWord)
 	inRegister(reg X64Register)
 end 'X64MapLength'
@@ -2202,7 +2202,7 @@ end 'X64MapLength'
 // opinion about the mapping ABI.
 //
 // ⚠ **A REFUSED `mmap` ANSWERS A SMALL NEGATIVE, NOT NULL**, so every caller tests the SIGN of rax.
-export function encodeX64MmapAnon(code ByteArray, length X64MapLength)
+function encodeX64MmapAnon(code ByteArray, length X64MapLength)
 	encodeMovRegImm32(code, dest: X64Register.rdi, value: MmapKernelChoosesBase)
 	encodeX64MoveLengthToRsi(code, length: length)
 	encodeMovRegImm32(code, dest: X64Register.rdx, value: MmapProtReadWrite)
@@ -4498,7 +4498,7 @@ end 'buildX64LinuxProcDescendantsChunk'
 // THE PROCESS-TRACE BAND
 // ==========================================================================
 
-export let HostTraceeReadOutIncomingSlot = 0 as MachineWord
+let HostTraceeReadOutIncomingSlot = 0 as MachineWord
 
 function buildX64LinuxTraceRequestChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(1)
@@ -4945,8 +4945,8 @@ end 'buildX64LinuxSpawnChunk'
 // The two arguments past the Win64 register file, in the order `StdOp.osProcessSpawn` names its operands.
 // Named because the WRITER (`StdToX64Conversion.lowerOsProcessSpawnLinux`) and the READER above are in
 // different files and a bare 0 and 1 at two sites is the one fact that pair must agree on.
-export let SpawnProcInfoIncomingSlot = 0 as MachineWord
-export let SpawnEnvironmentIncomingSlot = 1 as MachineWord
+let SpawnProcInfoIncomingSlot = 0 as MachineWord
+let SpawnEnvironmentIncomingSlot = 1 as MachineWord
 
 // Close the spawn's working-directory descriptor, when it opened one — the parent's half of the rule
 // `buildX64LinuxSpawnChunk`'s header states. Clobbers rax, rdi, and the syscall's rcx and r11.
@@ -5311,7 +5311,7 @@ function x64LinuxEmitEnsureStdDescriptor(asm X64RuntimeAsm, descriptor FullRange
 	asm.placeLabel(present)
 end 'x64LinuxEmitEnsureStdDescriptor'
 
-export function buildX64LinuxCheckStdFdsChunk() returns FunctionCodeChunk
+function buildX64LinuxCheckStdFdsChunk() returns FunctionCodeChunk
 	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let refused = asm.newLabel()

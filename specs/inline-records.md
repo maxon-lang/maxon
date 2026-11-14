@@ -973,7 +973,7 @@ end 'main'
 A field's storage width is read through the alias the DECLARING file means, not through a fold over
 every file's declaration. `wide/wide.maxon` declares `Wide` as the whole signed span and never names `Packed`;
 `packed/packed.maxon`, in another directory, declares its own `Wide` and the type built on it, so `Packed` is two 32-bit fields in one
-word. Both declarations are file-private, so each file sees one `Wide`. A width folded across both files
+word. Both declarations are unmarked, so each file sees one `Wide`. A width folded across both files
 would take the machine word for `Wide`, put the pair at 128 bits and leave `Packed` a heap record.
 ```maxon
 // --- file: wide/wide.maxon
@@ -985,11 +985,11 @@ export function widest(v ExitCode) returns ExitCode
 end 'widest'
 
 // --- file: packed/packed.maxon
-module typealias Wide = int(0 to u32.max)
+typealias Wide = int(0 to u32.max)
 
 export type Packed
-	module let lo as Wide
-	module let hi as Wide
+	let lo as Wide
+	let hi as Wide
 
 	export static function create(lo Count, hi Count) returns Self
 		return Self{lo: lo as Wide, hi: hi as Wide}

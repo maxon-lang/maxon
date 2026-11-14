@@ -1,6 +1,6 @@
-module typealias RewindMark = Array with ElementIndex
+typealias RewindMark = Array with ElementIndex
 
-module enum MemoTable
+enum MemoTable
 	declaredAliases
 	rangedAliasTags
 	castTargetTags
@@ -19,14 +19,14 @@ module enum MemoTable
 	filedTupleNames
 end 'MemoTable'
 
-module type RewindClaims
+type RewindClaims
 	var claimed as FixedBoolArray
 
-	module static function create() returns RewindClaims
+	static function create() returns RewindClaims
 		return Self{claimed: FixedBoolArray.create(MemoTable.allCases.count())}
 	end 'create'
 
-	module function claim(table MemoTable)
+	function claim(table MemoTable)
 		if self.isClaimed(table) 'claimedTwice'
 			panic("RewindClaims.claim: {table.name} is claimed by two tables — each MemoTable case is one table, or a rewind undoes one of them twice and the other never")
 		end 'claimedTwice'
@@ -34,7 +34,7 @@ module type RewindClaims
 		try self.claimed.set(table.ordinal, value: true) otherwise panic("RewindClaims.claim: claimed.set OOB at {table.ordinal} — `claimed` holds one slot per MemoTable case")
 	end 'claim'
 
-	module function requireEveryTableClaimed(lazily MemoTable)
+	function requireEveryTableClaimed(lazily MemoTable)
 		for table in MemoTable.allCases 'eachTable'
 			if table != lazily and not self.isClaimed(table) 'unclaimed'
 				panic("RewindClaims.requireEveryTableClaimed: {table.name} is claimed by no table — a MemoTable case with no table behind it is never marked or rewound")
@@ -47,18 +47,18 @@ module type RewindClaims
 	end 'isClaimed'
 end 'RewindClaims'
 
-module interface RewindLog
+interface RewindLog
 	function claimedTable() returns MemoTable
 	function logCount() returns ElementIndex
 	function rewindTo(mutable self, count ElementIndex)
 end 'RewindLog'
 
-module function rewindLogCount(memo RewindLog, table MemoTable) returns ElementIndex
+function rewindLogCount(memo RewindLog, table MemoTable) returns ElementIndex
 	requireClaimedAs(memo, table: table)
 	return memo.logCount()
 end 'rewindLogCount'
 
-module function rewindLogTo(memo mutable RewindLog, table MemoTable, count ElementIndex)
+function rewindLogTo(memo mutable RewindLog, table MemoTable, count ElementIndex)
 	requireClaimedAs(memo, table: table)
 	memo.rewindTo(count)
 end 'rewindLogTo'
@@ -69,7 +69,7 @@ function requireClaimedAs(memo RewindLog, table MemoTable)
 	end 'wrongMemo'
 end 'requireClaimedAs'
 
-module type RewindableMemo uses Key, Value implements RewindLog where Key is Hashable and Equatable and Cloneable
+type RewindableMemo uses Key, Value implements RewindLog where Key is Hashable and Equatable and Cloneable
 	typealias Entries = Map with (Key, Value)
 	typealias Filings = Array with Key
 
@@ -77,34 +77,34 @@ module type RewindableMemo uses Key, Value implements RewindLog where Key is Has
 	var filings as Filings
 	var table as MemoTable
 
-	module static function create(claims RewindClaims, table MemoTable) returns Self
+	static function create(claims RewindClaims, table MemoTable) returns Self
 		claims.claim(table)
 		return Self{entries: Entries.create(), filings: Filings.create(0), table: table}
 	end 'create'
 
-	module function claimedTable() returns MemoTable
+	function claimedTable() returns MemoTable
 		return self.table
 	end 'claimedTable'
 
-	module function get(key Key) returns Value throws MapError
+	function get(key Key) returns Value throws MapError
 		return try self.entries.get(key)
 	end 'get'
 
-	module function contains(key Key) returns bool
+	function contains(key Key) returns bool
 		return self.entries.contains(key)
 	end 'contains'
 
-	module function file(key Key, value Value)
+	function file(key Key, value Value)
 		let filed = key.clone()
 		try self.entries.insert(key, value: value) otherwise panic("RewindableMemo.file: the key is already filed — a rewind would drop the earlier answer along with this one")
 		self.filings.push(filed)
 	end 'file'
 
-	module function logCount() returns ElementIndex
+	function logCount() returns ElementIndex
 		return self.filings.count()
 	end 'logCount'
 
-	module function rewindTo(count ElementIndex)
+	function rewindTo(count ElementIndex)
 		for position in count upto self.filings.count() 'eachFiledSince'
 			_ = self.entries.remove(try self.filings.get(position) otherwise panic("RewindableMemo.rewindTo: filings.get OOB at {position}"))
 		end 'eachFiledSince'
@@ -113,28 +113,28 @@ module type RewindableMemo uses Key, Value implements RewindLog where Key is Has
 	end 'rewindTo'
 end 'RewindableMemo'
 
-module type RewindableNames implements RewindLog
+type RewindableNames implements RewindLog
 	var roster as UsedTypeNameRoster
 	var filings as NameRoster
 	var table as MemoTable
 
-	module static function create(claims RewindClaims, table MemoTable) returns RewindableNames
+	static function create(claims RewindClaims, table MemoTable) returns RewindableNames
 		claims.claim(table)
 		return Self{roster: noUsedTypeNames, filings: NameRoster.create(0), table: table}
 	end 'create'
 
-	module function claimedTable() returns MemoTable
+	function claimedTable() returns MemoTable
 		return self.table
 	end 'claimedTable'
 
-	module function contains(name ByteArray) returns bool
+	function contains(name ByteArray) returns bool
 		match self.roster 'state'
 			unwritten then return false
 			entries(names) then return names.contains(name)
 		end 'state'
 	end 'contains'
 
-	module function insert(name immutable ByteArray)
+	function insert(name immutable ByteArray)
 		let names = self.namesForWrite()
 
 		if names.contains(name) 'alreadyListed'
@@ -145,15 +145,15 @@ module type RewindableNames implements RewindLog
 		self.filings.push(name)
 	end 'insert'
 
-	module function published() returns UsedTypeNameRoster
+	function published() returns UsedTypeNameRoster
 		return self.roster
 	end 'published'
 
-	module function logCount() returns ElementIndex
+	function logCount() returns ElementIndex
 		return self.filings.count()
 	end 'logCount'
 
-	module function rewindTo(count ElementIndex)
+	function rewindTo(count ElementIndex)
 		if self.filings.count() <= count 'nothingFiledSince'
 			return
 		end 'nothingFiledSince'
@@ -180,20 +180,20 @@ module type RewindableNames implements RewindLog
 	end 'namesForWrite'
 end 'RewindableNames'
 
-module type BoxedUnionAnswers implements RewindLog
+type BoxedUnionAnswers implements RewindLog
 	var answers as BoxedUnionAnswerArray
 	var table as MemoTable
 
-	module static function create(claims RewindClaims) returns BoxedUnionAnswers
+	static function create(claims RewindClaims) returns BoxedUnionAnswers
 		claims.claim(MemoTable.boxedUnionAnswers)
 		return Self{answers: BoxedUnionAnswerArray.create(0), table: MemoTable.boxedUnionAnswers}
 	end 'create'
 
-	module function claimedTable() returns MemoTable
+	function claimedTable() returns MemoTable
 		return self.table
 	end 'claimedTable'
 
-	module function answerFor(nameId TypeNameId) returns BoxedUnionAnswer
+	function answerFor(nameId TypeNameId) returns BoxedUnionAnswer
 		if nameId >= self.answers.count() 'neverAsked'
 			return BoxedUnionAnswer.unasked
 		end 'neverAsked'
@@ -201,16 +201,16 @@ module type BoxedUnionAnswers implements RewindLog
 		return try self.answers.get(nameId) otherwise panic("BoxedUnionAnswers.answerFor: answers.get OOB at {nameId} below its own count")
 	end 'answerFor'
 
-	module function file(nameId TypeNameId, boxed bool)
+	function file(nameId TypeNameId, boxed bool)
 		self.answers.growFilled(nameId + 1, value: BoxedUnionAnswer.unasked)
 		try self.answers.set(nameId, value: BoxedUnionAnswer.boxed if boxed else BoxedUnionAnswer.notBoxed) otherwise panic("BoxedUnionAnswers.file: answers.set OOB at {nameId} after growing past it")
 	end 'file'
 
-	module function logCount() returns ElementIndex
+	function logCount() returns ElementIndex
 		return self.answers.count()
 	end 'logCount'
 
-	module function rewindTo(count ElementIndex)
+	function rewindTo(count ElementIndex)
 		if self.answers.count() > count 'answersPastTheMark'
 			self.answers.truncate(count)
 		end 'answersPastTheMark'

@@ -34,7 +34,7 @@
 // the panic runtime needs no data channel of its own. It registers during the ENCODE phase, after
 // every user literal, so it APPENDS to `.rdata` — which is why it moves no label id and no pinned
 // prefix (see `ir-specs/rdata-section.md`).
-export function arm64EmitPrintConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
+function arm64EmitPrintConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
 	arm64EmitCStringArg(asm, globalData: globalData, bytes: bytes)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 end 'arm64EmitPrintConstant'
@@ -502,7 +502,7 @@ end 'arm64EmitCoverageAbortDump'
 // question "can control reach a panic" is not one the encode phase can answer cheaply or safely. It
 // costs a few hundred bytes of `.text` and five `.rdata` strings; a lane that answered it wrongly
 // costs an unresolved `bl`.
-export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, dumpCoverage bool, greenThreads bool, target Target)
+function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, dumpCoverage bool, greenThreads bool, target Target)
 	chunks.push(buildArm64PanicChunk(globalData, dumpCoverage: dumpCoverage, greenThreads: greenThreads, target: target))
 	chunks.push(buildArm64WalkFramesChunk(globalData, greenThreads: greenThreads, os: target.os))
 	chunks.push(buildArm64PrintFrameChunk(globalData))
@@ -519,7 +519,7 @@ end 'appendArm64PanicRuntimeChunks'
 //
 // ⭐ EXPORTED: BOTH arm64 host surfaces call it (`Arm64DarwinRuntime`, `Arm64LinuxRuntime`), each for a
 // bring-up failure it cannot continue past.
-export function arm64EmitPanicConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
+function arm64EmitPanicConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
 	arm64EmitCStringArg(asm, globalData: globalData, bytes: bytes)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PanicName)
 end 'arm64EmitPanicConstant'

@@ -949,11 +949,11 @@ is another type, and the refusal names the parameter's side as `__ManagedMemory`
 through any alias the program wrote for its own buffer.
 ```maxon
 // --- file: holder.maxon
-export function open(path __ManagedMemory) returns ExitCode
+function open(path __ManagedMemory) returns ExitCode
 	return path.length() as ExitCode
 end 'open'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
@@ -964,5 +964,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:9: argument type mismatch for 'path': expected '__ManagedMemory with stdlib.Byte', got '__ManagedMemory with Byte'
+error E3005: app/<fragment>:14:9: argument type mismatch for 'path': expected '__ManagedMemory with stdlib.Byte', got '__ManagedMemory with app.Byte'
 ```

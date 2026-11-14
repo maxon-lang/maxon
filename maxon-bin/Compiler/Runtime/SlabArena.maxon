@@ -395,23 +395,23 @@ let ArenaMapL1Shift = ArenaMapL2Shift + ArenaMapLevelBits
 // OS-DIRECT SENTINEL, and the layer above reads it as *"this pointer was never registered as belonging to a
 // span, so it came straight from the OS and goes straight back"*. It is spelled here so the producer (the
 // three miss blocks) and the future consumer cannot disagree about which value carries that meaning.
-export let ArenaMapNoSpan = 0
+let ArenaMapNoSpan = 0
 
 let ArenaMapUnpublishedLevel = 0
 
 // --- Entry points ---
 
-export let SlabArenaAllocChunksName = b"__slab_arena_alloc_chunks"
-export let SlabArenaFreeChunksName = b"__slab_arena_free_chunks"
-export let SlabArenaOfName = b"__slab_arena_of"
-export let SlabArenaScavengeName = b"__slab_arena_scavenge"
-export let SlabArenaMapSetName = b"__slab_arena_map_set"
+let SlabArenaAllocChunksName = b"__slab_arena_alloc_chunks"
+let SlabArenaFreeChunksName = b"__slab_arena_free_chunks"
+let SlabArenaOfName = b"__slab_arena_of"
+let SlabArenaScavengeName = b"__slab_arena_scavenge"
+let SlabArenaMapSetName = b"__slab_arena_map_set"
 
 // ⚠ **THE OS-ALLOCATION GUARD IS THE FAMILY'S AND ITS CALLERS ARE NOT.** It guards `osAllocPages` rather
 // than the arena — the OS-direct path in `SlabRuntime` and the GT record carve in `SchedRuntime` are its
 // other two callers, and that second one is minted off `usesGt` rather than `usesHeap`. What makes that
 // harmless is that its body reads no `.data` word: it is a compare and an exit.
-export let SlabAssertOsAllocName = b"__slab_assert_os_alloc"
+let SlabAssertOsAllocName = b"__slab_assert_os_alloc"
 
 // The two `.data` words this family owns. Both `__`-prefixed, so no user name can collide and neither
 // reaches printed IR. ⭐ Their zero initializer IS the initial state, not a default: `list == 0`
@@ -727,7 +727,7 @@ end 'arenaChunksFor'
 // region — and it had no way to ask. `checkSlabRuntimeGeometry` asks it of BOTH lanes for
 // `checkArenaGeometryForLane`'s reason: a request too large is refused at RUN TIME with
 // `slabChunkRunUnsatisfiable`, on one lane, in a build whose native twin is perfect.
-export function slabArenaAllocatableChunks(hasPageReservation bool) returns FullRangeInt
+function slabArenaAllocatableChunks(hasPageReservation bool) returns FullRangeInt
 	return (SlabArenaGeometry.forReservation(hasPageReservation).chunkCount as FullRangeInt) - ArenaMetadataChunks
 end 'slabArenaAllocatableChunks'
 
@@ -759,7 +759,7 @@ end 'emitMapSlotAddr'
 //
 // It takes no lock and needs none even once the mutation paths take one: a published level pointer is never
 // overwritten, so a reader either sees 0 or sees a fully zeroed table.
-export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlock, ptr ValueId, spanId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlock, ptr ValueId, spanId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	let atL2 = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	let atL3 = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	let atPage = module.addBlock(func, label: label, heat: BlockHeat.normal)

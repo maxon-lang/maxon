@@ -36,7 +36,7 @@ export type StampedMemo uses Value
 end 'StampedMemo'
 
 export typealias TokenMemo = StampedMemo with TokenArray
-module typealias DeclarationHeadMemo = StampedMemo with DeclarationHeadIndex
+typealias DeclarationHeadMemo = StampedMemo with DeclarationHeadIndex
 
 // Per-file memo: the parsed artifact (this file's IR fragment + registry
 // contributions), stamped with the source hash it came from.
@@ -315,14 +315,14 @@ export type ParseFootprint
 	end 'create'
 
 	// @generated library-cache begin
-	module function cacheWrite(writer LibraryCacheWriter)
+	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteFootprintRowArray(writer, value: self.rows)
 		cacheWriteFootprintNameIdArray(writer, value: self.nameIds)
 		cacheWriteNameRoster(writer, value: self.nameBytes)
 		cacheWriteFootprintInterfaceArray(writer, value: self.interfaces)
 	end 'cacheWrite'
 
-	module static function cacheRead(reader LibraryCacheReader) returns ParseFootprint throws LibraryCacheDamage
+	static function cacheRead(reader LibraryCacheReader) returns ParseFootprint throws LibraryCacheDamage
 		let f_rows = try cacheReadFootprintRowArray(reader)
 		let f_nameIds = try cacheReadFootprintNameIdArray(reader)
 		let f_nameBytes = try cacheReadNameRoster(reader)
@@ -349,24 +349,24 @@ export type ParseRebase
 	end 'create'
 end 'ParseRebase'
 
-export type RebasedParse
-	export var artifact as FileParseArtifact
-	export let rebase as ParseRebase
+type RebasedParse
+	var artifact as FileParseArtifact
+	let rebase as ParseRebase
 
-	export static function create(artifact FileParseArtifact, rebase ParseRebase) returns RebasedParse
+	static function create(artifact FileParseArtifact, rebase ParseRebase) returns RebasedParse
 		return Self{artifact: artifact, rebase: rebase}
 	end 'create'
 end 'RebasedParse'
 
-module type ParseRebaseCheck
+type ParseRebaseCheck
 	let rebase as ParseRebase
 	let mints as ParseMints
 
-	module static function create(rebase ParseRebase, mints ParseMints) returns ParseRebaseCheck
+	static function create(rebase ParseRebase, mints ParseMints) returns ParseRebaseCheck
 		return Self{rebase: rebase, mints: mints}
 	end 'create'
 
-	module function applyTo(artifact FileParseArtifact) returns RebasedParse
+	function applyTo(artifact FileParseArtifact) returns RebasedParse
 		artifact.parseMints = self.mints
 
 		return RebasedParse.create(artifact, rebase: self.rebase)
@@ -376,8 +376,8 @@ end 'ParseRebaseCheck'
 export type SharedLibraryParse
 	let variant as HashDigest
 	let key as HashDigest
-	module let footprint as ParseFootprint
-	module var artifact as FileParseArtifact
+	let footprint as ParseFootprint
+	var artifact as FileParseArtifact
 
 	export static function create(variant HashDigest, key HashDigest, footprint ParseFootprint, artifact FileParseArtifact) returns SharedLibraryParse
 		return Self{variant: variant, key: key, footprint: footprint, artifact: artifact}
@@ -387,7 +387,7 @@ export type SharedLibraryParse
 		return self.key
 	end 'keyOf'
 
-	module function checkedAgainst(signatures ProgramSignatures, overrides RowSetOverrideTable) returns ParseRebaseCheck throws SharedMemoMiss
+	function checkedAgainst(signatures ProgramSignatures, overrides RowSetOverrideTable) returns ParseRebaseCheck throws SharedMemoMiss
 		let rebase = (try signatures.rebaseFor(self.footprint)).clone()
 
 		// Before the told answers are re-asked: their clone walk interns rows, which this check would read as
@@ -415,11 +415,11 @@ export type SharedLibraryParse
 		end 'mints'
 	end 'toldAnswersHold'
 
-	module function answers(wantedVariant HashDigest, wantedKey HashDigest) returns bool
+	function answers(wantedVariant HashDigest, wantedKey HashDigest) returns bool
 		return self.variant == wantedVariant and self.key == wantedKey
 	end 'answers'
 
-	module function isOfVariant(wantedVariant HashDigest) returns bool
+	function isOfVariant(wantedVariant HashDigest) returns bool
 		return self.variant == wantedVariant
 	end 'isOfVariant'
 
@@ -432,16 +432,16 @@ export typealias PendingSharedParseMap = Map with (HashDigest, immutable SharedL
 
 export typealias StashedParsePackMap = Map with (HashDigest, LibraryPackBuilder)
 
-export union SharedParsePlan
+union SharedParsePlan
 	unshared
 	shareable(contentHash HashDigest, variant HashDigest, key HashDigest)
 end 'SharedParsePlan'
 
-export type ParseStamp
+type ParseStamp
 	export let keyHash as HashDigest
 	export let sharing as SharedParsePlan
 
-	export static function create(keyHash HashDigest, sharing SharedParsePlan) returns ParseStamp
+	static function create(keyHash HashDigest, sharing SharedParsePlan) returns ParseStamp
 		return Self{keyHash: keyHash, sharing: sharing}
 	end 'create'
 end 'ParseStamp'
@@ -449,14 +449,14 @@ end 'ParseStamp'
 export type RawStreamFacts
 	export let declaredTypeNames as NameRoster
 	export let reservedSpellings as NameRoster
-	export let conditionalSpellings as NameRoster
+	let conditionalSpellings as ConditionalSpellings
 
-	export static function create(declaredTypeNames NameRoster, reservedSpellings NameRoster, conditionalSpellings NameRoster) returns RawStreamFacts
+	static function create(declaredTypeNames NameRoster, reservedSpellings NameRoster, conditionalSpellings ConditionalSpellings) returns RawStreamFacts
 		return Self{declaredTypeNames: declaredTypeNames, reservedSpellings: reservedSpellings, conditionalSpellings: conditionalSpellings}
 	end 'create'
 
 	export static function nothing() returns RawStreamFacts
-		return Self{declaredTypeNames: NameRoster.create(0), reservedSpellings: NameRoster.create(0), conditionalSpellings: NameRoster.create(0)}
+		return Self{declaredTypeNames: NameRoster.create(0), reservedSpellings: NameRoster.create(0), conditionalSpellings: ConditionalSpellings.create(NameRoster.create(0), rawCounts: SpellingCountArray.create(0))}
 	end 'nothing'
 
 	export static function of(tokens TokenArray) returns RawStreamFacts
@@ -574,8 +574,8 @@ end 'ClaimsTally'
 export type SharedFileMemoMap
 	export var entries as SharedFileMemoEntryMap
 	export var library as LibraryCache
-	module var libraryNames as LibraryNameRosterMap
-	module var claims as ClaimsTally
+	var libraryNames as LibraryNameRosterMap
+	var claims as ClaimsTally
 
 	static function over(library LibraryCache) returns SharedFileMemoMap
 		return Self{entries: SharedFileMemoEntryMap.create(), library: library, libraryNames: LibraryNameRosterMap.create(), claims: ClaimsTally.create()}
@@ -612,7 +612,7 @@ end 'SharedFileMemoMap'
 export typealias HashDigestSet = Set with HashDigest
 
 // @generated library-cache begin
-module function cacheWriteHashDigestSet(writer LibraryCacheWriter, value HashDigestSet)
+function cacheWriteHashDigestSet(writer LibraryCacheWriter, value HashDigestSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -620,7 +620,7 @@ module function cacheWriteHashDigestSet(writer LibraryCacheWriter, value HashDig
 	end 'eachItem'
 end 'cacheWriteHashDigestSet'
 
-module function cacheReadHashDigestSet(reader LibraryCacheReader) returns HashDigestSet throws LibraryCacheDamage
+function cacheReadHashDigestSet(reader LibraryCacheReader) returns HashDigestSet throws LibraryCacheDamage
 	let count = try reader.count()
 	let result = HashDigestSet.create()
 
@@ -668,31 +668,31 @@ end 'FileProvenance'
 
 export typealias FileProvenanceMemo = Map with (FilePath, FileProvenance)
 
-module typealias SourceFileStampMap = Map with (FilePath, SourceFileStamp)
+typealias SourceFileStampMap = Map with (FilePath, SourceFileStamp)
 
-export type LibraryInterface
+type LibraryInterface
 	export var declared as bool
 	export var parents as StringArray
 	export var methods as StringArray
 
-	export static function create() returns LibraryInterface
+	static function create() returns LibraryInterface
 		return Self{declared: false, parents: StringArray.create(0), methods: StringArray.create(0)}
 	end 'create'
 end 'LibraryInterface'
 
-export typealias LibraryInterfaceMap = Map with (String, LibraryInterface)
+typealias LibraryInterfaceMap = Map with (String, LibraryInterface)
 
-module type LibraryNameRoster
+type LibraryNameRoster
 	let stamps as SourceFileStampMap
 	let buildKey as BuildKey
 	export let names as NameRoster
 	export let interfaces as LibraryInterfaceMap
 
-	module static function create(stamps SourceFileStampMap, buildKey BuildKey, names NameRoster, interfaces LibraryInterfaceMap) returns LibraryNameRoster
+	static function create(stamps SourceFileStampMap, buildKey BuildKey, names NameRoster, interfaces LibraryInterfaceMap) returns LibraryNameRoster
 		return Self{stamps: stamps, buildKey: buildKey, names: names, interfaces: interfaces}
 	end 'create'
 
-	module function describes(paths MaxonSourcePathArray, forBuild BuildKey) returns bool
+	function describes(paths MaxonSourcePathArray, forBuild BuildKey) returns bool
 		if forBuild != self.buildKey 'anotherBuild'
 			return false
 		end 'anotherBuild'
@@ -713,11 +713,11 @@ module type LibraryNameRoster
 	end 'describes'
 end 'LibraryNameRoster'
 
-module typealias LibraryNameRosterMap = Map with (String, LibraryNameRoster)
+typealias LibraryNameRosterMap = Map with (String, LibraryNameRoster)
 
 export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
 export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
-module typealias DeclarationHeadCacheMap = Map with (FilePath, DeclarationHeadMemo)
+typealias DeclarationHeadCacheMap = Map with (FilePath, DeclarationHeadMemo)
 export typealias ParseCacheMap = Map with (FilePath, ParseMemo)
 
 // Running count of cache hits/misses. Wide range: unbounded over a long-lived
@@ -808,7 +808,7 @@ export type QueryDatabase
 	export var sourceFiles as SourceFileMap
 	export var sourcePaths as FilePathArray
 
-	module var sourceStamps as SourceFileStampMap
+	var sourceStamps as SourceFileStampMap
 
 	// The composite whole-program source hash, memoized — every whole-program memo keys on it and it
 	// is asked once per file, so re-folding it per ask is O(files²).
@@ -839,7 +839,7 @@ export type QueryDatabase
 
 	// Here and not on `DeclarationPoison`, whose every field `FoldCheckpoint` copies on each fold: the
 	// index is a fact of the file's tokens, so a fold has nothing to roll back in it.
-	module var declarationHeadCache as DeclarationHeadCacheMap
+	var declarationHeadCache as DeclarationHeadCacheMap
 
 	export var parseCache as ParseCacheMap
 
@@ -973,7 +973,7 @@ function declaredTypeNamesIn(tokens TokenArray) returns NameRoster
 	return names
 end 'declaredTypeNamesIn'
 
-module function reservedSpellingsIn(tokens TokenArray) returns NameRoster
+function reservedSpellingsIn(tokens TokenArray) returns NameRoster
 	let spellings = NameRoster.create(0)
 
 	for token in tokens 'eachToken'
@@ -990,9 +990,9 @@ typealias ConditionalDepth = int(0 to u64.max)
 // Read off the RAW stream: a spelling in an arm the target excludes has no token in the active stream,
 // so it is taken from every arm, which also keeps the fact independent of the target. A directive's
 // own condition is not a spelling.
-module function conditionalSpellingsIn(tokens TokenArray) returns NameRoster
+function conditionalSpellingsIn(tokens TokenArray) returns ConditionalSpellings
 	let spellings = NameRoster.create(0)
-	let seen = UsedTypeNameSet.create()
+	let positions = SpellingPositionMap.create()
 	var depth = 0 as ConditionalDepth
 	var onDirectiveLine = false
 
@@ -1021,14 +1021,51 @@ module function conditionalSpellingsIn(tokens TokenArray) returns NameRoster
 			continue
 		end 'endsTheDirectiveLine'
 
-		if token.kind == TokenKind.identifier and depth > 0 and not onDirectiveLine and not seen.contains(token.value) 'aNewSpelling'
-			seen.insert(token.value)
+		if token.kind == TokenKind.identifier and depth > 0 and not onDirectiveLine and not positions.contains(token.value) 'aNewSpelling'
+			positions.upsert(token.value, value: spellings.count())
 			spellings.push(token.value)
 		end 'aNewSpelling'
 	end 'eachToken'
 
-	return spellings
+	return ConditionalSpellings.create(spellings, rawCounts: rawSpellingCountsIn(tokens, positions: positions, count: spellings.count()))
 end 'conditionalSpellingsIn'
+
+function rawSpellingCountsIn(tokens TokenArray, positions SpellingPositionMap, count ElementIndex) returns SpellingCountArray
+	let counts = SpellingCountArray.create(count)
+
+	if count == 0 'noConditionalSpelling'
+		return counts
+	end 'noConditionalSpelling'
+
+	for token in tokens 'eachToken'
+		if not tokenCanBeAName(token) 'notAName'
+			continue
+		end 'notAName'
+
+		let at = try positions.get(token.value) otherwise continue
+		let seen = try counts.get(at) otherwise panic("rawSpellingCountsIn: spelling {at} is outside the {counts.count()} counted")
+		try counts.set(at, value: seen + 1) otherwise panic("rawSpellingCountsIn: spelling {at} is outside the {counts.count()} counted")
+	end 'eachToken'
+
+	return counts
+end 'rawSpellingCountsIn'
+
+typealias SpellingCount = int(0 to u64.max)
+typealias SpellingCountArray = Array with SpellingCount
+typealias SpellingPositionMap = Map with (ByteArray, ElementIndex)
+
+type ConditionalSpellings
+	let names as NameRoster
+	let rawCounts as SpellingCountArray
+
+	static function create(names NameRoster, rawCounts SpellingCountArray) returns ConditionalSpellings
+		return Self{names: names, rawCounts: rawCounts}
+	end 'create'
+
+	function rawCountAt(index ElementIndex) returns SpellingCount
+		return try self.rawCounts.get(index) otherwise panic("ConditionalSpellings.rawCountAt: spelling {index} is outside the {self.rawCounts.count()} counted")
+	end 'rawCountAt'
+end 'ConditionalSpellings'
 
 function tokenKindDeclaresATypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias

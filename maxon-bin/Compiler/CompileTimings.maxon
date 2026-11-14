@@ -96,7 +96,7 @@ let SubPhaseIndent = "    "
 
 // Marks a row folded from pool workers (`PhaseRowKind.poolBreakdownOf`) in both reports: a sum over
 // workers that is a breakdown of its driver phase, not an interval beside it.
-export let PoolMeasuredSuffix = " (pool)"
+let PoolMeasuredSuffix = " (pool)"
 
 // What `repeated` lays down: a column is filled with spaces, a rule is drawn with dashes.
 let PadUnit = " "
@@ -116,7 +116,7 @@ let PermilleTenthsPerPercent = 10
 let NanosPerSecond = 1000000000
 let MillisTenthsPerSecond = 10000
 let MillisTenthsPerMs = 10
-export let NanosPerMs = 1000000
+let NanosPerMs = 1000000
 
 // CPU time consumed by one thread, in the PLATFORM'S OWN UNIT — TSC ticks on Windows,
 // nanoseconds on POSIX (see `__Builtins.threadCpuTicks`). The two are not comparable and
@@ -228,12 +228,12 @@ export enum CompilePhase
 	resolveTypes
 	semanticCheck
 
-	// The cross-file unused-export audit (E3092/E3093/E3094). Its OWN phase, not a slice of
+	// The cross-directory unused-export audit (E3092). Its OWN phase, not a slice of
 	// `semanticCheck`, for the reason this file exists: it is a NEW whole-program walk over every
 	// declaration and every op, which is exactly the shape whose cost must be visible to `scale-test`
 	// rather than folded into a neighbour that would then report a growth it does not own.
 	checkUnusedExports
-	checkUnusedFilePrivate
+	checkUnusedUnexported
 	reportSecondaryFindings
 	lowerMaxonToStd
 	insertRangeChecks
@@ -813,7 +813,7 @@ end 'poolRemainderRow'
 // the one thing the old single-share table could never show. CPU ticks are deliberately
 // not rendered as a duration: their unit is platform-defined (see `CpuTicks`), so a
 // millisecond figure would be an invented conversion, while a share is exact either way.
-export function compileTimingsReport(timings CompileTimings) returns String
+function compileTimingsReport(timings CompileTimings) returns String
 	let total = timings.total
 
 	let msg = StringBuilder.create()
@@ -898,7 +898,7 @@ end 'millisText'
 // Exported for the memory table, whose four columns are wider than this one's three. That table used
 // to carry its own copy of this function and of both pads below, differing only in which widths they
 // summed — and a copy of a formatter is a formatter that will eventually disagree.
-export function horizontalRule(width ColumnWidth) returns String
+function horizontalRule(width ColumnWidth) returns String
 	return "{repeated(RuleUnit, count: width)}\n"
 end 'horizontalRule'
 

@@ -188,7 +188,7 @@ export let ManagedDirectoryDeleteName = b"__md_delete"
 // Held to the builders by the bidirectional drift guard in `installManagedDirectoryRuntime`, copied from
 // `installManagedFileRuntime` for its stated reason: a predicate and a `throws` stamp are one fact in two
 // places, and this project keeps finding that pair drifted.
-export function isThrowingManagedDirectoryRuntimeCallee(callee ByteArray) returns bool
+function isThrowingManagedDirectoryRuntimeCallee(callee ByteArray) returns bool
 	// ⚠ **THE FOUR ABSENTEES ARE EACH ABSENT FOR A STATED REASON, not by oversight.**
 	//   • `__md_close` — the spec documents `close()` as idempotent and destructor-called; naming it here
 	//     would make a `try` REQUIRED on a call that cannot fail (E3055).
@@ -218,7 +218,7 @@ end 'isThrowingManagedDirectoryRuntimeCallee'
 // reach, because the roster is "throwing AND void" and that crosses every family. An arm answering another
 // method's spelling is invisible to the whole suite and reaches a user as a diagnostic naming a call they
 // never wrote.
-export function managedDirectorySourceMethodName(callee ByteArray) returns immutable ByteArray
+function managedDirectorySourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedDirectoryOpenSearchName) 'openSearch'
 		return ManagedDirectoryOpenSearchMethod
 	end 'openSearch'
@@ -250,7 +250,7 @@ end 'managedDirectorySourceMethodName'
 // `managedFileThrows`. `ProgramSignatures.throwsOf` answers with it for a callee no file declares, which is
 // what types an `otherwise (e)` binding and therefore what makes `match e` see an enum instead of a scalar;
 // the four throwing builders stamp it as their `throws` clause. ONE speller for one fact.
-export function managedDirectoryThrows() returns ThrowsClause
+function managedDirectoryThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedDirectoryErrorTypeName))
 end 'managedDirectoryThrows'
 
@@ -292,7 +292,7 @@ end 'emitFileNameAddr'
 // header exits, that cursor IS the length, and it reaches the continuation block with NO block-arg of its
 // own: the header dominates the continuation (its `condBranch` is the only way in), so the value is simply
 // in scope — the same dominance argument `ManagedFileRuntime.emitBytesToCString` makes for its own `len`.
-export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, length ValueId, ids ValueMinter) returns IrBlock
+function emitCStringLength(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, length ValueId, ids ValueMinter) returns IrBlock
 	let header = module.addBlock(func, label: b"mdslh", heat: BlockHeat.normal)
 	let body = module.addBlock(func, label: b"mdslb", heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: b"mdsld", heat: BlockHeat.normal)
@@ -316,7 +316,7 @@ end 'emitCStringLength'
 // ⚠ EXPORTED because `CommandLineRuntime`'s splitter reads the command line a byte at a time and this is
 // exactly that read. A second copy would be a second answer to "how wide is a cstring byte, and is it
 // zero-extended?" — the pair this project keeps finding drifted.
-export function emitLoadByte(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+function emitLoadByte(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
 	let loaded = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: addr, offset: 0 as ByteOffset, valueType: StdType.u8))
@@ -328,7 +328,7 @@ end 'emitLoadByte'
 // ⚠ **IT LIVES BESIDE ITS DUAL RATHER THAN BESIDE A CALLER.** The load and the store are one fact
 // about one representation — how wide a raw byte is, and whether it is zero-extended — so both
 // answers are exported from one place.
-export function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
+function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
 	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0 as ByteOffset, valueId: value, valueType: StdType.u8))
 end 'emitStoreByte'
@@ -351,7 +351,7 @@ end 'emitStoreByte'
 // blocks, so the caller carries on from the one this leaves it in. The record's `ValueId` is MINTED BY THE
 // CALLER and handed in, rather than returned beside the block — a pair would have to be a `type`, and that
 // is a heap box (plus a destructor cascade over its `IrBlock` field) per call, for two values.
-export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, ids ValueMinter) returns IrBlock
+function emitCStringToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, ids ValueMinter) returns IrBlock
 	// The LENGTH's id is minted here and handed down, exactly as `record`'s is and for the same reason: a
 	// builder that returns both a block and a value would have to return a pair, and a pair is a heap box.
 	let i = ids.mint()
@@ -360,7 +360,7 @@ export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBl
 	return emitBytesToManaged(module, func: func, cur: build, source: cstr, byteCount: i, record: record, ids: ids)
 end 'emitCStringToManaged'
 
-export function emitBytesToManaged(module StdModule, func IrFunction, cur IrBlock, source ValueId, byteCount ValueId, record ValueId, ids ValueMinter) returns IrBlock
+function emitBytesToManaged(module StdModule, func IrFunction, cur IrBlock, source ValueId, byteCount ValueId, record ValueId, ids ValueMinter) returns IrBlock
 	let buffer = emitManagedByteBuffer(module, block: cur, record: record, byteCount: byteCount, ids: ids)
 	let afterCopy = emitForwardCopy(module, func: func, cur: cur, dest: buffer, src: source, byteCount: byteCount, ids: ids)
 

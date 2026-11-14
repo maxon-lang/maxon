@@ -1,4 +1,4 @@
-module function asyncRegisterCapacityOf(target Target) returns RegisterArgCapacity
+function asyncRegisterCapacityOf(target Target) returns RegisterArgCapacity
 	return match target.cpu 'cpu'
 		x64 gives x64RegisterArgCapacity()
 		arm64 gives arm64RegisterArgCapacity()
@@ -9,20 +9,20 @@ end 'asyncRegisterCapacityOf'
 // Where each word of a spawn's arguments sits: the declared parameters, then one existential
 // witness per interface parameter. The spawn stores at these offsets and its releaser reads them
 // back, so the two cannot place a word differently.
-module type AsyncArgumentSlots
+type AsyncArgumentSlots
 	let floatMask as ArgFloatMask
 	let userCount as ParamCount
 	let offsets as ByteOffsetArray
 	let witnessParams as ParamCountArray
-	module let stackPositions as ParamCountArray
-	module let usesImage as bool
+	let stackPositions as ParamCountArray
+	let usesImage as bool
 
 	// An `async` spawn's placement. Without `usesImage` every word is an integer register word of the
 	// GT's inline region. With it the words live in a separate image `GtOffArgBuf` points at: the
 	// integer words, then the float words at `AsyncImageFpOffset`, then the stack words. A stack word
 	// is written twice, into the image and below `gt.sp`: the callee reads the second, and the
 	// releaser reads the first at the await or the drop.
-	module static function of(paramTypes MaxonTypeArray, byReference ParamPositionMask, capacity RegisterArgCapacity) returns Self
+	static function of(paramTypes MaxonTypeArray, byReference ParamPositionMask, capacity RegisterArgCapacity) returns Self
 		if capacity > AsyncImageRegisterSlots 'imageTooShallow'
 			panic("AsyncArgumentSlots.of: the target passes {capacity} arguments per register file but a spawn's argument image holds only {AsyncImageRegisterSlots} of each")
 		end 'imageTooShallow'
@@ -64,7 +64,7 @@ module type AsyncArgumentSlots
 	// A service's start record: every word in order, floats included. The start thunk loads each word
 	// itself and calls the factory as an ordinary call, so no trampoline reads the record, and the
 	// thunk releases it.
-	module static function recorded(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns Self
+	static function recorded(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns Self
 		let userCount = paramTypes.count() as ParamCount
 		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
 		let slotCount = userCount + (witnessParams.count() as ParamCount)
@@ -102,15 +102,15 @@ module type AsyncArgumentSlots
 		return witnessParams
 	end 'witnessParamsOf'
 
-	module function valueIsFloat(position ParamCount) returns bool
+	function valueIsFloat(position ParamCount) returns bool
 		return argMaskBit(self.floatMask, argIndex: position)
 	end 'valueIsFloat'
 
-	module function offsetAt(position ParamCount) returns ByteOffset
+	function offsetAt(position ParamCount) returns ByteOffset
 		return try self.offsets.get(position) otherwise panic("AsyncArgumentSlots.offsetAt: no slot for position {position} — a placement holds one per declared parameter and one per witness after them")
 	end 'offsetAt'
 
-	module function witnessOffsetOf(param ParamCount) returns ByteOffset throws AbsentError
+	function witnessOffsetOf(param ParamCount) returns ByteOffset throws AbsentError
 		for (iter, witnessParam) in self.witnessParams.withIterator() 'eachWitness'
 			if witnessParam == param 'found'
 				return self.offsetAt(self.userCount + (iter.index() as ParamCount))
@@ -120,11 +120,11 @@ module type AsyncArgumentSlots
 		throw AbsentError.absent
 	end 'witnessOffsetOf'
 
-	module function imageBytes() returns ByteOffset
+	function imageBytes() returns ByteOffset
 		return AsyncImageStackOffset + (self.stackPositions.count() as ByteOffset) * GtArgSlotBytes
 	end 'imageBytes'
 
-	module function stackBytes() returns StackSize
+	function stackBytes() returns StackSize
 		return alignUpStack((self.stackPositions.count() as StackSize) * GtArgSlotBytes, alignment: StackFrameAlignment)
 	end 'stackBytes'
 end 'AsyncArgumentSlots'

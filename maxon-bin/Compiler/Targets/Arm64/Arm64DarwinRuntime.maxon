@@ -110,16 +110,16 @@ let SysctlWritesNothing = 0
 //
 // ⚠ x0 after it is the raw answer, whose upper half is unspecified for a 32-bit C return; a chunk
 // that reads the answer calls `arm64DarwinCallImportAnswering` instead.
-export function arm64DarwinCallImport(asm Arm64RuntimeAsm, slot OsImportSlot)
+function arm64DarwinCallImport(asm Arm64RuntimeAsm, slot OsImportSlot)
 	arm64EmitLibcCall(asm.code, iatRelocs: asm.iatRelocs, callFixups: asm.callFixups, slotIndex: osImportSlotIndex(slot))
 end 'arm64DarwinCallImport'
 
-export function arm64DarwinCallImportAnswering(asm Arm64RuntimeAsm, slot OsImportSlot)
+function arm64DarwinCallImportAnswering(asm Arm64RuntimeAsm, slot OsImportSlot)
 	arm64DarwinCallImport(asm, slot: slot)
 	arm64EmitImportAnswerWidth(asm, slot: slot)
 end 'arm64DarwinCallImportAnswering'
 
-module function arm64DarwinEmitLoadErrno(asm Arm64RuntimeAsm, dest Arm64Register)
+function arm64DarwinEmitLoadErrno(asm Arm64RuntimeAsm, dest Arm64Register)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadWord32At(asm, dest: dest, base: Arm64Register.x0, byteOffset: 0)
 end 'arm64DarwinEmitLoadErrno'
@@ -1281,7 +1281,7 @@ function buildArm64DarwinStashErrnoValueChunk(errnoHome DarwinErrnoHome) returns
 	return asm.finishFunction(DarwinStashErrnoValueName)
 end 'buildArm64DarwinStashErrnoValueChunk'
 
-module function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
+function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
 	let succeeded = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -1291,7 +1291,7 @@ module function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
 	asm.placeLabel(succeeded)
 end 'arm64DarwinEmitStashIfStatusFailed'
 
-module function arm64DarwinEmitPublishAndStashErrno(asm Arm64RuntimeAsm, value FullRangeInt)
+function arm64DarwinEmitPublishAndStashErrno(asm Arm64RuntimeAsm, value FullRangeInt)
 	arm64DarwinEmitPublishErrno(asm, value: value)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 end 'arm64DarwinEmitPublishAndStashErrno'
@@ -2295,7 +2295,7 @@ end 'emitArm64DarwinChildDup2'
 // The attach, whose body exists on this lane alone because `getenv` answers a pointer `shm_open` takes
 // directly. The create, the adopt, the map and the unmap are one body on both arm64 lanes and wear the shared
 // prefix (`Arm64PosixRuntime`), which reaches this lane's naming through `PosixShmNaming.sharedObjectName`.
-export let DarwinShmOpenName = b"mrt_darwin_shm_open"
+let DarwinShmOpenName = b"mrt_darwin_shm_open"
 
 // Darwin's `O_*` bits, which are not Linux's: Linux spells `O_CREAT` 0x40, `O_TRUNC` 0x200 and
 // `O_EXCL` 0x80.
@@ -2307,13 +2307,13 @@ let DarwinOpenExclusive = 0x800
 let DarwinShmCreateFlags = PosixOpenReadWrite or DarwinOpenCreate or DarwinOpenExclusive
 
 // `O_WRONLY|O_CREAT|O_TRUNC` as Darwin numbers them; see `LinuxRuntime.LinuxOpenCreateTruncateFlags`.
-export let DarwinOpenCreateTruncateFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenTruncate
+let DarwinOpenCreateTruncateFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenTruncate
 
-export let DarwinOpenCreateExclusiveFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenExclusive
+let DarwinOpenCreateExclusiveFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenExclusive
 
 let DarwinOpenEventOnly = 0x8000
 
-export let DarwinOpenResolveFlags = DarwinOpenEventOnly or DarwinOpenCloseOnExec
+let DarwinOpenResolveFlags = DarwinOpenEventOnly or DarwinOpenCloseOnExec
 
 // `mrt_host_file_open(x0 = path, x1 = flags, x2 = mode) -> x0 = fd | -1` — `open`, re-issued on `EINTR`.
 // A chunk because `open` is variadic and its mode travels on the stack, which an isel has no frame for.
@@ -2345,7 +2345,7 @@ function darwinShmHost() returns PosixShmHost
 	return PosixShmHost.create(PosixShmNaming.sharedObjectName, exclusiveCreateFlags: DarwinShmCreateFlags, stat: darwinStatLayout(), ftruncate: PosixHostCall.importCall(OsImportSlot.ftruncate), fstat: PosixHostCall.importCall(OsImportSlot.fstat), close: PosixHostCall.importCall(OsImportSlot.close))
 end 'darwinShmHost'
 
-module function arm64DarwinEmitShmOpenName(asm Arm64RuntimeAsm, nameSlot StackSize, flags MachineWord, mode MachineWord)
+function arm64DarwinEmitShmOpenName(asm Arm64RuntimeAsm, nameSlot StackSize, flags MachineWord, mode MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: nameSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: flags)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: mode)
@@ -2353,7 +2353,7 @@ module function arm64DarwinEmitShmOpenName(asm Arm64RuntimeAsm, nameSlot StackSi
 	arm64PosixEmitHostCallErrno(asm, call: PosixHostCall.importCall(OsImportSlot.shmOpen))
 end 'arm64DarwinEmitShmOpenName'
 
-module function arm64DarwinEmitShmUnlinkName(asm Arm64RuntimeAsm, nameSlot StackSize)
+function arm64DarwinEmitShmUnlinkName(asm Arm64RuntimeAsm, nameSlot StackSize)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: nameSlot)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.shmUnlink)
 end 'arm64DarwinEmitShmUnlinkName'
@@ -2412,7 +2412,7 @@ end 'arm64DarwinCaptureDescriptor'
 // which is what both keeps `__clock_now_unix_s` alive and emits `mrt_host_wall_clock`. Gating the two on
 // different questions is how a `bl` to an absent symbol happens, and an unresolved `bl` is a link failure
 // rather than a diagnostic.
-export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
+function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	let errnoHome = darwinErrnoHome(usage)
 	let kill = PosixHostCall.importCall(OsImportSlot.kill)
 
@@ -2992,7 +2992,7 @@ end 'buildArm64DarwinStatusOrErrnoChunk'
 // A libSystem status is -1 with the reason in `errno`, and answering the -1 alone would discard the
 // reason; a raw Linux `svc` already answers `-errno`, so only this lane folds. ⚠ x0 must already be
 // at the import's width (`arm64DarwinCallImportAnswering`), or a stale upper half reads as a sign.
-export function arm64DarwinEmitStatusOrErrno(asm Arm64RuntimeAsm)
+function arm64DarwinEmitStatusOrErrno(asm Arm64RuntimeAsm)
 	let answered = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -3009,7 +3009,7 @@ function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
 	arm64DarwinEmitNegateX0(asm)
 end 'arm64DarwinEmitNegatedErrno'
 
-module function arm64DarwinEmitUnstashedStatusOrErrno(asm Arm64RuntimeAsm)
+function arm64DarwinEmitUnstashedStatusOrErrno(asm Arm64RuntimeAsm)
 	let answered = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -3045,7 +3045,7 @@ function arm64DarwinEmitCloseAndAnswerErrno(asm Arm64RuntimeAsm, fdSlot StackSiz
 	arm64EmitBranchTo(asm, label: answered)
 end 'arm64DarwinEmitCloseAndAnswerErrno'
 
-module function arm64DarwinEmitTreeListAllocate(asm Arm64RuntimeAsm)
+function arm64DarwinEmitTreeListAllocate(asm Arm64RuntimeAsm)
 	let allocated = asm.newLabel()
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixTreeInitialBytes as MachineWord)
@@ -3057,11 +3057,11 @@ module function arm64DarwinEmitTreeListAllocate(asm Arm64RuntimeAsm)
 	asm.placeLabel(allocated)
 end 'arm64DarwinEmitTreeListAllocate'
 
-module function arm64DarwinEmitTreeListFree(asm Arm64RuntimeAsm)
+function arm64DarwinEmitTreeListFree(asm Arm64RuntimeAsm)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
 end 'arm64DarwinEmitTreeListFree'
 
-module function arm64DarwinEmitTreeGrow(asm Arm64RuntimeAsm, stateSlot StackSize)
+function arm64DarwinEmitTreeGrow(asm Arm64RuntimeAsm, stateSlot StackSize)
 	let failed = asm.newLabel()
 	let done = asm.newLabel()
 
@@ -3087,7 +3087,7 @@ module function arm64DarwinEmitTreeGrow(asm Arm64RuntimeAsm, stateSlot StackSize
 	asm.placeLabel(done)
 end 'arm64DarwinEmitTreeGrow'
 
-module function arm64DarwinEmitBranchIfSessionRootGone(asm Arm64RuntimeAsm, gone BlockId)
+function arm64DarwinEmitBranchIfSessionRootGone(asm Arm64RuntimeAsm, gone BlockId)
 	let present = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -3116,7 +3116,7 @@ function arm64DarwinEmitBranchOnPidListOutcome(asm Arm64RuntimeAsm, failed Block
 	asm.placeLabel(populated)
 end 'arm64DarwinEmitBranchOnPidListOutcome'
 
-module function arm64DarwinEmitSessionOf(asm Arm64RuntimeAsm, pidSlot StackSize)
+function arm64DarwinEmitSessionOf(asm Arm64RuntimeAsm, pidSlot StackSize)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.getsid)
 end 'arm64DarwinEmitSessionOf'
@@ -3414,10 +3414,10 @@ let DarwinProcPidTTaskInfo = 4
 let DarwinProcTaskInfoBytes = 96
 let DarwinProcTaskInfoRunningOffset = 88
 let DarwinProcBsdInfoBytes = 136
-module let DarwinProcPidtShortBsdInfo = 13
-module let DarwinProcBsdShortInfoBytes = 64
+let DarwinProcPidtShortBsdInfo = 13
+let DarwinProcBsdShortInfoBytes = 64
 let DarwinProcBsdShortInfoStatusOffset = 12
-module let DarwinProcBsdShortInfoFlagsOffset = 32
+let DarwinProcBsdShortInfoFlagsOffset = 32
 let DarwinProcBsdInfoCommOffset = 48
 let DarwinProcBsdInfoNameOffset = 64
 let DarwinProcStatusStopped = 4
@@ -3449,11 +3449,11 @@ let DarwinUniqIdentifierOffParentUnique = 24
 let DarwinProcPidIncludeZombies = 1
 let DarwinLedgerEntryShift = 3
 
-export function darwinProcBsdInfoSlots() returns StackSize
+function darwinProcBsdInfoSlots() returns StackSize
 	return runtimeFrameSlots(DarwinProcBsdInfoBytes)
 end 'darwinProcBsdInfoSlots'
 
-module function arm64DarwinEmitProcPidinfo(asm Arm64RuntimeAsm, flavor MachineWord, argument MachineWord, infoSlot StackSize, bytes Imm32)
+function arm64DarwinEmitProcPidinfo(asm Arm64RuntimeAsm, flavor MachineWord, argument MachineWord, infoSlot StackSize, bytes Imm32)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: flavor)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: argument)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: infoSlot)
@@ -3478,15 +3478,15 @@ function darwinNeedleSlots() returns StackSize
 	return runtimeFrameSlots(darwinDescendantsNeedlePrefix().count() as FullRangeInt + DarwinPidDigitsMax + 1)
 end 'darwinNeedleSlots'
 
-module function arm64DarwinEmitOwnPid(asm Arm64RuntimeAsm)
+function arm64DarwinEmitOwnPid(asm Arm64RuntimeAsm)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.getpid)
 end 'arm64DarwinEmitOwnPid'
 
-module function arm64DarwinEmitDescendantsTrack(asm Arm64RuntimeAsm)
+function arm64DarwinEmitDescendantsTrack(asm Arm64RuntimeAsm)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinDescendantsTrackName)
 end 'arm64DarwinEmitDescendantsTrack'
 
-module function arm64DarwinEmitSkipIfEnded(asm Arm64RuntimeAsm, pidSlot StackSize, infoSlot StackSize, skip BlockId)
+function arm64DarwinEmitSkipIfEnded(asm Arm64RuntimeAsm, pidSlot StackSize, infoSlot StackSize, skip BlockId)
 	let readStatus = asm.newLabel()
 	let live = asm.newLabel()
 
@@ -3509,7 +3509,7 @@ module function arm64DarwinEmitSkipIfEnded(asm Arm64RuntimeAsm, pidSlot StackSiz
 	asm.placeLabel(live)
 end 'arm64DarwinEmitSkipIfEnded'
 
-module function arm64DarwinEmitDescendantName(asm Arm64RuntimeAsm, pidSlot StackSize, infoSlot StackSize)
+function arm64DarwinEmitDescendantName(asm Arm64RuntimeAsm, pidSlot StackSize, infoSlot StackSize)
 	let haveName = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x9, slot: pidSlot)

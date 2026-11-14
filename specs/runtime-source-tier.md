@@ -57,9 +57,10 @@ The restrictions are what a runtime cannot have:
   what reaches a `for` element, a caught error, a `match` payload and a temporary no binding form sees; a
   CAPTURING closure is asked separately, because its heap is an environment block rather than the type of
   any value. A non-capturing closure, and a caught error whose enum owns nothing, are both admitted.
-- **Nothing wider than `module`.** `runtime/` is loaded into every program, so a declaration visible
-  outside the tier contests names with the programs it is linked into, and the compiler compiling
-  itself is one of them. `module` is the widest visibility the tier's own file-to-file sharing needs.
+- **Nothing wider than an unmarked declaration.** `runtime/` is loaded into every program, so a declaration
+  visible outside the tier contests names with the programs it is linked into, and the compiler compiling
+  itself is one of them. An unmarked declaration is the widest visibility the tier's own file-to-file sharing
+  needs.
 
 ⛔⛔ **AND ONE RESTRICTION IS NOT A RULE OF THE TIER AT ALL BUT A PROPERTY OF WHAT A BUILDER CAN DO THAT
 SOURCE CANNOT — AND IT IS THE BOUNDARY: A FAMILY'S BODIES CAN BE TIER SOURCE IFF THE BUILDER THAT EMITS THEM
@@ -176,7 +177,7 @@ Under test here is the DECLARATION door alone — that the row exists and a runt
 the body is then actually spliced past the budget is measured in `inline-leaves.md`.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_spliced(seed MachineWord) returns MachineWord
+function __probe_spliced(seed MachineWord) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	return seed + 1
@@ -202,7 +203,7 @@ row that lost is the one whose whole point is that it cannot lose silently. The 
 directive, which is the one that has to go.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_contradictory(seed MachineWord) returns MachineWord
+function __probe_contradictory(seed MachineWord) returns MachineWord
 	__Raw.ownFrame()
 	__Raw.splicedAtEverySite()
 
@@ -224,7 +225,7 @@ write, so the process would end silently — the exact defect the row exists to 
 at the call that spells it.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_unnamed_abort() returns MachineWord
+function __probe_unnamed_abort() returns MachineWord
 	__Raw.osExit(1000)
 
 	return 0
@@ -243,7 +244,7 @@ error E3005: <fragment>:4:8: '__Raw.osExit' requires the exit code of a RuntimeA
 would leave the compiler no `RuntimeAbort` case to take a message from.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_computed_abort(code MachineWord) returns MachineWord
+function __probe_computed_abort(code MachineWord) returns MachineWord
 	__Raw.osExit(code)
 
 	return 0
@@ -380,7 +381,7 @@ them, and a load answers a machine word while a store answers nothing.
 let ProbeScratchBytes = 8
 let ProbeByte = 255 as MachineWord
 
-module function probeBytes() returns MachineWord
+function probeBytes() returns MachineWord
 	let addr = __Raw.scratch(ProbeScratchBytes)
 	__Raw.storeByte(addr, offset: 0, value: ProbeByte)
 
@@ -416,7 +417,7 @@ let ProbeDelta = 1 as MachineWord
 let ProbeExpected = 0 as MachineWord
 let ProbeReplacement = 7 as MachineWord
 
-module function probeAtomics() returns MachineWord
+function probeAtomics() returns MachineWord
 	let addr = __Raw.scratch(ProbeAtomicBytes)
 	let prior = __Raw.atomicAddWord(addr, delta: ProbeDelta)
 	let swapped = __Raw.atomicCas(addr, expected: ProbeExpected, replacement: ProbeReplacement)
@@ -451,7 +452,7 @@ case runs on every lane. What is under test is the TABLE.
 let ProbeFillBytes = 16
 let ProbeFillByte = 0
 
-module function probeFill()
+function probeFill()
 	let addr = __Raw.scratch(ProbeFillBytes)
 	__Raw.memFill(addr, byteCount: ProbeFillBytes as MachineWord, value: ProbeFillByte)
 end 'probeFill'
@@ -483,7 +484,7 @@ page is taken, none is leaked, and the case runs on every lane. What is under te
 // --- runtime-file: Probe.maxon
 let ProbePageBytes = 65536 as MachineWord
 
-module function probePages() returns MachineWord
+function probePages() returns MachineWord
 	let reserved = __Raw.osReservePages(ProbePageBytes)
 	let committed = __Raw.osCommitPages(reserved, size: ProbePageBytes)
 	__Raw.osDecommitPages(committed, size: ProbePageBytes)
@@ -516,7 +517,7 @@ TABLE.
 // --- runtime-file: Probe.maxon
 let ProbeLockBytes = 64
 
-module function probeLock()
+function probeLock()
 	let lock = __Raw.scratch(ProbeLockBytes)
 	__Raw.osLockInit(lock)
 	__Raw.osLockEnter(lock)
@@ -543,7 +544,7 @@ argument is an ordinary word and its result is a machine word. That a lane WITHO
 program which reaches one is the pair of cases below.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeMachine(tebOffset MachineWord) returns MachineWord
+function probeMachine(tebOffset MachineWord) returns MachineWord
 	return __Raw.tlsSlotLoad(tebOffset)
 end 'probeMachine'
 // --- file: main.maxon
@@ -561,7 +562,7 @@ could be *"refuse every program that reaches a `__Raw` row"* and the wasm case w
 lane that HAS per-thread storage compiles the same program and runs it.
 
 ⭐ **IT IS ALSO THE ONLY WAY A SPEC CAN REACH A TIER BODY IT WROTE.** A `runtime/` file's unreserved
-declarations are module-scoped and its reserved ones may be called only from a file that may spell reserved
+declarations are visible only inside `runtime/` and its reserved ones may be called only from a file that may spell reserved
 names — so the crossing goes through a `stdlib/Builtins.maxon` overlay, which is such a file
 (`Parser.fileMayUseReservedNames`). `main` then calls an ordinary stdlib function, which is exactly the
 edge `LibraryFacts.substrateEntries` reports on.
@@ -648,7 +649,7 @@ that same bit — so a program with no allocator registers no table AND lowers n
 is under test is the TABLE: the three rows exist, the tier may spell them, and each answers a machine word.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeClassTables() returns MachineWord
+function probeClassTables() returns MachineWord
 	let small = __Raw.slabSizeToClass8Addr()
 	let large = __Raw.slabSizeToClass128Addr()
 	let geom = __Raw.slabClassGeomAddr()
@@ -679,7 +680,7 @@ gate bails. That is the same two-part contract `MmRuntime`'s four event emitters
 ⚠ The probe is uncalled, so dead-function elimination drops the body and the case runs on every lane.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeDebugStreamWords() returns MachineWord
+function probeDebugStreamWords() returns MachineWord
 	return __Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) + __Raw.loadWord(__Raw.dsAllocIdAddr(), offset: 0)
 end 'probeDebugStreamWords'
 // --- file: main.maxon
@@ -703,7 +704,7 @@ iterable and the `Character` element out of it, and the first one the file build
 is the construct the author has to remove, and the element goes with it.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeWalk() returns MachineWord
+function probeWalk() returns MachineWord
 	var seen = 0 as MachineWord
 
 	for c in "abc" 'eachByte'
@@ -733,7 +734,7 @@ name to hang a diagnostic on and no type to point at, so the only thing that can
 which is exactly what the columns hold.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeLength() returns MachineWord
+function probeLength() returns MachineWord
 	return "abc".count() as MachineWord
 end 'probeLength'
 // --- file: main.maxon
@@ -753,7 +754,7 @@ hold for a value the compiler mints rather than one it lays out, and this is the
 cost a real `__mm_alloc`.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeInterpolated() returns MachineWord
+function probeInterpolated() returns MachineWord
 	return "a{1}b".count() as MachineWord
 end 'probeInterpolated'
 // --- file: main.maxon
@@ -777,7 +778,7 @@ by the loop's own door and a `while` condition binds nothing at all. Every value
 machine word, so the file is legal and compiles.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeWords() returns MachineWord
+function probeWords() returns MachineWord
 	var total = 0 as MachineWord
 
 	for i in 0 upto 4 'eachIndex'
@@ -808,7 +809,7 @@ A capturing closure is a refcounted record, so a runtime file may not bind one; 
 immortal record and owes no count.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeClosure() returns MachineWord
+function probeClosure() returns MachineWord
 	var total = 0 as MachineWord
 	let bump = function(x MachineWord) gives total + x
 	total = bump(1 as MachineWord)
@@ -838,7 +839,7 @@ binding under a case at all.
 would need its own file, and the refusal above already states the line between the two.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeCaught() returns MachineWord
+function probeCaught() returns MachineWord
 	let ticks = __Raw.osTickCountMs()
 	var answer = 0 as MachineWord
 
@@ -880,7 +881,7 @@ inside a reached tier body, which reaches `ExitProcess` on x64-windows, `_exit` 
 // --- runtime-file: Probe.maxon
 let ProbeAbortCode = 93
 
-module function __probe_abort() returns MachineWord
+function __probe_abort() returns MachineWord
 	__Raw.osExit(ProbeAbortCode)
 
 	return 0
@@ -971,7 +972,7 @@ prefix that no ordinary file may write. So `public` on a runtime declaration sta
 caller that cannot exist, and the refusal says which of the two halves is wrong.
 
 ⚠ The refusal is a CEILING on visibility rather than a banned word, so its sibling below asks the same
-rule of `export`. `module` is where the ceiling sits: the tier's own files still share with each other.
+rule of `export`. An unmarked declaration is where the ceiling sits: the tier's own files still share with each other.
 ```maxon
 // --- runtime-file: Probe.maxon
 public function probePublic() returns ExitCode
@@ -983,7 +984,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3154: <fragment>:3:1: 'public' is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs
+error E3154: <fragment>:3:1: 'public' is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; an unmarked declaration is the widest visibility the tier's own file-to-file sharing needs
 ```
 
 <!-- test: runtime-file-may-not-export -->
@@ -992,7 +993,7 @@ declaration in a file the compiler loads into EVERY program it builds is a name 
 them — including to the compiler compiling ITSELF, where a `runtime/` alias and the compiler's own of
 that name make each other ambiguous (E3063) and the self-compile stops.
 
-⚠ `module` and `file` stay legal and must: `runtime/Word.maxon` declares its word roster `module`, and
+⚠ An unmarked declaration stays legal and must: `runtime/Word.maxon` declares its word roster unmarked, and
 the tier resolves those names across its own files. The rule is a CEILING, which is why one code and one
 sentence answer for both halves.
 ```maxon
@@ -1006,7 +1007,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3154: <fragment>:3:1: 'export' is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs
+error E3154: <fragment>:3:1: 'export' is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; an unmarked declaration is the widest visibility the tier's own file-to-file sharing needs
 ```
 
 <!-- test: runtime-file-may-not-declare-a-managed-field -->
@@ -1031,9 +1032,9 @@ end 'main'
 error E3153: <fragment>:4:15: managed type 'String' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
 ```
 
-<!-- test: runtime-file-unreserved-declaration-is-still-module-scoped -->
+<!-- test: runtime-file-unreserved-declaration-is-still-directory-scoped -->
 ⭐⭐ **THE NEGATIVE CONTROL ON THE ONE RULE THAT LETS A COMPILER-EMITTED CALL REACH THE TIER.** A runtime
-entry point answers to no directory's module scope: `stdlib/Clock.maxon`'s `nowUnixSeconds` becomes a call
+entry point answers to no directory's scope: `stdlib/Clock.maxon`'s `nowUnixSeconds` becomes a call
 to `runtime/Clock.maxon`'s `__clock_now_unix_s`, from a different directory, and visibility has nothing to
 refuse there because no file could have NAMED it — the callee is RESERVED, which is what makes the name
 unwritable (`SemanticCheck.calleeVisibleFrom`).
@@ -1041,17 +1042,17 @@ unwritable (`SemanticCheck.calleeVisibleFrom`).
 ⛔ **BEING RESERVED IS HALF THAT TEST, AND THIS IS THE HALF THAT MEASURES IT.** Keyed on the tier alone, the
 exemption would make every declaration in `runtime/` callable from every file in the program — the tier is
 loaded into all of them — so an UNRESERVED runtime declaration would become a global name in everything the
-compiler builds, which is the contest E3154's ceiling exists to prevent. It stays module-scoped, and the
-module is `runtime/`.
+compiler builds, which is the contest E3154's ceiling exists to prevent. It stays visible only in its
+directory, and the directory is `runtime/`.
 
 ⚠ **RESERVED IS NOT THE SAME AS `__`-PREFIXED, AND ONE TIER ENTRY IS THE DIFFERENCE.**
 `maxon_force_segfault` wears no prefix and is admitted by that same arm, because the DECLARATION door
 reserves the word in the free-function name space (`specs/safety.md`). The rule the case below measures is
-therefore *"a runtime declaration the compiler has not reserved stays module-scoped"*, and `probeHelper` is
+therefore *"a runtime declaration the compiler has not reserved stays directory-scoped"*, and `probeHelper` is
 one of those.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function probeHelper() returns ExitCode
+function probeHelper() returns ExitCode
 	return 7
 end 'probeHelper'
 // --- file: main.maxon
@@ -1060,5 +1061,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:8:9: function 'probeHelper' is module-scoped and not visible from this directory
+error E3008: <fragment>:8:9: function 'probeHelper' is not exported
 ```

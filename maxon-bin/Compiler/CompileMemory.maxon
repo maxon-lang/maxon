@@ -497,16 +497,16 @@ end 'PhaseTagCensusColumns'
 
 // One reading of the run's per-tag totals. `take` allocates nothing — `sized()` gave the columns their
 // full width — because a sampling that grew an array would be counted by the very tally it is taking.
-export type PhaseAllocTally
+type PhaseAllocTally
 	export var counts as PhaseColumnArray
 	export var bytes as PhaseColumnArray
 	export var runTotal as AllocCount
 
-	export static function empty() returns PhaseAllocTally
+	static function empty() returns PhaseAllocTally
 		return Self{counts: PhaseColumnArray.create(0), bytes: PhaseColumnArray.create(0), runTotal: 0}
 	end 'empty'
 
-	export static function sized() returns PhaseAllocTally
+	static function sized() returns PhaseAllocTally
 		return Self{counts: PhaseColumnArray.create(SlabCensusTagBuckets), bytes: PhaseColumnArray.create(SlabCensusTagBuckets), runTotal: 0}
 	end 'sized'
 
@@ -763,7 +763,7 @@ end 'claimedMemoryUnder'
 //
 // `timings` is read for one column: which phases were measured on a pool, and which driver's row each is
 // a breakdown of rather than an interval beside it (`PhaseRowKind`).
-export function compileMemoryReport(memory CompileMemory, timings CompileTimings) returns String
+function compileMemoryReport(memory CompileMemory, timings CompileTimings) returns String
 	let total = memory.total
 
 	let msg = StringBuilder.create()
@@ -1054,7 +1054,7 @@ function allocTallyLabel(bucket TagBucketIndex, names StringArray) returns Strin
 	return tagNameOrIndex(bucket, names: names)
 end 'allocTallyLabel'
 
-export function tagBucketLabel(bucket TagBucketIndex, kind TagRowLine, names StringArray, count AllocCount, bytes HeapByteCount) returns String
+function tagBucketLabel(bucket TagBucketIndex, kind TagRowLine, names StringArray, count AllocCount, bytes HeapByteCount) returns String
 	return match kind 'kind'
 		census(mode) gives tagCensusLabel(mode, bucket: bucket, names: names, count: count, bytes: bytes)
 		churn gives allocTallyLabel(bucket, names: names)
@@ -1078,7 +1078,7 @@ enum TagRowSkip
 	censusOwnRows
 end 'TagRowSkip'
 
-export union TagRowLine
+union TagRowLine
 	census(mode TagCensusMode)
 	churn
 end 'TagRowLine'

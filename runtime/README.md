@@ -31,7 +31,7 @@ self-compiles `maxon-bin/AGENTS.md` describes.
 | `SlabArena.maxon` | `__slab_assert_os_alloc`, `__slab_arena_new`, `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`, `__slab_arena_scavenge`, `__slab_arena_committed_bytes`, `__slab_arena_map_ensure`, `__slab_arena_map_set` | calls `installSlabRuntime`'s builders mint, and calls from the two slab tier files — compiler-called roster |
 | `SlabRuntime.maxon` | `__slab_os_direct_alloc`, `__slab_os_direct_free`, `__slab_state_base`, `__slab_state_committed`, `__slab_meta_alloc`, `__slab_meta_free`, `__slab_census`, `__slab_census_tally_walk`, `__slab_census_bucket_count`, `__slab_census_bucket_bytes` | calls `installSlabRuntime`'s builders mint (the census entries from the locked `__slab_live_bytes`-family wrappers) — compiler-called roster |
 | `WideText.maxon` | `__wt_widen`, `__wt_narrow`, `__wt_narrow_ascii`, `__wt_text_length`, `__wt_block_extent`, `__wt_path_needs_resolution`, `__wt_path_extension_fits`, `__wt_extend_resolved` (Windows only) | calls `HostTextRuntime`'s builders mint at every UTF-8⇄UTF-16 boundary of x64-windows — compiler-called roster |
-| `Word.maxon` | none: the shared `module typealias`es `MachineWord`, `BufferCoordinate`, `ElementStride`, `RefCountDelta` | — |
+| `Word.maxon` | none: the shared unmarked typealiases `MachineWord`, `BufferCoordinate`, `ElementStride`, `RefCountDelta` | — |
 
 A `__Builtins` row is lowered by the parser to a call naming the entry, from whatever file wrote the
 construct (`stdlib/Clock.maxon`'s `nowUnixSeconds` is one such caller). That call is an ordinary edge in an
@@ -56,7 +56,7 @@ reached only through its entry points.
   `buildClosureEnv` builds the record, refuses it. `declareInitializedBinding` and `bindParameters` ask
   first only for a sharper sentence that names the binding. A new way for a value to acquire heap that is
   not a type-column write owes its own recording door.
-- **Nothing wider than `module` (E3154).** The tier is loaded into every program, the compiler among
+- **Nothing marked `export` or `public` (E3154).** The tier is loaded into every program, the compiler among
   them, so an `export` or `public` declaration would contest names with the program it is linked into.
 - **`__Raw.*` is callable only from a tier file (E3152).** `__Raw` is the closed table of machine and OS
   operations in `Compiler/RawIntrinsics.maxon`; an unlisted `__Raw.` member is E3004. See
@@ -116,14 +116,14 @@ does not fault. `FunctionNameIndex.refuseDuplicateFunctionName` cannot report it
 parsed source. A new unprefixed tier entry owes the same declaration refusal and a `ReservedCalleeReason`
 arm.
 
-### Module visibility
+### Directory visibility
 
 A compiler-emitted call into the tier comes from whatever file wrote the construct, so
 `SemanticCheck.calleeVisibleFrom` admits, after the ordinary rule refuses, a callee that is reserved
 (`MmRuntime.isCompilerInternalCallee`) and declared under `runtime/`. This admit-list is sound only because
 no author can write a reserved name; for `maxon_force_segfault` that rests on the declaration refusal
-above. A tier file's unreserved declarations stay module-scoped
-(`specs/runtime-source-tier.md`'s `runtime-file-unreserved-declaration-is-still-module-scoped`).
+above. A tier file's unreserved declarations stay directory-scoped
+(`specs/runtime-source-tier.md`'s `runtime-file-unreserved-declaration-is-still-directory-scoped`).
 
 ## Provenance: `LibraryFacts.runtimeTier`
 
@@ -148,7 +148,7 @@ source" or "not parsed from source":
 
 A new predicate of that kind reads `runtimeTier`.
 
-⚠ Every declaration in a tier file skips the green-thread stack guard, unreserved `module function`
+⚠ Every declaration in a tier file skips the green-thread stack guard, unreserved unmarked
 helpers included, and tier source has no way to ask for one (`IrFunction.needsGreenThreadStackGuard` is set
 only by builders). They run inside the margin `GtRuntime.gtStackGuardMargin` is sized for, so a tier body
 must not recurse on program-sized data.

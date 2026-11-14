@@ -16,8 +16,8 @@ conversion, never E3010; an operator mixing the two, an argument, a field store 
 are E3005 exactly as for two differently spelled aliases (`specs/nominal-typealias.md`), and a `return`
 converts, because a `return` carries the cast.
 
-A non-exported `typealias` is **file-local** (`specs/duplicate-typealias.md`), so two files in different
-directories may each declare a private `Limit` with a different range and neither disturbs the other: neither
+A non-exported `typealias` is **directory-local** (`specs/duplicate-typealias.md`), so two files in different
+directories may each declare an unmarked `Limit` with a different range and neither disturbs the other: neither
 can see the other's. Two files of ONE directory may not, because a top-level name is declared once per
 directory whatever its visibility (`specs/top-level-name-scope.md`). What a bare name means in a file is decided by the AUTHOR declarations visible there, nearest first:
 
@@ -48,42 +48,40 @@ the casts in that file, and library files never see author declarations, so the 
 disturb the library either. `stdlib/Sleep.maxon` declares `Milliseconds`, which is what makes it the case
 a user actually meets.
 
-## A private alias is per file. A name is declared once per directory.
+## An unmarked alias is per directory. A name is declared once per directory.
 
-A private typealias belongs to its own file, range and underlying primitive alike: two files in different
-directories may each declare a private `Measure`, one over `int` and one over `float`, and each file means
-its own. A private alias and an exported one of one name in one directory are not both legal: a directory
+An unmarked typealias belongs to its own directory, range and underlying primitive alike: two files in different
+directories may each declare an unmarked `Measure`, one over `int` and one over `float`, and each file means
+its own. An unmarked alias and an exported one of one name in one directory are not both legal: a directory
 holds one declaration of a name, so the second is refused at that declaration with **E3061** `Duplicate
 typealias`, whatever its visibility, range or underlying primitive. Two directories may each declare one
 name, over any ranges or primitives; a reader that sees an exported one of each must qualify it (below), and
-a file whose own private alias sits beside another directory's exported one renames its own.
+a file whose own directory's unmarked alias sits beside another directory's exported one means its own.
 
 ## A THIRD file resolves to a declaration it MAY NAME
 
 A **third** file — one that names `Limit` and declares no `Limit` of its own — resolves to a declaration
-it MAY name: an author declaration visible to it (`export`ed or `public`, or `module` from its own
-directory subtree), or, when no author one is, a `public` standard-library declaration. **A plain
-`typealias` is file-local and a third file may not name it at all**, so it is never a candidate there.
+it MAY name: an author declaration visible to it (`export`ed or `public`, or unmarked in its own
+directory subtree), or, when no author one is, a `public` standard-library declaration. **An unmarked
+`typealias` in another directory may not be named at all**, so it is never a candidate there.
 
 - **One author candidate** is the answer, whatever the library declares.
 - **No author candidate** leaves the library's `public` declaration, when there is one.
 - **More than one author candidate** is **E3063**, `Ambiguous type name 'Limit': more than one visible
   declaration matches it. Qualify it as one of: …`, listing `<dir>.Limit` for each author directory
   (`export.Limit` for the project root); the library is not listed. The qualified spelling names exactly
-  one. In a file whose own private declaration is one of the candidates, the list ends `or rename this
-  file's own declaration`, because no qualifier names a file-private declaration.
-- **None**, while a declaration the reader may not name exists, is reported as hidden (E3008 for a
-  file-private or unexported one, E3088 for a `module` one outside its subtree).
+  one.
+- **None**, while a declaration the reader may not name exists, is reported as hidden (E3008).
 
-**This is what keeps a user's private alias from deciding what a STDLIB function accepts.** A user file may
+**This is what keeps a user's unmarked alias from deciding what a STDLIB function accepts.** A user file may
 declare `typealias Codepoint = int(0 to 100)`; `stdlib/helpers/string/utf16.maxon`'s
 `utf16LeadSurrogate(codepoint Codepoint)` declares no `Codepoint` of its own and cannot see the user's,
 so it resolves to `stdlib/Character.maxon`'s public `int(0 to 1114111)` and accepts `70000`.
 
-## A GENERIC-INSTANCE typealias is file-local too — `typealias Slots = Array with Big`
+## A GENERIC-INSTANCE typealias is directory-local too — `typealias Slots = Array with Big`
 
 Everything above is about the RANGED form. A **generic-instance** typealias (`typealias Slots = Array
-with Big`) is a `typealias` like any other: not exported, it is file-local, and two files in different
+with Big`) is a `typealias` like any other: not exported, it is directory-local, and two files in different
 directories may each declare `Slots` over a different instance without disturbing each other.
 
 A whole-program map keyed by the bare name would let **the last file folded win, and every other file
@@ -139,7 +137,7 @@ error E3005: <fragment>:5:14: Value 500 is outside the range of 'Milliseconds' (
 
 
 <!-- test: narrow-file-cast-still-rejected -->
-`a.maxon`'s private `Limit` is `int(0 to 200)` and `b.maxon`'s private one is `int(0 to 2000)`, so each
+`a.maxon`'s unmarked `Limit` is `int(0 to 200)` and `b.maxon`'s unmarked one is `int(0 to 2000)`, so each
 file sees only its own. The cast in `a.maxon` is checked against `a.maxon`'s range and rejected. This is
 the direction where the WIDER alias would erase a guard the author wrote.
 
@@ -274,7 +272,7 @@ error E3061: <fragment>:3:18: Duplicate typealias 'Measure'
 
 <!-- test: crossfile-alias-same-underlying-different-range-still-legal -->
 The guard the rule must not overreach into: two files of two directories, one name, two RANGES, both
-file-private. Each file's cast is checked against its own range, so both compile.
+unmarked. Each file's cast is checked against its own range, so both compile.
 ```maxon
 // --- file: a/a.maxon
 typealias Span = int(0 to 20)
@@ -302,17 +300,17 @@ end 'main'
 
 <!-- test: third-file-resolves-to-the-nameable-declaration -->
 A **third** file is what the two-file rule does not answer. `lib.maxon` names `Codepoint` and declares
-none, and `main.maxon`'s private `int(0 to 100)` is not a declaration it may name. The one declaration
+none, and `app/main.maxon`'s unmarked `int(0 to 100)`, in another directory, is not a declaration it may name. The one declaration
 `lib.maxon` may NAME is the library's public `Codepoint`, and that is the one it gets, so a legal `70000`
-is accepted. `main.maxon` declares no `Integer` and means `lib.maxon`'s, the only one it sees.
+is accepted. `main.maxon` declares no `Integer` and means `lib.maxon`'s exported one, the only one it sees.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export function widen(c Codepoint) returns Integer
 	return c / 1000
 end 'widen'
 
 export typealias Integer = int(i64.min to i64.max)
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Codepoint = int(0 to 100)
 
 function narrow(c Codepoint) returns Integer
@@ -337,7 +335,7 @@ admits. A false panic would be the runtime form of the false rejection above. `m
 `Codepoint` is its own narrow one, so the conversion is `lib.maxon`'s, where the name means the library's
 declaration. `Integer` is `lib.maxon`'s alone, and `main.maxon` names it bare.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 export function lift(n Integer) returns Codepoint
@@ -348,7 +346,7 @@ export function widen(c Codepoint) returns Codepoint
 	return c
 end 'widen'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Codepoint = int(0 to 100)
 
 function opaque(n Integer) returns Integer
@@ -371,17 +369,17 @@ end 'main'
 
 <!-- test: error.file-private-alias-still-binds-in-its-own-file -->
 The direction the rule must not overreach into: an author declaration beats the library's. `main.maxon`
-declares `Codepoint` privately and sees no other author `Codepoint`, so `narrow`'s parameter means
+declares `Codepoint` unmarked and sees no other author `Codepoint`, so `narrow`'s parameter means
 `int(0 to 100)` **in `main.maxon`** — the library's declaration does not widen it. Only a file that sees
 no author declaration resolves to the library's.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export function widen(c Codepoint) returns Integer
 	return c
 end 'widen'
 
 export typealias Integer = int(i64.min to i64.max)
-// --- file: main.maxon
+// --- file: app/main.maxon
 typealias Codepoint = int(0 to 100)
 
 function narrow(c Codepoint) returns Integer
@@ -393,7 +391,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:25: Value 150 is outside the range of 'Codepoint' (int(0 to 100))
+error E3005: app/<fragment>:16:25: Value 150 is outside the range of 'app.Codepoint' (int(0 to 100))
 ```
 
 ### ⛔⛔ AN ARM-SERVED DOOR RESOLVES ITS ALIAS IN THE *CALLEE'S* FILE, AND THE ANSWER HAS TO TRAVEL
@@ -405,14 +403,14 @@ applied at the CALL (`Parser.recordArmServedIndexRangeCheck`). The site carries 
 resolved (`RangeCheckSite.aliasFilePath`), so the emitted check reads the callee file's alias rather than
 one the CALLING file declares under the same name.
 
-⛔ **A user program's own FILE-PRIVATE `typealias ElementIndex = int(0 to 3)` does not decide what
+⛔ **A user program's own UNMARKED `typealias ElementIndex = int(0 to 3)` does not decide what
 `stdlib/Array.maxon`'s `set` accepts**: on a 20-element array, `a.set(9, value: 42)` is legal.
 
 <!-- test: a-contested-element-index-does-not-govern-the-array-door -->
-`main.maxon` and `lib.maxon` each declare a private `ElementIndex` over a range of their own, and
+`main.maxon` and `lib.maxon` each declare an unmarked `ElementIndex` over a range of their own, and
 neither may reach `Array`'s. Index 9 is legal for `stdlib/Array.maxon`'s `int(0 to u64.max)` and illegal
 for both user declarations, so a door reading either one refuses a legal program. Each file's own alias is
-exercised beside it — `ownClamp(3)` and `libClamp()` — so the case cannot pass with file-scoped
+exercised beside it — `ownClamp(3)` and `libClamp()` — so the case cannot pass with directory-scoped
 resolution disabled.
 ```maxon
 // --- file: lib/lib.maxon
@@ -448,7 +446,7 @@ end 'main'
 ```
 
 <!-- test: error.a-contested-element-index-still-governs-its-own-file -->
-The direction the rule must not overreach into — `error.file-private-alias-still-binds-in-its-own-file`
+The direction the rule must not overreach into — `error.unmarked-alias-still-binds-in-its-own-file`
 one door over. `main.maxon`'s `ElementIndex` means `int(0 to 3)` for `main.maxon`'s OWN cast, even though the
 same name does not reach `Array.get`. If this case stops being an error, resolution has stopped being by
 file.
@@ -514,7 +512,7 @@ for its own `Byte`, not `main.maxon`'s `int(0 to u8.max)`. The answer is 209.
 
 The two ranges are disjoint for the reason the case above states. The value reaching `push` here comes
 from a PARAMETER and not a literal, so the guard it meets is the runtime one — which is what makes this
-the form that compiles and then answers wrongly. Both `Byte`s are private, so each file sees only its own.
+the form that compiles and then answers wrongly. Both `Byte`s are unmarked, so each file sees only its own.
 ```maxon
 // --- file: wide/wide.maxon
 typealias Byte = int(300 to 1000)
@@ -595,7 +593,7 @@ end 'main'
 
 
 <!-- test: agreeing-generic-alias-is-not-contested -->
-The load-bearing negative: two files declare a private `Counts` over ONE `Tally` declaration, so both
+The load-bearing negative: two files declare an unmarked `Counts` over ONE `Tally` declaration, so both
 fold to ONE interned instance and the name is not contested at all. Nothing is scoped and nothing is
 re-keyed, so every program whose generic aliases have exactly this shape keeps one instance and one set of
 emitted symbols.
@@ -668,7 +666,7 @@ end 'main'
 A diagnostic names a declaration back at the author, and the compiler's contest mint (`Byte$300_1000`)
 is a name NO SOURCE LINE HOLDS. The narrowing E3005 and the `otherwise` E3005 are worded in one place
 and share the strip, so one alias prints one way whichever of the two an out-of-range value meets. Both
-`Byte`s are private, so each file sees only its own.
+`Byte`s are unmarked, so each file sees only its own.
 ```maxon
 // --- file: narrow/narrow.maxon
 typealias Byte = int(0 to 255)
@@ -753,20 +751,20 @@ end 'main'
 
 <!-- test: third-file-resolves-a-contested-generic-alias-to-the-nameable-one -->
 The generic twin of `third-file-resolves-to-the-nameable-declaration`, and the case that pins the whole
-visibility tier: `lib/main.maxon` declares no `Slots`, so it may not mean `priv.maxon`'s file-private one
-and resolves to `lib/shared.maxon`'s `module` declaration — the only one it is allowed to write down. Its
+visibility tier: `lib/main.maxon` declares no `Slots` and sees two, `priv.maxon`'s at the root and
+`lib/shared.maxon`'s in its own directory, and it resolves to its own directory's. Its
 `push(1500)` meets `lib`'s `int(1000 to 2000)`, while `priv.maxon`, outside `lib/` and so blind to
 `lib`'s `Slots`, means its own `int(0 to 100)`.
 ```maxon
 // --- file: lib/shared.maxon
-module typealias Elem = int(1000 to 2000)
-module typealias Slots = Array with Elem
+typealias Elem = int(1000 to 2000)
+typealias Slots = Array with Elem
 
 // --- file: priv.maxon
 typealias Elem = int(0 to 100)
 typealias Slots = Array with Elem
 
-module function fromPriv() returns ExitCode
+function fromPriv() returns ExitCode
 	let w = Slots.create(0)
 	w.push(40)
 	return try w.get(0) otherwise 0
@@ -1197,8 +1195,8 @@ end 'main'
 **A CROSS-FILE RETURN TYPE SPELLED WITH A CONTESTED GENERIC ALIAS RESOLVES IN THE CALLEE'S FILE, AND
 THIS CASE EXISTS TO KEEP IT THAT WAY.** `makeBag` returns `StringArray`, and the CALLER is itself a
 contestant that means something else by that name — the shape that would bite hardest if the return
-type were resolved against the reader's file. The caller's alias is file-private, so `adef.maxon` sees
-only the library's `StringArray`; the library takes no part in ambiguity, so the caller's bare name is its
+type were resolved against the reader's file. The caller's alias is unmarked in `app/`, so `adef.maxon`, at
+the root, sees only the library's `StringArray`; the library takes no part in ambiguity, so the caller's bare name is its
 own `Array with Num`. `ProgramSignatures.funcReturnDeclFiles` is the per-callee declaring-file index that
 decides it, and `copyFreeFunctionSweepEntries` carries it across a contest refile; nothing else pins
 either, so a regression in them would be silent.
@@ -1208,14 +1206,14 @@ library's `Array with String`. Had it resolved against `cmain.maxon`, the elemen
 neither the `otherwise ""` nor the `byteLength()` would compile.
 ```maxon
 // --- file: adef.maxon
-export function makeBag() returns StringArray
+function makeBag() returns StringArray
 	let b = StringArray.create(0)
 	b.push("four")
 	b.push("nine")
 	return b
 end 'makeBag'
 
-// --- file: cmain.maxon
+// --- file: app/cmain.maxon
 typealias Num = int(0 to 125)
 typealias StringArray = Array with Num
 
@@ -1340,8 +1338,8 @@ it — one row per name, LAST-WINS — so the declaration the fold reached last 
 program. `tupleAliasTargetInAnyFile` then reads that single row and is handed NO READING FILE at all, so
 a reference from the other declaring file is answered with a stranger's tuple.
 
-Two declarations of `Pair` over DIFFERENT tuples that no file sees both of are legal — `a/`'s `module`
-one is invisible outside `a/`, and `z/z-gamma.maxon`'s file-private one outside its file — so what the
+Two declarations of `Pair` over DIFFERENT tuples that no file sees both of are legal — `a/`'s unmarked
+one is invisible outside `a/`, and `z/`'s outside `z/` — so what the
 bare row costs is the LOSER's own legal program, the same trade every contest case in this file refuses.
 
 This one drives the SWEEP-REPAIR door: `a/`'s `Pair` is declared BELOW its use, so the declaration
@@ -1361,11 +1359,11 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: a/m-alpha.maxon
-module function relayA() returns Pair
+function relayA() returns Pair
 	return (9, 2)
 end 'relayA'
 
-module typealias Pair = (int, int)
+typealias Pair = (int, int)
 
 // --- file: z/z-gamma.maxon
 typealias Pair = (String, String)
@@ -1407,11 +1405,11 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: a/m-alpha.maxon
-module function relayA(p Pair) returns ExitCode
+function relayA(p Pair) returns ExitCode
 	return (p.0 - p.1) as ExitCode
 end 'relayA'
 
-module typealias Pair = (int, int)
+typealias Pair = (int, int)
 
 // --- file: z/z-gamma.maxon
 typealias Pair = (String, String)
@@ -1433,7 +1431,7 @@ gamma x y
 ```
 
 <!-- test: two-directories-tuple-alias-of-one-name-resolves-in-its-own-file-either-order -->
-⭐⭐ **A FILE-PRIVATE TUPLE ALIAS IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM, AND THIS
+⭐⭐ **An UNMARKED TUPLE ALIAS IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM, AND THIS
 IS THE CASE THAT SAYS SO.** The fold walks `Directory.list` order — NTFS index order on Windows, APFS
 hash order on macOS — so a one-row last-wins registry hands a different file
 the name on a different host, and a cure that only happened to pick the right row would be the same
@@ -1469,11 +1467,11 @@ function makeGamma() returns Pair
 end 'makeGamma'
 
 // --- file: z/z-alpha.maxon
-module function relayA() returns Pair
+function relayA() returns Pair
 	return (9, 2)
 end 'relayA'
 
-module typealias Pair = (int, int)
+typealias Pair = (int, int)
 ```
 ```exitcode
 0
@@ -1879,7 +1877,7 @@ name is not cross-kind contested at all and the ranking never runs; `type Pair` 
 contested across kinds and sends every reader through the claim set. A file whose tuple claim were
 dropped would rank as meaning the STRUCT.
 
-All three declarations are file-private, so no file sees two of them and each bare `Pair` has one
+All three declarations are unmarked, each in a directory of its own, so no file sees two of them and each bare `Pair` has one
 answer. Each declaring file keeps its own tuple claim and returns its own tuple from its own function; the
 twin below swaps the files' sort order, and the answer does not move.
 
@@ -1999,6 +1997,64 @@ typealias Pair = (int, int)
 xy
 ```
 
+
+<!-- test: an-exported-signature-through-a-contested-tuple-alias-resolves-the-readers-alias -->
+The same three declarations, with `malpha/`'s `Pair` exported and crossing into the root through `makeA`'s
+signature. The root declares no `Pair` and sees only `malpha/`'s, so `sum` takes the `(int, int)` that
+`makeA` returns, and `zgamma/`'s `(String, String)` stays its own (9 + 2).
+```maxon
+// --- file: a-main.maxon
+function sum(p Pair) returns ExitCode
+	return (p.0 + p.1) as ExitCode
+end 'sum'
+
+function main() returns ExitCode
+	useGamma()
+
+	return sum(makeA())
+end 'main'
+
+// --- file: malpha/m-alpha.maxon
+export typealias Pair = (int, int)
+
+export function makeA() returns Pair
+	return (9, 2)
+end 'makeA'
+
+// --- file: nnominal/n-nominal.maxon
+type Pair
+	export var q as Slot
+
+	static function create() returns Pair
+		return Self{q: 5}
+	end 'create'
+end 'Pair'
+
+typealias Slot = int(0 to 100)
+
+public function nominalQ() returns ExitCode
+	return Pair.create().q
+end 'nominalQ'
+
+// --- file: zgamma/z-gamma.maxon
+export function useGamma()
+	let g = makeG()
+
+	print("{g.0}{g.1}\n")
+end 'useGamma'
+
+function makeG() returns Pair
+	return ("x", "y")
+end 'makeG'
+
+typealias Pair = (String, String)
+```
+```exitcode
+11
+```
+```stdout
+xy
+```
 
 <!-- test: a-sized-fixed-array-keeps-its-element-count-when-its-element-is-contested -->
 ⭐ **A `FixedArray`'s SIZE is part of its type, and the per-file rescoping a contest causes must carry it.**
@@ -2141,7 +2197,7 @@ end 'main'
 typealias Measure = int(0 to 100)
 
 type IntBox
-	module var m as Measure
+	var m as Measure
 
 	static function of(m Measure) returns Self
 		return Self{m: m}
@@ -2157,7 +2213,7 @@ end 'fromA'
 typealias Measure = float(0.0 to 1.0)
 
 type FloatBox
-	module var m as Measure
+	var m as Measure
 
 	static function of(m Measure) returns Self
 		return Self{m: m}
@@ -2188,7 +2244,7 @@ interface IntScaled
 end 'IntScaled'
 
 type IntCell implements IntScaled
-	module let n as Measure
+	let n as Measure
 
 	static function of(n Measure) returns Self
 		return Self{n: n}
@@ -2200,7 +2256,7 @@ type IntCell implements IntScaled
 end 'IntCell'
 
 type IntRunner uses T where T is IntScaled
-	module let item as T
+	let item as T
 
 	static function of(item T) returns Self
 		return Self{item: item}
@@ -2225,7 +2281,7 @@ interface FloatScaled
 end 'FloatScaled'
 
 type FloatCell implements FloatScaled
-	module let n as Measure
+	let n as Measure
 
 	static function of(n Measure) returns Self
 		return Self{n: n}
@@ -2237,7 +2293,7 @@ type FloatCell implements FloatScaled
 end 'FloatCell'
 
 type FloatRunner uses T where T is FloatScaled
-	module let item as T
+	let item as T
 
 	static function of(item T) returns Self
 		return Self{item: item}
@@ -2273,7 +2329,7 @@ interface IntSource uses Element
 end 'IntSource'
 
 type IntCell implements IntSource with Measure
-	module let n as Measure
+	let n as Measure
 
 	static function of(n Measure) returns Self
 		return Self{n: n}
@@ -2302,7 +2358,7 @@ interface FloatSource uses Element
 end 'FloatSource'
 
 type FloatCell implements FloatSource with Measure
-	module let n as Measure
+	let n as Measure
 
 	static function of(n Measure) returns Self
 		return Self{n: n}
@@ -2331,7 +2387,7 @@ end 'main'
 ```
 
 <!-- test: error.an-exported-interface-instance-over-a-file-private-argument-is-refused -->
-`lib/b.maxon` and `app/main.maxon` each declare a file-private `Measure` and `Items`, and `ItemsSource` is `Source with Items` of `lib/b.maxon`'s. An exported alias and an exported function cannot name a file-private alias, so both are refused and no dispatch through `ItemsSource` reaches `app/main.maxon`'s own `Items`.
+`lib/b.maxon` and `app/main.maxon` each declare an unmarked `Measure` and `Items`, and `ItemsSource` is `Source with Items` of `lib/b.maxon`'s. An exported alias and an exported function cannot name an unmarked alias, so both are refused and no dispatch through `ItemsSource` reaches `app/main.maxon`'s own `Items`.
 ```maxon
 // --- file: lib/b.maxon
 typealias Measure = int(0 to 1000)
@@ -2375,12 +2431,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: lib/<fragment>:22:18: exported typealias 'lib.ItemsSource' names file-private typealias 'Items' in its target
-error E3167: lib/<fragment>:24:17: exported function 'lib.makeSource' names file-private typealias 'Items' in its return type
+error E3167: lib/<fragment>:22:18: exported typealias 'lib.ItemsSource' names unexported typealias 'Items' in its target
+error E3167: lib/<fragment>:24:17: exported function 'lib.makeSource' names unexported typealias 'Items' in its return type
 ```
 
 <!-- test: error.an-array-literal-stored-into-another-files-field-is-refused-at-the-field -->
-`lib/bag.maxon` and `app/main.maxon` each declare a file-private `Measure` and `Items`. `Bag.items` is typed by `lib/bag.maxon`'s `Items`, and an exported field cannot be typed by a file-private alias, so no array literal can be stored into it from another file.
+`lib/bag.maxon` and `app/main.maxon` each declare an unmarked `Measure` and `Items`. `Bag.items` is typed by `lib/bag.maxon`'s `Items`, and an exported field cannot be typed by an unmarked alias, so no array literal can be stored into it from another file.
 ```maxon
 // --- file: lib/bag.maxon
 typealias Measure = int(0 to 1000)
@@ -2413,16 +2469,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: lib/<fragment>:7:22: exported field 'lib.Bag.items' names file-private typealias 'Items' in its type
+error E3167: lib/<fragment>:7:22: exported field 'lib.Bag.items' names unexported typealias 'Items' in its type
 ```
 
 <!-- test: two-readers-in-two-directories-each-instantiate-their-own-directorys-alias -->
-Two directories each declare a module-scoped `Level` with its own range, and a file in each that declares
+Two directories each declare an unmarked `Level` with its own range, and a file in each that declares
 neither builds a `Map with (String, Level)`. Each reader sees only its own directory's alias, so each instance
 carries that alias, and the wider one holds 90000.
 ```maxon
 // --- file: a/alias.maxon
-module typealias Level = int(0 to 255)
+typealias Level = int(0 to 255)
 
 // --- file: a/use.maxon
 typealias ALevels = Map with (String, Level)
@@ -2435,7 +2491,7 @@ export function firstOfA() returns String
 end 'firstOfA'
 
 // --- file: b/alias.maxon
-module typealias Level = int(0 to 100000)
+typealias Level = int(0 to 100000)
 
 // --- file: b/use.maxon
 typealias BLevels = Map with (String, Level)
@@ -2462,9 +2518,9 @@ end 'main'
 
 <!-- test: error.a-hidden-alias-named-before-a-same-named-member-is-refused -->
 A field written before its type's own nested `Idx` does not name that member — the body walk has not reached
-it — so it names the file-scope `Idx`, which another file keeps private.
+it — so it names the file-scope `Idx`, which another directory keeps unexported.
 ```maxon
-// --- file: other.maxon
+// --- file: other/other.maxon
 typealias Idx = int(0 to 9)
 
 export function otherIdx() returns ExitCode
@@ -2495,7 +2551,7 @@ error E3008: <fragment>:12:19: typealias 'Idx' is not exported
 
 <!-- test: an-extension-body-names-its-types-nested-function-alias-beside-a-hidden-one -->
 An extension body names its type's nested function alias bare, and resolves it to that member even though
-another file keeps a private alias of the same name.
+another file keeps an unmarked alias of the same name.
 ```maxon
 // --- file: other/other.maxon
 typealias Step = int(0 to 9)
@@ -2847,7 +2903,7 @@ error E3063: <fragment>:18:11: Ambiguous type name 'StringArray': more than one 
 
 <!-- test: a-factory-argument-cast-to-a-contested-name-keeps-the-casting-files-alias -->
 ⭐ **A CAST ARGUMENT CARRIES THE ALIAS ITS FILE MEANS, NOT THE BARE SPELLING.** `2 as Small` in the
-second file names that file's private `int(0 to 100)` alias, a subtype of the factory's `Wide` parameter; a
+second file names that file's unmarked `int(0 to 100)` alias, a subtype of the factory's `Wide` parameter; a
 sibling declares `type Small`. The scalar is typed through the reading file's identity, so the factory
 argument is a `Small` of the alias and never the sibling's struct.
 
@@ -2971,7 +3027,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2055: b/<fragment>:15:17: Type 'Pair' has no associated types
-error E3167: b/<fragment>:17:17: exported function 'b.create' names file-private typealias 'Bad' in its return type
+error E3167: b/<fragment>:17:17: exported function 'b.create' names unexported typealias 'Bad' in its return type
 ```
 
 <!-- test: a-files-own-alias-leaves-a-directory-qualified-generic-base-meaning-that-directorys-type -->

@@ -1,25 +1,25 @@
 ---
 feature: unused-file-private-declaration
 status: stable
-keywords: [file-private, unused, diagnostics, errors, dead code]
+keywords: [unmarked, unexported, unused, diagnostics, errors, dead code]
 category: diagnostics
 ---
 
-# Unused File-Private Declarations
+# Unused Unmarked Declarations
 
 ## Documentation
 
 A top-level `function`, `let`, `type`, `enum`, `union` or `interface` with no visibility modifier is visible only in its
-own file. When nothing live in that file names it, the declaration is dead and the compiler reports it
-(**E3219**). Delete it, or use it.
+declaring directory and its subdirectories. When nothing live there names it, the declaration is dead and the
+compiler reports it (**E3219**). Delete it, or use it.
 
-"Live" is decided by reachability inside the file. A file-private declaration is live when it is named
-by code that is not itself a file-private declaration (an `export`, `module` or `public` declaration, a
-test, `main`, a method), or by a live file-private declaration. A group of file-private declarations that
+"Live" is decided by reachability inside that subtree. An unmarked declaration is live when it is named
+by code that is not itself an unmarked declaration (an `export` or `public` declaration, a
+test, `main`, a method), or by a live unmarked declaration. A group of unmarked declarations that
 only name each other, including a function that only names itself, is dead as a whole and is reported
 together.
 
-A name is judged by where it is spelled, in the tokens of the file. A spelling in a branch of `#if` the
+A name is judged by where it is spelled, in the tokens of the subtree's files. A spelling in a branch of `#if` the
 target excludes counts, so a declaration used only under one `#if os(...)` branch is live on every target.
 
 `typealias` is not part of this check: an alias nothing names is E3062. Members of a type, a `static let`
@@ -38,7 +38,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-function.maxon:2:10: unused function: 'unusedHelper' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-function.maxon:2:10: unused function: 'unusedHelper' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.unused-constant -->
@@ -50,7 +50,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-constant.maxon:2:5: unused constant: 'UnusedLimit' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-constant.maxon:2:5: unused constant: 'UnusedLimit' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.unused-type -->
@@ -66,7 +66,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-type.maxon:4:6: unused type: 'UnusedPoint' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-type.maxon:4:6: unused type: 'UnusedPoint' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.unused-enum -->
@@ -81,7 +81,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-enum.maxon:2:6: unused enum: 'UnusedShade' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-enum.maxon:2:6: unused enum: 'UnusedShade' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.unused-union -->
@@ -96,7 +96,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-union.maxon:2:7: unused union: 'UnusedOutcome' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-union.maxon:2:7: unused union: 'UnusedOutcome' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.a-function-that-only-names-itself-is-unused -->
@@ -110,7 +110,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.a-function-that-only-names-itself-is-unused.maxon:2:10: unused function: 'spin' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.a-function-that-only-names-itself-is-unused.maxon:2:10: unused function: 'spin' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.declarations-that-only-name-each-other-are-all-unused -->
@@ -130,9 +130,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.declarations-that-only-name-each-other-are-all-unused.maxon:2:5: unused constant: 'UnusedLimit' is file-private and nothing live in this file names it; delete it
-error E3219: specs/unused-file-private-declaration/error.declarations-that-only-name-each-other-are-all-unused.maxon:4:10: unused function: 'first' is file-private and nothing live in this file names it; delete it
-error E3219: specs/unused-file-private-declaration/error.declarations-that-only-name-each-other-are-all-unused.maxon:8:10: unused function: 'second' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.declarations-that-only-name-each-other-are-all-unused.maxon:2:5: unused constant: 'UnusedLimit' is not exported and nothing live in its directory names it; delete it
+error E3219: specs/unused-file-private-declaration/error.declarations-that-only-name-each-other-are-all-unused.maxon:4:10: unused function: 'first' is not exported and nothing live in its directory names it; delete it
+error E3219: specs/unused-file-private-declaration/error.declarations-that-only-name-each-other-are-all-unused.maxon:8:10: unused function: 'second' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.reported-in-source-order-whatever-the-kind -->
@@ -158,10 +158,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:2:6: unused enum: 'DeadShade' is file-private and nothing live in this file names it; delete it
-error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:7:10: unused function: 'deadHelper' is file-private and nothing live in this file names it; delete it
-error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:11:5: unused constant: 'DeadLimit' is file-private and nothing live in this file names it; delete it
-error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:13:7: unused union: 'DeadOutcome' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:2:6: unused enum: 'DeadShade' is not exported and nothing live in its directory names it; delete it
+error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:7:10: unused function: 'deadHelper' is not exported and nothing live in its directory names it; delete it
+error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:11:5: unused constant: 'DeadLimit' is not exported and nothing live in its directory names it; delete it
+error E3219: specs/unused-file-private-declaration/error.reported-in-source-order-whatever-the-kind.maxon:13:7: unused union: 'DeadOutcome' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.the-same-name-in-another-file-does-not-keep-it-alive -->
@@ -185,7 +185,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: api/<fragment>:3:10: unused function: 'helper' is file-private and nothing live in this file names it; delete it
+error E3219: api/<fragment>:3:10: unused function: 'helper' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.unused-interface -->
@@ -199,7 +199,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-interface.maxon:2:11: unused interface: 'UnusedShape' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-interface.maxon:2:11: unused interface: 'UnusedShape' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: error.an-unused-function-spelled-by-a-keyword -->
@@ -213,7 +213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.an-unused-function-spelled-by-a-keyword.maxon:2:10: unused function: 'from' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.an-unused-function-spelled-by-a-keyword.maxon:2:10: unused function: 'from' is not exported and nothing live in its directory names it; delete it
 ```
 
 <!-- test: used.a-static-binding-in-a-type-body-is-not-audited -->
@@ -478,5 +478,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3219: specs/unused-file-private-declaration/error.unused-in-a-file-with-conditional-regions.maxon:2:10: unused function: 'unusedHere' is file-private and nothing live in this file names it; delete it
+error E3219: specs/unused-file-private-declaration/error.unused-in-a-file-with-conditional-regions.maxon:2:10: unused function: 'unusedHere' is not exported and nothing live in its directory names it; delete it
 ```

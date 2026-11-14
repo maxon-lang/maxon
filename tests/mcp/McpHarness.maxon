@@ -1,22 +1,22 @@
 // Shared harness for `maxon mcp-server`: spawns the compiler under test and drives it over stdio
 // (newline-delimited JSON-RPC) or over the `--http` transport.
 
-export let CacheDirName = "cache"
-export let DebugBuildDirName = "debug-builds"
-export let SpecTempDirName = ".spec-tmp"
-export let ResultFlagPrefix = "--result-json="
-export let MessageByteBound = 4000
-export let TruncationMarkerOpen = "\n["
-export let TruncationMarkerClose = " bytes truncated]"
-export let SpecResultStem = "spec-result"
+let CacheDirName = "cache"
+let DebugBuildDirName = "debug-builds"
+let SpecTempDirName = ".spec-tmp"
+let ResultFlagPrefix = "--result-json="
+let MessageByteBound = 4000
+let TruncationMarkerOpen = "\n["
+let TruncationMarkerClose = " bytes truncated]"
+let SpecResultStem = "spec-result"
 
-export function resultPathNamedBy(command String) returns FilePath
+function resultPathNamedBy(command String) returns FilePath
 	let after = try command.split(ResultFlagPrefix).get(1) otherwise panic("the command line names no {ResultFlagPrefix}: {command}")
 
 	return try FilePath.from(after.trim()) otherwise panic("the result path is not a path: {after}")
 end 'resultPathNamedBy'
 
-export function fakeCheckoutWithCompiler(root FilePath, compiler FilePath)
+function fakeCheckoutWithCompiler(root FilePath, compiler FilePath)
 	for name in [StdlibDirName, CheckoutRuntimeDirName] 'eachCheckoutDir'
 		_ = stagingDir(root.join(name).toString())
 	end 'eachCheckoutDir'
@@ -30,7 +30,7 @@ end 'fakeCheckoutWithCompiler'
 
 // A case that replaces a compiler image on disk replaces a COPY: doing it to the tree's own slot would
 // rebuild the checkout's compiler as a side effect.
-export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns FilePath
+function stagedCopyOf(binary FilePath, dir FilePath, name String) returns FilePath
 	let target = dir.join("{name}{executableSuffix()}")
 	let bytes = fileBytes(binary)
 	try File.writeBinary(target, content: bytes, mode: FilePermission.executable) otherwise panic("McpHarness: could not write {target.path}")
@@ -38,17 +38,17 @@ export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns
 	return target
 end 'stagedCopyOf'
 
-export function stagedDirNamed(name String) returns FilePath
+function stagedDirNamed(name String) returns FilePath
 	return stagingDir("{testScratchDir().toString()}{PortablePathSeparator}{name}")
 end 'stagedDirNamed'
 
-export function stagedInTreeDirNamed(name String) returns FilePath
+function stagedInTreeDirNamed(name String) returns FilePath
 	return stagingDir("{projectScratchDir().toString()}{PortablePathSeparator}{name}")
 end 'stagedInTreeDirNamed'
 
 // A staging directory in the test scratch directory holding ONE program, the previous run's files
 // cleared, so every file a tool call leaves there afterwards is one the call wrote.
-export function stagedProgram(dirName String, fileName String, source String) returns FilePath
+function stagedProgram(dirName String, fileName String, source String) returns FilePath
 	let dir = stagedDirNamed(dirName)
 	clearStagedTree(dir)
 
@@ -58,13 +58,13 @@ export function stagedProgram(dirName String, fileName String, source String) re
 end 'stagedProgram'
 
 // `arguments` for a tool that takes a `path`, naming `file`.
-export function pathArgument(file FilePath) returns String
+function pathArgument(file FilePath) returns String
 	return argumentsOf([pathMember(file)])
 end 'pathArgument'
 
 // Every file under `dir` at any depth other than `kept`, for a report. Empty is what a tool that writes
 // nothing leaves.
-export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
+function filesWrittenBeside(kept FilePath, dir FilePath) returns String
 	let written = FilePathArray.create(0)
 
 	for entry in filesUnder(dir) 'eachFile'
@@ -78,50 +78,50 @@ end 'filesWrittenBeside'
 
 // A program that prints `line` and exits 0, written into the test scratch directory by a case so no live
 // `.maxon` sits under `tests/`.
-export function printingProgramSource(line String) returns String
+function printingProgramSource(line String) returns String
 	return "function main() returns ExitCode\n\tprint(\"{line}\\n\")\n\treturn 0\nend 'main'\n"
 end 'printingProgramSource'
 
 // `compiler` builds `program` over its own image.
-export function rebuildOwnImage(dir FilePath, compiler FilePath, program FilePath) returns CollectedOutput
+function rebuildOwnImage(dir FilePath, compiler FilePath, program FilePath) returns CollectedOutput
 	return spawnCompiler([BuildCommandName, program.toString(), "{OutputOptionPrefix}{compiler.toString()}"], staged: dir, what: "the rebuild of its own image", binary: compiler)
 end 'rebuildOwnImage'
 
-export typealias JsonDocArray = Array with JsonDoc
+typealias JsonDocArray = Array with JsonDoc
 
-export type McpRun
+type McpRun
 	export var stdout as String
 	export var stderr as String
 	export var exitCode as ExitInt
 
-	export static function create(stdout String, stderr String, exitCode ExitInt) returns McpRun
+	static function create(stdout String, stderr String, exitCode ExitInt) returns McpRun
 		return Self{stdout: stdout, stderr: stderr, exitCode: exitCode}
 	end 'create'
 end 'McpRun'
 
-export typealias RequestId = int(1 to i64.max)
+typealias RequestId = int(1 to i64.max)
 
-export function initRequest(id RequestId = 1) returns String
+function initRequest(id RequestId = 1) returns String
 	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"initialize\",\"params\":\{\}\}"
 end 'initRequest'
 
-export function initializedNotification() returns String
+function initializedNotification() returns String
 	return "\{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"\}"
 end 'initializedNotification'
 
-export function toolsListRequest(id RequestId = 2) returns String
+function toolsListRequest(id RequestId = 2) returns String
 	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/list\",\"params\":\{\}\}"
 end 'toolsListRequest'
 
-export function toolCallRequest(id RequestId, name String, argumentsJson String = "\{\}") returns String
+function toolCallRequest(id RequestId, name String, argumentsJson String = "\{\}") returns String
 	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":\{\"name\":\"{name}\",\"arguments\":{argumentsJson}\}\}"
 end 'toolCallRequest'
 
-export function unknownMethodRequest(method String = "unknown/method", id RequestId = 1) returns String
+function unknownMethodRequest(method String = "unknown/method", id RequestId = 1) returns String
 	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":\{\}\}"
 end 'unknownMethodRequest'
 
-export function runMcp(requests StringArray, devMode bool = false, environment Environment = Environment.inherit) returns McpRun
+function runMcp(requests StringArray, devMode bool = false, environment Environment = Environment.inherit) returns McpRun
 	let argv = StringArray.create(0)
 	argv.push("mcp-server")
 
@@ -142,19 +142,19 @@ export function runMcp(requests StringArray, devMode bool = false, environment E
 	return McpRun.create(out.stdout, stderr: out.stderr, exitCode: out.exitCode())
 end 'runMcp'
 
-export function runMcpSingle(request String, devMode bool = false) returns McpRun
+function runMcpSingle(request String, devMode bool = false) returns McpRun
 	let reqs = StringArray.create(0)
 	reqs.push(request)
 	return runMcp(reqs, devMode: devMode)
 end 'runMcpSingle'
 
-export type StreamingMcpSession
+type StreamingMcpSession
 	export var server as StreamingSubprocess
 	var responses as ChildOutputReader
 
 	// `binary` is a parameter because a case starts a server from a STAGED COPY and then replaces or
 	// renames that copy on disk; it must not be the tree's own slot.
-	export static function startFrom(binary FilePath, devMode bool = false) returns StreamingMcpSession
+	static function startFrom(binary FilePath, devMode bool = false) returns StreamingMcpSession
 		let argv = StringArray.create(0)
 		argv.push("mcp-server")
 
@@ -200,7 +200,7 @@ export type StreamingMcpSession
 	end 'close'
 end 'StreamingMcpSession'
 
-export function responseDocs(run McpRun) returns JsonDocArray
+function responseDocs(run McpRun) returns JsonDocArray
 	let docs = JsonDocArray.create(0)
 
 	for line in run.stdout.split("\n") 'each'
@@ -217,12 +217,12 @@ export function responseDocs(run McpRun) returns JsonDocArray
 	return docs
 end 'responseDocs'
 
-export function hasChildKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
+function hasChildKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
 	try doc.getChild(parent, key: key) otherwise return false
 	return true
 end 'hasChildKey'
 
-export function resultNode(doc JsonDoc) returns JsonNodeId
+function resultNode(doc JsonDoc) returns JsonNodeId
 	return try doc.getChild(doc.root, key: "result") otherwise panic("response has no `result`: {Json.stringify(doc)}")
 end 'resultNode'
 
@@ -230,7 +230,7 @@ function errorNode(doc JsonDoc) returns JsonNodeId
 	return try doc.getChild(doc.root, key: "error") otherwise panic("response has no `error`: {Json.stringify(doc)}")
 end 'errorNode'
 
-export function toolNames(doc JsonDoc) returns StringArray
+function toolNames(doc JsonDoc) returns StringArray
 	let names = StringArray.create(0)
 	let resId = resultNode(doc)
 	let toolsId = try doc.getChild(resId, key: "tools") otherwise return names
@@ -270,7 +270,7 @@ function toolSchemaProperties(doc JsonDoc, toolName String) returns SchemaLookup
 	return SchemaLookup.absent
 end 'toolSchemaProperties'
 
-export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArray
+function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArray
 	return match toolSchemaProperties(doc, toolName: toolName) 'lookup'
 		found(propsId) gives doc.get(propsId).keys.clone()
 		absent gives StringArray.create(0)
@@ -278,7 +278,7 @@ export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArr
 end 'toolPropertyKeys'
 
 // ⛔ A property or description that is not there is a BROKEN ROSTER, never an empty description.
-export function toolPropertyDescription(doc JsonDoc, toolName String, property String) returns String
+function toolPropertyDescription(doc JsonDoc, toolName String, property String) returns String
 	match toolSchemaProperties(doc, toolName: toolName) 'lookup'
 		found(propsId) then return propertyDescriptionIn(doc, properties: propsId, toolName: toolName, property: property)
 		absent then panic("tools/list has no input schema for `{toolName}`: {Json.stringify(doc)}")
@@ -292,24 +292,24 @@ end 'propertyDescriptionIn'
 
 // ⛔ A missing field is a BROKEN RESPONSE, not an empty one. Answering "" would let an assertion on
 // the payload pass against a response that never carried it.
-export function toolCallText(doc JsonDoc) returns String
+function toolCallText(doc JsonDoc) returns String
 	let resId = resultNode(doc)
 	let contentId = try doc.getChild(resId, key: "content") otherwise panic("tool result has no `content`: {Json.stringify(doc)}")
 	let firstElemId = try doc.arrayAt(contentId, index: 0) otherwise panic("tool result `content` is empty: {Json.stringify(doc)}")
 	return try doc.getString(firstElemId, key: "text") otherwise panic("tool result content[0] has no `text`: {Json.stringify(doc)}")
 end 'toolCallText'
 
-export function toolCallIsError(doc JsonDoc) returns bool
+function toolCallIsError(doc JsonDoc) returns bool
 	let resId = resultNode(doc)
 	return try doc.getBool(resId, key: "isError") otherwise panic("tool result has no `isError`: {Json.stringify(doc)}")
 end 'toolCallIsError'
 
-export function rpcErrorCode(doc JsonDoc) returns JsonInt
+function rpcErrorCode(doc JsonDoc) returns JsonInt
 	let errId = errorNode(doc)
 	return try doc.getInt(errId, key: "code") otherwise panic("rpc error has no `code`: {Json.stringify(doc)}")
 end 'rpcErrorCode'
 
-export function rpcErrorMessage(doc JsonDoc) returns String
+function rpcErrorMessage(doc JsonDoc) returns String
 	let errId = errorNode(doc)
 	return try doc.getString(errId, key: "message") otherwise panic("rpc error has no `message`: {Json.stringify(doc)}")
 end 'rpcErrorMessage'
@@ -321,36 +321,36 @@ end 'toolPayload'
 
 // Whether the payload carries a key at all — the question an OMITTED field is the answer to. A tool that
 // names no tree leaves `repoRoot` out rather than reporting an empty one.
-export function payloadHasKey(doc JsonDoc, key String) returns bool
+function payloadHasKey(doc JsonDoc, key String) returns bool
 	let payload = toolPayload(doc)
 	return hasChildKey(payload, parent: payload.root, key: key)
 end 'payloadHasKey'
 
-export function payloadString(doc JsonDoc, key String) returns String
+function payloadString(doc JsonDoc, key String) returns String
 	let payload = toolPayload(doc)
 	return try payload.getString(payload.root, key: key) otherwise panic("tool payload has no `{key}`: {toolCallText(doc)}")
 end 'payloadString'
 
-export function payloadInt(doc JsonDoc, key String) returns JsonInt
+function payloadInt(doc JsonDoc, key String) returns JsonInt
 	let payload = toolPayload(doc)
 	return try payload.getInt(payload.root, key: key) otherwise panic("tool payload has no number `{key}`: {toolCallText(doc)}")
 end 'payloadInt'
 
 let SpecFileExtension = ".md"
 
-export function printingSpecCase(name String, mainBody String, expectedStdout String) returns String
+function printingSpecCase(name String, mainBody String, expectedStdout String) returns String
 	return "<!-- test: {name} -->\n\n```maxon\nfunction main() returns ExitCode\n{mainBody}\treturn 0\nend 'main'\n```\n\n```stdout\n{expectedStdout}\n```\n"
 end 'printingSpecCase'
 
-export function failingSpecCase(name String) returns String
+function failingSpecCase(name String) returns String
 	return printingSpecCase(name, mainBody: "\tprint(\"{name}\\n\")\n", expectedStdout: "not {name}")
 end 'failingSpecCase'
 
-export function passingSpecCase(name String) returns String
+function passingSpecCase(name String) returns String
 	return printingSpecCase(name, mainBody: "\tprint(\"kept\\n\")\n", expectedStdout: "kept")
 end 'passingSpecCase'
 
-export function failingSpecCases(names StringArray) returns StringArray
+function failingSpecCases(names StringArray) returns StringArray
 	let cases = StringArray.create(0)
 
 	for name in names 'eachName'
@@ -360,7 +360,7 @@ export function failingSpecCases(names StringArray) returns StringArray
 	return cases
 end 'failingSpecCases'
 
-export function stageSpecFile(dir FilePath, specName String, cases StringArray)
+function stageSpecFile(dir FilePath, specName String, cases StringArray)
 	var source = "---\nfeature: mcp-{specName}\n---\n# {specName}\n\n## Tests\n"
 
 	for c in cases 'eachCase'
@@ -374,7 +374,7 @@ end 'stageSpecFile'
 let CheckoutRuntimeDirName = "runtime"
 
 // Drive one request against a server started in the given mode and return its response.
-export function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
+function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
 	let reqs = StringArray.create(0)
 	reqs.push(initRequest(1))
 	reqs.push(toolCallRequest(2, name: name, argumentsJson: argumentsJson))
@@ -383,7 +383,7 @@ export function callTool(name String, argumentsJson String = "\{\}", devMode boo
 	return try docs.get(1) otherwise panic("no response to tools/call `{name}`")
 end 'callTool'
 
-export function listTools(devMode bool = false) returns JsonDoc
+function listTools(devMode bool = false) returns JsonDoc
 	let reqs = StringArray.create(0)
 	reqs.push(initRequest(1))
 	reqs.push(toolsListRequest(2))
@@ -392,22 +392,22 @@ export function listTools(devMode bool = false) returns JsonDoc
 	return try docs.get(1) otherwise panic("no response to tools/list")
 end 'listTools'
 
-export typealias HeaderMap = Map with (String, String)
+typealias HeaderMap = Map with (String, String)
 
 // Not `StatusCode`: parsing a status line into that enum throws on a code it does not name, and a
 // transport case must be able to read back any code the server sends.
-export typealias HttpAnswerStatus = int(100 to 599)
+typealias HttpAnswerStatus = int(100 to 599)
 
 let LowestHttpAnswerStatus = 100 as FullRangeInt
 let HighestHttpAnswerStatus = 599 as FullRangeInt
 let AnswerBodyBound = 16777216
 
-export let McpHttpOption = "--http"
-export let McpExitOnStdinEofOption = "--exit-on-stdin-eof"
-export let McpIdleTimeoutOptionPrefix = "--idle-timeout="
-export let McpMaxSessionsOptionPrefix = "--max-sessions="
+let McpHttpOption = "--http"
+let McpExitOnStdinEofOption = "--exit-on-stdin-eof"
+let McpIdleTimeoutOptionPrefix = "--idle-timeout="
+let McpMaxSessionsOptionPrefix = "--max-sessions="
 let McpSessionHeaderName = "mcp-session-id"
-export let McpRoutePath = "/mcp"
+let McpRoutePath = "/mcp"
 
 let EndpointKey = "endpoint"
 let HeaderSeparator = "\r\n"
@@ -419,16 +419,16 @@ let SessionCloseDeadlineMs = 10000 as WaitDeadlineMs
 let NoContentStatus = 204
 let NotModifiedStatus = 304
 
-export type HttpAnswer
+type HttpAnswer
 	export var statusCode as HttpAnswerStatus
 	export var headers as HeaderMap
 	export var body as String
 
-	export static function create(statusCode HttpAnswerStatus, headers HeaderMap, body String) returns HttpAnswer
+	static function create(statusCode HttpAnswerStatus, headers HeaderMap, body String) returns HttpAnswer
 		return HttpAnswer{statusCode: statusCode, headers: headers, body: body}
 	end 'create'
 
-	export function session() returns McpSession
+	function session() returns McpSession
 		let id = try self.headers.get(McpSessionHeaderName) otherwise return McpSession.none
 
 		return McpSession.minted(id)
@@ -439,12 +439,12 @@ export type HttpAnswer
 	end 'bodyDoc'
 end 'HttpAnswer'
 
-export union McpSession
+union McpSession
 	none
 	minted(id String)
 end 'McpSession'
 
-export function describedSession(session McpSession) returns String
+function describedSession(session McpSession) returns String
 	return match session 'which'
 		none gives "no `Mcp-Session-Id`"
 		minted(id) gives "`Mcp-Session-Id: {id}`"
@@ -651,11 +651,11 @@ function watchedForEndpoint(pump ChildPump) returns EndpointWatch
 	return watch
 end 'watchedForEndpoint'
 
-export type HttpMcpAddress
+type HttpMcpAddress
 	export let hostName as String
 	export let port as NetworkPort
 
-	export static function at(hostName String, port NetworkPort) returns HttpMcpAddress
+	static function at(hostName String, port NetworkPort) returns HttpMcpAddress
 		return HttpMcpAddress{hostName: hostName, port: port}
 	end 'at'
 
@@ -667,23 +667,23 @@ export type HttpMcpAddress
 		return "http://{self.authority()}"
 	end 'loopbackOrigin'
 
-	export function post(body String, sessionId McpSession) returns HttpAnswer
+	function post(body String, sessionId McpSession) returns HttpAnswer
 		return self.request("POST", target: McpRoutePath, host: self.authority(), origin: "", sessionId: sessionId, body: body)
 	end 'post'
 
-	export function request(method String, target String, host String, origin String, sessionId McpSession, body String) returns HttpAnswer
+	function request(method String, target String, host String, origin String, sessionId McpSession, body String) returns HttpAnswer
 		return httpExchange(self.port, requestText: mcpRequestText(method, target: target, host: host, origin: origin, sessionId: sessionId, body: body))
 	end 'request'
 end 'HttpMcpAddress'
 
 // Every path owes `stop` or `terminate`: an unreleased `StreamingSubprocess` leaks and the run
 // exits 101.
-export type StreamingHttpMcpServer
+type StreamingHttpMcpServer
 	export var server as StreamingSubprocess
 	export var endpoint as String
 	export let address as HttpMcpAddress
 
-	export static function start(extraOptions StringArray, environment Environment = Environment.inherit, endsWithItsStdin bool = true) returns StreamingHttpMcpServer
+	static function start(extraOptions StringArray, environment Environment = Environment.inherit, endsWithItsStdin bool = true) returns StreamingHttpMcpServer
 		let argv = StringArray.create(0)
 		argv.push("mcp-server")
 		argv.push(McpHttpOption)
@@ -740,7 +740,7 @@ export type StreamingHttpMcpServer
 		return StreamingHttpMcpServer{server: spawned, endpoint: endpointText, address: HttpMcpAddress.at(parsedHost, port: parsedPort)}
 	end 'start'
 
-	export function initializeSession() returns (HttpAnswer, McpSession)
+	function initializeSession() returns (HttpAnswer, McpSession)
 		let answer = self.address.post(initRequest(1), sessionId: McpSession.none)
 		return (answer, answer.session())
 	end 'initializeSession'
@@ -771,14 +771,14 @@ export type StreamingHttpMcpServer
 	end 'terminate'
 end 'StreamingHttpMcpServer'
 
-export let RpcInvalidParamsCode = -32602
-export let RpcMethodNotFoundCode = -32601
+let RpcInvalidParamsCode = -32602
+let RpcMethodNotFoundCode = -32601
 
-export typealias ProgramSleepMillis = int(0 to 60000)
+typealias ProgramSleepMillis = int(0 to 60000)
 
-export let SleepingProgramStartedLine = "started sleeping"
+let SleepingProgramStartedLine = "started sleeping"
 
-export function sleepingProgramSource(sleepMs ProgramSleepMillis) returns String
+function sleepingProgramSource(sleepMs ProgramSleepMillis) returns String
 	var source = ""
 	source.append("function main() returns ExitCode\n")
 	source.append("\tprint(\"{SleepingProgramStartedLine}\\n\")\n")
@@ -791,7 +791,7 @@ export function sleepingProgramSource(sleepMs ProgramSleepMillis) returns String
 	return source
 end 'sleepingProgramSource'
 
-export function debuggableProgramSource() returns String
+function debuggableProgramSource() returns String
 	let lines = StringArray.create(0)
 	lines.push("typealias Step = int(0 to 1000000)")
 	lines.push("")
@@ -819,9 +819,9 @@ export function debuggableProgramSource() returns String
 	return terminatedLines(lines)
 end 'debuggableProgramSource'
 
-export let DebuggableProgramLocalName = "total"
+let DebuggableProgramLocalName = "total"
 
-export function stdioToolCall(session StreamingMcpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
+function stdioToolCall(session StreamingMcpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
 	try session.sendLine(toolCallRequest(id, name: name, argumentsJson: argumentsJson)) otherwise (e) 'writeFailed'
 		panic("McpHarness: could not send `{name}`: {e.displayReason()}")
 	end 'writeFailed'
@@ -831,7 +831,7 @@ export function stdioToolCall(session StreamingMcpSession, id RequestId, name St
 	end 'readFailed'
 end 'stdioToolCall'
 
-export function stdioHandshake(session StreamingMcpSession)
+function stdioHandshake(session StreamingMcpSession)
 	try session.sendLine(initRequest(1)) otherwise (e) 'writeFailed'
 		panic("McpHarness: could not send `initialize`: {e.displayReason()}")
 	end 'writeFailed'
@@ -843,7 +843,7 @@ end 'stdioHandshake'
 
 let DebuggedBuildLabel = "debuggee"
 
-export function buildStagedProgram(program FilePath) returns FilePath
+function buildStagedProgram(program FilePath) returns FilePath
 	let directory = try program.parent() otherwise panic("McpHarness: {program.path} has no directory to build into")
 	let executable = directory.join("debuggee{executableSuffix()}")
 	let build = spawnBuild(program, staged: directory, output: executable, label: DebuggedBuildLabel, extraArguments: StringArray.create(0))
@@ -858,7 +858,7 @@ let DebugEventsKey = "events"
 let DebugEventKindKey = "event"
 let DebugOutputKey = "output"
 
-export function debugToolState(doc JsonDoc) returns String
+function debugToolState(doc JsonDoc) returns String
 	let payload = toolPayload(doc)
 	return try payload.getString(payload.root, key: DebugStateKey) otherwise panic("McpHarness: a debug tool answered no `{DebugStateKey}`: {toolCallText(doc)}")
 end 'debugToolState'
@@ -875,7 +875,7 @@ function payloadArray(payload JsonDoc, doc JsonDoc, key String) returns JsonNode
 	return elements
 end 'payloadArray'
 
-export function payloadArrayFields(doc JsonDoc, key String, field String) returns StringArray
+function payloadArrayFields(doc JsonDoc, key String, field String) returns StringArray
 	let payload = toolPayload(doc)
 	let values = StringArray.create(0)
 
@@ -886,7 +886,7 @@ export function payloadArrayFields(doc JsonDoc, key String, field String) return
 	return values
 end 'payloadArrayFields'
 
-export function payloadArrayStrings(doc JsonDoc, key String) returns StringArray
+function payloadArrayStrings(doc JsonDoc, key String) returns StringArray
 	let payload = toolPayload(doc)
 	let values = StringArray.create(0)
 
@@ -897,7 +897,7 @@ export function payloadArrayStrings(doc JsonDoc, key String) returns StringArray
 	return values
 end 'payloadArrayStrings'
 
-export function debugEventKinds(doc JsonDoc) returns StringArray
+function debugEventKinds(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
 	let kinds = StringArray.create(0)
 
@@ -909,7 +909,7 @@ export function debugEventKinds(doc JsonDoc) returns StringArray
 	return kinds
 end 'debugEventKinds'
 
-export function debugEventLines(doc JsonDoc, kind String) returns StringArray
+function debugEventLines(doc JsonDoc, kind String) returns StringArray
 	let payload = toolPayload(doc)
 	let lines = StringArray.create(0)
 
@@ -925,7 +925,7 @@ export function debugEventLines(doc JsonDoc, kind String) returns StringArray
 	return lines
 end 'debugEventLines'
 
-export function debugOutputLines(doc JsonDoc) returns StringArray
+function debugOutputLines(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
 	let lines = StringArray.create(0)
 
@@ -942,7 +942,7 @@ export function debugOutputLines(doc JsonDoc) returns StringArray
 	return lines
 end 'debugOutputLines'
 
-export function debugLocalNames(doc JsonDoc) returns StringArray
+function debugLocalNames(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
 	let names = StringArray.create(0)
 
@@ -960,28 +960,28 @@ export function debugLocalNames(doc JsonDoc) returns StringArray
 	return names
 end 'debugLocalNames'
 
-export let DebugStartTool = "debug_start"
-export let DebugBreakTool = "debug_break"
-export let DebugContinueTool = "debug_continue"
-export let DebugLocalsTool = "debug_locals"
-export let DebugStopTool = "debug_stop"
-export let ExecuteTool = "execute"
-export let BuildTool = "build"
-export let TestTool = "test"
-export let FmtTool = "fmt"
+let DebugStartTool = "debug_start"
+let DebugBreakTool = "debug_break"
+let DebugContinueTool = "debug_continue"
+let DebugLocalsTool = "debug_locals"
+let DebugStopTool = "debug_stop"
+let ExecuteTool = "execute"
+let BuildTool = "build"
+let TestTool = "test"
+let FmtTool = "fmt"
 
-export let TimeoutSecondsArgument = "timeoutSeconds"
-export let StopTimeoutArgument = "stopTimeoutSeconds"
-export let BoundStoppedMarker = "stopped waiting"
+let TimeoutSecondsArgument = "timeoutSeconds"
+let StopTimeoutArgument = "stopTimeoutSeconds"
+let BoundStoppedMarker = "stopped waiting"
 
-export let DebuggableProgramAnchor = "hot"
-export let DebugStoppedState = "stopped"
-export let DebugStopEventName = "stop"
+let DebuggableProgramAnchor = "hot"
+let DebugStoppedState = "stopped"
+let DebugStopEventName = "stop"
 let HttpOkStatus = 200
 
 let ArgumentMemberSeparator = ","
 
-export function argumentsOf(members StringArray) returns String
+function argumentsOf(members StringArray) returns String
 	var joined = ""
 
 	for member in members 'eachMember'
@@ -991,43 +991,43 @@ export function argumentsOf(members StringArray) returns String
 	return "\{{joined}\}"
 end 'argumentsOf'
 
-export function executableMember(executable FilePath) returns String
+function executableMember(executable FilePath) returns String
 	return "\"executable\":{Json.quote(executable.toString())}"
 end 'executableMember'
 
-export function sourceMember(source String) returns String
+function sourceMember(source String) returns String
 	return "\"source\":{Json.quote(source)}"
 end 'sourceMember'
 
-export function pathMember(file FilePath) returns String
+function pathMember(file FilePath) returns String
 	return "\"path\":{Json.quote(file.toString())}"
 end 'pathMember'
 
-export function outputMember(output FilePath) returns String
+function outputMember(output FilePath) returns String
 	return "\"output\":{Json.quote(output.toString())}"
 end 'outputMember'
 
-export function targetMember(target String) returns String
+function targetMember(target String) returns String
 	return "\"target\":{Json.quote(target)}"
 end 'targetMember'
 
-export function secondsMember(key String, seconds String) returns String
+function secondsMember(key String, seconds String) returns String
 	return "\"{key}\":{seconds}"
 end 'secondsMember'
 
-export function debugExecutableArgument(executable FilePath) returns String
+function debugExecutableArgument(executable FilePath) returns String
 	return argumentsOf([executableMember(executable)])
 end 'debugExecutableArgument'
 
-export function sourceArgument(source String) returns String
+function sourceArgument(source String) returns String
 	return argumentsOf([sourceMember(source)])
 end 'sourceArgument'
 
-export function debugBreakTargetArgument(line SourceLine) returns String
+function debugBreakTargetArgument(line SourceLine) returns String
 	return argumentsOf([targetMember("main.maxon:{line}")])
 end 'debugBreakTargetArgument'
 
-export function httpToolCall(address HttpMcpAddress, sessionId McpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
+function httpToolCall(address HttpMcpAddress, sessionId McpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
 	let answer = address.post(toolCallRequest(id, name: name, argumentsJson: argumentsJson), sessionId: sessionId)
 
 	if answer.statusCode != HttpOkStatus 'refused'
@@ -1037,18 +1037,18 @@ export function httpToolCall(address HttpMcpAddress, sessionId McpSession, id Re
 	return answer.bodyDoc()
 end 'httpToolCall'
 
-module let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
-module let AnotherHost = "another-os/another-host/another-namespace"
-module let SleepMs = 60000
-module let OkStatus = 200 as HttpAnswerStatus
-module let IdleTimeoutSeconds = 1
-module let AcceptedStatus = 202 as HttpAnswerStatus
-module let NotFoundStatus = 404 as HttpAnswerStatus
-module let SnippetDirName = "mcp-snippet"
-module let SnippetStem = "mcp-snippet"
-module let CompilerStem = "maxon"
-module let PreviousInfix = ".previous"
-module let ProgramFileName = "program.maxon"
+let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let AnotherHost = "another-os/another-host/another-namespace"
+let SleepMs = 60000
+let OkStatus = 200 as HttpAnswerStatus
+let IdleTimeoutSeconds = 1
+let AcceptedStatus = 202 as HttpAnswerStatus
+let NotFoundStatus = 404 as HttpAnswerStatus
+let SnippetDirName = "mcp-snippet"
+let SnippetStem = "mcp-snippet"
+let CompilerStem = "maxon"
+let PreviousInfix = ".previous"
+let ProgramFileName = "program.maxon"
 let RetiredImageProbeLabel = "mcp-retired-images"
 let RetiredImagePlantedSerial = 7
 let RetiredImagePlantedText = "left by an earlier build"
@@ -1061,12 +1061,12 @@ function plantNamesBeside(dir FilePath, names StringArray)
 	end 'eachName'
 end 'plantNamesBeside'
 
-export type PlantedRetiredImages
+type PlantedRetiredImages
 	export var minted as StringArray
 	export var numbered as StringArray
 	export var lookalikes as StringArray
 
-	export static function plantBeside(dir FilePath) returns Self
+	static function plantBeside(dir FilePath) returns Self
 		let suffix = executableSuffix()
 		let mintedHere = mintedScratchName(RetiredImageProbeLabel, base: RetiredBase, namespace: OwnHostNamespace, pid: endedProcessId(), serial: RetiredImagePlantedSerial)
 		let mintedByAnotherHost = mintedScratchName(RetiredImageProbeLabel, base: RetiredBase, namespace: AnotherHost, pid: endedProcessId(), serial: RetiredImagePlantedSerial + 1)
@@ -1097,17 +1097,17 @@ export type PlantedRetiredImages
 	end 'plantBeside'
 end 'PlantedRetiredImages'
 
-module function plantPreviousImageBeside(dir FilePath)
+function plantPreviousImageBeside(dir FilePath)
 	writeStagedFile(dir.join("{CompilerStem}{PreviousInfix}{executableSuffix()}"), content: RetiredImagePlantedText)
 end 'plantPreviousImageBeside'
 
-module function expectNamesSwept(dir FilePath, names StringArray, why String) throws TestFailure
+function expectNamesSwept(dir FilePath, names StringArray, why String) throws TestFailure
 	for name in names 'eachSwept'
 		try Expect.isFalse(File.exists(dir.join(name)), message: "{name} is still there, and it should have been deleted: {why}")
 	end 'eachSwept'
 end 'expectNamesSwept'
 
-module function expectNamesKept(dir FilePath, names StringArray, why String) throws TestFailure
+function expectNamesKept(dir FilePath, names StringArray, why String) throws TestFailure
 	for name in names 'eachKept'
 		try Expect.isTrue(File.exists(dir.join(name)), message: "{name} was deleted, and it should have stayed: {why}")
 	end 'eachKept'

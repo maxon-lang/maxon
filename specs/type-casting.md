@@ -354,7 +354,7 @@ So is a numeric literal cast to exactly the type its destination already declare
 argument's parameter, a `return`'s declared result, a struct-literal field or a stored field:
 the literal is checked against that type without the cast. So is a literal cast in an untyped
 `let` when every use of the `let` would take the constant it otherwise holds the same way; a
-`public`, `export` or `module` `let` keeps its cast, and so does one a closure captures.
+top-level `let` keeps its cast, and so does one a closure captures.
 A literal cast stays legal where nothing declares the type — an untyped `var`, an operand, an
 array-literal element, a join of `gives`/`if`-`else`/`otherwise` arms, a generic `T` slot, a
 `let` some use of which needs the alias.
@@ -709,7 +709,8 @@ end 'main'
 error E3010: <fragment>:9:18: unneeded cast: the literal 2.5 already fits every use of 'level'
 ```
 
-<!-- test: error.unneeded.literal-top-level-let-every-use-takes-the-constant -->
+<!-- test: a-top-level-let-keeps-its-cast -->
+A top-level `let` is visible to its whole directory, so it keeps its cast whatever its uses take.
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -720,101 +721,11 @@ function bonus(score Score) returns Score
 end 'bonus'
 
 function main() returns ExitCode
-	if bonus(passMark) > passMark 'raised'
-		return 0
-	end 'raised'
-	return 1
+	return bonus(passMark) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3010: <fragment>:4:19: unneeded cast: the literal 50 already fits every use of 'passMark'
-```
-
-<!-- test: error.unneeded.literal-top-level-let-read-by-a-function-body-cast -->
-A function body that casts the constant to another alias is a use that takes the plain constant.
-```maxon
-typealias Wide = int(0 to 1000)
-typealias Small = int(0 to 100) implements Wide
-
-let Base = 2 as Wide
-
-function narrow() returns Small
-	return Base as Small
-end 'narrow'
-
-function main() returns ExitCode
-	if narrow() == 2 'two'
-		return 0
-	end 'two'
-	return 1
-end 'main'
-```
-```maxoncstderr
-error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every use of 'Base'
-```
-
-<!-- test: error.unneeded.literal-top-level-let-read-by-another-top-level-initializer -->
-The same read from a file-scope initializer is a use too.
-```maxon
-typealias Wide = int(0 to 1000)
-typealias Small = int(0 to 100) implements Wide
-
-let Base = 2 as Wide
-let S = Base as Small
-
-function main() returns ExitCode
-	if S == 2 'two'
-		return 0
-	end 'two'
-	return 1
-end 'main'
-```
-```maxoncstderr
-error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every use of 'Base'
-```
-
-<!-- test: error.unneeded.literal-top-level-let-read-by-a-top-level-factory-argument -->
-A record initializer's read counts the same way: the field of a `static let`'s record literal takes the plain constant.
-```maxon
-typealias Wide = int(0 to 1000)
-typealias Small = int(0 to 100) implements Wide
-
-let Base = 2 as Wide
-
-type Holder
-	export var n as Small
-
-	static let cell = Holder{n: Base as Small}
-end 'Holder'
-
-function main() returns ExitCode
-	return Holder.cell.n as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every use of 'Base'
-```
-
-<!-- test: error.unneeded.literal-let-to-a-full-range-alias-used-as-an-operand -->
-An operand use takes the constant too: the product of two constants is a constant, checked where it lands.
-```maxon
-let solarMass = 39.478417604357432 as FullRangeFloat
-
-function weigh(mass FullRangeFloat) returns FullRangeFloat
-	return mass
-end 'weigh'
-
-function main() returns ExitCode
-	let jupiter = weigh(9.54791938424326609e-04 * solarMass)
-	let sun = weigh(solarMass)
-	if jupiter < sun 'lighter'
-		return 0
-	end 'lighter'
-	return 1
-end 'main'
-```
-```maxoncstderr
-error E3010: <fragment>:2:36: unneeded cast: the literal 39.478417604357432 already fits every use of 'solarMass'
+```exitcode
+51
 ```
 
 <!-- test: a-literal-let-cast-that-a-var-starts-from-is-not-unneeded -->
@@ -834,23 +745,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: error.unneeded.literal-top-level-let-to-a-qualified-alias -->
-A qualified cast target names the same declaration as its bare spelling, at file scope as in a body.
-```maxon
-function twice(value Byte) returns Byte
-	return value * 2
-end 'twice'
-
-let seed = 5 as stdlib.Byte
-
-function main() returns ExitCode
-	return twice(seed)
-end 'main'
-```
-```maxoncstderr
-error E3010: <fragment>:6:14: unneeded cast: the literal 5 already fits every use of 'seed'
 ```
 
 <!-- test: error.unneeded.literal-let-cast-again-to-another-alias -->

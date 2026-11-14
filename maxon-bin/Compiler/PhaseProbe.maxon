@@ -177,7 +177,7 @@ export type PhaseProbe
 	export var outerOpen as bool
 	export var outer as CompilePhase
 
-	module let upkeepMark as PhaseDelta
+	let upkeepMark as PhaseDelta
 
 	// Open a bracket, and open the matching TRACE SPAN.
 	//
@@ -356,7 +356,7 @@ end 'heapBytesOf'
 // The register allocator's sub-phase writer is `addRegAllocDelta` at the foot of this file, and it
 // closes no span because its brackets open none.
 
-export function recordPhase(project Project, phase CompilePhase, probe PhaseProbe)
+function recordPhase(project Project, phase CompilePhase, probe PhaseProbe)
 	recordPhaseDelta(project, phase: phase, delta: probe.elapsed(), probe: probe)
 end 'recordPhase'
 
@@ -369,7 +369,7 @@ end 'recordPhase'
 // back off the two tables the recorder wrote. `PhaseDelta.minus` traps rather than wrapping if the inner
 // exceeds the outer, which is the loudest available way to say the two brackets really overlapped.
 // `PoolPhaseCosts.recordExcluding` is the same discipline one tier down.
-export function recordPhaseExcluding(project Project, phase CompilePhase, probe PhaseProbe, inner CompilePhase)
+function recordPhaseExcluding(project Project, phase CompilePhase, probe PhaseProbe, inner CompilePhase)
 	let innerCost = project.timings.costOf(inner)
 	let innerMemory = project.memory.deltaOf(inner)
 	let innerDelta = PhaseDelta.create(innerCost.nanos, cpuTicks: innerCost.cpuTicks, allocs: innerMemory.allocs, frees: innerMemory.frees, bytes: innerMemory.bytes)
@@ -408,7 +408,7 @@ end 'recordPhaseDelta'
 // The front end's stages close no bracket of their own, so `FrontEndPool` calls this at the end of
 // each drain. `sharing` is true when the previous call sampled the very same heap, so the census
 // reuses its walk.
-module function recordPhaseLevels(project Project, phase CompilePhase, sharing bool)
+function recordPhaseLevels(project Project, phase CompilePhase, sharing bool)
 	if project.samplesResidency 'census'
 		project.memory.recordResidency(phase, reading: PhaseResidency.sample())
 
@@ -441,7 +441,7 @@ end 'closePhaseSpan'
 //
 // It is a no-op after a successful compile (every bracket recorded its own delta), which is what lets the
 // caller run it unconditionally on its failure path without asking which stage failed.
-export function closeOpenPhaseSpans(spans TraceNameArray, unit TraceUnit)
+function closeOpenPhaseSpans(spans TraceNameArray, unit TraceUnit)
 	while spans.count() > 0 'drain'
 		__DebugStream.phaseEnd(try spans.pop() otherwise panic("closeOpenPhaseSpans: pop from a non-empty span stack"), unit)
 	end 'drain'
@@ -456,7 +456,7 @@ end 'closeOpenPhaseSpans'
 // driver folds that value in on the main thread. In a PARALLEL compile several such brackets overlap in
 // wall time, so these rows SUM over workers — see `PoolPhaseCosts` for which columns that makes a sum and
 // which it leaves exact.
-module function addRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
+function addRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
 	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.regAlloc.addPhase(phase, delta: delta)
 end 'addRegAllocDelta'
@@ -471,7 +471,7 @@ end 'addRegAllocDelta'
 // attribution honest: its row is a sum over workers that overlaps the driver's wall, so it is a breakdown
 // OF the driver phase rather than a disjoint interval beside it, and `CompileTimings.attributedCost`
 // counts it as such.
-module function foldPoolPhaseDelta(project Project, phase CompilePhase, driver CompilePhase, delta PhaseDelta)
+function foldPoolPhaseDelta(project Project, phase CompilePhase, driver CompilePhase, delta PhaseDelta)
 	project.timings.addPoolPhaseCost(phase, driver: driver, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
 end 'foldPoolPhaseDelta'

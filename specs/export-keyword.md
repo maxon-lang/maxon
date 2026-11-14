@@ -11,7 +11,7 @@ category: infrastructure
 
 ### Export Keyword
 
-All declarations — functions, types, enums, typealiases, and top-level variables — are file-scoped by default. The `export` keyword makes them visible to other modules. Without `export`, a declaration can only be used within the file where it is defined.
+All declarations — functions, types, enums, typealiases, and top-level bindings — are visible by default to every file in their declaring directory and its subdirectories. The `export` keyword makes them visible to every file. Without `export`, a file in another directory cannot use the declaration.
 
 ```text
 export function publicApi() returns Integer
@@ -23,11 +23,11 @@ function privateHelper() returns Integer
 end 'privateHelper'
 ```
 
-When modules are compiled together, only exported symbols from earlier modules can be called by later modules. Non-exported symbols from other files are invisible — attempting to use them produces a compile error.
+A file outside the declaring directory's subtree that names an unexported declaration is refused with E3008.
 
 ### Exporting Types
 
-Types can be exported to make them available to other modules. Without `export`, a type is only usable within its file:
+Types can be exported to make them available to every file. Without `export`, a type is usable only within its directory's subtree:
 
 ```text
 export type Point
@@ -48,11 +48,11 @@ export enum Color
 end 'Color'
 ```
 
-Without `export`, a enum is only visible within its declaring file.
+Without `export`, an enum is visible only within its declaring directory's subtree.
 
 ### Exporting Type Aliases
 
-Typealiases are also file-scoped by default. Use `export` for cross-file visibility:
+Typealiases are also directory-scoped by default. Use `export` for visibility in every file:
 
 ```text
 export typealias Score = int(0 to 100)
@@ -100,7 +100,7 @@ When there is no collision, unqualified cross-file calls continue to work via th
 
 The same model applies to **type names** — typealiases, types, enums, unions and interfaces: two exported declarations of one bare name in different directories are accepted at decl time, and a bare reference from a third file is rejected with **E3063** (`Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score`). The user writes `api.Score` or `legacy.Score` to disambiguate; a project-root declaration is `export.Score` and the standard library's is `stdlib.Score`. A file whose own directory declares one means that one by its bare name, and so does a file elsewhere when the project root declares one; the standard library's declarations never make a bare name ambiguous, and a visible author declaration is what the bare name means. Two typealiases of one name in one directory are E3061 — qualification cannot tell them apart. See `specs/typealias-collision.md` for the canonical tests.
 
-Qualification never bypasses visibility, and a type hidden from a file hides its members too: through a value of it, that file reaches no field, method, extension method, accessor or static, nor the calls the compiler makes on the value's behalf (interpolation's `toString`, `==` and ordering operators, `for` iteration, `match`) — E3008, or E3088 for a `module` type outside its subtree. A value held at an exported interface answers that interface's requirements whatever type stands behind it.
+Qualification never bypasses visibility, and a type hidden from a file hides its members too: through a value of it, that file reaches no field, method, extension method, accessor or static, nor the calls the compiler makes on the value's behalf (interpolation's `toString`, `==` and ordering operators, `for` iteration, `match`) — E3008. A value held at an exported interface answers that interface's requirements whatever type stands behind it.
 
 ## Tests
 
@@ -328,7 +328,7 @@ end 'main'
 
 <!-- test: error.non-exported-function-cross-file -->
 ```maxon
-// --- file: helper.maxon
+// --- file: lib/helper.maxon
 typealias Integer = int(i64.min to i64.max)
 
 function privateHelper() returns Integer
@@ -386,7 +386,7 @@ end 'main'
 
 <!-- test: error.non-exported-type-cross-file -->
 ```maxon
-// --- file: point.maxon
+// --- file: lib/point.maxon
 typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
@@ -411,7 +411,7 @@ error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:15:10
 A parameter typed with a type its file may not name is refused at the written name, and every use of the value
 it binds is that one refusal.
 ```maxon
-// --- file: point.maxon
+// --- file: lib/point.maxon
 type InternalPoint
 	export var x as ExitCode
 
@@ -441,7 +441,7 @@ error E3008: specs/export-keyword/error.a-hidden-type-written-in-a-parameter-is-
 A parameter typed with a typealias its file may not name is refused at that name. Reading a field of the value
 is no second refusal, of the type the alias denotes.
 ```maxon
-// --- file: alias.maxon
+// --- file: lib/alias.maxon
 type Box uses T
 	export var v as T
 end 'Box'
@@ -471,7 +471,7 @@ error E3008: specs/export-keyword/error.a-hidden-generic-typealias-written-in-a-
 Calling a static names its type, and the type's tier is what refuses the name: an exported static of a type that is
 not exported cannot be called from another file.
 ```maxon
-// --- file: point.maxon
+// --- file: lib/point.maxon
 type InternalPoint
 	export static function answer() returns ExitCode
 		return 42
@@ -489,7 +489,7 @@ error E3008: specs/export-keyword/error.a-non-exported-types-static-is-refused-a
 
 <!-- test: error.a-non-exported-generic-type-field-read-across-files-names-its-visibility -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 type Box uses T
 	export var v as T
 
@@ -517,8 +517,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:11:18: exported typealias 'StrBox' names file-private type 'Box' in its target
-error E3167: <fragment>:14:22: exported field 'Holder.inner' names file-private type 'Box' in its type
+error E3167: lib/<fragment>:11:18: exported typealias 'lib.StrBox' names unexported type 'Box' in its target
+error E3167: lib/<fragment>:14:22: exported field 'lib.Holder.inner' names unexported type 'Box' in its type
 error E3008: <fragment>:24:18: type 'Box' is not exported
 ```
 
@@ -526,7 +526,7 @@ error E3008: <fragment>:24:18: type 'Box' is not exported
 A type another file may not name hides its members from that file, so a value of it that reached the file through
 an exported field cannot be written through either. The field that carried it is refused beside the write.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 type Box uses T
 	export var v as T
 
@@ -553,15 +553,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:11:18: exported typealias 'StrBox' names file-private type 'Box' in its target
-error E3167: <fragment>:14:22: exported field 'Holder.inner' names file-private type 'Box' in its type
+error E3167: lib/<fragment>:11:18: exported typealias 'lib.StrBox' names unexported type 'Box' in its target
+error E3167: lib/<fragment>:14:22: exported field 'lib.Holder.inner' names unexported type 'Box' in its type
 error E3008: <fragment>:24:10: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-method-is-refused-through-a-value -->
 An exported method of a type the reading file may not name is hidden with the type.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 type Box uses T
 	var v as T
 
@@ -592,15 +592,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:15:18: exported typealias 'StrBox' names file-private type 'Box' in its target
-error E3167: <fragment>:18:22: exported field 'Holder.inner' names file-private type 'Box' in its type
+error E3167: lib/<fragment>:15:18: exported typealias 'lib.StrBox' names unexported type 'Box' in its target
+error E3167: lib/<fragment>:18:22: exported field 'lib.Holder.inner' names unexported type 'Box' in its type
 error E3008: <fragment>:28:18: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-extension-method-is-refused-through-a-value -->
 An extension's exported method belongs to the type it extends, and is hidden with it.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 type Inner
@@ -633,13 +633,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:20:22: exported field 'Holder.inner' names file-private type 'Inner' in its type
+error E3167: lib/<fragment>:20:22: exported field 'lib.Holder.inner' names unexported type 'Inner' in its type
 error E3008: <fragment>:30:18: type 'Inner' is not exported
 ```
 
 <!-- test: error.a-hidden-enums-method-is-refused-through-a-value -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 enum Mode
 	fast
 	slow
@@ -669,14 +669,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:13:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3167: lib/<fragment>:13:21: exported field 'lib.Settings.mode' names unexported enum 'Mode' in its type
 error E3008: <fragment>:24:12: type 'Mode' is not exported
 ```
 
 <!-- test: error.a-hidden-enums-accessor-is-refused-through-a-value -->
 A case's `name`, `ordinal` and `rawValue` are members of the enum, and are hidden with it.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 enum Mode
 	fast
 	slow
@@ -698,7 +698,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:9:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3167: lib/<fragment>:9:21: exported field 'lib.Settings.mode' names unexported enum 'Mode' in its type
 error E3008: <fragment>:19:17: type 'Mode' is not exported
 ```
 
@@ -706,7 +706,7 @@ error E3008: <fragment>:19:17: type 'Mode' is not exported
 A value held at an exported interface is that interface's surface, so its requirements stay callable whatever type
 stands behind it.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 export interface Answer
@@ -743,7 +743,7 @@ end 'main'
 <!-- test: error.a-hidden-interfaces-method-is-refused-through-a-value -->
 A value held at an interface the reading file may not name exposes none of that interface's requirements.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 interface Shape
@@ -778,14 +778,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:22:22: exported field 'Holder.shape' names file-private interface 'Shape' in its type
+error E3167: lib/<fragment>:22:22: exported field 'lib.Holder.shape' names unexported interface 'Shape' in its type
 error E3008: <fragment>:32:12: type 'Shape' is not exported
 ```
 
 <!-- test: error.a-hidden-types-to-string-is-refused-through-interpolation -->
 Interpolating a value calls its type's `toString`, which is hidden with the type.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 type Point implements Stringable
@@ -816,14 +816,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:18:22: exported field 'Holder.point' names file-private type 'Point' in its type
+error E3167: lib/<fragment>:18:22: exported field 'lib.Holder.point' names unexported type 'Point' in its type
 error E3008: <fragment>:28:10: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-equals-is-refused-through-the-equality-operator -->
 `==` on two values calls their type's `equals`, which is hidden with the type.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
@@ -859,15 +859,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:18:22: exported field 'Pair.first' names file-private type 'Point' in its type
-error E3167: <fragment>:19:23: exported field 'Pair.second' names file-private type 'Point' in its type
+error E3167: lib/<fragment>:18:22: exported field 'lib.Pair.first' names unexported type 'Point' in its type
+error E3167: lib/<fragment>:19:23: exported field 'lib.Pair.second' names unexported type 'Point' in its type
 error E3008: <fragment>:30:16: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-compare-is-refused-through-an-ordering-operator -->
 `<` on two values calls their type's `compare`, which is hidden with the type.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 type Point implements Comparable
@@ -911,15 +911,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:26:22: exported field 'Pair.first' names file-private type 'Point' in its type
-error E3167: <fragment>:27:23: exported field 'Pair.second' names file-private type 'Point' in its type
+error E3167: lib/<fragment>:26:22: exported field 'lib.Pair.first' names unexported type 'Point' in its type
+error E3167: lib/<fragment>:27:23: exported field 'lib.Pair.second' names unexported type 'Point' in its type
 error E3008: <fragment>:38:16: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-iteration-is-refused-through-a-for-loop -->
 A `for` loop over a value calls its type's `createIterator`, which is hidden with the type.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
@@ -981,14 +981,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:44:20: exported field 'Holder.seq' names file-private type 'Seq' in its type
+error E3167: lib/<fragment>:44:20: exported field 'lib.Holder.seq' names unexported type 'Seq' in its type
 error E3008: <fragment>:56:2: type 'Seq' is not exported
 ```
 
 <!-- test: error.a-hidden-enum-is-refused-through-a-match -->
 Matching a value reads its case, which is a member of the enum and hidden with it.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 enum Mode
 	fast
 	slow
@@ -1013,13 +1013,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:9:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3167: lib/<fragment>:9:21: exported field 'lib.Settings.mode' names unexported enum 'Mode' in its type
 error E3008: <fragment>:20:2: type 'Mode' is not exported
 ```
 
 <!-- test: error.a-hidden-unions-payload-is-refused-through-a-match-binding -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 union Reading
@@ -1046,14 +1046,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:11:24: exported field 'Sensor.reading' names file-private union 'Reading' in its type
+error E3167: lib/<fragment>:11:24: exported field 'lib.Sensor.reading' names unexported union 'Reading' in its type
 error E3008: <fragment>:22:2: type 'Reading' is not exported
 ```
 
 <!-- test: error.a-hidden-enum-is-refused-through-interpolation -->
 Interpolating a case prints its name, which is a member of the enum and hidden with it.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 enum Mode
 	fast
 	slow
@@ -1075,7 +1075,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: <fragment>:9:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3167: lib/<fragment>:9:21: exported field 'lib.Settings.mode' names unexported enum 'Mode' in its type
 error E3008: <fragment>:19:10: type 'Mode' is not exported
 ```
 
@@ -1083,7 +1083,7 @@ error E3008: <fragment>:19:10: type 'Mode' is not exported
 Sorting an array of a hidden type's values calls `compare` through the `Comparable` witness the library's sort
 dispatches on, which is the interface's surface rather than the type's, so it stays legal.
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 type Point implements Comparable
@@ -1162,7 +1162,7 @@ end 'main'
 
 <!-- test: error.non-exported-enum-cross-file -->
 ```maxon
-// --- file: status.maxon
+// --- file: lib/status.maxon
 enum InternalStatus
 	ok
 	err
@@ -1180,7 +1180,7 @@ error E3008: specs/export-keyword/error.non-exported-enum-cross-file.maxon:10:10
 
 <!-- test: error.a-non-exported-unions-case-spawned-across-files -->
 ```maxon
-// --- file: shape.maxon
+// --- file: lib/shape.maxon
 typealias Radius = int(0 to 100)
 
 union Shape
@@ -1202,7 +1202,7 @@ error E3008: specs/export-keyword/error.a-non-exported-unions-case-spawned-acros
 
 <!-- test: error.a-non-exported-unions-case-construction-across-files -->
 ```maxon
-// --- file: shape.maxon
+// --- file: lib/shape.maxon
 typealias Radius = int(0 to 100)
 
 union Shape
@@ -1241,7 +1241,7 @@ end 'main'
 
 <!-- test: error.non-exported-typealias-cross-file -->
 ```maxon
-// --- file: types.maxon
+// --- file: types/types.maxon
 typealias InternalScore = int(0 to 100)
 
 // --- file: main.maxon
@@ -1252,7 +1252,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:7:16: typealias 'InternalScore' is not exported
-error E3062: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:3:11: unused typealias: 'InternalScore'
+error E3062: types/specs/export-keyword/error.non-exported-typealias-cross-file.maxon:3:11: unused typealias: 'InternalScore'
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->
@@ -1326,7 +1326,7 @@ end 'main'
 <!-- test: error.non-exported-var-cross-file -->
 Non-exported module-level var should not be accessible from another file.
 ```maxon
-// --- file: state.maxon
+// --- file: lib/state.maxon
 let secret = 99 as ExitCode
 
 // --- file: main.maxon
@@ -1362,14 +1362,14 @@ end 'main'
 Whether `7 as Score` is legal in a file that declares no `Score` depends on whether ANY declaration of
 `Score` is visible to it — not on whichever declaration happened to be recorded last, so the answer does
 not depend on the order files are walked, which is alphabetical. **The paths below are load-bearing** —
-`lib/a.maxon` sorts before `zz/b.maxon`, so the private declaration is the one recorded last, and the
-`module` one must still be found. `zz/` is outside `lib/`, so the private alias's file cannot see the
-`module` one and is not ambiguous, and `lib/main.maxon` cannot see the private one.
+`lib/a.maxon` sorts before `zz/b.maxon`, so `zz/`'s declaration is the one recorded last, and `lib/`'s
+must still be found. `zz/` is outside `lib/`, so `zz/b.maxon` cannot see `lib/`'s alias and is not
+ambiguous, and `lib/main.maxon` cannot see `zz/`'s.
 
 <!-- test: exported-alias-found-past-a-later-private-one -->
 ```maxon
 // --- file: lib/a.maxon
-module typealias Score = int(0 to 100)
+typealias Score = int(0 to 100)
 
 // --- file: zz/b.maxon
 typealias Score = int(0 to 50)
@@ -1400,7 +1400,7 @@ cannot drift unnoticed; the body-only order is pinned by
 
 <!-- test: error.hidden-alias-const-and-body-cast -->
 ```maxon
-// --- file: types.maxon
+// --- file: types/types.maxon
 typealias Dead = int(0 to 100)
 
 // --- file: main.maxon
@@ -1414,7 +1414,7 @@ end 'main'
 ```maxoncstderr
 error E3008: <fragment>:6:14: typealias 'Dead' is not exported
 error E3008: <fragment>:9:15: typealias 'Dead' is not exported
-error E3062: <fragment>:3:11: unused typealias: 'Dead'
+error E3062: types/<fragment>:3:11: unused typealias: 'Dead'
 ```
 
 ### A hidden alias of every form is refused in every type position
@@ -1426,7 +1426,7 @@ declaration is not unused.
 
 <!-- test: error.hidden-ranged-alias-in-every-type-position -->
 ```maxon
-// --- file: probe.maxon
+// --- file: lib/probe.maxon
 typealias Score = int(0 to 100)
 
 export function probeScore() returns ExitCode
@@ -1469,7 +1469,7 @@ error E3008: <fragment>:23:32: typealias 'Score' is not exported
 
 <!-- test: error.hidden-generic-alias-in-every-type-position -->
 ```maxon
-// --- file: probe.maxon
+// --- file: lib/probe.maxon
 typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
@@ -1517,7 +1517,7 @@ error E3008: <fragment>:31:15: typealias 'ScoreArray' is not exported
 
 <!-- test: error.hidden-function-alias-in-every-type-position -->
 ```maxon
-// --- file: probe.maxon
+// --- file: lib/probe.maxon
 typealias Flip = function(bool) returns bool
 
 function same(b bool) returns bool
@@ -1572,7 +1572,7 @@ error E3008: <fragment>:34:34: typealias 'Flip' is not exported
 
 <!-- test: error.hidden-tuple-alias-in-every-type-position -->
 ```maxon
-// --- file: probe.maxon
+// --- file: lib/probe.maxon
 typealias Pair = (bool, bool)
 
 function made() returns Pair
@@ -1622,8 +1622,8 @@ error E3008: <fragment>:27:34: typealias 'Pair' is not exported
 
 <!-- test: synthesized-clone-crosses-an-exported-type-s-file-boundary -->
 ⭐ **A RATCHET, NOT A GATE.** `clone` is synthesized for a type whose fields all conform, so nobody
-writes it and nobody writes a visibility modifier for it. A stub registered with neither `IsExported`
-nor `IsModuleVisible` would be file-private, and this exact program would be refused with
+writes it and nobody writes a visibility modifier for it. A stub registered as unexported would be visible
+only in `lib/`, and this exact program would be refused with
 `E3008: function 'Holder.clone' is not exported` while `a == b` over the identical pair compiled and
 ran — one operation, two spellings, disagreeing. The case is here so a change to how a synthesized
 member is registered cannot introduce that split silently.
@@ -1632,7 +1632,7 @@ member is registered cannot introduce that split silently.
 `E3004: call to undefined function 'Holder.equals'`. That is a different gap and belongs to its own
 row, not to this one.
 ```maxon
-// --- file: holder.maxon
+// --- file: lib/holder.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 export type Holder
@@ -1658,13 +1658,13 @@ end 'main'
 ### A STATIC FIELD obeys the export rule its type does
 
 `export` on the type publishes the type, not every slot inside it. A `static var` without its own
-`export` is file-private exactly as a top-level function is, and reading or writing it from another
+`export` is unmarked exactly as a top-level function is, and reading or writing it from another
 file is the same refusal with a different noun — `function 'x' is not exported` and
 `static 'T.x' is not exported` are one rule.
 
 <!-- test: error.non-exported-static-read-cross-file -->
 ```maxon
-// --- file: holder.maxon
+// --- file: lib/holder.maxon
 export typealias Count = int(0 to u64.max)
 
 export type Holder
@@ -1693,7 +1693,7 @@ must return a record (E2015). `error.non-exported-static-read-cross-file` above 
 form, whose `Holder.build()` returns one. A call-built SCALAR global would need a guard word per scalar
 static rather than the in-band pointer sentinel a record slot allows.
 ```maxon
-// --- file: counter.maxon
+// --- file: lib/counter.maxon
 export type Counter
 	static let hits = 7 as FullRangeInt
 end 'Counter'
@@ -1709,10 +1709,10 @@ error E3008: specs/export-keyword/error.non-exported-static-constant-assign-cros
 ```
 
 <!-- test: error.hidden-alias-as-a-top-level-container-create -->
-A top-level `<alias>.create()` names the alias, so another file's file-private one is refused there as it is in
+A top-level `<alias>.create()` names the alias, so another directory's unmarked one is refused there as it is in
 a body.
 ```maxon
-// --- file: types.maxon
+// --- file: lib/types.maxon
 typealias Smalls = Array with ExitCode
 
 export function emptySmalls() returns ExitCode
@@ -1734,10 +1734,10 @@ error E3008: specs/export-keyword/error.hidden-alias-as-a-top-level-container-cr
 ```
 
 <!-- test: error.hidden-alias-as-a-top-level-set-from-head -->
-A top-level `<alias> from […]` names the alias, so another file's file-private one is refused there as it is in
+A top-level `<alias> from […]` names the alias, so another directory's unmarked one is refused there as it is in
 a body.
 ```maxon
-// --- file: types.maxon
+// --- file: lib/types.maxon
 typealias Counts = Set with ExitCode
 
 export function probeCounts() returns ExitCode

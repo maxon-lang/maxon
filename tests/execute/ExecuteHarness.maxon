@@ -15,8 +15,8 @@
 //
 // ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006).
 // So the corpus gets ONE shared half, exported from this file, and a case file beside it declares
-// only what that case alone uses. A file-private `let` does NOT collide, so a constant declared
-// twice is the half nothing catches: every constant this corpus shares is declared here or in
+// only what that case alone uses. A constant collides the same way, and a copy in another directory
+// does not, which is the half nothing catches: every constant this corpus shares is declared here or in
 // `tests/support/`.
 //
 // ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
@@ -32,7 +32,7 @@
 // ⚠ **SPELLED AGAIN HERE, WHICH IS FORCED**: this corpus is a separate program and cannot read the
 // driver's own constants. Every such respelling is in THIS file — the command word below, and the slot layout further down — so a rename in the driver is one file to follow it into, and
 // it goes red rather than quiet: a case cannot find its slot, or finds an entry it cannot classify.
-export let ExecuteCommandName = "execute"
+let ExecuteCommandName = "execute"
 
 // ⚠ **THE VARIABLE NAMING THE USER'S HOME DIRECTORY, RESPELLED HERE FOR THE REASON ABOVE**: this corpus
 // cannot read the driver's constants, and the driver reads a different one per host.
@@ -49,14 +49,14 @@ let UserCacheDirName = "cache"
 // ⭐ **THE FIXTURE ROSTER.** `corpus.maxtest` compares it against the directories actually on disk, so a
 // fixture nobody stages and a name no directory answers to are both red. Every case names its fixture
 // through one of these.
-export let HelloFixtureName = "hello"
-export let ExitCodeFixtureName = "exit-code"
-export let ArgvFixtureName = "argv"
-export let StdinFixtureName = "stdin"
-export let BrokenFixtureName = "broken"
-export let ProjectFixtureName = "project"
+let HelloFixtureName = "hello"
+let ExitCodeFixtureName = "exit-code"
+let ArgvFixtureName = "argv"
+let StdinFixtureName = "stdin"
+let BrokenFixtureName = "broken"
+let ProjectFixtureName = "project"
 
-export function fixtureNames() returns StringArray
+function fixtureNames() returns StringArray
 	let names = StringArray.create(0)
 	names.push(HelloFixtureName)
 	names.push(ExitCodeFixtureName)
@@ -70,15 +70,15 @@ end 'fixtureNames'
 
 // What the fixtures print and return. Spelled here because several cases stage one fixture and each
 // asserts what it saw; a drift between a fixture and one of these goes red in the case that reads it.
-export let HelloGreeting = "hello from maxon run"
-export let ProjectGreeting = "two files, one program"
-export let ForwardedExitCode = 7
+let HelloGreeting = "hello from maxon run"
+let ProjectGreeting = "two files, one program"
+let ForwardedExitCode = 7
 
 // Where the corpus lives, relative to the checkout root. Staging goes to this process's test scratch
 // directory outside the checkout (`testScratchDir`): a live `.maxon` under `tests/` is one `maxon fmt`
 // over the checkout rewrites.
-export let FixturesDirName = "tests/execute/fixtures"
-export let ProjectDirName = "tests/execute"
+let FixturesDirName = "tests/execute/fixtures"
+let ProjectDirName = "tests/execute"
 
 // The two halves of a case's staging tree. Separate directories rather than one, so the cache's own files
 // can never reach the source walk the command under test performs.
@@ -91,14 +91,14 @@ let StagedHomeDirName = "home"
 
 let StagedTierDirName = "tier"
 
-export let GreetingPackageName = "greeting"
-export let GreetingPackageFileName = "Greeting.maxon"
-export let ScriptlibGreeting = "hello from scriptlib"
-export let ScriptFileName = "script.maxon"
-export let MintProbePackageName = "pkg"
-export let MintProbePackageFileName = "Pkg.maxon"
-export let GreetingFunctionName = "greeting"
-export let ShadowedClockTypeName = "Clock"
+let GreetingPackageName = "greeting"
+let GreetingPackageFileName = "Greeting.maxon"
+let ScriptlibGreeting = "hello from scriptlib"
+let ScriptFileName = "script.maxon"
+let MintProbePackageName = "pkg"
+let MintProbePackageFileName = "Pkg.maxon"
+let GreetingFunctionName = "greeting"
+let ShadowedClockTypeName = "Clock"
 let ShebangLine = "#!/usr/bin/env maxon"
 
 // The layout the driver keeps its slots in, which is the whole of how a case finds one without respelling
@@ -112,19 +112,19 @@ let PendingBuildMarker = ".tmp"
 
 // Where slots of OTHER cache formats sit below the run root: directly under it (the unversioned layout),
 // and under a `v<n>` format directory older, and newer, than any this driver writes.
-export let UnversionedFormatSlotPath = "0123456789abcdef"
-export let OlderFormatSlotPath = "v1/0123456789abcdef"
-export let NewerFormatSlotPath = "v999/0123456789abcdef"
+let UnversionedFormatSlotPath = "0123456789abcdef"
+let OlderFormatSlotPath = "v1/0123456789abcdef"
+let NewerFormatSlotPath = "v999/0123456789abcdef"
 
 // What a planted build is called and holds. It is never run, so it need not be a program.
 let PlantedBuildStem = "main-0123456789abcdef"
 let PlantedBuildContent = "a build another cache format left"
 
 // The one ordinary source allowed to sit in this corpus. Read by the guards in `corpus.maxtest`.
-export let SharedHelperFileName = "ExecuteHarness.maxon"
+let SharedHelperFileName = "ExecuteHarness.maxon"
 
 // A file's size in bytes, as a case compares two of them, and how many files one staging produced.
-export typealias StagedFileSize = int(0 to u64.max)
+typealias StagedFileSize = int(0 to u64.max)
 
 typealias StreamingChildArray = Array with StreamingSubprocess
 
@@ -134,7 +134,7 @@ typealias StreamingChildArray = Array with StreamingSubprocess
 
 // One case's tree: the program's sources, the build cache that run is confined to, and the compiler it
 // runs.
-export type StagedCase
+type StagedCase
 	export let sources as FilePath
 	export let cache as FilePath
 	export let compiler as FilePath
@@ -150,7 +150,7 @@ end 'StagedCase'
 //
 // The FIXTURE is a required parameter and is not the case label: several cases stage `hello` and each
 // needs a tree of its own.
-export function stageCase(caseLabel String, fixture String) returns StagedCase
+function stageCase(caseLabel String, fixture String) returns StagedCase
 	let cleared = clearedCase(caseLabel)
 	let sources = cleared.sources
 
@@ -172,18 +172,18 @@ function clearedCase(caseLabel String) returns StagedCase
 	return StagedCase.create(sources, cache: cache, compiler: testedCompilerPath())
 end 'clearedCase'
 
-export function stageScriptlibCase(caseLabel String) returns StagedCase
+function stageScriptlibCase(caseLabel String) returns StagedCase
 	let cleared = clearedCase(caseLabel)
 	let tierCompiler = stagedLibraryTierCompiler(stagedTier(caseLabel), staged: cleared.sources)
 
 	return StagedCase.create(cleared.sources, cache: cleared.cache, compiler: tierCompiler)
 end 'stageScriptlibCase'
 
-export function stagedTier(caseLabel String) returns FilePath
+function stagedTier(caseLabel String) returns FilePath
 	return stagingDir("{caseDirSpelling(caseLabel)}{PortablePathSeparator}{StagedTierDirName}")
 end 'stagedTier'
 
-export function writeLooseScriptlibFile(caseLabel String, fileName String, content String)
+function writeLooseScriptlibFile(caseLabel String, fileName String, content String)
 	writeStagedFile(stagingDir(scriptlibDirSpelling(caseLabel)).join(fileName), content: content)
 end 'writeLooseScriptlibFile'
 
@@ -195,18 +195,18 @@ function scriptlibDirSpelling(caseLabel String) returns String
 	return "{caseDirSpelling(caseLabel)}{PortablePathSeparator}{StagedTierDirName}{PortablePathSeparator}{ScriptlibDirName}"
 end 'scriptlibDirSpelling'
 
-export function shadowingScriptSource(shadowedType String, packageFunction String) returns String
+function shadowingScriptSource(shadowedType String, packageFunction String) returns String
 	let usingTheShadow = "\tlet own = {shadowedType}.zero()\n"
 	let exitingFromTheShadow = "0 if own == 0 else 1"
 
 	return "type {shadowedType}\n\tstatic function zero() returns Count\n\t\treturn 0\n\tend 'zero'\nend '{shadowedType}'\n\n{mainSource(packageFunction, opening: usingTheShadow, result: exitingFromTheShadow)}"
 end 'shadowingScriptSource'
 
-export function greetingScriptSource() returns String
+function greetingScriptSource() returns String
 	return "{ShebangLine}{LineFeed}{LineFeed}{printingMainSource(GreetingFunctionName)}"
 end 'greetingScriptSource'
 
-export function printingMainSource(packageFunction String) returns String
+function printingMainSource(packageFunction String) returns String
 	return mainSource(packageFunction, opening: "", result: "0")
 end 'printingMainSource'
 
@@ -215,26 +215,26 @@ function mainSource(packageFunction String, opening String, result String) retur
 end 'mainSource'
 
 // The staged program's entry file, which is what a FILE case hands the driver.
-export function stagedMain(staged StagedCase) returns FilePath
+function stagedMain(staged StagedCase) returns FilePath
 	return staged.sources.join("{StagedProgramFileName}")
 end 'stagedMain'
 
 // A home directory of the case's own, for a child that must derive its cache root from one. Called AFTER
 // `stageCase`, whose clearing walk reaches it: a build a previous run left there is exactly what a case
 // about where a build LANDS must not inherit.
-export function stagedHome(caseLabel String) returns FilePath
+function stagedHome(caseLabel String) returns FilePath
 	return stagingDir("{caseDirSpelling(caseLabel)}{PortablePathSeparator}{StagedHomeDirName}")
 end 'stagedHome'
 
 // ⭐ **WHERE THE DRIVER KEEPS RUN BUILDS WHEN NOTHING NAMES A ROOT**: its own directory under the user's
 // home, and the `run` directory below that. Respelled here for the reason in the header.
-export function defaultRunCacheRoot(home FilePath) returns FilePath
+function defaultRunCacheRoot(home FilePath) returns FilePath
 	return home.join(MaxonUserDirName).join(UserCacheDirName).join("{CacheCommandDirName}")
 end 'defaultRunCacheRoot'
 
 // Rewrite the staged program, replacing one piece of its text. What a cache case needs and nothing else
 // can express: an EDIT, made after a build, that the next run must notice.
-export function rewriteStagedMain(staged StagedCase, replacing String, becoming String)
+function rewriteStagedMain(staged StagedCase, replacing String, becoming String)
 	let path = stagedMain(staged)
 	let body = fileText(path)
 
@@ -250,7 +250,7 @@ end 'rewriteStagedMain'
 // ============================================================================================
 
 // `maxon run <program>` — the ordinary command line, with the program made absolute.
-export function runArguments(program FilePath) returns StringArray
+function runArguments(program FilePath) returns StringArray
 	let arguments = StringArray.create(0)
 	arguments.push(ExecuteCommandName)
 	arguments.push(program.toString())
@@ -259,14 +259,14 @@ export function runArguments(program FilePath) returns StringArray
 end 'runArguments'
 
 // One child driver, run in the case's staging tree with its cache confined to that tree.
-export function spawnDriver(staged StagedCase, arguments StringArray, standardInput InputSource) returns CollectedOutput
+function spawnDriver(staged StagedCase, arguments StringArray, standardInput InputSource) returns CollectedOutput
 	return spawnCompiler(arguments, staged: staged.sources, what: "the driver", binary: staged.compiler, environment: Environment.inheritUpdating([CacheRootVariable: staged.cache.toString()]), standardInput: standardInput)
 end 'spawnDriver'
 
 // ⭐⭐ **ONE CHILD DRIVER THAT SEES NO CACHE OVERRIDE AT ALL, and a home directory of the case's own.** It
 // is the only way to ask where a build goes when nothing names a root, and it is why the environment below
 // is BUILT rather than updated.
-export function spawnDriverWithHome(staged StagedCase, arguments StringArray, home FilePath) returns CollectedOutput
+function spawnDriverWithHome(staged StagedCase, arguments StringArray, home FilePath) returns CollectedOutput
 	return spawnCompiler(arguments, staged: staged.sources, what: "the driver", binary: staged.compiler, environment: environmentWithHome(home))
 end 'spawnDriverWithHome'
 
@@ -306,7 +306,7 @@ function thisHarnessDecides(name String) returns bool
 end 'thisHarnessDecides'
 
 // The shape almost every case wants: `maxon run <program>`, with stdin closed.
-export function runProgram(staged StagedCase, program FilePath) returns CollectedOutput
+function runProgram(staged StagedCase, program FilePath) returns CollectedOutput
 	return spawnDriver(staged, arguments: runArguments(program), standardInput: InputSource.none)
 end 'runProgram'
 
@@ -315,10 +315,10 @@ end 'runProgram'
 // ============================================================================================
 
 // How many children one concurrent case launches, and what one of them reported.
-export typealias ConcurrentRunTally = int(1 to 64)
-export typealias ChildExitCode = int(i64.min to i64.max)
+typealias ConcurrentRunTally = int(1 to 64)
+typealias ChildExitCode = int(i64.min to i64.max)
 
-export type ConcurrentRun
+type ConcurrentRun
 	export let exitCode as ChildExitCode
 	export let stdout as String
 	export let stderr as String
@@ -328,7 +328,7 @@ export type ConcurrentRun
 	end 'create'
 end 'ConcurrentRun'
 
-export typealias ConcurrentRunArray = Array with ConcurrentRun
+typealias ConcurrentRunArray = Array with ConcurrentRun
 
 // ⭐⭐ **EVERY CHILD IS SPAWNED BEFORE ANY OF THEM IS WAITED ON, WHICH IS WHAT MAKES THIS CONCURRENT.**
 // `Configuration.run()` cannot express it — it spawns and waits in one call, so a loop over it is a
@@ -337,7 +337,7 @@ export typealias ConcurrentRunArray = Array with ConcurrentRun
 // The streams are drained to end-of-stream and only then is the child waited on. Both are pipes with a
 // buffer the OS chooses, so a child left unread while its sibling is waited on could fill one and block
 // forever; these children write one line and nothing.
-export function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany ConcurrentRunTally) returns ConcurrentRunArray
+function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany ConcurrentRunTally) returns ConcurrentRunArray
 	let binary = staged.compiler
 	let arguments = runArguments(program)
 	let environment = Environment.inheritUpdating([CacheRootVariable: staged.cache.toString()])
@@ -404,7 +404,7 @@ end 'drainStream'
 
 // A build planted in the case's private cache at `slotPath` below the run root, as another compiler would
 // have left it. Answers where it went.
-export function plantCachedBuild(staged StagedCase, slotPath String) returns FilePath
+function plantCachedBuild(staged StagedCase, slotPath String) returns FilePath
 	let relative = try FilePath.from(slotPath) otherwise panic("run tests: the gate could not run — '{slotPath}' is not a spellable path")
 	let dir = runCacheRoot(staged).joinPath(relative)
 
@@ -417,17 +417,17 @@ export function plantCachedBuild(staged StagedCase, slotPath String) returns Fil
 	return build
 end 'plantCachedBuild'
 
-export typealias PlantedPendingSerial = int(1 to 9)
+typealias PlantedPendingSerial = int(1 to 9)
 
 // A build still being written, as a process with id `owner` in `namespace` would have left it in the
 // sole slot's directory.
-export function plantPendingBuild(caseLabel String, staged StagedCase, namespace String, owner Pid, serial PlantedPendingSerial) returns FilePath
+function plantPendingBuild(caseLabel String, staged StagedCase, namespace String, owner Pid, serial PlantedPendingSerial) returns FilePath
 	let name = mintedScratchName(caseLabel, base: PlantedBuildStem, namespace: namespace, pid: owner, serial: serial as Count)
 
 	return plantedPendingFile(staged, name: "{name}{pendingBuildSuffix()}")
 end 'plantPendingBuild'
 
-export function plantPendingBuildOfAnOlderCompiler(staged StagedCase, owner Pid) returns FilePath
+function plantPendingBuildOfAnOlderCompiler(staged StagedCase, owner Pid) returns FilePath
 	return plantedPendingFile(staged, name: "{PlantedBuildStem}.{owner}{pendingBuildSuffix()}")
 end 'plantPendingBuildOfAnOlderCompiler'
 
@@ -497,7 +497,7 @@ end 'soleSlotDir'
 //
 // ⭐ **A PENDING NAME IS EXCLUDED HERE AND MUST BE**, because it is excluded from the driver's hit test
 // too: counting one would make a run that CRASHED mid-build read exactly like a cached one.
-export function slotExecutables(staged StagedCase) returns FilePathArray
+function slotExecutables(staged StagedCase) returns FilePathArray
 	let found = FilePathArray.create(0)
 
 	for dir in slotDirs(staged) 'eachSlot'
@@ -516,7 +516,7 @@ end 'slotExecutables'
 // Whether a cache entry is a published build: neither the debug sidecar beside one nor a build still
 // being written. Derived by elimination for the reasons above, so no case has to know what the driver
 // calls a build.
-export function isPublishedBuild(entry FilePath) returns bool
+function isPublishedBuild(entry FilePath) returns bool
 	let name = entry.filename()
 	return not name.endsWith(SidecarSuffix) and not name.endsWith(pendingBuildSuffix())
 end 'isPublishedBuild'
@@ -557,7 +557,7 @@ end 'soleSlotExecutable'
 // The cached executable's size, as a case compares two of them. NOT its modification time: a rebuild
 // landing in the same whole second as the build it replaced ties, which is the very ambiguity the driver's
 // content-hash key exists to remove.
-export function slotExecutableSize(staged StagedCase) returns StagedFileSize
+function slotExecutableSize(staged StagedCase) returns StagedFileSize
 	let executable = soleSlotExecutable(staged)
 	let info = try File.info(executable) otherwise panic("run tests: the gate could not run — could not read {executable.toString()}, which this run wrote moments ago.")
 
@@ -567,7 +567,7 @@ end 'slotExecutableSize'
 // ⭐⭐ **THE CACHED BUILD'S NAME, WHICH IS THE KEY IT WAS BUILT UNDER.** The driver keeps nothing beside
 // the executable and compares nothing: a build's name carries the hash of everything it was made from, so
 // two runs reaching one name is a hit and a name that moved is a miss.
-export function slotExecutableName(staged StagedCase) returns String
+function slotExecutableName(staged StagedCase) returns String
 	return soleSlotExecutable(staged).filename()
 end 'slotExecutableName'
 
@@ -576,11 +576,11 @@ end 'slotExecutableName'
 // away changes no answer the driver gives — except that a REBUILD writes it again and a reused build does
 // not. Without it, "the binary did not change" is equally true of a cache that recompiled the same source
 // to the same bytes.
-export function removeSlotSidecar(staged StagedCase)
+function removeSlotSidecar(staged StagedCase)
 	let sidecar = soleSlotEntry(staged, found: slotEntriesEndingIn(staged, suffix: SidecarSuffix), what: "the debug sidecar")
 	try File.delete(sidecar) otherwise panic("run tests: the gate could not run — could not remove {sidecar.toString()}, which is how this case asks whether the next run compiled.")
 end 'removeSlotSidecar'
 
-export function slotHasSidecar(staged StagedCase) returns bool
+function slotHasSidecar(staged StagedCase) returns bool
 	return slotEntriesEndingIn(staged, suffix: SidecarSuffix).count() > 0
 end 'slotHasSidecar'

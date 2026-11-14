@@ -1,11 +1,11 @@
 typealias WriteGroupByName = Map with ByteArray, CsrIndex
 
-export union WriteSites
+union WriteSites
 	unbuilt
 	built(index WriteSiteIndex)
 end 'WriteSites'
 
-module let noWriteSites = WriteSites.unbuilt
+let noWriteSites = WriteSites.unbuilt
 
 // The writes of one file's tokens, in token order, with each name's writes grouped: `tokens[site]`
 // is the token a write sits at and `names[site]` the name it writes. `rows` lists a name's sites in
@@ -13,14 +13,14 @@ module let noWriteSites = WriteSites.unbuilt
 // end)?" is one bisect. `Parser.assignedBindingsIn` asks it per construct, which a rescan of the
 // construct's tokens would make quadratic in nesting. `Parser.buildWriteSiteIndex` decides what
 // counts as a write.
-export type WriteSiteIndex
+type WriteSiteIndex
 	let tokens as TokenIndexArray
 	let names as NameRoster
 	let groupByName as WriteGroupByName
 	let rows as CsrGraph
 	let rowTokens as TokenIndexArray
 
-	export static function build(tokens TokenIndexArray, names NameRoster) returns WriteSiteIndex
+	static function build(tokens TokenIndexArray, names NameRoster) returns WriteSiteIndex
 		let groupByName = WriteGroupByName.create()
 		let groupOfSite = CsrColumn.create(names.count(), zeroed: false)
 		let siteOrdinals = CsrColumn.create(names.count(), zeroed: false)

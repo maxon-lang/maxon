@@ -6,15 +6,15 @@ SOURCE_DIRECTORIES = ("maxon-bin", "stdlib", "runtime")
 REGION_BEGIN = "// @generated library-cache begin"
 REGION_END = "// @generated library-cache end"
 
-VISIBILITY = r"(?:(?:export|module|public)\s+)?"
+VISIBILITY = r"(?:(?:export|public)\s+)?"
 DECLARATION = re.compile(r"^" + VISIBILITY + r"(type|union|enum|interface)\s+([A-Za-z_][A-Za-z0-9_]*)(.*)$")
 ALIAS = re.compile(r"^" + VISIBILITY + r"typealias\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
-FIELD_TYPED = re.compile(r"^\t(?:(export|module|public)\s+)?(var|let)\s+([A-Za-z_][A-Za-z0-9_]*)\s+as\s+(.+)$")
-FIELD_INFERRED = re.compile(r"^\t(?:(export|module|public)\s+)?(var|let)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$")
-STATIC_MEMBER = re.compile(r"^(?:(?:export|module|public)\s+)?static\b")
+FIELD_TYPED = re.compile(r"^\t(?:(export|public)\s+)?(var|let)\s+([A-Za-z_][A-Za-z0-9_]*)\s+as\s+(.+)$")
+FIELD_INFERRED = re.compile(r"^\t(?:(export|public)\s+)?(var|let)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$")
+STATIC_MEMBER = re.compile(r"^(?:(?:export|public)\s+)?static\b")
 UNION_CASE = re.compile(r"^([a-z][A-Za-z0-9_]*)(?:\((.*)\))?(?:\s*=\s*.+)?\s*$")
 ENUM_CASE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\s*(?:=\s*.+)?\s*$")
-MEMBER_KEYWORDS = re.compile(r"^(?:(?:export|module|public)\s+)?(?:static\s+)?(?:function|var|let)\s+[A-Za-z_]")
+MEMBER_KEYWORDS = re.compile(r"^(?:(?:export|public)\s+)?(?:static\s+)?(?:function|var|let)\s+[A-Za-z_]")
 PAYLOAD_PARAMETER = re.compile(r"^(?:let\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$")
 USES_CLAUSE = re.compile(r"\buses\s+(.+?)(?:\s+implements\b|\s+where\b|$)")
 
@@ -261,9 +261,9 @@ def strip_comment(text):
 
 
 def visibility_of(line):
-    match = re.match(r"^(export|module|public)\s+", line)
+    match = re.match(r"^(export|public)\s+", line)
 
-    return match.group(1) if match else "private"
+    return match.group(1) if match else "unmarked"
 
 
 def parse_lines(path, lines):
@@ -312,13 +312,13 @@ def parse_lines(path, lines):
 
             if match:
                 type_text, default = split_default(strip_comment(match.group(4)))
-                current.fields.append(Field(match.group(1) or "private", match.group(2), match.group(3), type_text, default))
+                current.fields.append(Field(match.group(1) or "unmarked", match.group(2), match.group(3), type_text, default))
                 continue
 
             match = FIELD_INFERRED.match(line)
 
             if match:
-                current.fields.append(Field(match.group(1) or "private", match.group(2), match.group(3), None, strip_comment(match.group(4)).strip()))
+                current.fields.append(Field(match.group(1) or "unmarked", match.group(2), match.group(3), None, strip_comment(match.group(4)).strip()))
         elif current.kind == "union":
             if UNION_CASE.match(body) and not MEMBER_KEYWORDS.match(body):
                 current.cases.append(body)

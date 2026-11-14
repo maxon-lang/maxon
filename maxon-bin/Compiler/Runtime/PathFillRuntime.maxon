@@ -4,7 +4,7 @@ let PhysicalPathFirstUnits = 4096 as FullRangeInt
 
 let PathGrowthShift = 1
 
-export union PathFill
+union PathFill
 	executablePath
 	processNamespace
 	currentDirectory
@@ -15,7 +15,7 @@ export union PathFill
 	finalPath(handle ValueId)
 end 'PathFill'
 
-export function pathFillEncoding(module StdModule, fill PathFill) returns HostTextEncoding
+function pathFillEncoding(module StdModule, fill PathFill) returns HostTextEncoding
 	return match fill 'fill'
 		processNamespace gives HostTextEncoding.utf8
 		executablePath or
@@ -59,7 +59,7 @@ end 'emitExtensionFitTest'
 // and `getcwd` answers NULL with `ERANGE`. The retry lives in Std so no backend owns a buffer
 // policy. The buffer is still allocated on both exits, the refused one included, and the caller
 // frees it.
-export function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlock, fitTest IrBlock, grow IrBlock, fill PathFill, whenRefused IrBlock, whenFits IrBlock, ids ValueMinter) returns (ValueId, ValueId, ValueId)
+function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlock, fitTest IrBlock, grow IrBlock, fill PathFill, whenRefused IrBlock, whenFits IrBlock, ids ValueMinter) returns (ValueId, ValueId, ValueId)
 	let buffer = ids.mint()
 	let capacity = ids.mint()
 	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))

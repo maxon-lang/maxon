@@ -1,22 +1,22 @@
-module typealias CapturedLoadMap = Map with (ValueId, ParamCount)
+typealias CapturedLoadMap = Map with (ValueId, ParamCount)
 
-module typealias RetainedValueMap = Map with (ValueId, ValueId)
+typealias RetainedValueMap = Map with (ValueId, ValueId)
 
-module typealias ParamMaskByValue = Map with (ValueId, ParamPositionMask)
+typealias ParamMaskByValue = Map with (ValueId, ParamPositionMask)
 
-module typealias SettlingOpByValue = Map with (ValueId, ElementIndex)
+typealias SettlingOpByValue = Map with (ValueId, ElementIndex)
 
-module typealias LoadedFromMap = Map with (ValueId, ValueId)
+typealias LoadedFromMap = Map with (ValueId, ValueId)
 
-module typealias IncomingsByPhi = Map with (ValueId, ValueIdArray)
+typealias IncomingsByPhi = Map with (ValueId, ValueIdArray)
 
-module typealias PositionSlotKey = int(0 to 9223372036854775807)
+typealias PositionSlotKey = int(0 to 9223372036854775807)
 
-module typealias ParamMaskByCallArgument = Map with (PositionSlotKey, ParamPositionMask)
+typealias ParamMaskByCallArgument = Map with (PositionSlotKey, ParamPositionMask)
 
-module typealias ParamSourcesByFunction = Map with (ElementIndex, ParamSources)
+typealias ParamSourcesByFunction = Map with (ElementIndex, ParamSources)
 
-module function positionSlotKey(index ElementIndex, position ElementIndex) returns PositionSlotKey
+function positionSlotKey(index ElementIndex, position ElementIndex) returns PositionSlotKey
 	return (index as PositionSlotKey) * (MaxAbiArgs as PositionSlotKey) + (position as PositionSlotKey)
 end 'positionSlotKey'
 
@@ -145,17 +145,17 @@ function indexParamNotes(ir MaxonModule, func IrFunction, joined ParamMaskByValu
 	end 'eachDerivedResult'
 end 'indexParamNotes'
 
-module type ParamNoteIndex
-	module let joined as ParamMaskByValue
-	module let callArguments as ParamMaskByCallArgument
-	module let results as SettlingOpByValue
-	module let derived as SettlingOpByValue
+type ParamNoteIndex
+	let joined as ParamMaskByValue
+	let callArguments as ParamMaskByCallArgument
+	let results as SettlingOpByValue
+	let derived as SettlingOpByValue
 
-	module static function empty() returns ParamNoteIndex
+	static function empty() returns ParamNoteIndex
 		return Self{joined: ParamMaskByValue.create(), callArguments: ParamMaskByCallArgument.create(), results: SettlingOpByValue.create(), derived: SettlingOpByValue.create()}
 	end 'empty'
 
-	module static function of(ir MaxonModule, func IrFunction, shared ParamNoteIndex) returns ParamNoteIndex
+	static function of(ir MaxonModule, func IrFunction, shared ParamNoteIndex) returns ParamNoteIndex
 		if not paramNotesAreRecorded(func) 'nothingRecorded'
 			return shared
 		end 'nothingRecorded'
@@ -184,20 +184,20 @@ function paramNotesAreRecorded(func IrFunction) returns bool
 	return not (notes.joinedSources.isEmpty() and notes.callArgSources.isEmpty() and notes.undecidedResultOps.isEmpty() and notes.derivedResultValues.isEmpty())
 end 'paramNotesAreRecorded'
 
-module enum HolderWalk
+enum HolderWalk
 	within
 	withinThroughResults
 	opaqueElementSources
 end 'HolderWalk'
 
-module type ParamSources
-	module let project as Project
-	module let ir as MaxonModule
-	module let signatures as ProgramSignatures
-	module let funcIndexByName as FuncIndexByName
-	module let func as IrFunction
-	module let captured as CapturedLoadMap
-	module let retainedFrom as RetainedValueMap
+type ParamSources
+	let project as Project
+	let ir as MaxonModule
+	let signatures as ProgramSignatures
+	let funcIndexByName as FuncIndexByName
+	let func as IrFunction
+	let captured as CapturedLoadMap
+	let retainedFrom as RetainedValueMap
 	let notes as ParamNoteIndex
 	var masks as ParamMaskByValue
 	var settledWithin as ParamMaskByValue
@@ -214,7 +214,7 @@ module type ParamSources
 	let elementHolders as ParamMaskByValue
 	var elementHoldersIndexed as bool
 
-	module static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex, signatures ProgramSignatures) returns ParamSources
+	static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex, signatures ProgramSignatures) returns ParamSources
 		let captured = CapturedLoadMap.create()
 		let retainedFrom = RetainedValueMap.create()
 		scanParamAliases(ir, func: func, captured: captured, retainedFrom: retainedFrom)
@@ -292,7 +292,7 @@ module type ParamSources
 		self.loadedFrom.upsert(loaded, value: addr)
 	end 'noteLoad'
 
-	module function maskWithin(value ValueId, throughResults bool) returns ParamPositionMask
+	function maskWithin(value ValueId, throughResults bool) returns ParamPositionMask
 		if not valueCarriesACapability(self.project, func: self.func, value: value) 'aValueHasNoStorageToLieWithin'
 			return NoParamPositions
 		end 'aValueHasNoStorageToLieWithin'
@@ -300,7 +300,7 @@ module type ParamSources
 		return self.holdersReachedFrom(value, walk: HolderWalk.withinThroughResults if throughResults else HolderWalk.within)
 	end 'maskWithin'
 
-	module function holdersReachedFrom(value ValueId, walk HolderWalk) returns ParamPositionMask
+	function holdersReachedFrom(value ValueId, walk HolderWalk) returns ParamPositionMask
 		self.indexDerivations()
 		let settled = self.settledHolders(walk)
 		var mask = NoParamPositions
@@ -375,7 +375,7 @@ module type ParamSources
 		end 'eachSourceArg'
 	end 'pushHoldersOfResult'
 
-	module function writeSeeds() returns ParamWriteSeedRow
+	function writeSeeds() returns ParamWriteSeedRow
 		let row = ParamWriteSeedRow.empty()
 
 		for opIdx in self.ir.liveOpIndices(self.func) 'eachOp'
@@ -397,7 +397,7 @@ module type ParamSources
 		return row
 	end 'writeSeeds'
 
-	module function valueMayHoldAUnique(value ValueId) returns bool
+	function valueMayHoldAUnique(value ValueId) returns bool
 		let tag = valueTagOf(self.func, value: value)
 
 		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function 'aValueWhoseContentIsOpen'
@@ -499,18 +499,18 @@ module type ParamSources
 		return records
 	end 'rawWrittenParams'
 
-	module function forgetMasks()
+	function forgetMasks()
 		self.masks = ParamMaskByValue.create()
 		self.settledWithin = ParamMaskByValue.create()
 		self.settledThroughResults = ParamMaskByValue.create()
 		self.settledOpaqueElements = ParamMaskByValue.create()
 	end 'forgetMasks'
 
-	module function parameterBehind(value ValueId) returns ParamCount throws AbsentError
+	function parameterBehind(value ValueId) returns ParamCount throws AbsentError
 		return try parameterBehindIn(self.func, captured: self.captured, value: value)
 	end 'parameterBehind'
 
-	module function rootOf(value ValueId) returns ValueId
+	function rootOf(value ValueId) returns ValueId
 		var current = value
 
 		while true 'towardTheRoot'
@@ -520,11 +520,11 @@ module type ParamSources
 		panic("ParamSources.rootOf: the walk toward a root only exits by returning at a value no retain produced")
 	end 'rootOf'
 
-	module function isAResult(value ValueId) returns bool
+	function isAResult(value ValueId) returns bool
 		return self.notes.results.contains(value)
 	end 'isAResult'
 
-	module function settlingOpOf(value ValueId) returns ElementIndex throws AbsentError
+	function settlingOpOf(value ValueId) returns ElementIndex throws AbsentError
 		if let opIdx = try self.notes.results.get(value) 'aResult'
 			return opIdx
 		end 'aResult'
@@ -532,11 +532,11 @@ module type ParamSources
 		return try self.notes.derived.get(value) otherwise throw AbsentError.absent
 	end 'settlingOpOf'
 
-	module function hasASettlingOp(value ValueId) returns bool
+	function hasASettlingOp(value ValueId) returns bool
 		return self.notes.results.contains(value) or self.notes.derived.contains(value)
 	end 'hasASettlingOp'
 
-	module function maskOf(value ValueId) returns ParamPositionMask
+	function maskOf(value ValueId) returns ParamPositionMask
 		if let known = try self.masks.get(value) 'alreadyAnswered'
 			return known
 		end 'alreadyAnswered'
@@ -578,7 +578,7 @@ module type ParamSources
 		return self.maskOfResult(opIdx)
 	end 'maskOfSettlingResult'
 
-	module function maskOfResult(opIdx ElementIndex) returns ParamPositionMask
+	function maskOfResult(opIdx ElementIndex) returns ParamPositionMask
 		let args = self.argumentsOfCall(opIdx)
 		var mask = NoParamPositions
 
@@ -594,7 +594,7 @@ module type ParamSources
 		return parts.1
 	end 'argumentsOfCall'
 
-	module function resultSourcePositions(opIdx ElementIndex) returns FuncIndexArray
+	function resultSourcePositions(opIdx ElementIndex) returns FuncIndexArray
 		let positions = FuncIndexArray.create(0)
 		let parts = try directCallPartsOf(try self.ir.ops.get(opIdx) otherwise panic("ParamSources.resultSourcePositions: ops.get OOB at {opIdx}")) otherwise return positions
 
@@ -619,7 +619,7 @@ module type ParamSources
 		return positions
 	end 'resultSourcePositions'
 
-	module function resultIsUnknown(opIdx ElementIndex) returns bool
+	function resultIsUnknown(opIdx ElementIndex) returns bool
 		let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.resultIsUnknown: ops.get OOB at {opIdx}")
 		let parts = try directCallPartsOf(op) otherwise return false
 		let calleeIndex = try self.funcIndexByName.get(parts.0) otherwise return false
@@ -627,34 +627,34 @@ module type ParamSources
 		return (try self.ir.functions.get(calleeIndex) otherwise panic("ParamSources.resultIsUnknown: functions.get OOB at {calleeIndex}")).resultIsUnknown()
 	end 'resultIsUnknown'
 
-	module function maskOfCallArgument(opIdx ElementIndex, args ValueIdArray, position ElementIndex) returns ParamPositionMask
+	function maskOfCallArgument(opIdx ElementIndex, args ValueIdArray, position ElementIndex) returns ParamPositionMask
 		let argId = try args.get(position) otherwise panic("ParamSources.maskOfCallArgument: args.get OOB at {position}")
 		let recorded = try self.notes.callArguments.get(positionSlotKey(opIdx, position: position)) otherwise NoParamPositions
 		return recorded or self.maskOf(argId)
 	end 'maskOfCallArgument'
 end 'ParamSources'
 
-module type ParamWriteSeedRow
-	module var identity as ParamPositionMask
-	module var within as ParamPositionMask
-	module var kept as ParamPositionMask
-	module var moved as ParamPositionMask
-	module var movedUnique as ParamPositionMask
-	module var rawWrite as bool
+type ParamWriteSeedRow
+	var identity as ParamPositionMask
+	var within as ParamPositionMask
+	var kept as ParamPositionMask
+	var moved as ParamPositionMask
+	var movedUnique as ParamPositionMask
+	var rawWrite as bool
 
-	module static function empty() returns ParamWriteSeedRow
+	static function empty() returns ParamWriteSeedRow
 		return Self{identity: NoParamPositions, within: NoParamPositions, kept: NoParamPositions, moved: NoParamPositions, movedUnique: NoParamPositions, rawWrite: false}
 	end 'empty'
 end 'ParamWriteSeedRow'
 
-module type ParamWriteSeeds
-	module let identity as ParamPositionMaskArray
-	module let within as ParamPositionMaskArray
-	module let kept as ParamPositionMaskArray
-	module let moved as ParamPositionMaskArray
-	module let movedUnique as ParamPositionMaskArray
+type ParamWriteSeeds
+	let identity as ParamPositionMaskArray
+	let within as ParamPositionMaskArray
+	let kept as ParamPositionMaskArray
+	let moved as ParamPositionMaskArray
+	let movedUnique as ParamPositionMaskArray
 
-	module static function over(funcNames FunctionNameIndex, paramSources ParamSourceIndex) returns ParamWriteSeeds
+	static function over(funcNames FunctionNameIndex, paramSources ParamSourceIndex) returns ParamWriteSeeds
 		let funcCount = funcNames.functions.count()
 		let seeds = Self{identity: emptySummaryColumn(funcCount), within: emptySummaryColumn(funcCount), kept: emptySummaryColumn(funcCount), moved: emptySummaryColumn(funcCount), movedUnique: emptySummaryColumn(funcCount)}
 
@@ -677,7 +677,7 @@ module type ParamWriteSeeds
 	end 'over'
 end 'ParamWriteSeeds'
 
-module type ParamSourceIndex
+type ParamSourceIndex
 	let project as Project
 	let ir as MaxonModule
 	let funcNames as FunctionNameIndex
@@ -685,11 +685,11 @@ module type ParamSourceIndex
 	let signatures as ProgramSignatures
 	var built as ParamSourcesByFunction
 
-	module static function over(project Project, ir MaxonModule, funcNames FunctionNameIndex, signatures ProgramSignatures) returns ParamSourceIndex
+	static function over(project Project, ir MaxonModule, funcNames FunctionNameIndex, signatures ProgramSignatures) returns ParamSourceIndex
 		return Self{project: project, ir: ir, funcNames: funcNames, noNotes: ParamNoteIndex.empty(), signatures: signatures, built: ParamSourcesByFunction.create()}
 	end 'over'
 
-	module function of(funcIndex ElementIndex) returns ParamSources
+	function of(funcIndex ElementIndex) returns ParamSources
 		if let known = try self.built.get(funcIndex) 'alreadyBuilt'
 			return known
 		end 'alreadyBuilt'
@@ -700,14 +700,14 @@ module type ParamSourceIndex
 		return sources
 	end 'of'
 
-	module function ofFunction(func IrFunction) returns ParamSources
+	function ofFunction(func IrFunction) returns ParamSources
 		return self.of(try self.funcNames.byName.get(func.name) otherwise panic("ParamSourceIndex.ofFunction: '{String.from(func.name)}' is not in the function-name index"))
 	end 'ofFunction'
 end 'ParamSourceIndex'
 
 // What an op does with a field slot: reads it, stores into it, or retains a value — which a `let` bound out of a
 // rebindable slot is — or none of these.
-export union SlotRead
+union SlotRead
 	none
 	load(opIndex ElementIndex, addr ValueId, offset ByteOffset)
 	store(addr ValueId, offset ByteOffset, value ValueId)
@@ -715,7 +715,7 @@ export union SlotRead
 	wordPayload(result ValueId, holder ValueId)
 end 'SlotRead'
 
-export function slotReadOfOp(op MaxonOp, opIndex ElementIndex) returns SlotRead
+function slotReadOfOp(op MaxonOp, opIndex ElementIndex) returns SlotRead
 	match op 'op'
 		loadIndirect(_, addr, offset, _) then return SlotRead.load(opIndex, addr: addr, offset: offset)
 		storeIndirect(addr, offset, value, _) then return SlotRead.store(addr, offset: offset, value: value)

@@ -43,13 +43,13 @@ let KeywordNote = "Maxon language keyword."
 // Where the enclosure is the question, `lspDocumentBlocks` answers it off the `end '<label>'` pairs.
 let TopLevelColumn = 1
 
-module function hoverServedMethods() returns LspMethodArray
+function hoverServedMethods() returns LspMethodArray
 	let served = LspMethodArray.create(0)
 	served.push(LspMethod.hover)
 	return served
 end 'hoverServedMethods'
 
-module function hoverAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+function hoverAnswer(request LspRequest) returns LspAnswer throws LspParamsError
 	let position = try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey)
 
 	// A buffer mid-edit routinely does not even LEX — an unterminated string is enough. That is LSP's
@@ -364,11 +364,11 @@ end 'HoverNaming'
 // ⭐ It is a TYPE and not a bag of free functions because a second instance is exactly how a stdlib doc
 // comment is reached: the same walks run over `stdlib/Array.maxon` as over the open document, with no
 // second spelling of any of them.
-module type HoverDocument
+type HoverDocument
 	let text as String
 	let bytes as ByteArray
-	module let tokens as TokenArray
-	module let qualifiers as TypeQualifierPositions
+	let tokens as TokenArray
+	let qualifiers as TypeQualifierPositions
 	let lines as LspLineIndex
 	let keywords as immutable KeywordTable
 	var corpus as LspCorpus
@@ -386,7 +386,7 @@ module type HoverDocument
 
 	// Tokens the caller already holds, so a declaring file is rendered out of `queryActiveTokens`'
 	// memo rather than lexed again on every hover.
-	module static function ofTokens(text String, tokens TokenArray, keywords KeywordTable, corpus LspCorpus) returns HoverDocument
+	static function ofTokens(text String, tokens TokenArray, keywords KeywordTable, corpus LspCorpus) returns HoverDocument
 		return Self.assembled(text, bytes: text.toByteArray(), tokens: tokens, qualifiers: TypeQualifierPositions.over(tokens), lines: LspLineIndex.build(text), keywords: keywords, corpus: corpus, consultedLibrary: false)
 	end 'ofTokens'
 
@@ -394,7 +394,7 @@ module type HoverDocument
 		return Self{text: text, bytes: bytes, tokens: tokens, qualifiers: qualifiers, lines: lines, keywords: keywords, corpus: corpus, consultedLibrary: consultedLibrary, naming: HoverNaming.of(corpus, consultedLibrary: consultedLibrary)}
 	end 'assembled'
 
-	module function withCorpus(swept LspCorpus) returns HoverDocument
+	function withCorpus(swept LspCorpus) returns HoverDocument
 		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, qualifiers: self.qualifiers, lines: self.lines, keywords: self.keywords, corpus: swept, consultedLibrary: self.consultedLibrary)
 	end 'withCorpus'
 
@@ -1244,7 +1244,7 @@ module type HoverDocument
 		end 'bareName'
 
 		match typeOfReceiverEndingAt(nameIndex - TokensBetweenAReceiverAndItsMember, reach: reach) 'receiver'
-			named(base, _, written) then return boundMemberType(methodReturnType(base, method: tokenAt(nameIndex).value, near: nameIndex), written: written)
+			named(base, _, written) then return boundMemberType(methodReturnType(base, method: tokenAt(nameIndex).value), written: written)
 			unknown then return HoverType.unknown
 		end 'receiver'
 	end 'calleeResultType'
@@ -1327,12 +1327,12 @@ module type HoverDocument
 		end 'noReceiver'
 
 		match typeOfReceiverEndingAt(index - TokensBetweenAReceiverAndItsMember, reach: HoverDeclarationHopBudget) 'ofType'
-			named(base, _, _) then return methodRendering(base, method: tokenAt(index).value, near: index)
+			named(base, _, _) then return methodRendering(base, method: tokenAt(index).value)
 			unknown then return HoverRendering.absent
 		end 'ofType'
 	end 'memberRendering'
 
-	module function receiverSubject(receiver ElementIndex) returns LspSubject
+	function receiverSubject(receiver ElementIndex) returns LspSubject
 		return match receiverEndingAt(receiver, reach: HoverDeclarationHopBudget) 'receiver'
 			value(inferred) gives surfaceSubject(inferred, ofAValue: true)
 			typeSurface(inferred) gives surfaceSubject(inferred, ofAValue: false)
@@ -1385,7 +1385,7 @@ module type HoverDocument
 
 	function memberTypeEndingAt(last ElementIndex, reach HoverReceiverReach) returns HoverType
 		match typeOfReceiverEndingAt(last - TokensBetweenAReceiverAndItsMember, reach: reach) 'ofType'
-			named(base, _, written) then return boundMemberType(memberType(base, member: tokenAt(last).value, reach: reach, near: last), written: written)
+			named(base, _, written) then return boundMemberType(memberType(base, member: tokenAt(last).value, reach: reach), written: written)
 			unknown then return HoverType.unknown
 		end 'ofType'
 	end 'memberTypeEndingAt'
@@ -1566,24 +1566,24 @@ module type HoverDocument
 		throw HoverLookupError.unclosedBracketGroup
 	end 'beforeBracketedGroup'
 
-	function memberType(owner ByteArray, member ByteArray, reach HoverReceiverReach, near ElementIndex) returns HoverMemberType
+	function memberType(owner ByteArray, member ByteArray, reach HoverReceiverReach) returns HoverMemberType
 		match declarationSite(memberDeclaredHere(owner, member: member), kind: HoverDeclarationKind.binding) 'aFieldHere'
 			at(head) then return memberTypeOrParameter(followedBindingType(head, reach: reach), owner: owner)
-			none then return corpusFieldType(owner, member: member, near: near)
+			none then return corpusFieldType(owner, member: member)
 		end 'aFieldHere'
 	end 'memberType'
 
-	function corpusFieldType(owner ByteArray, member ByteArray, near ElementIndex) returns HoverMemberType
+	function corpusFieldType(owner ByteArray, member ByteArray) returns HoverMemberType
 		let heldCorpus = self.corpus
 
 		match heldCorpus 'held'
-			loaded(_, signatures, readerPath) then return declaredFieldType(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: near))
+			loaded(_, signatures, readerPath) then return declaredFieldType(signatures, owner: owner, member: member, readerPath: readerPath)
 			unavailable then return HoverMemberType.none
 		end 'held'
 	end 'corpusFieldType'
 
-	function declaredFieldType(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns HoverMemberType
-		match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'aField'
+	function declaredFieldType(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns HoverMemberType
+		match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
 			declared(layout, index) then return brandedMemberType(signatures, spelling: layout.fieldSpelledName(index), owner: owner, declFilePath: layout.declFilePath)
 			hidden or
 			none then return HoverMemberType.none
@@ -1719,19 +1719,19 @@ module type HoverDocument
 		return self.writtenNamedType(named.value)
 	end 'declaredTypeNameAt'
 
-	function methodRendering(receiver ByteArray, method ByteArray, near ElementIndex) returns HoverRendering
+	function methodRendering(receiver ByteArray, method ByteArray) returns HoverRendering
 		match lookupOwnerOf(receiver, member: method) 'declaringType'
-			at(owner) then return declaredMemberRendering(owner, method: method, near: near)
+			at(owner) then return declaredMemberRendering(owner, method: method)
 			none then return HoverRendering.absent
 		end 'declaringType'
 	end 'methodRendering'
 
-	function declaredMemberRendering(owner ByteArray, method ByteArray, near ElementIndex) returns HoverRendering
+	function declaredMemberRendering(owner ByteArray, method ByteArray) returns HoverRendering
 		if declarationWasFound(memberDeclaredHere(owner, member: method)) 'declaredInThisDocument'
 			return declaredMethodRendering(owner, method: method)
 		end 'declaredInThisDocument'
 
-		let declaringDocument = memberDeclaringDocument(owner, member: method, near: near)
+		let declaringDocument = memberDeclaringDocument(owner, member: method)
 
 		match declaringDocument 'elsewhere'
 			at(declaring) then return declaring.declaredMethodRendering(owner, method: method).inAnotherFile()
@@ -1760,7 +1760,7 @@ module type HoverDocument
 		end 'aHandle'
 	end 'handleLookupOwner'
 
-	module function bindsTheName(name ByteArray, near ElementIndex) returns bool
+	function bindsTheName(name ByteArray, near ElementIndex) returns bool
 		return declarationWasFound(declarationOf(name, near: near, scope: HoverDeclarationScope.everyDeclaration))
 	end 'bindsTheName'
 
@@ -1798,19 +1798,19 @@ module type HoverDocument
 	// The declared return type of `receiver`'s `method`, resolved through the same owner and the same
 	// declaring document its rendering is. Splitting the two lookups gives an editor a signature from one
 	// declaration and a type from another the day they disagree.
-	function methodReturnType(receiver ByteArray, method ByteArray, near ElementIndex) returns HoverMemberType
+	function methodReturnType(receiver ByteArray, method ByteArray) returns HoverMemberType
 		match lookupOwnerOf(receiver, member: method) 'declaringType'
-			at(owner) then return declaredMemberReturnType(owner, method: method, near: near)
+			at(owner) then return declaredMemberReturnType(owner, method: method)
 			none then return HoverMemberType.none
 		end 'declaringType'
 	end 'methodReturnType'
 
-	function declaredMemberReturnType(owner ByteArray, method ByteArray, near ElementIndex) returns HoverMemberType
+	function declaredMemberReturnType(owner ByteArray, method ByteArray) returns HoverMemberType
 		if declarationWasFound(memberDeclaredHere(owner, member: method)) 'declaredInThisDocument'
 			return declaredMethodReturnType(owner, method: method)
 		end 'declaredInThisDocument'
 
-		match memberDeclaringDocument(owner, member: method, near: near) 'elsewhere'
+		match memberDeclaringDocument(owner, member: method) 'elsewhere'
 			at(declaring) then return declaring.declaredMethodReturnType(owner, method: method)
 			none then return HoverMemberType.none
 		end 'elsewhere'
@@ -1827,9 +1827,9 @@ module type HoverDocument
 		end 'aRoutine'
 	end 'returnTypeOfDeclaration'
 
-	function memberDeclaringDocument(owner ByteArray, member ByteArray, near ElementIndex) returns HoverDeclaringDocument
+	function memberDeclaringDocument(owner ByteArray, member ByteArray) returns HoverDeclaringDocument
 		match corpus 'held'
-			loaded(_, signatures, readerPath) then return declaringDocumentOfAMember(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: near))
+			loaded(_, signatures, readerPath) then return declaringDocumentOfAMember(signatures, owner: owner, member: member, readerPath: readerPath)
 			unavailable then return HoverDeclaringDocument.none
 		end 'held'
 	end 'memberDeclaringDocument'
@@ -1838,8 +1838,8 @@ module type HoverDocument
 	// member the corpus holds to be hidden from this file answers `none`, so that unfiltered road can
 	// never render what the visibility filter refused. With no corpus attached this answers `none` too,
 	// and the corpus pass asks again.
-	function declaringDocumentOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns HoverDeclaringDocument
-		match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'declared'
+	function declaringDocumentOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns HoverDeclaringDocument
+		match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath) 'declared'
 			declaredIn(path, _) then return documentOfCorpusFile(path)
 			hiddenHere then return HoverDeclaringDocument.none
 			nothingDeclaresIt then return stdlibDocumentFor(owner)
@@ -1862,9 +1862,8 @@ module type HoverDocument
 
 	// --- Source text --------------------------------------------------------------------------
 
-	// A declaration's head begins at its first MODIFIER, not at its keyword: `public function push` and
-	// `module function push` are what an editor should show. `module` is CONTEXTUAL — an identifier the
-	// parser matches by its bytes — which is why the test takes a whole token and not a `TokenKind`.
+	// A declaration's head begins at its first MODIFIER, not at its keyword: `public function push` is what
+	// an editor should show.
 	function declarationStart(keyword ElementIndex) returns ElementIndex
 		var start = keyword
 
@@ -1939,7 +1938,7 @@ module type HoverDocument
 	// Where a source line's text stops.
 	//
 	// ⭐ `LspLineIndex` clamps a `character` past the end of a line to exactly that point, and it is the
-	// ONLY reader of it `Compiler/` has: `String.byteAt` is `module`-visible inside `stdlib/`, so
+	// ONLY reader of it `Compiler/` has: `String.byteAt` is unexported inside `stdlib/`, so
 	// nothing here can walk a line's bytes itself. That clamp is therefore asked the question rather
 	// than a second scan being written for it.
 	function lineContentEnd(line LineNumber) returns ByteOffset
@@ -2044,7 +2043,7 @@ end 'kindCarriesAuthoredText'
 
 // Keywords that introduce a NAME for a type. `extension` is here because hovering the name in
 // `extension Array where …` should reach that block, even though it declares nothing new.
-module function kindDeclaresATypeName(kind TokenKind) returns bool
+function kindDeclaresATypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.extension
 end 'kindDeclaresATypeName'
 

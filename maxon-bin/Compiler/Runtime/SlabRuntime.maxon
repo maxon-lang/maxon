@@ -98,7 +98,7 @@
 // here at all: it is `MmRuntime.emitWordSlotAddr`, exported so a third copy of that
 // arithmetic did not get written. What stays private is the LAYOUT constant, because a shared "8" is not a
 // shared fact — these are strides of tables this file owns.
-let WordBytes = 8 as ByteOffset
+let SlabRecordWordBytes = 8 as ByteOffset
 
 // --- The mspan record ---
 //
@@ -149,11 +149,11 @@ let MspanRemoteHeadOffset = 56
 let MspanRemoteCountOffset = 64 as ByteOffset
 
 // ⭐ **THE RECORD'S WIDTH, DERIVED FROM ITS LAST FIELD — and stated HERE rather than at the check that
-// reads it.** A width spelled over there as `<last field> + WordBytes` stops being the width the moment a
+// reads it.** A width spelled over there as `<last field> + SlabRecordWordBytes` stops being the width the moment a
 // field is appended past it, and the guard against overlapping headers then silently measures 56 bytes of a
 // 64-byte record. Naming the width once, beside the field that determines it, is what makes the next
 // appended field move it.
-let MspanRecordBytes = MspanRemoteCountOffset + WordBytes
+let MspanRecordBytes = MspanRemoteCountOffset + SlabRecordWordBytes
 
 // One mspan header's slot in the metadata slab. 80 keeps successive headers 16-byte aligned inside the
 // 8 KiB metadata chunk, which holds 102 of them. `checkSlabRuntimeGeometry` asserts the record fits rather
@@ -297,8 +297,8 @@ export let SlabStateLabel = b"__slab_state"
 // Chained rather than written as 0/8/16 so that inserting a head word moves every offset after it — the
 // lock's included, since it is derived from the last of them.
 let SlabStateMetaBumpOffset = 0 as ByteOffset
-let SlabStateMetaEndOffset = SlabStateMetaBumpOffset + WordBytes
-let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + WordBytes
+let SlabStateMetaEndOffset = SlabStateMetaBumpOffset + SlabRecordWordBytes
+let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + SlabRecordWordBytes
 
 // ⭐⭐ **THE SCHEDULER WORD — the TLS slot's TEB offset once `__sched_init_procs` has published it, 0
 // before, and never 0 again.** One word answers the two questions every allocation and every free ask:
@@ -306,12 +306,12 @@ let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + WordBytes
 // `tlsSlotLoad` takes). It lives HERE and not in a `.data` word because `__sched_tls_teb_offset` is laid
 // out only in a program with a scheduler, while every heap program's allocator reads this one.
 // `emitSlabPublishScheduler` is its single writer.
-let SlabStateSchedulerOffset = SlabStateMetaFreeOffset + WordBytes
+let SlabStateSchedulerOffset = SlabStateMetaFreeOffset + SlabRecordWordBytes
 
 // Where a thread with no machine keeps the lock depth it steps around `__slab_lock` — the allocator's
 // twin of `SchedRuntime.SchedLockDepthSinkLabel`, in the region rather than in `.data` for the scheduler
 // word's reason. Nothing reads it; it is an address that is not zero.
-let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + WordBytes
+let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + SlabRecordWordBytes
 
 // ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD —
 // WHICH IS A `TargetIr`-PIN ARGUMENT, NOT A TIDINESS ONE.** Every `TargetIr` pin renders the whole
@@ -326,7 +326,7 @@ let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + WordBytes
 // reverse nesting does not exist and there is no order for two files to remember. **A future caller that
 // makes the allocator call into `GtRuntime` while holding this lock introduces a deadlock**, which is why
 // the direction is written down here rather than left to be re-derived.
-let SlabStateLockOffset = SlabStateLockDepthSinkOffset + WordBytes
+let SlabStateLockOffset = SlabStateLockDepthSinkOffset + SlabRecordWordBytes
 let SlabStateLockBytes = RecursiveLockBytes
 let SlabStateMcentralOffset = SlabStateLockOffset + (SlabStateLockBytes as ByteOffset)
 
@@ -351,7 +351,7 @@ let SlabStateMcentralOffset = SlabStateLockOffset + (SlabStateLockBytes as ByteO
 // The derivation is exact wherever the maintained word was: both columns are stepped by the row's own
 // writer under the row's own discipline, and `emitSlabTrafficRead` samples a row's columns together, so
 // nothing a single word ruled out is admitted here.
-export enum SlabTrafficColumn
+enum SlabTrafficColumn
 	trackedFrees
 	trackedTotal
 	trackedBytes
@@ -360,7 +360,7 @@ export enum SlabTrafficColumn
 	rawBytes
 end 'SlabTrafficColumn'
 
-export enum SlabTrafficLayer
+enum SlabTrafficLayer
 	tracked
 	raw
 end 'SlabTrafficLayer'
@@ -466,7 +466,7 @@ let SlabScaffoldFreeOversizeName = b"__slab_free_scaffold_oversize"
 
 // `counted` credits the raw columns, `tracked` the tracked columns and `scaffolding` neither; a door
 // pays one row walk whichever it credits.
-module enum SlabCounting
+enum SlabCounting
 	counted
 	tracked
 	scaffolding
@@ -519,10 +519,10 @@ function slabCountingOf(kind SlabBufferKind) returns SlabCounting
 end 'slabCountingOf'
 
 type SlabDoors
-	module let alloc as immutable ByteArray
-	module let free as immutable ByteArray
-	module let allocOversize as immutable ByteArray
-	module let freeOversize as immutable ByteArray
+	let alloc as immutable ByteArray
+	let free as immutable ByteArray
+	let allocOversize as immutable ByteArray
+	let freeOversize as immutable ByteArray
 
 	static function of(counting SlabCounting) returns SlabDoors
 		return match counting 'counting'
@@ -533,7 +533,7 @@ type SlabDoors
 	end 'of'
 end 'SlabDoors'
 
-module union SlabFreeDoor
+union SlabFreeDoor
 	plain(counting SlabCounting)
 	poisoning
 
@@ -561,7 +561,7 @@ end 'SlabFreeDoor'
 
 // The one decision of which door frees a buffer of `kind`. `installSlabRuntime` builds the box door and
 // `emitSlabFree` calls it from this same answer, so a call never names a door the program lacks.
-module function slabFreeDoorOf(module StdModule, kind SlabBufferKind) returns SlabFreeDoor
+function slabFreeDoorOf(module StdModule, kind SlabBufferKind) returns SlabFreeDoor
 	if module.poisonFreed and kind == SlabBufferKind.managedBox 'poisonsTheBox'
 		return SlabFreeDoor.poisoning
 	end 'poisonsTheBox'
@@ -673,7 +673,7 @@ let SlabRuntimeCallPrefix = b"__slab_"
 
 // One membership, so `RuntimeUsage.recordCallUsage` reads a roster this file owns rather than keeping a
 // second list free to drift from it.
-export function isSlabCensusCallee(callee ByteArray) returns bool
+function isSlabCensusCallee(callee ByteArray) returns bool
 	if not bytesStartWith(callee, prefix: SlabRuntimeCallPrefix) 'notTheAllocatorsBand'
 		return false
 	end 'notTheAllocatorsBand'
@@ -803,7 +803,7 @@ end 'installSlabRuntime'
 // In an untraced build `__mm_alloc` and `__mm_free` carry the tracked doors' hit path, so those doors are
 // built once, as their full bodies under their own names. Every other door is a leaf under its own name in
 // front of its full body, `<door>_slow`.
-module function slabBoxDoorsAreInlined(module StdModule) returns bool
+function slabBoxDoorsAreInlined(module StdModule) returns bool
 	return not module.debugStream
 end 'slabBoxDoorsAreInlined'
 
@@ -934,7 +934,7 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the exit code for a pointer the OS-direct road never handed out", here: RuntimeAbort.slabOsDirectPointerNotOurs.rawValue, named: "SlabOsDirectPointerNotOursExit"))
 	out.push(TierGeometryPin.create("the exit code for a slab-state read before the first allocation committed it", here: RuntimeAbort.slabStateReadBeforeCommit.rawValue, named: "SlabStateReadBeforeCommitExit"))
 
-	out.push(TierGeometryPin.create("the state region's word stride", here: WordBytes as FullRangeInt, named: "SlabWordBytes"))
+	out.push(TierGeometryPin.create("the state region's word stride", here: SlabRecordWordBytes as FullRangeInt, named: "SlabWordBytes"))
 	out.push(TierGeometryPin.create("the metadata slab's bump cursor", here: SlabStateMetaBumpOffset as FullRangeInt, named: "SlabStateMetaBumpOffset"))
 	out.push(TierGeometryPin.create("the metadata slab's limit", here: SlabStateMetaEndOffset as FullRangeInt, named: "SlabStateMetaEndOffset"))
 	out.push(TierGeometryPin.create("the metadata slab's free list", here: SlabStateMetaFreeOffset as FullRangeInt, named: "SlabStateMetaFreeOffset"))
@@ -1032,16 +1032,16 @@ end 'arenaLaneLabel'
 // One mcache row: one span pointer per class. DERIVED from the class count rather than written as a
 // number a regenerated ladder invalidates in silence.
 function slabMcacheRowStride() returns FullRangeInt
-	return ((slabClassCount() as ByteOffset) * WordBytes) as FullRangeInt
+	return ((slabClassCount() as ByteOffset) * SlabRecordWordBytes) as FullRangeInt
 end 'slabMcacheRowStride'
 
 function slabStateMcacheOffset() returns FullRangeInt
-	return (SlabStateMcentralOffset + (slabClassCount() as ByteOffset) * WordBytes) as FullRangeInt
+	return (SlabStateMcentralOffset + (slabClassCount() as ByteOffset) * SlabRecordWordBytes) as FullRangeInt
 end 'slabStateMcacheOffset'
 
 // One row of traffic columns, one word per `SlabTrafficColumn`.
 function slabTrafficRowBytes() returns FullRangeInt
-	return ((SlabTrafficColumn.allCases.count() as ByteOffset) * WordBytes) as FullRangeInt
+	return ((SlabTrafficColumn.allCases.count() as ByteOffset) * SlabRecordWordBytes) as FullRangeInt
 end 'slabTrafficRowBytes'
 
 function slabStateTrafficOffset() returns FullRangeInt
@@ -1056,11 +1056,11 @@ function slabStateOsDirectBytesOffset() returns FullRangeInt
 end 'slabStateOsDirectBytesOffset'
 
 function slabCensusBucketStride() returns FullRangeInt
-	return ((SlabCensusBucketWords as ByteOffset) * WordBytes) as FullRangeInt
+	return ((SlabCensusBucketWords as ByteOffset) * SlabRecordWordBytes) as FullRangeInt
 end 'slabCensusBucketStride'
 
 function slabStateCensusTableOffset() returns FullRangeInt
-	return slabStateOsDirectBytesOffset() + (WordBytes as FullRangeInt)
+	return slabStateOsDirectBytesOffset() + (SlabRecordWordBytes as FullRangeInt)
 end 'slabStateCensusTableOffset'
 
 function slabStateCensusMarksOffset() returns FullRangeInt
@@ -1170,7 +1170,7 @@ end 'emitMcacheSlotAddr'
 
 // The scheduler word (`SlabStateSchedulerOffset`). A `singleMachine` target never publishes one, so the
 // read is a constant there and the TLS walk behind it is never emitted — the backend has no `tlsSlotLoad`.
-module function emitSlabSchedulerWord(module StdModule, block IrBlock, state ValueId, model MachineModel, ids ValueMinter) returns ValueId
+function emitSlabSchedulerWord(module StdModule, block IrBlock, state ValueId, model MachineModel, ids ValueMinter) returns ValueId
 	return match model 'model'
 		singleMachine gives emitConst(module, block: block, value: 0, ids: ids)
 		multiMachine gives emitLoadField(module, block: block, record: state, offset: SlabStateSchedulerOffset, ids: ids)
@@ -1186,18 +1186,18 @@ end 'emitSlabSchedulerExists'
 // ⭐ **THE SCHEDULER WORD'S SINGLE WRITER — `__sched_init_procs`, beside its store of the same offset into
 // `__sched_tls_teb_offset`.** The region is committed through `__slab_state_base` rather than assumed,
 // because this runs once and the call is the one spelling of the commit.
-export function emitSlabPublishScheduler(module StdModule, block IrBlock, tebOffset ValueId, ids ValueMinter)
+function emitSlabPublishScheduler(module StdModule, block IrBlock, tebOffset ValueId, ids ValueMinter)
 	let state = ids.mint()
 	module.appendOp(block, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 	emitStoreField(module, block: block, record: state, offset: SlabStateSchedulerOffset, value: tebOffset)
 end 'emitSlabPublishScheduler'
 
 // A block a walk bails to, with the arguments its edge carries.
-export type SlabBailEdge
+type SlabBailEdge
 	export var block as IrBlock
 	export let args as ValueIdArray
 
-	export static function create(block IrBlock, args ValueIdArray) returns Self
+	static function create(block IrBlock, args ValueIdArray) returns Self
 		return Self{block: block, args: args}
 	end 'create'
 end 'SlabBailEdge'
@@ -1209,7 +1209,7 @@ end 'SlabBailEdge'
 // different arms. ⛔ Neither test is defensive: before the word is published `gs:[0]` is a NON-NULL
 // pointer, and a zero slot is a real thread with no machine. Only for a `multiMachine` target — a
 // `singleMachine` caller never reaches a TLS op and branches to its bail directly.
-export function emitSlabMachineOrBail(module StdModule, func IrFunction, cur IrBlock, schedulerWord ValueId, haveMachine IrBlock, noScheduler SlabBailEdge, noMachine SlabBailEdge, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns ValueId
+function emitSlabMachineOrBail(module StdModule, func IrFunction, cur IrBlock, schedulerWord ValueId, haveMachine IrBlock, noScheduler SlabBailEdge, noMachine SlabBailEdge, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns ValueId
 	let haveScheduler = module.addBlock(func, label: label, heat: heat)
 
 	// Not `emitSlabSchedulerExists` with its arms swapped: that form lowers to a `setcc` rather than
@@ -1231,7 +1231,7 @@ end 'emitSlabMachineOrBail'
 // of its owner's strand, so billing it to the coroutine would put a bracket's own allocations outside the
 // bracket. A machine with no running GT — its own bring-up, the system monitor for its whole life — takes
 // `noThread`.
-export function emitSlabOwnerThreadOrBail(module StdModule, cur IrBlock, m ValueId, haveOwner IrBlock, noThread SlabBailEdge, ids ValueMinter) returns ValueId
+function emitSlabOwnerThreadOrBail(module StdModule, cur IrBlock, m ValueId, haveOwner IrBlock, noThread SlabBailEdge, ids ValueMinter) returns ValueId
 	let gt = emitLoadField(module, block: cur, record: m, offset: MOffCurrentGt, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: gt, pred: StdCmpPred.eq, against: 0, whenTrue: noThread.block, whenFalse: haveOwner, ids: ids)
 	pushBranchEdge(cur, to: noThread.block, values: noThread.args.clone())
@@ -1713,7 +1713,7 @@ function emitSlabTrafficRowBase(module StdModule, block IrBlock, state ValueId, 
 end 'emitSlabTrafficRowBase'
 
 function slabTrafficColumnOffset(column SlabTrafficColumn) returns ByteOffset
-	return (column.ordinal as ByteOffset) * WordBytes
+	return (column.ordinal as ByteOffset) * SlabRecordWordBytes
 end 'slabTrafficColumnOffset'
 
 function slabLayerFreesColumn(layer SlabTrafficLayer) returns SlabTrafficColumn
@@ -1765,7 +1765,7 @@ end 'emitSlabAllocColumns'
 // ⭐⭐ **WHAT ONE READER ANSWERS, AS AN EXPRESSION OVER A SINGLE ROW'S COLUMNS.** Every figure this family
 // reports is a weighted sum of one row's words, so one walk serves them all — and being able to state the
 // whole expression per ROW is what keeps a difference honest.
-export union SlabTrafficFigure
+union SlabTrafficFigure
 	// One column.
 	column(which SlabTrafficColumn)
 
@@ -1793,7 +1793,7 @@ end 'SlabTrafficFigure'
 // reader on every green thread.
 //
 // Terminates `cur` and answers in `answerId`, the merge block's single argument.
-export function emitSlabTrafficRead(module StdModule, func IrFunction, cur IrBlock, figure SlabTrafficFigure, answerId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+function emitSlabTrafficRead(module StdModule, func IrFunction, cur IrBlock, figure SlabTrafficFigure, answerId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	let walk = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	let loopHdr = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	let loopBody = module.addBlock(func, label: label, heat: BlockHeat.normal)
@@ -1976,7 +1976,7 @@ end 'emitSlabStateCommitRoad'
 // ⭐ *"Has this program allocated anything yet?"* — the region's `.data` word is 0 until the first commit.
 // One spelling, because the readers that must NOT commit a region test exactly what the doors that must
 // test.
-export function emitSlabStateUncommitted(module StdModule, block IrBlock, state ValueId, ids ValueMinter) returns ValueId
+function emitSlabStateUncommitted(module StdModule, block IrBlock, state ValueId, ids ValueMinter) returns ValueId
 	return emitCompareWithConstant(module, block: block, value: state, pred: StdCmpPred.eq, against: SlabStateUncommitted, ids: ids)
 end 'emitSlabStateUncommitted'
 
@@ -1985,7 +1985,7 @@ end 'emitSlabStateUncommitted'
 // allocator answered, and the box layer's own bookkeeping after its `__slab_alloc` call, read a non-zero
 // word by construction. A zero here is a free
 // of a pointer no allocation produced, and it faults on the first field read rather than answering.
-export function emitSlabStateCommitted(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitSlabStateCommitted(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let stateAddr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(stateAddr, label: SlabStateLabel))
 	return emitLoadField(module, block: block, record: stateAddr, offset: 0, ids: ids)
@@ -2256,7 +2256,7 @@ union SlabEvictSlot
 	ofOwner
 end 'SlabEvictSlot'
 
-module enum SlabAbortRoad
+enum SlabAbortRoad
 	returnsTheDoor
 	endsInline
 end 'SlabAbortRoad'
@@ -2668,7 +2668,7 @@ end 'emitSlabFastAllocOwnArm'
 
 // The hit path as a leaf. Only loads precede the probe's verdict and the row is credited after it, so a
 // bail has stored nothing and the full body that takes over credits the request once.
-module function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock, size ValueId, zeroed bool, counting SlabCounting, model MachineModel, abortRoad SlabAbortRoad, bail IrBlock, slotId ValueId, ids ValueMinter) returns IrBlock
+function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock, size ValueId, zeroed bool, counting SlabCounting, model MachineModel, abortRoad SlabAbortRoad, bail IrBlock, slotId ValueId, ids ValueMinter) returns IrBlock
 	let small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitSlabSizeRouting(module, block: cur, size: size, osDirect: bail, small: small, ids: ids)
@@ -3486,7 +3486,7 @@ end 'buildSlabFreeFast'
 // The free's leaf, under the same rule as `emitSlabFastAlloc`: each bail precedes the credit, so the full
 // body credits the free once. The `--poison-freed` fill runs ahead of the walk and a bail repeats it in the
 // full body, which writes the same bytes again.
-module function emitSlabFastFree(module StdModule, func IrFunction, cur IrBlock, ptr ValueId, door SlabFreeDoor, model MachineModel, bail IrBlock, ids ValueMinter)
+function emitSlabFastFree(module StdModule, func IrFunction, cur IrBlock, ptr ValueId, door SlabFreeDoor, model MachineModel, bail IrBlock, ids ValueMinter)
 	let counting = door.counting()
 
 	let span = ids.mint()
@@ -3556,17 +3556,17 @@ end 'buildSlabFreeOversize'
 
 // `ptr` must be exactly what `emitSlabAlloc` answered for the same `kind`, and never 0: a region
 // freed under another kind's counting drifts a frees column from its total.
-export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, kind SlabBufferKind, ids ValueMinter)
+function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, kind SlabBufferKind, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: slabFreeDoorOf(module, kind: kind).name(), args: argsOf(ptr)))
 end 'emitSlabFree'
 
-export function emitSlabAlloc(module StdModule, block IrBlock, bytes ValueId, kind SlabBufferKind, ids ValueMinter) returns ValueId
+function emitSlabAlloc(module StdModule, block IrBlock, bytes ValueId, kind SlabBufferKind, ids ValueMinter) returns ValueId
 	let region = ids.mint()
 	emitSlabAllocInto(module, block: block, result: region, bytes: bytes, kind: kind)
 	return region
 end 'emitSlabAlloc'
 
-export function emitSlabAllocInto(module StdModule, block IrBlock, result ValueId, bytes ValueId, kind SlabBufferKind)
+function emitSlabAllocInto(module StdModule, block IrBlock, result ValueId, bytes ValueId, kind SlabBufferKind)
 	module.appendOp(block, op: StdOp.call(result, callee: slabAllocDoorOf(kind), args: argsOf(bytes)))
 end 'emitSlabAllocInto'
 

@@ -13,7 +13,7 @@
 // in no source file, so `Parser.requireCalleeIsNotReservedName` refuses a tier body naming one
 // (E3004).
 
-module typealias ProcessId = int(0 to u64.max)
+typealias ProcessId = int(0 to u64.max)
 
 typealias ProbeWord = int(i64.min to i64.max)
 
@@ -40,7 +40,7 @@ let HighestProbedProcessId = 2147483647
 // call in a process. The op is nevertheless not pure — it is a call, and the backends need the call
 // barrier's clobber accounting — so two reads in one function are two calls, which
 // `specs/process-id.md:is-stable-across-calls` asserts agree rather than assuming.
-module function __proc_pid() returns ProcessId
+function __proc_pid() returns ProcessId
 	return __Raw.osGetPid() as ProcessId
 end '__proc_pid'
 
@@ -58,13 +58,13 @@ end '__proc_pid'
 // VALUE'S.** A priority is whatever unit the platform keeps — a Windows priority CLASS against a POSIX
 // NICE value, on scales that run in opposite directions and one of which is legitimately negative. There
 // is no non-negative domain to narrow it to; an id has one.
-module function __proc_bg_priority() returns MachineWord
+function __proc_bg_priority() returns MachineWord
 	return __Raw.osEnterBackgroundPriority()
 end '__proc_bg_priority'
 
 // A probe refused for any reason but "no such process" names a process that exists and is not ours
 // to open or signal, so it answers alive.
-module function __proc_alive(pid ProbeWord) returns bool
+function __proc_alive(pid ProbeWord) returns bool
 	// To `kill`, zero and negative ids name process groups; both hosts truncate the word to 32 bits,
 	// so a wider one would probe some other id.
 	if pid <= 0 or pid > HighestProbedProcessId 'noProcessHasThisId'
@@ -96,6 +96,6 @@ module function __proc_alive(pid ProbeWord) returns bool
 	#endif
 end '__proc_alive'
 
-module function __proc_end_descendants_text(buffer cstring, capacity DescendantsWord) returns DescendantsWord
+function __proc_end_descendants_text(buffer cstring, capacity DescendantsWord) returns DescendantsWord
 	return __Raw.osDescendants(DescendantsVerbEnd as MachineWord, buffer: buffer, capacity: capacity as MachineWord) as DescendantsWord
 end '__proc_end_descendants_text'

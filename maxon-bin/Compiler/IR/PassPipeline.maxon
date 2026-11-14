@@ -26,12 +26,13 @@ export union PassKind
 	resolveTypes
 	semanticCheck
 
-	// Phase 2b: the cross-file unused-export audit (E3092/E3093/E3094). Scheduled AFTER
+	// Phase 2b: the cross-directory unused-export audit (E3092). Scheduled AFTER
 	// `semanticCheck`, so its own no-diagnostic guard sees every error the language checks report.
 	checkUnusedExports
 
-	// Phase 2c: the file-private audit, over the same program the unused-export audit judged.
-	checkUnusedFilePrivate
+	// Phase 2c: the unexported-declaration audit (E3219), over the same program the unused-export audit
+	// judged.
+	checkUnusedUnexported
 
 	// The last Maxon-tier pass, so every language check has spoken before a deferred target refusal
 	// is reported. ⚠ A diagnostic a later pass would decide (InsertRangeChecks' E3005, the backend's,
@@ -307,7 +308,7 @@ function classifyPass(pass PassKind) returns PassClassification
 
 		// Whole-module by nature: "does any OTHER file name this?" cannot be answered per function.
 		checkUnusedExports gives PassClassification.wholeModule
-		checkUnusedFilePrivate gives PassClassification.wholeModule
+		checkUnusedUnexported gives PassClassification.wholeModule
 		reportSecondaryFindings gives PassClassification.wholeModule
 
 		// Intra-function, and it reads the Maxon module and the project's registries to produce the Std one.
@@ -370,7 +371,7 @@ end 'classifyPass'
 
 // ⭐ **THE PASS A FAN-OUT STEP STANDS FOR** — what a member is announced, billed and classified as. The
 // step is the scalar spelling a worker receives and a union payload may hold (`StdPassPool.StdFanOutStep`).
-module function passKindOfFanOutStep(step StdFanOutStep) returns PassKind
+function passKindOfFanOutStep(step StdFanOutStep) returns PassKind
 	return match step 'pass'
 		pruneDeadBlockArgs gives PassKind.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives PassKind.elimTrivialBlockArgs
@@ -426,14 +427,14 @@ end 'requireMembersArePerFunction'
 // silently go unmeasured — which is the whole point of the attribution (see
 // CompileTimings' header). The mapping is 1:1 today and is expected to stay so; a
 // pass grouping several phases would defeat the table's purpose.
-module function compilePhaseOfPass(pass PassKind) returns CompilePhase
+function compilePhaseOfPass(pass PassKind) returns CompilePhase
 	return match pass 'phase'
 		reportDeferredNames gives CompilePhase.reportDeferredNames
 		checkSignatureVisibility gives CompilePhase.checkSignatureVisibility
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
 		checkUnusedExports gives CompilePhase.checkUnusedExports
-		checkUnusedFilePrivate gives CompilePhase.checkUnusedFilePrivate
+		checkUnusedUnexported gives CompilePhase.checkUnusedUnexported
 		reportSecondaryFindings gives CompilePhase.reportSecondaryFindings
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		insertRangeChecks gives CompilePhase.insertRangeChecks
@@ -469,7 +470,7 @@ function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		checkUnusedExports gives "checkUnusedExports"
-		checkUnusedFilePrivate gives "checkUnusedFilePrivate"
+		checkUnusedUnexported gives "checkUnusedUnexported"
 		reportSecondaryFindings gives "reportSecondaryFindings"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		insertRangeChecks gives "insertRangeChecks"
@@ -499,7 +500,7 @@ end 'passKindToString'
 
 // The line `run` prints before a pass, and the fan-out prints before each of its members
 // (`StdPassPool.announceStep`) — one spelling, so the two logs read alike.
-module function passBanner(pass PassKind) returns String
+function passBanner(pass PassKind) returns String
 	return "=== Running pass: {passKindToString(pass)} ==="
 end 'passBanner'
 
@@ -542,7 +543,7 @@ export function buildMaxonTierPasses() returns PassKindArray
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.checkUnusedExports)
-	passes.push(PassKind.checkUnusedFilePrivate)
+	passes.push(PassKind.checkUnusedUnexported)
 	passes.push(PassKind.reportSecondaryFindings)
 	return passes
 end 'buildMaxonTierPasses'
@@ -702,9 +703,9 @@ end 'PipelineStep'
 typealias PipelineJoinArray = Array with PipelineJoin
 
 type PipelineJoin
-	module let run as StdPassRun
-	module let probe as PhaseProbe
-	module let next as ElementIndex
+	let run as StdPassRun
+	let probe as PhaseProbe
+	let next as ElementIndex
 
 	static function of(run StdPassRun, probe PhaseProbe, next ElementIndex) returns PipelineJoin
 		return Self{run: run, probe: probe, next: next}
@@ -958,7 +959,7 @@ export type PassPipeline
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then try self.semanticCheckThenNonConstantCalls()
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
-			checkUnusedFilePrivate then try checkUnusedFilePrivate(self.project, module: self.maxonModule, signatures: self.signatures)
+			checkUnusedUnexported then try checkUnusedUnexported(self.project, module: self.maxonModule, signatures: self.signatures)
 			reportSecondaryFindings then _ = reportSecondaryFindings(self.project, flush: SecondaryFlush.beforeLowering)
 			lowerMaxonToStd then self.stdModule = try lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
@@ -975,7 +976,7 @@ export type PassPipeline
 			resolveTypes or
 			semanticCheck or
 			checkUnusedExports or
-			checkUnusedFilePrivate or
+			checkUnusedUnexported or
 			reportSecondaryFindings or
 			lowerMaxonToStd or
 			insertRangeChecks then try self.runFrontEndPass(pass)

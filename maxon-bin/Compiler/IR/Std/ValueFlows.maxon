@@ -1,4 +1,4 @@
-module type ValueFlow
+type ValueFlow
 	export let feeder as ValueId
 	export let carrier as ValueId
 
@@ -7,14 +7,14 @@ module type ValueFlow
 	end 'create'
 end 'ValueFlow'
 
-module typealias ValueFlowArray = Array with ValueFlow
+typealias ValueFlowArray = Array with ValueFlow
 
-module enum ReturnExits
+enum ReturnExits
 	everyExit
 	reachableExits
 end 'ReturnExits'
 
-module function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlowArray
+function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlowArray
 	let flows = ValueFlowArray.create(0)
 	let positionById = module.blockIndexById(func)
 
@@ -35,7 +35,7 @@ module function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlo
 	return flows
 end 'valueFlowsOf'
 
-module function valuesFeeding(flows ValueFlowArray, seeds BoolArray) returns BoolArray
+function valuesFeeding(flows ValueFlowArray, seeds BoolArray) returns BoolArray
 	let fromCarrier = CsrColumn.create(flows.count(), zeroed: false)
 	let toFeeder = CsrColumn.create(flows.count(), zeroed: false)
 
@@ -47,15 +47,15 @@ module function valuesFeeding(flows ValueFlowArray, seeds BoolArray) returns Boo
 	return reverseReachabilityMark(buildCsr(fromCarrier, to: toFeeder, nodeCount: seeds.count() as CsrIndex), seeds: seeds)
 end 'valuesFeeding'
 
-module function isMarked(column BoolArray, v ValueId) returns bool
+function isMarked(column BoolArray, v ValueId) returns bool
 	return try column.get(v) otherwise panic("isMarked: value {v} is outside the {column.count()} the function defines")
 end 'isMarked'
 
-module function markValue(column BoolArray, v ValueId)
+function markValue(column BoolArray, v ValueId)
 	try column.set(v, value: true) otherwise panic("markValue: value {v} is outside the {column.count()} the function defines")
 end 'markValue'
 
-module function returnedValuesOf(module StdModule, func IrFunction, exits ReturnExits) returns ValueIdArray
+function returnedValuesOf(module StdModule, func IrFunction, exits ReturnExits) returns ValueIdArray
 	let returned = ValueIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'

@@ -67,16 +67,16 @@
 // Exported with its constructor and its setter: `dropBlockArgs` is shared with
 // `elimTrivialBlockArgs`, and the column that tells it which block-args SURVIVE is what both passes
 // hand it.
-export typealias ValueFlagColumn = FixedArray with bool
+typealias ValueFlagColumn = FixedArray with bool
 
 // The pass's summary line, from the tally its runs summed into (`StdPassPool`): over the
 // functions that hold an op in the fan-out, and over the band's functions in the appended band.
-module function pruneDeadBlockArgsSummary(tally StdPassTally, funcCount ElementIndex) returns String
+function pruneDeadBlockArgsSummary(tally StdPassTally, funcCount ElementIndex) returns String
 	return "pruneDeadBlockArgs: removed {tally.removedBlockArgs} dead block-arg(s) across {funcCount} function(s)"
 end 'pruneDeadBlockArgsSummary'
 
 // Prune one function, in place. Returns how many block-args it dropped.
-module function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
 	let bound = blockArgIdBound(module, func: func)
 
 	if bound == 0 'noBlockArgs'
@@ -118,7 +118,7 @@ end 'pruneDeadBlockArgsInFunc'
 // Exported: `elimTrivialBlockArgs` sizes its own dense columns by exactly this space, for exactly
 // this reason. Two copies of "how big is the block-arg id space" would be two chances to size a
 // column wrong.
-export function blockArgIdBound(module StdModule, func IrFunction) returns ValueId
+function blockArgIdBound(module StdModule, func IrFunction) returns ValueId
 	var bound = 0 as ValueId
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -134,12 +134,12 @@ export function blockArgIdBound(module StdModule, func IrFunction) returns Value
 	return bound
 end 'blockArgIdBound'
 
-export function flagColumn(count ValueId) returns ValueFlagColumn
+function flagColumn(count ValueId) returns ValueFlagColumn
 	let col = ValueFlagColumn.create(count)
 	return col
 end 'flagColumn'
 
-export function setFlag(col ValueFlagColumn, v ValueId)
+function setFlag(col ValueFlagColumn, v ValueId)
 	try col.set(v, value: true) otherwise panic("blockArgs: flag write for value {v} is outside the block-arg id space")
 end 'setFlag'
 
@@ -163,12 +163,12 @@ end 'flagOf'
 // the WALK and not the index. Sharing neither would give each its own copy, and a
 // second copy of "how the edge slots line up with the block-args" is a second chance to mis-pair a
 // phi with someone else's value — the one mistake the positional model cannot survive.
-export type PhiOperandPairs
+type PhiOperandPairs
 	// `CsrColumn`s because the pairs are the edge list `buildCsr` reads; a read casts back to the value.
 	export var args as CsrColumn
 	export var incoming as CsrColumn
 
-	export static function create(args CsrColumn, incoming CsrColumn) returns PhiOperandPairs
+	static function create(args CsrColumn, incoming CsrColumn) returns PhiOperandPairs
 		return Self{args: args, incoming: incoming}
 	end 'create'
 
@@ -186,7 +186,7 @@ export type PhiOperandPairs
 end 'PhiOperandPairs'
 
 // Collect them. One walk over every edge of every block, in O(edge slots).
-export function collectPhiOperands(module StdModule, func IrFunction, refByBlockId ValueIdArray) returns PhiOperandPairs
+function collectPhiOperands(module StdModule, func IrFunction, refByBlockId ValueIdArray) returns PhiOperandPairs
 	let args = CsrColumn.create(0)
 	let incoming = CsrColumn.create(0)
 
@@ -212,7 +212,7 @@ end 'collectPhiOperands'
 // SSA or a later pass — so it panics rather than silently mis-pairing a phi with someone
 // else's value. Exported: `threadConstantBranches` reads a predecessor's tested slot through it,
 // so the one statement of that panic stays here.
-export function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
+function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
 	return try edge.argIds.get(k) otherwise panic("blockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
 end 'incomingArgAt'
 
@@ -224,7 +224,7 @@ end 'incomingArgAt'
 //
 // Exported, and used by `elimTrivialBlockArgs` too: it is the same index over the same id space,
 // and two copies of it were two chances to resolve an edge onto the wrong block.
-export function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
+function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
 	let refByBlockId = ValueIdArray.create(func.nextBlockId)
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -239,7 +239,7 @@ end 'buildBlockIdIndex'
 // block-arg passes pass the branching block's label, `insertRangeChecks` passes the function whose
 // recorded guard site cites it. The message therefore says "names" rather than "branches to" — a
 // panic that asserts the wrong provenance sends its reader to the wrong pass.
-export function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
+function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
 	let refPlusOne = try refByBlockId.get(id) otherwise panic("blockById: '{String.from(from)}' names block id {id}, outside its function's block-id space")
 
 	if refPlusOne == 0 'notInFunction'
@@ -319,7 +319,7 @@ end 'markUseful'
 // Returns the number dropped, which is the number of block-args `kept` left unmarked. Both callers
 // take their answer FROM here rather than counting alongside it, so "how many went" cannot disagree
 // with "how many are gone".
-export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, kept ValueFlagColumn) returns ValueId
+function dropBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, kept ValueFlagColumn) returns ValueId
 	for blockRef in func.blockRefs 'eachPred'
 		let pred = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
 		let newEdges = BranchEdgeArray.create(pred.branchEdges.count(), zeroed: false)

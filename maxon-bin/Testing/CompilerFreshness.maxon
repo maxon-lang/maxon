@@ -79,7 +79,7 @@ let SourceRootMarkerDirName = "Compiler"
 //
 // EXPORTED because one caller answers a staleness by REBUILDING rather than by refusing, and needs the
 // verdict itself to say which source forced the rebuild (`SpecTestRunner.guestCompilerFor`).
-export union StalenessVerdict
+union StalenessVerdict
 	mayProceed
 	stale(newerSource FilePath)
 end 'StalenessVerdict'
@@ -104,12 +104,12 @@ end 'refuseIfStale'
 //
 // `elsewhere` carries the sentence a caller that must REFUSE prints, because the reason is only
 // stateable beside the constants that make it true.
-export union BinarySourceRoot
+union BinarySourceRoot
 	checkout(root FilePath)
 	elsewhere(reason String)
 end 'BinarySourceRoot'
 
-export function binarySourceRootOf(binary FilePath) returns BinarySourceRoot
+function binarySourceRootOf(binary FilePath) returns BinarySourceRoot
 	let outputDir = try binary.parent() otherwise return BinarySourceRoot.elsewhere("{binary.toString()} has no parent directory")
 
 	if outputDir.filename().toLower() != ProjectProductsDirName 'notBuiltInPlace'
@@ -130,7 +130,7 @@ end 'binarySourceRootOf'
 // Is any source compiled into `binary` newer than it?
 //
 // EXPORTED for `StalenessVerdict`'s reason: one caller acts on a staleness by rebuilding.
-export function stalenessOf(binary FilePath) returns StalenessVerdict
+function stalenessOf(binary FilePath) returns StalenessVerdict
 	return match binarySourceRootOf(binary) 'origin'
 		checkout(sourceRoot) gives stalenessUnder(binary, sourceRoot: sourceRoot)
 		elsewhere gives StalenessVerdict.mayProceed
@@ -162,7 +162,7 @@ function stalenessUnder(binary FilePath, sourceRoot FilePath) returns StalenessV
 	return StalenessVerdict.mayProceed
 end 'stalenessUnder'
 
-export function modifiedTimeOf(path FilePath, why String) returns Timestamp
+function modifiedTimeOf(path FilePath, why String) returns Timestamp
 	match fileStateOf(path) 'state'
 		present(_, modifiedTime, _) then return modifiedTime
 		absent or

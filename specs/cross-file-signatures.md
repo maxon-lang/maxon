@@ -129,9 +129,9 @@ this — a correct program — and over-rejection is the worse failure. The pars
 refusing.
 ```maxon
 // --- file: a.maxon
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export function crossFileInt() returns Integer
+function crossFileInt() returns Integer
 	return 41
 end 'crossFileInt'
 
@@ -158,7 +158,7 @@ the `and` ever stopped short-circuiting, this would name itself instead of trapp
 ```maxon
 // --- file: a.maxon
 
-export function ready() returns bool
+function ready() returns bool
 	return false
 end 'ready'
 
@@ -166,7 +166,7 @@ function opaqueZero() returns Integer
 	return 0
 end 'opaqueZero'
 
-export function enabled() returns bool
+function enabled() returns bool
 	let zero = opaqueZero()
 	return (try (1 / zero) otherwise panic("`and` did not short-circuit: enabled() was evaluated")) == 0
 end 'enabled'
@@ -197,7 +197,7 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: z-callee.maxon
-export function alwaysTrue() returns bool
+function alwaysTrue() returns bool
 	return true
 end 'alwaysTrue'
 ```
@@ -227,7 +227,7 @@ of both getting whichever one the host's directory walk happened to serve.
 ```maxon
 // --- file: alias.maxon
 public typealias Int = int(i64.min to i64.max)
-export typealias IntArray = Array with Int
+typealias IntArray = Array with Int
 
 // --- file: main.maxon
 type Holder
@@ -305,8 +305,8 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias IntArray = Array with Int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 ```
 ```exitcode
 42
@@ -320,8 +320,8 @@ last; that is the order the compiler compiles, so the pair covers both orders (s
 `cross-file-generic-alias-is-a-swept-value-type-either-order` above).
 ```maxon
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias UnaryOp = function(Int) returns Int
+typealias Int = int(i64.min to i64.max)
+typealias UnaryOp = function(Int) returns Int
 
 // --- file: main.maxon
 function twice(n Int) returns Int
@@ -377,8 +377,8 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias UnaryOp = function(Int) returns Int
+typealias Int = int(i64.min to i64.max)
+typealias UnaryOp = function(Int) returns Int
 ```
 ```exitcode
 42
@@ -398,30 +398,30 @@ the function alias and its call site in another, and a file that mentions neithe
 deciding who interns first.
 ```maxon
 // --- file: thief.maxon
-export typealias Small = int(0 to 10)
+typealias Small = int(0 to 10)
 typealias SmallArray = Array with Small
 
-export function smallCount() returns Small
+function smallCount() returns Small
 	let s = SmallArray.create(0)
 	s.push(3)
 	return s.count()
 end 'smallCount'
 
 // --- file: types.maxon
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export type Field
-	export var v as Integer
+type Field
+	var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
 
-export typealias FieldArray = Array with Field
+typealias FieldArray = Array with Field
 
 // --- file: srv.maxon
-export typealias Count = int(i64.min to i64.max)
+typealias Count = int(i64.min to i64.max)
 typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
@@ -436,7 +436,7 @@ function apply(f FieldsBuilder) returns Count
 	return first.v
 end 'apply'
 
-export function runBuilder() returns Count
+function runBuilder() returns Count
 	return apply(buildFields)
 end 'runBuilder'
 
@@ -458,20 +458,20 @@ twice, and neither half is decoration: the twin catches the order dependence and
 compiler does not simply refuse everything.
 ```maxon
 // --- file: types.maxon
-export typealias Integer = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export type Field
-	export var v as Integer
+type Field
+	var v as Integer
 
-	export static function create(v Integer) returns Field
+	static function create(v Integer) returns Field
 		return Self{v: v}
 	end 'create'
 end 'Field'
 
-export typealias FieldArray = Array with Field
+typealias FieldArray = Array with Field
 
 // --- file: srv.maxon
-export typealias Count = int(i64.min to i64.max)
+typealias Count = int(i64.min to i64.max)
 typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
@@ -486,15 +486,15 @@ function apply(f FieldsBuilder) returns Count
 	return first.v
 end 'apply'
 
-export function runBuilder() returns Count
+function runBuilder() returns Count
 	return apply(buildFields)
 end 'runBuilder'
 
 // --- file: thief.maxon
-export typealias Small = int(0 to 10)
+typealias Small = int(0 to 10)
 typealias SmallArray = Array with Small
 
-export function smallCount() returns Small
+function smallCount() returns Small
 	let s = SmallArray.create(0)
 	s.push(3)
 	return s.count()
@@ -600,12 +600,12 @@ error E3004: <fragment>:12:12: call to undefined function 'brokeHidden'
 `main.maxon`'s initializer omits `create`'s defaulted `n`, so the compiler calls the default's helper, which `types.maxon` declares. The helper is the compiler's call and no name `main.maxon` wrote, so the initializer is not refused for a file that cannot name it. It prints `6`.
 ```maxon
 // --- file: types.maxon
-export typealias Integer = int(0 to 100000)
+typealias Integer = int(0 to 100000)
 
-export type Rec
-	export var v as Integer
+type Rec
+	var v as Integer
 
-	export static function create(n Integer = 5) returns Self
+	static function create(n Integer = 5) returns Self
 		return Self{v: n + 1}
 	end 'create'
 end 'Rec'
@@ -628,14 +628,14 @@ end 'main'
 `Bag.items` is defaulted by a call, which `types.maxon` declares as a helper. `main.maxon`'s initializer builds a `Bag` without naming that helper, so the compiler's call to it is not refused for a file that cannot name it. It prints `3 0`.
 ```maxon
 // --- file: types.maxon
-export typealias Integer = int(0 to 100000)
-export typealias IntArray = Array with Integer
+typealias Integer = int(0 to 100000)
+typealias IntArray = Array with Integer
 
-export type Bag
-	export var items = IntArray.create(0)
-	export var tag as Integer
+type Bag
+	var items = IntArray.create(0)
+	var tag as Integer
 
-	export static function create(tag Integer) returns Self
+	static function create(tag Integer) returns Self
 		return Self{tag: tag}
 	end 'create'
 end 'Bag'

@@ -721,29 +721,29 @@ a=7 b=5 c=2
 <!-- test: error.a-bare-read-of-end-in-a-first-method-is-the-only-diagnostic -->
 ```maxon
 // --- file: span.maxon
-module type Span
+type Span
 	var start as SpanPos
 
-	module static function create(start SpanPos) returns Span
+	static function create(start SpanPos) returns Span
 		return Span{start: start}
 	end 'create'
 
-	module function endsBefore(position SpanPos, end SpanPos) returns bool
+	function endsBefore(position SpanPos, end SpanPos) returns bool
 		return position < end and start < end
 	end 'endsBefore'
 
-	module function shifted(by SpanPos) returns Span
+	function shifted(by SpanPos) returns Span
 		let moved = Span.create(start + by)
 		return moved
 	end 'shifted'
 
-	module function width(to SpanPos) returns SpanPos
+	function width(to SpanPos) returns SpanPos
 		return to - start
 	end 'width'
 end 'Span'
 
 // --- file: types.maxon
-module typealias SpanPos = int(0 to 1000)
+typealias SpanPos = int(0 to 1000)
 
 // --- file: main.maxon
 function main() returns ExitCode

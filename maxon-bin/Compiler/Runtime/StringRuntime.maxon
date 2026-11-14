@@ -114,15 +114,14 @@ let SingleByteGraphemesFalse = 0
 // ⚠ **EXPORTED FOR `GraphemeRuntime.buildCharFromCodepoint`, WHICH IS THE OTHER PRODUCER OF THIS FIELD.**
 // Slot@48's meaning is declared in this file, so the byte that clears it is declared here too — a second
 // `13` in the encoder would be a fourth statement of the number with nothing holding it to this one.
-export let CarriageReturnByte = 13 as Byte
+let CarriageReturnByte = 13 as Byte
 
 // The blob is the payload bytes followed by a single NUL — a C string, so the record's pointer is
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
-// ⚠ EXPORTED — and `export` rather than `module` is the correct one, which the self-compile's own
-// visibility check confirms by NOT flagging it. The blob's READER needs the same terminator its writer
+// ⚠ EXPORTED. The blob's READER needs the same terminator its writer
 // used: `TargetPrinter` renders a blob's text and must stop where this stops, not at the
 // padding — and it lives in `Compiler/IR/Target/`, outside this file's `Compiler/Runtime/` subtree, which
-// is exactly the reach `module` does not have (measured: `module` here is `E2004 Undefined variable`).
+// is exactly the reach an unmarked declaration does not have.
 export let NulTerminator = 0 as Byte
 
 // `__int_to_string`'s decimal machinery. The digits are rendered without ever NEGATING the value, so
@@ -536,7 +535,7 @@ export function registerStringBlob(globalData GlobalDataTable, bytes ByteArray) 
 	return globalData.registerRdataConstant(StringBlobPrefix, bytes: stringBlobBytes(bytes), kind: RdataPayloadKind.stringBlob)
 end 'registerStringBlob'
 
-export function registerPanicLabel(globalData GlobalDataTable, message ByteArray) returns immutable ByteArray
+function registerPanicLabel(globalData GlobalDataTable, message ByteArray) returns immutable ByteArray
 	return globalData.labelBytesOf(registerStringBlob(globalData, bytes: message))
 end 'registerPanicLabel'
 
@@ -737,7 +736,7 @@ end 'buildStreamWrite'
 // name shares the declaration for the reason it shares the body: ONE graph cannot have two signatures, and
 // the operator path already types its result `boolean` at the call site (`Parser.emitStrEqCall`),
 // so this is the type it was always claiming to return.
-export function buildStrEq(module StdModule, name ByteArray)
+function buildStrEq(module StdModule, name ByteArray)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean))), paramCount: 2, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(2)
 
@@ -784,7 +783,7 @@ end 'buildStrEq'
 // every runtime loop here builds directly, a runtime function having no parser. The phi's `argType` is set
 // explicitly because `retypeBlockArgs` runs in `lowerMaxonToStd`, which these post-pipeline functions never
 // pass through.
-export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock, aBuf ValueId, bBuf ValueId, len ValueId, allMatch IrBlock, notEqual IrBlock, ids ValueMinter)
+function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock, aBuf ValueId, bBuf ValueId, len ValueId, allMatch IrBlock, notEqual IrBlock, ids ValueMinter)
 	let header = module.addBlock(func, label: b"cmphdr", heat: BlockHeat.normal)
 	let body = module.addBlock(func, label: b"cmpbody", heat: BlockHeat.normal)
 
@@ -1150,7 +1149,7 @@ end 'buildStrDecref'
 // and `__gt_subp_str_from_bytes` (passes 0 — child output is arbitrary bytes, `not-ascii` is the safe class)
 // were byte-for-byte copies of this sequence, and a field the record later gains must be initialized once, here,
 // not silently in one path and not the other.
-export function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, srcBuf ValueId, srcLen ValueId, singleByteGraphemes ValueId) returns ValueId
+function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, srcBuf ValueId, srcLen ValueId, singleByteGraphemes ValueId) returns ValueId
 	let newRec = emitAllocOwnedInlineString(module, block: block, ids: ids, byteLen: srcLen, singleByteGraphemes: singleByteGraphemes)
 	let copied = ids.mint()
 	module.appendOp(block, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(emitInlineStringBuffer(module, block: block, ids: ids, record: newRec), second: srcBuf, third: srcLen)))
@@ -1164,7 +1163,7 @@ end 'emitBuildOwnedInlineString'
 // whole buffer-ownership encoding (`capacity@16 = InlineBufferCapacity`, `parent@32` left 0 by the
 // slab's zeroing contract) — so a caller that fills the bytes itself cannot publish a record that
 // differs from a cloned one by a field.
-export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, byteLen ValueId, singleByteGraphemes ValueId) returns ValueId
+function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, byteLen ValueId, singleByteGraphemes ValueId) returns ValueId
 	// One `__mm_alloc` for the record + the bytes + a trailing NUL (the slab zeroes it), sized exactly as an
 	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
 	let overhead = emitConst(module, block: block, value: StringInterpOverheadBytes, ids: ids)
@@ -1191,7 +1190,7 @@ end 'emitAllocOwnedInlineString'
 // Where a fused record's inline bytes begin: right after the record. ONE definition, asked for by everything
 // that writes those bytes — so a caller re-deriving it (two ops, a const and an add, in a compiler-internal
 // graph) is cheaper than a second place that could be told a different record size.
-export function emitInlineStringBuffer(module StdModule, block IrBlock, ids ValueMinter, record ValueId) returns ValueId
+function emitInlineStringBuffer(module StdModule, block IrBlock, ids ValueMinter, record ValueId) returns ValueId
 	let recordBytes = emitConst(module, block: block, value: StringRecordBytes as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: record, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
 end 'emitInlineStringBuffer'

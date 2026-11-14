@@ -48,7 +48,7 @@ public type TlsStream implements ByteSource
 	var readDeadlineMs as SocketDeadlineMs
 	var writeDeadlineMs as SocketDeadlineMs
 
-	module static function establish(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
+	static function establish(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream throws TlsError
 		let stream = TlsStream.unshaken(transport, endpoint: endpoint, peer: peer, deadlineMs: deadlineMs)
 
 		try stream.handshake()
@@ -56,7 +56,7 @@ public type TlsStream implements ByteSource
 		return stream
 	end 'establish'
 
-	module static function unshaken(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream
+	static function unshaken(transport TcpClient, endpoint TlsEndpoint, peer TlsX509Peer, deadlineMs SocketDeadlineMs) returns TlsStream
 		return Self{transport: transport, endpoint: endpoint, peer: peer, inbound: ByteArray.create(0), consumed: 0, unread: ByteBacklog.create(), writeClosed: false, writeHealth: TlsWriteHealth.intact, closed: false, phase: TlsHandshakePhase.pending, handshakeDeadlineMs: deadlineMs, readDeadlineMs: NoDeadlineMs, writeDeadlineMs: NoDeadlineMs}
 	end 'unshaken'
 
@@ -224,7 +224,7 @@ public type TlsStream implements ByteSource
 		transport.close()
 	end 'close'
 
-	module function closeAfterDraining()
+	function closeAfterDraining()
 		if closed 'already'
 			return
 		end 'already'

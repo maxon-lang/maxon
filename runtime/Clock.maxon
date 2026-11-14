@@ -42,24 +42,24 @@ let WallClockScratchBytes = 8
 // registry, which resolves last-wins for a reader that declares neither — so the duplicate would decide
 // what `UnixSeconds` means in files that have nothing to do with this tier.
 typealias FileTimeTicks = int(0 to u64.max)
-module typealias EpochSeconds = int(0 to u64.max)
-module typealias EpochNanos = int(0 to u64.max)
+typealias EpochSeconds = int(0 to u64.max)
+typealias EpochNanos = int(0 to u64.max)
 
 // ⭐ **`__clock_now_unix_s()` — WHOLE SECONDS SINCE 1970-01-01 UTC.** The host op only reads its
 // calendar (`__clock_now_filetime`); the epoch shift and the tick scale are HERE, so a lane pays for one
 // host read and shares the arithmetic.
-module function __clock_now_unix_s() returns EpochSeconds
+function __clock_now_unix_s() returns EpochSeconds
 	return (clockTicksSince1970() / FileTimeTicksPerSecond) as EpochSeconds
 end '__clock_now_unix_s'
 
-module function __clock_now_unix_ns() returns EpochNanos
+function __clock_now_unix_ns() returns EpochNanos
 	return (clockTicksSince1970() * NanosPerFileTimeTick) as EpochNanos
 end '__clock_now_unix_ns'
 
 // The raw FILETIME, unshifted, is also `__Builtins.profileNowFileTime`: the profiler's
 // `SetWaitableTimer` deadline is an absolute FILETIME, and a deadline counted on any other epoch or
 // scale arms the timer at a moment it does not name.
-module function __clock_now_filetime() returns FileTimeTicks
+function __clock_now_filetime() returns FileTimeTicks
 	let ticksAddr = __Raw.scratch(WallClockScratchBytes) as MachineWord
 	__Raw.osReadWallClock(ticksAddr)
 	return __Raw.loadWord(ticksAddr, offset: 0) as FileTimeTicks
@@ -77,6 +77,6 @@ end 'clockTicksSince1970'
 // arithmetic is the contract: the DebugStream wire format stamps every ring entry with
 // `osTickCountMs() - start_timestamp`, so a consumer that scales or reseeds this reading turns each
 // delta into a number with no meaning.
-module function __uptime_ms() returns MachineWord
+function __uptime_ms() returns MachineWord
 	return __Raw.osTickCountMs()
 end '__uptime_ms'

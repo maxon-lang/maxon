@@ -22,8 +22,8 @@ public typealias TlsAuthorityNameArray = Array with ByteArray
 let tlsRandomBytes = 32
 let tlsMaxSessionIdBytes = 32
 let tlsNamedCurveType = 3
-module let tlsTls13VersionCode = 0x0304
-module let tlsHelloRetryRequestRandom = ByteArray from [0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C]
+let tlsTls13VersionCode = 0x0304
+let tlsHelloRetryRequestRandom = ByteArray from [0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C]
 
 /// A TLS version.
 public enum TlsProtocol
@@ -60,7 +60,7 @@ public enum TlsKeyUpdateRequest
 	updateRequested = 1
 end 'TlsKeyUpdateRequest'
 
-module enum TlsHandshakeType
+enum TlsHandshakeType
 	helloRequest = 0
 	clientHello = 1
 	serverHello = 2
@@ -605,7 +605,7 @@ function appendCertificateVerify(body ByteArray, scheme TlsSignatureSchemeCode, 
 	try appendVector(body, prefix: TlsLengthPrefix.uint16, contents: signature)
 end 'appendCertificateVerify'
 
-module function tlsServerKeyExchangeParameters(namedGroup TlsGroupCode, publicKey ByteArray) returns ByteArray throws TlsEncodeError
+function tlsServerKeyExchangeParameters(namedGroup TlsGroupCode, publicKey ByteArray) returns ByteArray throws TlsEncodeError
 	let parameters = ByteArray.create(0)
 	appendUnsigned(parameters, value: tlsNamedCurveType, width: TlsWireWidth.uint8)
 	appendUnsigned(parameters, value: namedGroup, width: TlsWireWidth.uint16)

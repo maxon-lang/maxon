@@ -724,7 +724,7 @@ export function wordByteCount(width WordBytes) returns FullRangeInt
 	end 'w'
 end 'wordByteCount'
 
-export function wordSwapOpcode(width WordBytes) returns StdUnaryOpcode
+function wordSwapOpcode(width WordBytes) returns StdUnaryOpcode
 	return match width 'w'
 		two gives StdUnaryOpcode.byteSwap16
 		four gives StdUnaryOpcode.byteSwap32
@@ -742,7 +742,7 @@ export function byteSwapWidth(opcode StdUnaryOpcode) returns WordBytes throws Ab
 	throw AbsentError.absent
 end 'byteSwapWidth'
 
-export function stdOpcodeIsByteSwap(opcode StdUnaryOpcode) returns bool
+function stdOpcodeIsByteSwap(opcode StdUnaryOpcode) returns bool
 	let width = try byteSwapWidth(opcode) otherwise return false
 	return wordSwapOpcode(width) == opcode
 end 'stdOpcodeIsByteSwap'
@@ -3932,8 +3932,7 @@ end 'StdArithOperands'
 // (`commutesForCoalescing`, `StdLoweringShared`) all ask it and must not answer it separately: the
 // `min`/`max` answer below is the one a second copy gets wrong.
 //
-// `export`, not `module`: readers live under `Compiler/Targets/`, and `module` visibility is a
-// directory subtree.
+// `export`: readers live under `Compiler/Targets/`, outside this directory's subtree.
 export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 	return match opcode 'o'
 		add or
@@ -4124,7 +4123,7 @@ end 'classifyArithOperands'
 // `reader` names the pass, because the panic is about a disagreement between the dialect and whoever
 // asked, and a message that could not say which pass tripped it would send the reader to this file
 // rather than to the roster arm that admitted the op.
-module function requireArithOpIsPure(op StdOp, reader String)
+function requireArithOpIsPure(op StdOp, reader String)
 	if not op.rawValue.isPure 'impure'
 		panic("{reader}: `classifyArithOperands` admitted an op in category {op.rawValue.category.name} that the dialect declares `isPure: false` — an op that may trap or have effects must never be dropped, duplicated or moved")
 	end 'impure'
@@ -4435,7 +4434,7 @@ end 'classifyLoadOperands'
 //
 // ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isStore` SAYS THE RECORD WAS FILLED**, and none may be read as
 // a sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
-module type StdStoreOperands
+type StdStoreOperands
 	var store as bool
 	export var access as StdAccessOperands
 
@@ -4445,11 +4444,11 @@ module type StdStoreOperands
 	export var valueId as ValueId
 	export var valueType as StdType
 
-	module static function create() returns StdStoreOperands
+	static function create() returns StdStoreOperands
 		return Self{store: false, access: StdAccessOperands.create(), addrId: 0, offset: 0, valueId: 0, valueType: StdType.i64}
 	end 'create'
 
-	module function isStore() returns bool
+	function isStore() returns bool
 		return self.store
 	end 'isStore'
 
@@ -4470,7 +4469,7 @@ end 'StdStoreOperands'
 // the calls among them — answers "not a plain store", and a pass that must account for every write asks
 // the dialect's `isStore` flag beside this, which is what keeps the two from disagreeing about a variant
 // that writes memory through some other shape.
-module function classifyStoreOperands(op StdOp, store StdStoreOperands)
+function classifyStoreOperands(op StdOp, store StdStoreOperands)
 	classifyAccessOperands(op, access: store.access)
 
 	if store.access.isPlainStore() 'aPlainStore'
@@ -4485,7 +4484,7 @@ end 'classifyStoreOperands'
 // read off an op into a caller-owned record. Every other op answers `other`; a caller that must account
 // for every call asks the dialect's `isCall` flag beside this, so an indirect or witness call is a call
 // with no name rather than a non-call.
-module enum StdCallShape
+enum StdCallShape
 	other
 	directCall
 	throwingCall
@@ -4689,13 +4688,13 @@ export function classifyCallOperands(op StdOp, call StdCallOperands)
 	end 'c'
 end 'classifyCallOperands'
 
-module enum StdWitnessShape
+enum StdWitnessShape
 	other
 	dispatch
 	throwingDispatch
 end 'StdWitnessShape'
 
-module type StdWitnessOperands
+type StdWitnessOperands
 	var shape as StdWitnessShape
 	export var resultId as ValueId
 	export var errorFlagId as ValueId
@@ -4706,15 +4705,15 @@ module type StdWitnessOperands
 	export var argFloatMask as ArgFloatMask
 	export var args as ValueIdArray
 
-	module static function create() returns StdWitnessOperands
+	static function create() returns StdWitnessOperands
 		return Self{shape: StdWitnessShape.other, resultId: 0, errorFlagId: 0, witnessAddr: 0, methodIndex: 0, resultIsVoid: false, resultIsFloat: false, argFloatMask: 0, args: ValueIdArray.create(0)}
 	end 'create'
 
-	module function isDispatch() returns bool
+	function isDispatch() returns bool
 		return self.shape != StdWitnessShape.other
 	end 'isDispatch'
 
-	module function throwsToAFlag() returns bool
+	function throwsToAFlag() returns bool
 		return self.shape == StdWitnessShape.throwingDispatch
 	end 'throwsToAFlag'
 
@@ -4736,7 +4735,7 @@ module type StdWitnessOperands
 	end 'recordDispatch'
 end 'StdWitnessOperands'
 
-module function classifyWitnessOperands(op StdOp, w StdWitnessOperands)
+function classifyWitnessOperands(op StdOp, w StdWitnessOperands)
 	match op 'c'
 		call or
 		tryCall or
@@ -5310,7 +5309,7 @@ export function collectFunctionValueUses(module StdModule, func IrFunction, refe
 	end 'eachBlock'
 end 'collectFunctionValueUses'
 
-export function collectBlockExitUses(module StdModule, block IrBlock, referenced StdValueUseSet)
+function collectBlockExitUses(module StdModule, block IrBlock, referenced StdValueUseSet)
 	if block.hasTerminatorOp() 'hasTerm'
 		collectStdOpUses(try module.ops.get(block.terminatorIndex()) otherwise panic("collectBlockExitUses: terminatorIndex not in module.ops"), referenced: referenced)
 	end 'hasTerm'
@@ -5519,7 +5518,7 @@ end 'maxValueId'
 // a payload-bearing union heap-boxes every case, and this is asked of every live op of a function by
 // `nextFreeValueId` (three passes), by every def-removing pass's `removeOpsDefining`, by LICM's loop-def
 // collect and by the inliner's clone check.
-module enum StdDefinedValueKind
+enum StdDefinedValueKind
 	// A terminator, a store or an effect op.
 	none
 
@@ -5584,7 +5583,7 @@ end 'StdDefinedValues'
 // ⚠ Moving a defining op into the `none` arm still compiles: it under-counts `nextFreeValueId`,
 // which then mints a live id. The `one` arm binds `resultId` at payload position 0 under `const`'s
 // name, so a variant joins it only if its def sits there.
-module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
+function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 	match op 'r'
 		const(resultId, _, _) then def.recordOne(resultId)
 		binOp(resultId, _, _, _, _) then def.recordOne(resultId)
@@ -5772,8 +5771,8 @@ end 'insertUseCalleeAndArgs'
 // rewritten to (and `v` itself where nothing changes). The mirror of `collectStdOpUses`: it
 // rewrites exactly the operands that one reports, so the two cannot drift. DEFS are left alone
 // (a def is not a use), and so are branch-edge args — those live on the predecessor's `IrBlock`,
-// not on the op, so rewriting them is `substituteValuesInFunc`'s job — and the reason this is
-// file-private where `remappedValue` beside it is not: a pass that reached the op rewrite directly
+// not on the op, so rewriting them is `substituteValuesInFunc`'s job — and the reason no pass calls
+// this where `remappedValue` beside it is called: a pass that reached the op rewrite directly
 // could perform half the substitution, which is the failure that function's header names. Its two
 // callers are both in THIS file — `substituteValuesInFunc` below, and, arm for arm, `cloneStdOp`, which
 // makes the same rewrite in one construction with the DEF and BLOCK-TARGET halves a clone additionally
@@ -5987,7 +5986,7 @@ end 'remapStdOpUses'
 // values a phi-folding pass ever rewrites), and an operand above it — an op result, a parameter —
 // is by definition not a block-arg and so is not being rewritten. Same discipline, and the same
 // reason, as `pruneDeadBlockArgs.flagOf`.
-module function remappedValue(v ValueId, subst ValueIdArray) returns ValueId
+function remappedValue(v ValueId, subst ValueIdArray) returns ValueId
 	return try subst.get(v) otherwise v
 end 'remappedValue'
 
@@ -5995,9 +5994,8 @@ end 'remappedValue'
 // id with every NEW slot standing for ITSELF.
 //
 // ⭐ **THE COLUMN'S BUILDER, BESIDE ITS READER AND ITS APPLIER.** `remappedValue` reads one entry and
-// `substituteValuesInFunc` applies the whole column; this is how an entry gets in. It was file-private
-// to `foldConstOperands` while that pass was the only builder — `eliminateCommonSubexpressions` is the
-// second, and a second copy would be a dense column whose `push`-not-`resize` trap and identity seed
+// `substituteValuesInFunc` applies the whole column; this is how an entry gets in. `foldConstOperands`
+// and `eliminateCommonSubexpressions` both build one, and a second copy would be a dense column whose `push`-not-`resize` trap and identity seed
 // nothing keeps in step with this one.
 //
 // ⚠ `resize` cannot build this column and the difference is a miscompile rather than a detail: it
@@ -6052,7 +6050,7 @@ export function compressValueSubstitutions(subst ValueIdArray)
 	end 'eachEntry'
 end 'compressValueSubstitutions'
 
-module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
+function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
 	let out = ValueIdArray.create(args.count(), zeroed: false)
 
 	for a in args 'each'
@@ -6109,20 +6107,20 @@ end 'remappedArgs'
 //   shared — a splice on the main thread inside ONE module: the clone reads the source op's box.
 //   owned  — a copy made on a pool worker: the payload is the clone's own, so the copy and its
 //            original can cross back in one reply.
-module enum ClonePayloads
+enum ClonePayloads
 	shared
 	owned
 end 'ClonePayloads'
 
-module type StdOpCloner
+type StdOpCloner
 	var def as StdDefinedValues
 	var verified as BoolArray
 
-	module static function create() returns StdOpCloner
+	static function create() returns StdOpCloner
 		return Self{def: StdDefinedValues.create(), verified: BoolArray.create(0)}
 	end 'create'
 
-	module function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, payloads ClonePayloads) returns StdOp
+	function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, payloads ClonePayloads) returns StdOp
 		let cloned = cloneStdOp(op, valueSubst: valueSubst, blockSubst: blockSubst, payloads: payloads)
 		let variant = op.ordinal
 		self.verified.growFilled(variant + 1, value: false)
@@ -6369,16 +6367,16 @@ end 'stdOpCloneRefusalName'
 // The column covers `0 .. nextFreeValueId(callee)`, so an id outside it is a column built against a
 // different function.
 //
-// ⚠ **`module`-VISIBLE BECAUSE THE SPLICE ITSELF ASKS IT TOO**, of the values no op carries — a copied
+// ⚠ **`InlineLeaves` CALLS IT TOO, BECAUSE THE SPLICE ITSELF ASKS IT**, of the values no op carries — a copied
 // block's phis and its outgoing edge args live on the `IrBlock`, not on any op, so `InlineLeaves` reaches
 // them past the cloner, through this one spelling of the column-bounds rule.
-module function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
+function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
 	return try subst.get(v) otherwise panic("cloneStdOp: callee value {v} is outside the {subst.count()}-entry value column this splice built — the column is sized by the callee's own `nextFreeValueId`, so an id past it means the op belongs to another function")
 end 'clonedValue'
 
 // A cloned terminator's block target, through the splice's dense block column: every copied callee
 // block maps to its fresh caller block.
-module function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
+function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
 	return try subst.get(id) otherwise panic("cloneStdOp: callee block id {id} is outside the {subst.count()}-entry block column this splice built — the column is sized by the callee's own `nextBlockId`")
 end 'clonedBlock'
 
@@ -6418,7 +6416,7 @@ end 'substituteValuesInFunc'
 // The per-block half of `substituteValuesInFunc` — the block's ops, its terminator and its outgoing
 // edge args — for a caller that rewrites a SUBSET of a function's blocks (`unswitchInvariantGuards`
 // rewrites the readers of an exit phi everywhere but inside the loop that defines the value).
-module function substituteValuesInBlock(module StdModule, block IrBlock, subst ValueIdArray)
+function substituteValuesInBlock(module StdModule, block IrBlock, subst ValueIdArray)
 	for opIdx in block.bodyOps() 'eachOp'
 		substituteOpUses(module, opIdx: opIdx, subst: subst)
 	end 'eachOp'
@@ -6432,7 +6430,7 @@ end 'substituteValuesInBlock'
 
 // The op half, on its own for a caller that holds the READ SITES of the values it rewrites
 // (`unswitchInvariantGuards` indexes them) and so touches only the ops that read one.
-module function substituteOpUses(module StdModule, opIdx ElementIndex, subst ValueIdArray)
+function substituteOpUses(module StdModule, opIdx ElementIndex, subst ValueIdArray)
 	let op = module.getOp(opIdx)
 	try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInBlock: ops.set({opIdx}) OOB")
 end 'substituteOpUses'
@@ -6445,7 +6443,7 @@ end 'substituteOpUses'
 // a function with dozens of edges, so almost every one of those rebuilds produced a column
 // identical to the one it replaced. The test below is the same walk over the same args and
 // allocates nothing, so asking first is strictly cheaper than rebuilding blind.
-module function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
+function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 	if not anyEdgeArgIsRemapped(block, subst: subst) 'edgesUnchanged'
 		return
 	end 'edgesUnchanged'
@@ -6494,7 +6492,7 @@ end 'anyEdgeArgIsRemapped'
 // ⚠ It removes from `block.opRefs` only. A TERMINATOR is never doomed by any caller (a const and an
 // identity `binOpImm` are body ops, and CSE's roster answers `neither` for every control op), and
 // removing one would leave a block with no exit at all.
-module function removeOpsDefining(module StdModule, func IrFunction, doomed StdValueUseSet)
+function removeOpsDefining(module StdModule, func IrFunction, doomed StdValueUseSet)
 	if doomed.isEmpty() 'nothingDoomed'
 		return
 	end 'nothingDoomed'
@@ -6817,11 +6815,11 @@ export function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 
-export typealias PredecessorCounts = Array with ElementIndex
+typealias PredecessorCounts = Array with ElementIndex
 
 // Counts the edges terminators draw into each block id; the function entry's own entry is not an edge
 // and is not counted.
-export function stdPredecessorCounts(module StdModule, func IrFunction) returns PredecessorCounts
+function stdPredecessorCounts(module StdModule, func IrFunction) returns PredecessorCounts
 	let counts = PredecessorCounts.create(func.nextBlockId as ElementIndex)
 	let successors = BlockIdArray.create(0)
 
@@ -6868,13 +6866,13 @@ end 'pushSwitchTargets'
 // roster and answers a question that walk cannot: the successor list of a `condBranch` names its arms
 // but not the CONDITION, and a `switch` with one dense arm has the same two successors a `condBranch`
 // has.
-module enum StdBranchShape
+enum StdBranchShape
 	other
 	branch
 	condBranch
 end 'StdBranchShape'
 
-export type StdBranchOperands
+type StdBranchOperands
 	var shape as StdBranchShape
 
 	// `branch` only.
@@ -6885,7 +6883,7 @@ export type StdBranchOperands
 	export var thenBlockId as BlockId
 	export var elseBlockId as BlockId
 
-	export static function create() returns StdBranchOperands
+	static function create() returns StdBranchOperands
 		return Self{shape: StdBranchShape.other, targetBlockId: 0, condId: 0, thenBlockId: 0, elseBlockId: 0}
 	end 'create'
 
@@ -6914,7 +6912,7 @@ export type StdBranchOperands
 	end 'isCondBranch'
 end 'StdBranchOperands'
 
-module function classifyBranch(op StdOp, out StdBranchOperands)
+function classifyBranch(op StdOp, out StdBranchOperands)
 	match op 'term'
 		const or
 		binOp or

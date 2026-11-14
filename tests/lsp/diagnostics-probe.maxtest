@@ -3,20 +3,20 @@
 //
 // The client, the release discipline and the SUBJECT/RUNNER split are `LspClient.maxon`'s.
 
-export typealias SymbolTally = int(0 to i64.max)
+typealias SymbolTally = int(0 to i64.max)
 
-export typealias PublishedDiagnosticsArray = Array with PublishedDiagnostics
+typealias PublishedDiagnosticsArray = Array with PublishedDiagnostics
 
-export let DiagnosticsUri = "file:///diagnostics-publish.maxon"
+let DiagnosticsUri = "file:///diagnostics-publish.maxon"
 
 // LSP's `DiagnosticSeverity.Error`, the severity of every compiler `Diagnostic`: it carries no
 // severity field, and any diagnostic at all fails the build.
-export let PublishedErrorSeverity = 1 as DiagnosticSeverityCode
+let PublishedErrorSeverity = 1 as DiagnosticSeverityCode
 
-export let PublishedInformationSeverity = 3 as DiagnosticSeverityCode
+let PublishedInformationSeverity = 3 as DiagnosticSeverityCode
 
 // The `source` every published diagnostic carries, and what an editor groups them under.
-export let MaxonDiagnosticSource = "maxon"
+let MaxonDiagnosticSource = "maxon"
 
 // The two documents three files in this family drive, side by side because they differ in exactly one
 // word: `main` returns `ExitCode` in one and a bare `int` in the other. One pair rather than a pair per
@@ -25,7 +25,7 @@ export let MaxonDiagnosticSource = "maxon"
 // ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, no
 // indentation stripped or added and no trailing newline. `diagnostics-ranges.maxtest` counts a column
 // ruler against the broken one.
-export function compilingDocument() returns String
+function compilingDocument() returns String
 	return String.from(b"typealias LspDiagnosticsProbe = int(0 to 100)
 
 function main() returns ExitCode
@@ -34,7 +34,7 @@ function main() returns ExitCode
 end 'main'")
 end 'compilingDocument'
 
-export function brokenDocument() returns String
+function brokenDocument() returns String
 	return String.from(b"typealias LspDiagnosticsProbe = int(0 to 100)
 
 function main() returns int
@@ -44,7 +44,7 @@ end 'main'")
 end 'brokenDocument'
 
 // One step of a session, in the order a script lists them.
-export union SessionStep
+union SessionStep
 	open(content String)
 	change(content String, version DocumentVersion)
 	close
@@ -55,20 +55,20 @@ export union SessionStep
 	takeSymbolCount
 end 'SessionStep'
 
-export typealias SessionStepArray = Array with SessionStep
+typealias SessionStepArray = Array with SessionStep
 
 // LSP requires a document's version to increase; it does not say where it starts.
-export let BrokenEditVersion = 2 as DocumentVersion
-export let FixedEditVersion = 3 as DocumentVersion
+let BrokenEditVersion = 2 as DocumentVersion
+let FixedEditVersion = 3 as DocumentVersion
 
-export union SessionOutcome
+union SessionOutcome
 	observed(symbolCount SymbolTally, publishes PublishedDiagnosticsArray)
 	broke(detail String)
 end 'SessionOutcome'
 
 // Run `script` against a fresh server and hand back what it observed. The client is released before the
 // outcome is returned, so an `Expect` that throws cannot skip the release.
-export function runSession(script SessionStepArray) returns SessionOutcome
+function runSession(script SessionStepArray) returns SessionOutcome
 	let client = LspClient.start()
 	let outcome = collectSession(client, script: script)
 	client.release()
@@ -112,7 +112,7 @@ end 'openSymbolCount'
 
 // --- Reading an outcome -----------------------------------------------------------------------
 
-export function observedPublishes(outcome SessionOutcome, what String) returns PublishedDiagnosticsArray throws TestFailure
+function observedPublishes(outcome SessionOutcome, what String) returns PublishedDiagnosticsArray throws TestFailure
 	match outcome 'session'
 		observed(_, publishes) then return publishes
 		broke(detail) then try Expect.fail("{what} published nothing this test could read: {detail}. An editor learns about an error ONLY from this notification — there is no request it can send to ask.")
@@ -121,7 +121,7 @@ export function observedPublishes(outcome SessionOutcome, what String) returns P
 	panic("observedPublishes: the `broke` arm always throws, so this line is unreachable")
 end 'observedPublishes'
 
-export function publishAt(publishes PublishedDiagnosticsArray, index SymbolTally) returns PublishedDiagnostics throws TestFailure
+function publishAt(publishes PublishedDiagnosticsArray, index SymbolTally) returns PublishedDiagnostics throws TestFailure
 	return try publishes.get(index as ElementIndex) otherwise 'missing'
 		try Expect.fail("the session observed {publishes.count()} publish(es), and this assertion needs the one at {index}.")
 		panic("publishAt: `Expect.fail` always throws")
@@ -129,7 +129,7 @@ export function publishAt(publishes PublishedDiagnosticsArray, index SymbolTally
 end 'publishAt'
 
 // Open `document`, take the one publish it produces, and hand back its items.
-export function publishedFor(document String, what String) returns PublishedDiagnosticArray throws TestFailure
+function publishedFor(document String, what String) returns PublishedDiagnosticArray throws TestFailure
 	let script = [SessionStep.open(document), SessionStep.takePublish]
 	return (try publishAt(try observedPublishes(runSession(script), what: what), index: 0)).items
 end 'publishedFor'
@@ -137,7 +137,7 @@ end 'publishedFor'
 // The single diagnostic a fixture must publish. ⭐ The COUNT is asserted, not merely the presence: a
 // publish carrying a second diagnostic is one the compiler does not raise for a `maxon build` of the same
 // text, and reading element 0 alone would hide it.
-export function onlyPublishedDiagnostic(document String, what String) returns PublishedDiagnostic throws TestFailure
+function onlyPublishedDiagnostic(document String, what String) returns PublishedDiagnostic throws TestFailure
 	let items = try publishedFor(document, what: what)
 
 	try Expect.equal(items.count(), expected: 1, message: "{what} must publish exactly ONE diagnostic. A second one is something a `maxon build` of the same text does not report, and reading element 0 alone would hide it.")

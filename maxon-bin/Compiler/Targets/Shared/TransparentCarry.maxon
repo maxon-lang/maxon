@@ -2,7 +2,7 @@
 // that visits every block once in ascending order: a run enters the census at its first block and
 // leaves after its last, so it costs two edits rather than one per block it covers. A block's sweep
 // adds only its explicit values on top (`seedSweepRow`) and takes them back out (`finishSweepRow`).
-export type TransparentCarry
+type TransparentCarry
 	var track as bool
 	var next as ElementIndex
 	var startOffsets as CfgIndexArray
@@ -12,11 +12,11 @@ export type TransparentCarry
 	var endCursor as CfgIndexArray
 	var endValues as ValueIdArray
 
-	export static function create() returns TransparentCarry
+	static function create() returns TransparentCarry
 		return Self{track: false, next: 0, startOffsets: CfgIndexArray.create(0), startCursor: CfgIndexArray.create(0), startValues: ValueIdArray.create(0), endOffsets: CfgIndexArray.create(0), endCursor: CfgIndexArray.create(0), endValues: ValueIdArray.create(0)}
 	end 'create'
 
-	export function begin(liveness LivenessResult, census RegPoolCensus, pool RegMask, carrying bool)
+	function begin(liveness LivenessResult, census RegPoolCensus, pool RegMask, carrying bool)
 		self.track = carrying
 		self.next = 0
 
@@ -63,7 +63,7 @@ export type TransparentCarry
 		end 'placeEvents'
 	end 'begin'
 
-	export function advanceTo(blockLocal ElementIndex, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn)
+	function advanceTo(blockLocal ElementIndex, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn)
 		if blockLocal != self.next 'outOfOrder'
 			panic("TransparentCarry.advanceTo: block {blockLocal} asked for when block {self.next} is next — the carried census is only valid when every block is visited once, in ascending order")
 		end 'outOfOrder'

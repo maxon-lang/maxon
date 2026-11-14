@@ -20,7 +20,7 @@
 // ==========================================================================
 
 // `dest = handle >> 48` — the kind field, for the two ops that dispatch on it.
-export function arm64PosixHandleKind(asm Arm64RuntimeAsm, dest Arm64Register, handle Arm64Register)
+function arm64PosixHandleKind(asm Arm64RuntimeAsm, dest Arm64Register, handle Arm64Register)
 	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(handle), sh: PosixHandleKindShift)
 end 'arm64PosixHandleKind'
 
@@ -31,14 +31,14 @@ end 'arm64PosixHandleKind'
 // compile error: `lsl #48` keeps the low SIXTEEN bits of a pointer, so every handle became a small integer
 // and the first field store through one segfaulted. Derived from the two rather than written down, so the
 // pair cannot come apart.
-export function arm64PosixUntagHandle(asm Arm64RuntimeAsm, reg Arm64Register)
+function arm64PosixUntagHandle(asm Arm64RuntimeAsm, reg Arm64Register)
 	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: PosixHandleKindBits)
 	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: PosixHandleKindBits)
 end 'arm64PosixUntagHandle'
 
 // `reg = reg | (kindObject << 48)` — what `mrt_host_wait_new` hands back, so every object handle in the
 // program carries its kind from the moment it exists.
-export function arm64PosixTagObject(asm Arm64RuntimeAsm, reg Arm64Register, scratch Arm64Register)
+function arm64PosixTagObject(asm Arm64RuntimeAsm, reg Arm64Register, scratch Arm64Register)
 	arm64EmitMovRuntimeImm(asm, dest: scratch, value: PosixHandleKindObject * PosixHandleKindUnit)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: reg, lhs: reg, rhs: scratch)
 end 'arm64PosixTagObject'
@@ -62,7 +62,7 @@ end 'arm64PosixTagObject'
 //
 // ⚠ It clobbers x1..x5 and ENDS by branching to `finish`; the caller places that label and loads its own
 // answer out of `writtenSlot`.
-export function arm64PosixEmitEnvValueCopy(asm Arm64RuntimeAsm, valueSlot StackSize, bufPtrSlot StackSize, bufLenSlot StackSize, writtenSlot StackSize, finish BlockId)
+function arm64PosixEmitEnvValueCopy(asm Arm64RuntimeAsm, valueSlot StackSize, bufPtrSlot StackSize, bufLenSlot StackSize, writtenSlot StackSize, finish BlockId)
 	let copyLoop = asm.newLabel()
 	let tooSmall = asm.newLabel()
 
@@ -128,7 +128,7 @@ end 'arm64PosixEmitEnvValueCopy'
 // (`mov x2, x2` when a caller does pass x2 is a self-move the encoder emits and the CPU discards.)
 //
 // ⚠ It CLOBBERS x1..x4. Every caller places its own arguments after it, never before.
-export function arm64PosixToTimespec(asm Arm64RuntimeAsm, amount Arm64Register, unit PosixTimeUnit, secSlot StackSize, nsecSlot StackSize)
+function arm64PosixToTimespec(asm Arm64RuntimeAsm, amount Arm64Register, unit PosixTimeUnit, secSlot StackSize, nsecSlot StackSize)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: amount)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: posixUnitsPerSecond(unit))
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x3, lhs: Arm64Register.x2, rhs: Arm64Register.x1)
@@ -154,7 +154,7 @@ end 'arm64PosixToTimespec'
 // `fd` out of x1 writes the zeroing cursor — a stack address — where the descriptor should be. MEASURED: that
 // is what made arm64-macos refuse every `kevent` registration, and the chunk answered a bare `-1` so the
 // reason never surfaced. The two Darwin arm chunks store x1 to a slot first and reload it here.
-export function arm64EmitZeroSlots(asm Arm64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
+function arm64EmitZeroSlots(asm Arm64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
 	let step = asm.newLabel()
 	let zeroed = asm.newLabel()
 
@@ -184,7 +184,7 @@ end 'arm64EmitZeroSlots'
 // ⚠ It tests the whole 64-bit register against zero, so the widening is the caller's: a Darwin
 // libSystem call answers a C `int` whose upper half AAPCS64 leaves unspecified
 // (`arm64DarwinCallImportAnswering`), while a Linux `svc` answers a full 64-bit `-errno`.
-export function arm64EmitWin32BoolFromZeroStatus(asm Arm64RuntimeAsm)
+function arm64EmitWin32BoolFromZeroStatus(asm Arm64RuntimeAsm)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixCallSucceeded as Imm32)
 	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), cond: Arm64CondCode.eq)
 end 'arm64EmitWin32BoolFromZeroStatus'
@@ -205,7 +205,7 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 //
 // `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
 // busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
-export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock FullRangeInt, dirNotEmpty FullRangeInt)
+function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock FullRangeInt, dirNotEmpty FullRangeInt)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
@@ -296,7 +296,7 @@ end 'arm64EmitErrnoToWin32'
 // NON-ZERO answer means a terminal; Linux asks `ioctl(TCGETS)`, whose ZERO status does. Both compare against
 // 0, so the comparison is here and only the condition crosses the boundary — folding either polarity into
 // this body would make the other lane's call site read as its own opposite.
-export function arm64EmitFileTypeFromStatus(asm Arm64RuntimeAsm, terminalWhen Arm64CondCode)
+function arm64EmitFileTypeFromStatus(asm Arm64RuntimeAsm, terminalWhen Arm64CondCode)
 	let terminal = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -321,7 +321,7 @@ end 'arm64EmitFileTypeFromStatus'
 // `clock_gettime` answers a `timespec`, whose SECONDS half is exactly this conversion and whose nanoseconds
 // half is one `udiv` by `posixNanosPerFileTimeTick()` on top. The Darwin wall clock reads nanoseconds outright
 // and so does the division alone — it is the one caller of that constant that needs no seconds step.
-export function arm64EmitSecondsToFileTime(asm Arm64RuntimeAsm, reg Arm64Register, scratch Arm64Register)
+function arm64EmitSecondsToFileTime(asm Arm64RuntimeAsm, reg Arm64Register, scratch Arm64Register)
 	arm64EmitMovRuntimeImm(asm, dest: scratch, value: FileTimeTicksPerSecond as MachineWord)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: reg, lhs: reg, rhs: scratch)
 	arm64EmitMovRuntimeImm(asm, dest: scratch, value: FileTimeTicksFrom1601To1970 as MachineWord)
@@ -345,7 +345,7 @@ end 'arm64EmitSecondsToFileTime'
 
 // Where a path's FINAL COMPONENT starts: just past the last `/`, or the path itself when it has none. It is a
 // pointer INTO the caller's string and owns nothing.
-export function buildArm64PosixBaseNameChunk() returns FunctionCodeChunk
+function buildArm64PosixBaseNameChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let step = asm.newLabel()
@@ -376,7 +376,7 @@ end 'buildArm64PosixBaseNameChunk'
 // directory would otherwise be linear in that directory — and MORE FAITHFUL: `FindFirstFileW` matches a
 // literal name the way the FILESYSTEM does, which on a case-insensitive volume is case-insensitively, while
 // both lanes' pattern matchers are case-sensitive. Handing the literal to `stat` lets the filesystem answer.
-export function buildArm64PosixHasWildcardChunk() returns FunctionCodeChunk
+function buildArm64PosixHasWildcardChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let step = asm.newLabel()
@@ -417,7 +417,7 @@ end 'buildArm64PosixHasWildcardChunk'
 // ⚠ **READ-ONLY IS THE OWNER'S WRITE BIT AND NOTHING FINER.** POSIX has three write bits and Win32 has one
 // flag; the owner's is the one that decides whether the process that just created the file can write it,
 // which is the question `readOnly` is asked to answer.
-export function buildArm64PosixAttrsFromModeChunk(layout PosixStatLayout) returns FunctionCodeChunk
+function buildArm64PosixAttrsFromModeChunk(layout PosixStatLayout) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: layout.modeOffset)
@@ -455,7 +455,7 @@ end 'buildArm64PosixAttrsFromModeChunk'
 // ⚠ **THE TWO SIZE DWORDS ARE ONE UNALIGNED 64-BIT STORE**, and the halves are swapped to get there:
 // `nFileSizeHigh` sits at 28 and `nFileSizeLow` at 32, so on a little-endian machine the word that lands
 // correctly is `(low << 32) | high` — a 64-bit rotate of the size by 32.
-export function buildArm64PosixFillFindDataChunk(layout PosixStatLayout) returns FunctionCodeChunk
+function buildArm64PosixFillFindDataChunk(layout PosixStatLayout) returns FunctionCodeChunk
 	let SlotFindData = 0
 	let SlotStat = 1
 	let SlotName = 2
@@ -526,7 +526,7 @@ end 'arm64PosixFillFindDataTime'
 // The route fork, as data rather than as a second copy of a body — the runtime-chunk twin of
 // `StdToArm64Conversion.hostCalleeOn`. The two lanes reach the identical primitive through
 // different doors, and a body written twice around that difference drifts.
-export union PosixHostCall
+union PosixHostCall
 	// A GOT-indirect libSystem call — the arm64-macOS route, where every primitive in this band is a libc
 	// function.
 	importCall(slot OsImportSlot)
@@ -543,7 +543,7 @@ function arm64PosixEmitHostCall(asm Arm64RuntimeAsm, call PosixHostCall)
 	end 'route'
 end 'arm64PosixEmitHostCall'
 
-module function arm64PosixEmitHostCallErrno(asm Arm64RuntimeAsm, call PosixHostCall)
+function arm64PosixEmitHostCallErrno(asm Arm64RuntimeAsm, call PosixHostCall)
 	arm64PosixEmitHostCall(asm, call: call)
 	arm64PosixEmitErrnoAnswer(asm, call: call)
 end 'arm64PosixEmitHostCallErrno'
@@ -585,7 +585,7 @@ function arm64PosixEmitPublishErrno(asm Arm64RuntimeAsm, call PosixHostCall, val
 	end 'route'
 end 'arm64PosixEmitPublishErrno'
 
-export function arm64EmitImportAnswerWidth(asm Arm64RuntimeAsm, slot OsImportSlot)
+function arm64EmitImportAnswerWidth(asm Arm64RuntimeAsm, slot OsImportSlot)
 	let answer = osImportAnswerOf(slot)
 
 	match answer 'width'
@@ -621,7 +621,7 @@ end 'arm64EmitDwordWidening'
 // GUARANTEE STRUCTURAL.** The scheduler's deadlines come from that chunk; a second, independent read here
 // would be a second clock choice that can silently become a different clock. The conversion is DERIVED from the frequency that chunk reports rather than assuming the
 // 1e9 both lanes happen to answer today, so a lane that ever reports raw counter ticks needs no edit here.
-export function buildArm64PosixTickMsChunk() returns FunctionCodeChunk
+function buildArm64PosixTickMsChunk() returns FunctionCodeChunk
 	let SlotTicks = 0
 	let SlotFreq = 1
 	let asm = Arm64RuntimeAsm.beginFunction(2)
@@ -664,7 +664,7 @@ end 'buildArm64PosixTickMsChunk'
 // `mrt_host_last_error` reads it, so the spawn that gives up reports why. A pipe cannot answer
 // descriptor 0 in a process that still holds its standard streams, so a real end is never mistaken
 // for the absence of one.
-export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) returns FunctionCodeChunk
+function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) returns FunctionCodeChunk
 	let SlotReadOut = 0
 	let SlotWriteOut = 1
 	let SlotFds = 2
@@ -764,7 +764,7 @@ function arm64PosixEmitEnsureStdDescriptor(asm Arm64RuntimeAsm, globalData Globa
 	asm.placeLabel(present)
 end 'arm64PosixEmitEnsureStdDescriptor'
 
-export function buildArm64PosixCheckStdFdsChunk(globalData GlobalDataTable, os Os, fcntl PosixHostCall, open PosixHostCall) returns FunctionCodeChunk
+function buildArm64PosixCheckStdFdsChunk(globalData GlobalDataTable, os Os, fcntl PosixHostCall, open PosixHostCall) returns FunctionCodeChunk
 	let asm = arm64PosixBeginCheckStdFdsFrame(fcntl, open: open)
 
 	let refused = asm.newLabel()
@@ -790,7 +790,7 @@ end 'buildArm64PosixCheckStdFdsChunk'
 
 // `PeekNamedPipe` — "are there bytes to read, without committing to a read". `PosixPipeReadyBytes` above
 // carries the whole argument for the count this answers and for where EOF is reported.
-export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns FunctionCodeChunk
+function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns FunctionCodeChunk
 	let SlotAvailOut = 0
 	let SlotPollfd = 1
 	let SlotTsSec = 2
@@ -856,7 +856,7 @@ end 'buildArm64PosixPipePeekChunk'
 //
 // This is a union rather than two parameters because the route and the timeout's shape are ONE fact: there is
 // no lane that spells the call one way and the timeout the other.
-export union PosixPollCall
+union PosixPollCall
 	// `poll(fds, 1, 0)` — libSystem's.
 	pollImport(slot OsImportSlot)
 
@@ -897,14 +897,14 @@ end 'arm64PosixEmitPollWasInterrupted'
 //
 // libSystem answers -1 and keeps the number in the thread-local `*__error()`, so the result
 // register cannot carry it. ⚠ It CLOBBERS x0, which every caller has already finished with.
-export function arm64PosixEmitDarwinBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
+function arm64PosixEmitDarwinBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
 	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x1)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrno.interrupted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
 end 'arm64PosixEmitDarwinBranchIfEintr'
 
 // A raw `svc` answers the NEGATED number in the result register itself, so there is no accessor to call.
-export function arm64PosixEmitSyscallBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
+function arm64PosixEmitSyscallBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.interrupted.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
 end 'arm64PosixEmitSyscallBranchIfEintr'
@@ -927,7 +927,7 @@ end 'arm64EmitBranchIfInterrupted'
 
 // For a libSystem call whose failure is -1: the errno read clobbers x0, so a failure other than `EINTR`
 // answers -1 again.
-export function arm64PosixEmitDarwinFailureBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
+function arm64PosixEmitDarwinFailureBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
 	let answered = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -974,7 +974,7 @@ let PosixReapBaseSlots = 4 as StackSize
 // holds no other child of ours, because every child leads its own. A peek that errors (the child
 // left its group) falls back to the pid, and a blocking reap that sees a stop sleeps
 // `PosixChildPollMs` before peeking again. `childAlone` is Darwin's, whose runtime traces no child.
-export union PosixReapScope
+union PosixReapScope
 	childAlone
 	childAndItsTracees(peek PosixHostCall)
 end 'PosixReapScope'
@@ -1095,7 +1095,7 @@ end 'arm64PosixEmitTraceeReapOperands'
 // ⚠ **x3 IS SET FOR A FOURTH ARGUMENT ONLY ONE ROUTE HAS.** Linux's `wait4` takes a `struct rusage *` there
 // and NULL discards it; Darwin's `waitpid` is a three-argument call that never reads the register. Setting it
 // on both is one instruction and is what lets the two share this body.
-export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReapScope) returns FunctionCodeChunk
+function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReapScope) returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotBlocking = 1
 	let SlotStatus = 2
@@ -1211,7 +1211,7 @@ let SpinPauseNanosFractionShift = 4
 
 // The opening `ISB` is charged 18 ns of the delay in `x0`; the rest becomes `CNTVCT` ticks as
 // `(ns + ns/16) * CNTFRQ >> 30`, which is `ns * CNTFRQ / 1e9` about 1% short.
-module function arm64EmitProcyield(asm Arm64RuntimeAsm)
+function arm64EmitProcyield(asm Arm64RuntimeAsm)
 	let delay = asm.newLabel()
 	let done = asm.newLabel()
 
@@ -1237,7 +1237,7 @@ module function arm64EmitProcyield(asm Arm64RuntimeAsm)
 	asm.placeLabel(done)
 end 'arm64EmitProcyield'
 
-export function buildArm64PosixSpinPauseChunk() returns FunctionCodeChunk
+function buildArm64PosixSpinPauseChunk() returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitProcyield(asm)
@@ -1270,7 +1270,7 @@ end 'buildArm64PosixSpinPauseChunk'
 // that does NOT go through the poller's child band, which every other one does.
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL**, which is why one body serves both lanes: two `bl`s and a compare.
-export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
+function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotTimeout = 1
 	let SlotDeadline = 2
@@ -1337,7 +1337,7 @@ end 'buildArm64PosixProcAwaitChunk'
 //
 // ⚠ **A REAP THAT CANNOT HAPPEN LEAVES THE CACHED STATUS UNTOUCHED**, which is 0 for a handle whose child
 // another process took; there is no route in this runtime that reaps a child twice.
-export function buildArm64PosixProcExitCodeChunk() returns FunctionCodeChunk
+function buildArm64PosixProcExitCodeChunk() returns FunctionCodeChunk
 	let SlotCodeOut = 0
 	let SlotObj = 1
 	let asm = Arm64RuntimeAsm.beginFunction(2)
@@ -1352,7 +1352,7 @@ end 'buildArm64PosixProcExitCodeChunk'
 
 // `mrt_host_proc_exit_signal(x0 = handle) -> x0 = signal | 0` — the signal the reap recorded, 0 for a child
 // no signal ended. The reap and its cached-status rule are the exit-code read's.
-export function buildArm64PosixProcExitSignalChunk() returns FunctionCodeChunk
+function buildArm64PosixProcExitSignalChunk() returns FunctionCodeChunk
 	let SlotObj = 0
 	let asm = Arm64RuntimeAsm.beginFunction(1)
 
@@ -1400,7 +1400,7 @@ end 'arm64PosixEmitReapedField'
 //
 // ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
 // record whose pid was never filled would kill this process and every sibling it shares a group with.
-export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
+function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotCode = 1
 	let SlotTreeBit = 2
@@ -1511,7 +1511,7 @@ function arm64PosixEmitGroupKillVerdict(asm Arm64RuntimeAsm, kill PosixHostCall,
 	arm64EmitBranchTo(asm, label: refusedTo)
 end 'arm64PosixEmitGroupKillVerdict'
 
-export union PosixTreeLane
+union PosixTreeLane
 	linux(errnoHome LinuxErrnoHome)
 	macos
 end 'PosixTreeLane'
@@ -1554,7 +1554,7 @@ function arm64PosixEmitSignalMember(asm Arm64RuntimeAsm, kill PosixHostCall, sig
 	asm.placeLabel(accepted)
 end 'arm64PosixEmitSignalMember'
 
-export function arm64PosixEmitTreeStopOrBranchIfRefused(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize, refused BlockId)
+function arm64PosixEmitTreeStopOrBranchIfRefused(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize, refused BlockId)
 	let stopped = asm.newLabel()
 
 	arm64PosixEmitSignalMember(asm, kill: kill, signal: posixTreeStopSignal(lane), pidSlot: pidSlot, gone: stopped, refused: refused)
@@ -1562,7 +1562,7 @@ export function arm64PosixEmitTreeStopOrBranchIfRefused(asm Arm64RuntimeAsm, kil
 	asm.placeLabel(stopped)
 end 'arm64PosixEmitTreeStopOrBranchIfRefused'
 
-export function arm64PosixEmitTreeStop(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize)
+function arm64PosixEmitTreeStop(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize)
 	let continued = asm.newLabel()
 
 	arm64PosixEmitTreeStopOrBranchIfRefused(asm, kill: kill, lane: lane, pidSlot: pidSlot, refused: continued)
@@ -1591,14 +1591,14 @@ function arm64PosixEmitStashSessionFailure(asm Arm64RuntimeAsm, lane PosixTreeLa
 	end 'lane'
 end 'arm64PosixEmitStashSessionFailure'
 
-export function arm64PosixEmitTreeSessionMismatch(asm Arm64RuntimeAsm, sessionReg Arm64Register, stateSlot StackSize, mismatch BlockId)
+function arm64PosixEmitTreeSessionMismatch(asm Arm64RuntimeAsm, sessionReg Arm64Register, stateSlot StackSize, mismatch BlockId)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateSession as MachineWord)
 	arm64EmitCmpRuntimeReg(asm, lhs: sessionReg, rhs: Arm64Register.x5)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: mismatch)
 end 'arm64PosixEmitTreeSessionMismatch'
 
-export function arm64PosixEmitTreeAdoptSession(asm Arm64RuntimeAsm, sessionReg Arm64Register, stateSlot StackSize)
+function arm64PosixEmitTreeAdoptSession(asm Arm64RuntimeAsm, sessionReg Arm64Register, stateSlot StackSize)
 	let known = asm.newLabel()
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
@@ -1611,7 +1611,7 @@ export function arm64PosixEmitTreeAdoptSession(asm Arm64RuntimeAsm, sessionReg A
 	asm.placeLabel(known)
 end 'arm64PosixEmitTreeAdoptSession'
 
-export function arm64PosixEmitTreeMembership(asm Arm64RuntimeAsm, valueReg Arm64Register, stateSlot StackSize, found BlockId, missing BlockId)
+function arm64PosixEmitTreeMembership(asm Arm64RuntimeAsm, valueReg Arm64Register, stateSlot StackSize, found BlockId, missing BlockId)
 	let walk = asm.newLabel()
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
@@ -1631,7 +1631,7 @@ export function arm64PosixEmitTreeMembership(asm Arm64RuntimeAsm, valueReg Arm64
 	arm64EmitBranchTo(asm, label: walk)
 end 'arm64PosixEmitTreeMembership'
 
-export function arm64PosixEmitTreeMarkFailed(asm Arm64RuntimeAsm, stateSlot StackSize)
+function arm64PosixEmitTreeMarkFailed(asm Arm64RuntimeAsm, stateSlot StackSize)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x4, byteOffset: PosixTreeStateStatus as MachineWord)
@@ -1642,7 +1642,7 @@ function arm64PosixEmitInlineTreeMarkFailed(asm Arm64RuntimeAsm, stateSlot Stack
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: stateSlot + PosixTreeFieldStatus)
 end 'arm64PosixEmitInlineTreeMarkFailed'
 
-export function arm64PosixEmitTreeAppend(asm Arm64RuntimeAsm, lane PosixTreeLane, kind PosixProcWalkKind, stateSlot StackSize, pidSlot StackSize, refused BlockId)
+function arm64PosixEmitTreeAppend(asm Arm64RuntimeAsm, lane PosixTreeLane, kind PosixProcWalkKind, stateSlot StackSize, pidSlot StackSize, refused BlockId)
 	let hasRoom = asm.newLabel()
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
@@ -1740,31 +1740,31 @@ function arm64PosixEmitTreeKillThenAwaitEnded(asm Arm64RuntimeAsm, kill PosixHos
 	arm64EmitBranchTo(asm, label: release)
 end 'arm64PosixEmitTreeKillThenAwaitEnded'
 
-export function arm64PosixReadsTickClock(usage RuntimeUsage) returns bool
+function arm64PosixReadsTickClock(usage RuntimeUsage) returns bool
 	return posixReadsMonotonicClock(usage) or posixUsesProcessEndWait(usage)
 end 'arm64PosixReadsTickClock'
 
-export function arm64PosixEmitDeadlineFromBudget(asm Arm64RuntimeAsm, budgetSlot StackSize)
+function arm64PosixEmitDeadlineFromBudget(asm Arm64RuntimeAsm, budgetSlot StackSize)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: budgetSlot)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: budgetSlot)
 end 'arm64PosixEmitDeadlineFromBudget'
 
-export function arm64PosixEmitEndedDeadline(asm Arm64RuntimeAsm, deadlineSlot StackSize)
+function arm64PosixEmitEndedDeadline(asm Arm64RuntimeAsm, deadlineSlot StackSize)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ProcessEndBoundMs as MachineWord)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: deadlineSlot)
 	arm64PosixEmitDeadlineFromBudget(asm, budgetSlot: deadlineSlot)
 end 'arm64PosixEmitEndedDeadline'
 
-export function arm64PosixEmitBranchIfPastDeadline(asm Arm64RuntimeAsm, deadlineSlot StackSize, past BlockId)
+function arm64PosixEmitBranchIfPastDeadline(asm Arm64RuntimeAsm, deadlineSlot StackSize, past BlockId)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: deadlineSlot)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: past)
 end 'arm64PosixEmitBranchIfPastDeadline'
 
-export function arm64PosixEmitSleepUnlessPast(asm Arm64RuntimeAsm, deadlineSlot StackSize, past BlockId)
+function arm64PosixEmitSleepUnlessPast(asm Arm64RuntimeAsm, deadlineSlot StackSize, past BlockId)
 	arm64PosixEmitBranchIfPastDeadline(asm, deadlineSlot: deadlineSlot, past: past)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
@@ -1784,7 +1784,7 @@ function arm64PosixEmitBranchIfPidEnded(asm Arm64RuntimeAsm, lane PosixTreeLane,
 	end 'lane'
 end 'arm64PosixEmitBranchIfPidEnded'
 
-export function buildArm64PosixProcAwaitEndedChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
+function buildArm64PosixProcAwaitEndedChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotList = 0
 	let SlotCount = 1
 	let SlotIndex = 2
@@ -1869,7 +1869,7 @@ end 'buildArm64PosixProcAwaitEndedChunk'
 // stashed last. On macOS a member that never confirms its stop marks
 // the walk failed once the pass is done: it may have forked a child the walk missed, which nothing
 // later would see.
-export function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
+function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotState = 0
 	let SlotRoot = SlotState + PosixTreeStateWords
 	let SlotBefore = SlotRoot + 1
@@ -1990,7 +1990,7 @@ end 'arm64PosixEmitDescendantName'
 // Verb `end` answers the byte count the report needs (more than the buffer holds is a short buffer and
 // every descendant is ended all the same), or `-DescendantsEnumerationFailed` when the walk could not list
 // every process; any other verb is `track`, which the lane answers by arranging for orphans to stay findable.
-export function buildArm64PosixProcDescendantsChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
+function buildArm64PosixProcDescendantsChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotState = 0
 	let SlotRoot = SlotState + PosixTreeStateWords
 	let SlotBefore = SlotRoot + 1
@@ -2181,7 +2181,7 @@ end 'buildArm64PosixProcDescendantsChunk'
 // kernel still lists after it has ended, a zombie, answers `PosixProbeEndedAnswer`: the predicate is
 // the one the tree kill waits on (`arm64PosixEmitBranchIfPidEnded`), so `Process.isAlive` and the
 // tree kill agree on what has ended.
-export function buildArm64PosixProcProbeChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
+function buildArm64PosixProcProbeChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotPid = 0
 	let SlotProbe = 1
 	let asm = Arm64RuntimeAsm.beginFunction(SlotProbe + posixEndedProbeSlots(lane))
@@ -2222,7 +2222,7 @@ end 'buildArm64PosixProcProbeChunk'
 // `-errno`, a different negative per reason. Bit 63 is what both have in common, and a mapping that
 // SUCCEEDED never has it: neither kernel hands a user process an address out of the kernel half. A test for
 // zero would be wrong on both — a failed mapping is negative, never NULL.
-export function buildArm64PosixShmMapChunk(call PosixHostCall) returns FunctionCodeChunk
+function buildArm64PosixShmMapChunk(call PosixHostCall) returns FunctionCodeChunk
 	let SlotFd = 0
 	let SlotBytes = 1
 	let asm = Arm64RuntimeAsm.beginFunction(2)
@@ -2261,7 +2261,7 @@ end 'buildArm64PosixShmMapChunk'
 // The status is discarded for `mrt_host_file_close`'s reason: an unmap that fails leaves a caller nothing to
 // do. A zero base is the no-op `UnmapViewOfFile(0)` is, which is what lets `__shm_close` run without a test
 // on a segment whose map never succeeded.
-export function buildArm64PosixShmUnmapChunk(call PosixHostCall) returns FunctionCodeChunk
+function buildArm64PosixShmUnmapChunk(call PosixHostCall) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let unmapped = asm.newLabel()
@@ -2279,12 +2279,12 @@ end 'buildArm64PosixShmUnmapChunk'
 
 // How a lane names a segment: Darwin's `shm_open` takes the name, and a libc-less Linux image opens the
 // `/dev/shm` path that function would have built.
-export union PosixShmNaming
+union PosixShmNaming
 	sharedObjectName
 	devShmPath
 end 'PosixShmNaming'
 
-export type PosixShmHost
+type PosixShmHost
 	export let naming as PosixShmNaming
 	export let exclusiveCreateFlags as MachineWord
 	export let stat as PosixStatLayout
@@ -2292,7 +2292,7 @@ export type PosixShmHost
 	export let fstat as PosixHostCall
 	export let close as PosixHostCall
 
-	export static function create(naming PosixShmNaming, exclusiveCreateFlags MachineWord, stat PosixStatLayout, ftruncate PosixHostCall, fstat PosixHostCall, close PosixHostCall) returns PosixShmHost
+	static function create(naming PosixShmNaming, exclusiveCreateFlags MachineWord, stat PosixStatLayout, ftruncate PosixHostCall, fstat PosixHostCall, close PosixHostCall) returns PosixShmHost
 		return Self{naming: naming, exclusiveCreateFlags: exclusiveCreateFlags, stat: stat, ftruncate: ftruncate, fstat: fstat, close: close}
 	end 'create'
 end 'PosixShmHost'
@@ -2347,7 +2347,7 @@ end 'arm64PosixEmitShmCloseFd'
 // The publish road. `CreateFileMappingW` names and sizes in one call; POSIX takes two, so a segment that
 // could not be sized loses its name again. Only `EEXIST` answers `nameTaken`, the one refusal the stdlib
 // answers by adopting; every other failure is `refused`.
-export function buildArm64PosixShmCreateChunk(host PosixShmHost) returns FunctionCodeChunk
+function buildArm64PosixShmCreateChunk(host PosixShmHost) returns FunctionCodeChunk
 	let asm = arm64PosixShmBegin(host)
 
 	let unsized = asm.newLabel()
@@ -2387,7 +2387,7 @@ end 'buildArm64PosixShmCreateChunk'
 // open and its `ftruncate`, and a missing name one that has not published yet or has just withdrawn — both
 // `notYetPublished`, which the stdlib retries. A segment smaller than `bytes` is `refused`, since mapping
 // past its end would fault on first touch.
-export function buildArm64PosixShmAdoptChunk(host PosixShmHost) returns FunctionCodeChunk
+function buildArm64PosixShmAdoptChunk(host PosixShmHost) returns FunctionCodeChunk
 	let asm = arm64PosixShmBegin(host)
 
 	let notOpened = asm.newLabel()

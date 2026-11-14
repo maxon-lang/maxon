@@ -63,11 +63,11 @@
 // (`FullRangeIntArray` — a column of full-range integers — is `stdlib/Builtins.maxon`'s. The parser's
 // constant folder keeps one too, over its own tier's value ids.)
 
-export type ConstValueMap
+type ConstValueMap
 	var isConst as BoolArray
 	var constant as FullRangeIntArray
 
-	export static function create() returns ConstValueMap
+	static function create() returns ConstValueMap
 		return Self{isConst: BoolArray.create(0), constant: FullRangeIntArray.create(0)}
 	end 'create'
 
@@ -137,7 +137,7 @@ enum StdFoldableDefKind
 	addressDef
 end 'StdFoldableDefKind'
 
-export type StdFoldableDef
+type StdFoldableDef
 	// ⚠ **THE THREE FIELDS BELOW ARE MEANINGLESS UNTIL `kind` SAYS WHICH OF THEM THE LAST
 	// classification FILLED** — the discipline the union enforced by construction, and the one thing a
 	// record has to state rather than enforce. Every reader asks a `kind` predicate first, and none of
@@ -157,7 +157,7 @@ export type StdFoldableDef
 	// `definedId` may read instead.
 	export var identityOperand as ValueId
 
-	export static function create() returns StdFoldableDef
+	static function create() returns StdFoldableDef
 		return Self{kind: StdFoldableDefKind.neither, definedId: 0, constant: 0, constType: StdType.i64, identityOperand: 0}
 	end 'create'
 
@@ -214,7 +214,7 @@ end 'StdFoldableDef'
 // constant cannot be one either: by the time the identity collect runs, `rewriteBinAndCmpOps` has
 // turned every foldable const rhs into a `binOpImm`, and each identity constant (0, 1, -1) fits
 // every immediate field `constFitsBinOpImmediate` guards.
-export function classifyFoldableDef(op StdOp, def StdFoldableDef)
+function classifyFoldableDef(op StdOp, def StdFoldableDef)
 	match op 'c'
 		const(resultId, value, valueType) then def.recordConst(resultId, value: value, valueType: valueType)
 		binOp or
@@ -352,7 +352,7 @@ end 'classifyFoldableDef'
 // The pass's headline: the function range its driver is about to fold. Both drivers print it — the pool
 // over the whole module, `runStdPassesOverTheBand` over the appended runtime band — so the range is the
 // argument rather than a constant here.
-module function foldConstOperandsHeadline(firstFuncIndex ElementIndex, funcCount ElementIndex) returns String
+function foldConstOperandsHeadline(firstFuncIndex ElementIndex, funcCount ElementIndex) returns String
 	return "foldConstOperands: functions [{firstFuncIndex}, {funcCount})"
 end 'foldConstOperandsHeadline'
 
@@ -367,7 +367,7 @@ end 'foldConstOperandsHeadline'
 // entry per live op into it, so a per-walk rebuild is a per-walk O(ops) allocation and copy. Five walks
 // meant five of them (six once the identity substitution fired), and the pass runs over every function
 // in the module.
-module function foldConstOperandsInFunc(module StdModule, func IrFunction)
+function foldConstOperandsInFunc(module StdModule, func IrFunction)
 	let opIndices = module.liveOpIndices(func)
 
 	// ONE classification record for all three walks below — refilled per op, never re-created. See
@@ -391,7 +391,7 @@ end 'foldConstOperandsInFunc'
 // same reason — its subject is a `div`/`mod` whose DIVISOR is a `const`. A second collector would be a
 // second answer to "which values in this function are constants", over the same shared
 // `classifyFoldableDef` roster, and the two would be free to drift about which ops count.
-export function collectConstValues(module StdModule, opIndices OpIndexArray, def StdFoldableDef) returns ConstValueMap
+function collectConstValues(module StdModule, opIndices OpIndexArray, def StdFoldableDef) returns ConstValueMap
 	let constMap = ConstValueMap.create()
 
 	for opIdx in opIndices 'eachOp'
@@ -731,7 +731,7 @@ end 'constAsImmediate'
 // entirely different reason and would otherwise need a second copy of the identical walk. What stays here is
 // the only part that is this pass's own — WHICH defs are retirable, which is `StdFoldableDef`'s
 // kinds and a reference test.
-export function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
+function dceRetiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
 	removeOpsDefining(module, func: func, doomed: retiredDefs(module, func: func, opIndices: opIndices, def: def))
 end 'dceRetiredDefs'
 

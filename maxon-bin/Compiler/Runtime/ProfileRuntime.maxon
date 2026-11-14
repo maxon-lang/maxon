@@ -98,8 +98,8 @@ let ThreadSampleAccess = ThreadSuspendResume or ThreadGetContext or ThreadQueryI
 // measured a nominal one-millisecond `Sleep` returning on the scheduler's tick at ~35 ms; a sampler driven
 // that way collects a few dozen readings a second while reporting a kilohertz, which is the lying instrument
 // this whole feature refuses to be.
-export let CreateWaitableTimerHighResolution = 0x00000002
-export let CreateWaitableTimerOrdinary = 0x00000000
+let CreateWaitableTimerHighResolution = 0x00000002
+let CreateWaitableTimerOrdinary = 0x00000000
 export let TimerAllAccess = 0x1F0003
 
 // `TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32` — the module list of ONE process. Unlike the thread flag, this
@@ -150,13 +150,13 @@ export function isProfileRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProfileRuntimePrefix)
 end 'isProfileRuntimeCallee'
 
-export union ProfileHostShape
+union ProfileHostShape
 	win32
 	mach
 	ptrace
 end 'ProfileHostShape'
 
-export function profileHostShapeOf(target Target) returns ProfileHostShape
+function profileHostShapeOf(target Target) returns ProfileHostShape
 	return match target.os 'os'
 		windows gives ProfileHostShape.win32
 		macos gives ProfileHostShape.mach
@@ -169,7 +169,7 @@ export function isHostScratchRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(ProfileReadWordName) or callee.equals(ProfileWriteWordName) or bytesStartWith(callee, prefix: ProfilePagesPrefix)
 end 'isHostScratchRuntimeCallee'
 
-export function isHostResourceBoxRuntimeCallee(callee ByteArray) returns bool
+function isHostResourceBoxRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(ProfilePagesReserveName) or callee.equals(ProfilePagesDestructName) or callee.equals(ProfileTimerOpenName) or callee.equals(ProfileHandleAdoptName) or callee.equals(ProfileHandleDestructName)
 end 'isHostResourceBoxRuntimeCallee'
 
@@ -179,7 +179,7 @@ end 'isHostResourceReadingRuntimeCallee'
 
 // One `osHostProcess`, with all six words marshalled. The op's arity is fixed at its widest member's, so a
 // narrower service is handed zeros for the operands it does not read — see `StdOp.osHostProcess`.
-module function emitHostSample(module StdModule, block IrBlock, service HostProcessCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
+function emitHostSample(module StdModule, block IrBlock, service HostProcessCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
 	let answer = ids.mint()
 	module.appendOp(block, op: StdOp.osHostProcess(answer, service: service, a0Id: a0, a1Id: a1, a2Id: a2, a3Id: a3, a4Id: a4, a5Id: a5))
 
@@ -661,7 +661,7 @@ function buildProfilePagesRelease(module StdModule)
 	module.functions.push(func)
 end 'buildProfilePagesRelease'
 
-export function buildBoxDestruct(module StdModule, name ByteArray, release ByteArray)
+function buildBoxDestruct(module StdModule, name ByteArray, release ByteArray)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
@@ -681,7 +681,7 @@ export function buildBoxDestruct(module StdModule, name ByteArray, release ByteA
 	module.functions.push(func)
 end 'buildBoxDestruct'
 
-export function buildBoxWordGetter(module StdModule, name ByteArray, offset ByteOffset)
+function buildBoxWordGetter(module StdModule, name ByteArray, offset ByteOffset)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 

@@ -1,8 +1,8 @@
 let ReachableDefinitionRootName = "definition-resolves-only-reachable-fields"
 let ReachableDefinitionMainFileName = "main.maxon"
-let ReachableDefinitionGaugeFileName = "gauge.maxon"
-let ReachableDefinitionDialFileName = "dial.maxon"
-let ReachableDefinitionDialTail = "definition-resolves-only-reachable-fields/dial.maxon"
+let ReachableDefinitionGaugeFileName = "lib/gauge.maxon"
+let ReachableDefinitionDialFileName = "lib/dial.maxon"
+let ReachableDefinitionDialTail = "definition-resolves-only-reachable-fields/lib/dial.maxon"
 let ReachableDefinitionHiddenFieldLine = 3
 let ReachableDefinitionHiddenFieldCharacter = 19
 let ReachableDefinitionVisibleFieldLine = 4
@@ -21,11 +21,11 @@ test 'definition resolves only the members a reader may reach'
 
 	let hiddenField = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionHiddenFieldLine, character: ReachableDefinitionHiddenFieldCharacter)
 
-	expectNoDefinitionInProject(hiddenField, note: "a cursor on `level` in `gauge.level` jumped to its declaration. `Gauge` is declared with no visibility modifier in a sibling file, so this file may not name it and the compiler refuses every field read through a `Gauge` value.")
+	expectNoDefinitionInProject(hiddenField, note: "a cursor on `level` in `gauge.level` jumped to its declaration. `Gauge` is declared with no visibility modifier in `lib/`, a directory this file is outside of, so this file may not name it and the compiler refuses every field read through a `Gauge` value.")
 
 	let hiddenMethod = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionHiddenMethodLine, character: ReachableDefinitionHiddenMethodCharacter)
 
-	expectNoDefinitionInProject(hiddenMethod, note: "a cursor on `describe` in `gauge.describe()` jumped to its declaration. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every method call on a `Gauge` value.")
+	expectNoDefinitionInProject(hiddenMethod, note: "a cursor on `describe` in `gauge.describe()` jumped to its declaration. `Gauge` is declared with no visibility modifier in `lib/`, a directory this file is outside of, so the compiler refuses every method call on a `Gauge` value.")
 
 	let visibleField = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionVisibleFieldLine, character: ReachableDefinitionVisibleFieldCharacter)
 

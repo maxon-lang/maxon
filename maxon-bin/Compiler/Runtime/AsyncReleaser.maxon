@@ -108,14 +108,14 @@ typealias AsyncReleaserSet = Set with ByteArray
 //     awaiting frame, which drops it once. The releaser must release the ARGUMENTS ONLY.
 //   • `ownedByThisDrop` — `__gt_promise_drop` (and `p.cancel()`, which routes through it) is the last reader
 //     the result will ever have. The releaser must release the arguments AND the result-or-error.
-export union AsyncResultDisposition
+union AsyncResultDisposition
 	consumedByAwaiter
 	ownedByThisDrop
 end 'AsyncResultDisposition'
 
 // The word the synthesized releaser tests (`resultConsumed != 0` ⇒ stop after the arguments). Read HERE and
 // nowhere else, so the encoding is one fact and the call sites carry only the meaning.
-export function asyncResultConsumedFlag(disposition AsyncResultDisposition) returns FullRangeInt
+function asyncResultConsumedFlag(disposition AsyncResultDisposition) returns FullRangeInt
 	return match disposition 'disposition'
 		consumedByAwaiter gives 1
 		ownedByThisDrop gives 0

@@ -1,71 +1,71 @@
-module type WarmCounters
-	module let allModuleHits as QueryCount
-	module let allModuleMisses as QueryCount
-	module let tokenHits as QueryCount
-	module let tokenMisses as QueryCount
-	module let activeTokenHits as QueryCount
-	module let activeTokenMisses as QueryCount
-	module let parseHits as QueryCount
-	module let parseMisses as QueryCount
-	module let signatureHits as QueryCount
-	module let signatureMisses as QueryCount
-	module let admittedLibraryFiles as QueryCount
-	module let sharedTokenHits as QueryCount
-	module let sharedParseHits as QueryCount
-	module let sharedParseMisses as QueryCount
-	module let sharedParsePublishes as QueryCount
-	module let sharedParseDrifts as QueryCount
-	module let sharedParseReusedFiles as QueryCount
-	module let storeEntries as QueryCount
-	module let storeParses as QueryCount
+type WarmCounters
+	let allModuleHits as QueryCount
+	let allModuleMisses as QueryCount
+	let tokenHits as QueryCount
+	let tokenMisses as QueryCount
+	let activeTokenHits as QueryCount
+	let activeTokenMisses as QueryCount
+	let parseHits as QueryCount
+	let parseMisses as QueryCount
+	let signatureHits as QueryCount
+	let signatureMisses as QueryCount
+	let admittedLibraryFiles as QueryCount
+	let sharedTokenHits as QueryCount
+	let sharedParseHits as QueryCount
+	let sharedParseMisses as QueryCount
+	let sharedParsePublishes as QueryCount
+	let sharedParseDrifts as QueryCount
+	let sharedParseReusedFiles as QueryCount
+	let storeEntries as QueryCount
+	let storeParses as QueryCount
 
-	module static function of(project Project) returns WarmCounters
+	static function of(project Project) returns WarmCounters
 		let db = project.db
 
 		return Self{allModuleHits: db.allModuleHits, allModuleMisses: db.allModuleMisses, tokenHits: db.tokenHits, tokenMisses: db.tokenMisses, activeTokenHits: db.activeTokenHits, activeTokenMisses: db.activeTokenMisses, parseHits: db.parseHits, parseMisses: db.parseMisses, signatureHits: db.signatureHits, signatureMisses: db.signatureMisses, admittedLibraryFiles: db.shareableTokenHashes.count() as QueryCount, sharedTokenHits: db.sharedTokenHits, sharedParseHits: db.sharedParseHits, sharedParseMisses: db.sharedParseMisses, sharedParsePublishes: db.sharedParsePublishes, sharedParseDrifts: db.sharedParseDrifts, sharedParseReusedFiles: db.sharedParseReusedFiles.count() as QueryCount, storeEntries: sharedMemoEntryCount(project), storeParses: sharedParseEntryCount(project)}
 	end 'of'
 end 'WarmCounters'
 
-module type WarmSource
-	module let path as FilePath
-	module let content as String
-	module let library as bool
+type WarmSource
+	let path as FilePath
+	let content as String
+	let library as bool
 
 	static function create(path FilePath, content String, library bool) returns WarmSource
 		return Self{path: path, content: content, library: library}
 	end 'create'
 end 'WarmSource'
 
-module typealias WarmSourceArray = Array with WarmSource
+typealias WarmSourceArray = Array with WarmSource
 
-module type WarmImage
-	module let code as ByteArray
-	module let rdata as ByteArray
-	module let symdata as ByteArray
-	module let data as ByteArray
+type WarmImage
+	let code as ByteArray
+	let rdata as ByteArray
+	let symdata as ByteArray
+	let data as ByteArray
 
-	module static function of(result CodeResult) returns WarmImage
+	static function of(result CodeResult) returns WarmImage
 		return Self{code: result.code, rdata: result.rdata, symdata: result.symdata, data: result.dataPrelude}
 	end 'of'
 
-	module static function none() returns WarmImage
+	static function none() returns WarmImage
 		return Self{code: ByteArray.create(0), rdata: ByteArray.create(0), symdata: ByteArray.create(0), data: ByteArray.create(0)}
 	end 'none'
 end 'WarmImage'
 
-module type WarmProbe
-	module let misses as QueryCount
-	module let missed as ParseMissPathRoster
+type WarmProbe
+	let misses as QueryCount
+	let missed as ParseMissPathRoster
 
 	static function of(misses QueryCount, missed ParseMissPathRoster) returns WarmProbe
 		return Self{misses: misses, missed: missed}
 	end 'of'
 end 'WarmProbe'
 
-module type WarmImmutability
-	module let compared as Count
-	module let digested as Count
-	module let changes as ParseChangeArray
+type WarmImmutability
+	let compared as Count
+	let digested as Count
+	let changes as ParseChangeArray
 
 	static function of(compared Count, digested Count, changes ParseChangeArray) returns WarmImmutability
 		return Self{compared: compared, digested: digested, changes: changes}
@@ -73,15 +73,15 @@ module type WarmImmutability
 end 'WarmImmutability'
 
 export type WarmReading
-	module let counters as WarmCounters
-	module let diagnostics as DiagnosticArray
-	module let lines as CapturedDiagnosticTextArray
-	module let sources as WarmSourceArray
-	module let refused as bool
-	module let image as WarmImage
-	module let probe as WarmProbe
-	module let immutability as WarmImmutability
-	module let sharing as LibraryParseSharing
+	let counters as WarmCounters
+	let diagnostics as DiagnosticArray
+	let lines as CapturedDiagnosticTextArray
+	let sources as WarmSourceArray
+	let refused as bool
+	let image as WarmImage
+	let probe as WarmProbe
+	let immutability as WarmImmutability
+	let sharing as LibraryParseSharing
 
 	static function of(project Project, refused bool = false, sources WarmSourceArray = WarmSourceArray.create(0), image WarmImage = WarmImage.none(), probe WarmProbe = WarmProbe.of(0, missed: ParseMissPathRoster.create(0)), immutability WarmImmutability = WarmImmutability.of(0, digested: 0, changes: ParseChangeArray.create(0)), sharing LibraryParseSharing = LibraryParseSharing.undecided) returns WarmReading
 		let sink = project.session.diagnostics
@@ -112,7 +112,7 @@ export union WarmStep
 	compareParses(slot String, merged String, piped String, remerged String, repiped String, edited FilePath)
 	read(slot String, sharing bool)
 
-	module function word() returns String
+	function word() returns String
 		return match self 'step'
 			load gives "load"
 			edit gives "edit"
@@ -125,14 +125,14 @@ export union WarmStep
 	end 'word'
 end 'WarmStep'
 
-module function goalOfWarm(goal WarmGoal) returns CompileGoal
+function goalOfWarm(goal WarmGoal) returns CompileGoal
 	return match goal 'goal'
 		codeResult gives CompileGoal.codeResult
 		merged gives CompileGoal.frontEnd(NamespaceDirectoryCheck.unchecked)
 	end 'goal'
 end 'goalOfWarm'
 
-module function warmKeepsImage(goal WarmGoal) returns bool
+function warmKeepsImage(goal WarmGoal) returns bool
 	return match goal 'goal'
 		codeResult(keepsImage) gives keepsImage
 		merged gives false
@@ -143,19 +143,19 @@ typealias WarmSlotMap = Map with (String, Project)
 typealias ParseSnapshotMap = Map with (FilePath, ParseSnapshot)
 typealias WarmSnapshotSets = Map with (String, ParseSnapshotMap)
 
-module type WarmBench
+type WarmBench
 	var projects as WarmSlotMap
 	var snapshots as WarmSnapshotSets
 
-	module static function create() returns WarmBench
+	static function create() returns WarmBench
 		return Self{projects: WarmSlotMap.create(), snapshots: WarmSnapshotSets.create()}
 	end 'create'
 
-	module function projectIn(slot String) returns Project
+	function projectIn(slot String) returns Project
 		return try self.projects.get(slot) otherwise panic("WarmBench.projectIn: the slot '{slot}' holds no project — a gate loads a slot before any step names it")
 	end 'projectIn'
 
-	module function stepped(step WarmStep, memos SharedFileMemoMap) returns WarmReading throws CompileError
+	function stepped(step WarmStep, memos SharedFileMemoMap) returns WarmReading throws CompileError
 		match step 'step'
 			load(slot, input, target, defines, edit, debugInfo) then return try self.loaded(slot, input: input, target: target, defines: defines, edit: edit, debugInfo: debugInfo, memos: memos)
 			edit(slot, path, content) then return self.edited(slot, path: path, content: content)
@@ -167,11 +167,11 @@ module type WarmBench
 		end 'step'
 	end 'stepped'
 
-	module function compiled(slot String, image WarmImage) returns WarmReading
+	function compiled(slot String, image WarmImage) returns WarmReading
 		return WarmReading.of(self.projectIn(slot), image: image)
 	end 'compiled'
 
-	module function refused(slot String) returns WarmReading
+	function refused(slot String) returns WarmReading
 		return WarmReading.of(self.projectIn(slot), refused: true)
 	end 'refused'
 
@@ -315,7 +315,7 @@ type ParseSnapshot
 	end 'create'
 end 'ParseSnapshot'
 
-module typealias ParseChangeArray = Array with String
+typealias ParseChangeArray = Array with String
 
 function snapshotParses(project Project) returns ParseSnapshotMap
 	let snapshot = ParseSnapshotMap.create()
@@ -508,27 +508,27 @@ function reusedParsesVerdict(merged ParseSnapshotMap, piped ParseSnapshotMap, re
 	return WarmImmutability.of(compared, digested: digested, changes: changes)
 end 'reusedParsesVerdict'
 
-module type WarmSession
+type WarmSession
 	let driver as CompileDriver.handle
 	let sink as DiagnosticSink
 
-	module static function over(driver CompileDriver.handle, sink DiagnosticSink) returns WarmSession
+	static function over(driver CompileDriver.handle, sink DiagnosticSink) returns WarmSession
 		return Self{driver: driver, sink: sink}
 	end 'over'
 
-	module function load(slot String, input FilePath, target Target, defines DefineArray = DefineArray.create(0), edit WarmLoadEdit = WarmLoadEdit.none, debugInfo bool = false) returns WarmReading throws CompileError
+	function load(slot String, input FilePath, target Target, defines DefineArray = DefineArray.create(0), edit WarmLoadEdit = WarmLoadEdit.none, debugInfo bool = false) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.load(slot, input: input, target: target, defines: defines.clone(), edit: edit, debugInfo: debugInfo))
 	end 'load'
 
-	module function edit(slot String, path FilePath, content String) returns WarmReading throws CompileError
+	function edit(slot String, path FilePath, content String) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.edit(slot, path: path, content: content))
 	end 'edit'
 
-	module function tryCompile(slot String, goal WarmGoal) returns WarmReading throws CompileError
+	function tryCompile(slot String, goal WarmGoal) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.compile(slot, goal: goal))
 	end 'tryCompile'
 
-	module function compile(slot String, goal WarmGoal) returns WarmReading throws CompileError
+	function compile(slot String, goal WarmGoal) returns WarmReading throws CompileError
 		let reading = try self.tryCompile(slot, goal: goal)
 
 		if reading.refused 'aRefusedProgram'
@@ -538,19 +538,19 @@ module type WarmSession
 		return reading
 	end 'compile'
 
-	module function probe(slot String) returns WarmReading throws CompileError
+	function probe(slot String) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.probe(slot))
 	end 'probe'
 
-	module function snapshot(slot String, tag String) returns WarmReading throws CompileError
+	function snapshot(slot String, tag String) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.snapshot(slot, tag: tag))
 	end 'snapshot'
 
-	module function compareParses(slot String, merged String, piped String, remerged String, repiped String, edited FilePath) returns WarmReading throws CompileError
+	function compareParses(slot String, merged String, piped String, remerged String, repiped String, edited FilePath) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.compareParses(slot, merged: merged, piped: piped, remerged: remerged, repiped: repiped, edited: edited))
 	end 'compareParses'
 
-	module function read(slot String, sharing bool = false) returns WarmReading throws CompileError
+	function read(slot String, sharing bool = false) returns WarmReading throws CompileError
 		return try self.stepped(WarmStep.read(slot, sharing: sharing))
 	end 'read'
 

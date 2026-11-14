@@ -52,7 +52,7 @@ typealias BuildNameArray = Array with String
 
 // One program's place in the cache: the path its key was computed over, the build the current inputs
 // name, and the private path a fresh one is written to before it takes that name.
-module type RunSlot
+type RunSlot
 	export let program as FilePath
 	export let directory as FilePath
 	export let executable as FilePath
@@ -79,7 +79,7 @@ end 'RunSlot'
 // ⭐ **THE PENDING NAME IS A SCRATCH NAME (`pendingSpellingOf`), WHICH IS WHAT MAKES IT ONE WRITER'S.**
 // Its block names the writer's host, start and id and a serial, so no two writers share it, and a
 // pending file a DEAD writer left is swept by name (`pendingBuildIsAbandoned`).
-module function locateRunSlot(spelled FilePath, isProject bool, target Target, entryFunction ByteArray) returns RunSlot throws RunCacheError
+function locateRunSlot(spelled FilePath, isProject bool, target Target, entryFunction ByteArray) returns RunSlot throws RunCacheError
 	let program = spelled.anchoredAt(Directory.currentPath())
 	let key = try freshnessKey(program, target: target, entryFunction: entryFunction)
 	let stem = try slotStem(program, isProject: isProject)
@@ -99,7 +99,7 @@ end 'locateRunSlot'
 // was built from these very inputs — by a run that got there first, and which Windows will not let this
 // one replace while it is executing it. A failure with NOTHING there is the real one, and it refuses by
 // name rather than leaving the caller to discover there is nothing to run.
-module function publishSlotBuild(slot RunSlot, built FilePath) throws RunCacheError
+function publishSlotBuild(slot RunSlot, built FilePath) throws RunCacheError
 	try File.rename(built, to: slot.executable) otherwise 'notRenamed'
 		if not File.exists(slot.executable) 'nothingPublished'
 			throw RunCacheError.unavailable("could not publish {slot.executable.toString()}: {built.toString()} could not be renamed onto it, and nothing is there to run")
@@ -224,7 +224,7 @@ end 'discardSlotBuilds'
 //
 // ⚠ **EVERY TARGET'S EXECUTABLE EXTENSION IS TRIED**, because a build's name ends in the extension of the
 // target it was built FOR and one root holds the builds of every target this host compiled for.
-export function isPublishedBuildName(name String) returns bool
+function isPublishedBuildName(name String) returns bool
 	for os in Os.allCases 'eachOs'
 		let binarySuffix = executableExtension(os)
 
@@ -502,7 +502,7 @@ end 'sourceLine'
 
 // The compile loads its sources through `namedSourceFiles` too, so a file the build reads and this did
 // not is not expressible.
-module function programSources(paths MaxonSourcePathArray) returns CompileInputArray throws RunCacheError
+function programSources(paths MaxonSourcePathArray) returns CompileInputArray throws RunCacheError
 	let listed = try namedSourceFiles(paths) otherwise (e) 'unlistable'
 		throw RunCacheError.unavailable("could not list the program's sources: {driverErrorSentence(e)}")
 	end 'unlistable'
@@ -516,7 +516,7 @@ end 'programSources'
 // single-file program's scriptlib packages are listed by the loader's own
 // `StdlibLoader.scriptlibSourcesLoadedBy`, so an edited package rebuilds exactly the programs that
 // load it.
-module function libraryInputs(programPaths MaxonSourcePathArray) returns CompileInputArray throws RunCacheError
+function libraryInputs(programPaths MaxonSourcePathArray) returns CompileInputArray throws RunCacheError
 	let stdlibDir = try locateStdlibDir() otherwise throw RunCacheError.unavailable("could not locate the stdlib/ directory, which the build cache key is computed over")
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw RunCacheError.unavailable("could not locate the runtime/ directory beside stdlib/, which the build cache key is computed over")
 

@@ -68,7 +68,7 @@
 // ⚠ Its POSIX counterpart lives in `StdLoweringShared.StderrFd` instead, beside its stdout twin: a
 // DESCRIPTOR is a target-independent fact, where a Win32 HANDLE SELECTOR is an x64-Windows one and belongs
 // with the rest of this table.
-export let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
+let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
 
 // AddVectoredExceptionHandler(First = 1, handler): 1 = call this handler BEFORE any
 // previously registered one.
@@ -239,7 +239,7 @@ end 'x64WindowsRuntimeGlobals'
 // ⭐ **THE ONE WRITE PATH BOTH PRODUCERS REACH.** The isel lowers `osWriteStdout`/`osWriteStderr` to a call
 // of this name and the panic writer tail-calls it, so the console probe, the widening and the two loops
 // exist exactly once. EXPORTED because `StdToX64Conversion` names it.
-export let WriteStreamName = b"mrt_write_stream"
+let WriteStreamName = b"mrt_write_stream"
 
 // The vectored exception handler `AddVectoredExceptionHandler` registers. A different name from the
 // POSIX `FaultHandlerName` because the two are reached differently — one is a callback the OS invokes
@@ -255,8 +255,8 @@ export let LinuxSigreturnName = b"mrt_rt_sigreturn"
 // The chunk assembler
 // ==========================================================================
 
-export typealias RuntimeStringLabelMap = Map with (ByteArray, BlockId)
-export typealias RuntimeStringLabelArray = Array with BlockId
+typealias RuntimeStringLabelMap = Map with (ByteArray, BlockId)
+typealias RuntimeStringLabelArray = Array with BlockId
 
 // Every pooled string starts on an even offset, so a UTF-16 one (`MachineGuidSubKey`) lands
 // 2-aligned; a chunk itself starts on `BranchWindowBytes`.
@@ -271,7 +271,7 @@ let RuntimeStringAlignment = 2 as ElementIndex
 // body is one call with a constant swapped, which is the same objection X64Backend already
 // makes to a `encodeMov`/`encodeSub`/`encodeCmp` family. What lives here is only what
 // needs STATE: labels, the string pool, and the frame.
-export type X64RuntimeAsm
+type X64RuntimeAsm
 	export var code as ByteArray
 	export var callFixups as CallFixupArray
 	export var iatRelocs as RelocationArray
@@ -301,7 +301,7 @@ export type X64RuntimeAsm
 	// call arguments BEYOND the four the Win64 ABI passes in registers. The frame is laid
 	// out from the bottom up — shadow space, outgoing args, then the slots — and rounded to
 	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
-	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
+	static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
 		return Self.beginFunctionAfterEntry(ByteArray.create(0), callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), slots: slots, outgoingStackArgBytes: outgoingStackArgBytes)
 	end 'beginFunction'
 
@@ -309,7 +309,7 @@ export type X64RuntimeAsm
 	// guard, which then sees the entry shape every guarded compiled function presents (`__gt_morestack` builds
 	// the requesting frame's record from it). `entry`'s own branches are resolved; its calls and `.data`
 	// references travel in the two arrays, which the chunk goes on appending to.
-	export static function beginFunctionAfterEntry(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
+	static function beginFunctionAfterEntry(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
 		let slotAreaBytes = slots * SpillSlotBytes
 		let frameBytes = alignUpStack(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: StackFrameAlignment)
 
@@ -454,11 +454,11 @@ end 'X64RuntimeAsm'
 // `cmp reg, imm` — the zero/constant test every guard below is written in terms of. x64's
 // group-1 immediate is SIGN-extended to 64 bits, which is what makes `cmp rax, -1` (the
 // "no symbol found" marker) compare against the full-width value and not 0x00000000FFFFFFFF.
-export function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
+function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: reg, imm: imm)
 end 'emitCmpRegImm'
 
-module function emitClampToPrintableAscii(asm X64RuntimeAsm, reg X64Register)
+function emitClampToPrintableAscii(asm X64RuntimeAsm, reg X64Register)
 	let printable = asm.newLabel()
 	let unprintable = asm.newLabel()
 
@@ -476,13 +476,13 @@ end 'emitClampToPrintableAscii'
 // `lea dest, [rip + <string>]` — load the address of a chunk-local string constant.
 // Exported: the Linux host surface takes the address of its own chunk-local constants the same way — the
 // `/proc/self/exe` path it hands `readlinkat`, and every panic message a green-thread chunk names.
-export function emitLeaString(asm X64RuntimeAsm, dest X64Register, bytes ByteArray)
+function emitLeaString(asm X64RuntimeAsm, dest X64Register, bytes ByteArray)
 	encodeLeaRegLabel(asm.code, rel32Fixups: asm.rel32Fixups, dest: dest, targetLabel: asm.stringLabel(bytes), site: PatchSite.x64RuntimeLabelDisp32)
 end 'emitLeaString'
 
 // Print a chunk-local string constant: `lea rcx, [rip + s]; call mrt_write_cstr_stderr`.
 // The single most repeated three lines in this file.
-module function emitPrintString(asm X64RuntimeAsm, bytes ByteArray)
+function emitPrintString(asm X64RuntimeAsm, bytes ByteArray)
 	emitLeaString(asm, dest: X64Register.rcx, bytes: bytes)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 end 'emitPrintString'
@@ -506,7 +506,7 @@ end 'emitLeaTextBase'
 //
 // Exported: the Linux host surface measures an environment variable's value the same way, for the same
 // reason — a `char*` out of the `envp` vector carries no length either.
-export function emitCstrLenIntoRax(asm X64RuntimeAsm, cstrReg X64Register)
+function emitCstrLenIntoRax(asm X64RuntimeAsm, cstrReg X64Register)
 	let lenLoop = asm.newLabel()
 	let lenDone = asm.newLabel()
 
@@ -564,7 +564,7 @@ end 'emitFaultAddressesAndBacktrace'
 // code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
 // inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
 // same reason.
-export function encodeX64ProcessExit(code ByteArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool, target Target)
+function encodeX64ProcessExit(code ByteArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool, target Target)
 	match route 'route'
 		importCall then encodeWin64ProcessExit(code, callFixups: callFixups, exitCode: exitCode, usesGt: usesGt, target: target)
 		syscall then encodeLinuxProcessExit(code, exitCode: exitCode)
@@ -1727,7 +1727,7 @@ function buildCpuFeatureProbeChunk() returns FunctionCodeChunk
 	return asm.finishFunction(CpuFeatureProbeName)
 end 'buildCpuFeatureProbeChunk'
 
-module function emitStoreGlobalImm(asm X64RuntimeAsm, label ByteArray, value MachineWord, width X64AccessWidth, through X64Register)
+function emitStoreGlobalImm(asm X64RuntimeAsm, label ByteArray, value MachineWord, width X64AccessWidth, through X64Register)
 	if through == X64Register.rax 'theValueWouldOverwriteTheAddress'
 		panic("emitStoreGlobalImm: '{String.from(label)}' is addressed through rax, the register the value is loaded into, so the store would go to the address the value names")
 	end 'theValueWouldOverwriteTheAddress'
@@ -2299,7 +2299,7 @@ function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute 
 	end 'greenThreads'
 end 'appendX64WindowsRuntimeChunks'
 
-export let WindowsProcessNamespaceName = b"mrt_win_proc_ns"
+let WindowsProcessNamespaceName = b"mrt_win_proc_ns"
 
 let HkeyLocalMachine = 0xFFFFFFFF80000002 as MachineWord
 let MachineGuidSubKey = "SOFTWARE\\Microsoft\\Cryptography"
@@ -2404,7 +2404,7 @@ function buildWindowsProcessNamespaceChunk(usesGt bool) returns FunctionCodeChun
 	return asm.finishFunction(WindowsProcessNamespaceName)
 end 'buildWindowsProcessNamespaceChunk'
 
-export let WindowsProcessDescendantsName = b"mrt_win_proc_descendants"
+let WindowsProcessDescendantsName = b"mrt_win_proc_descendants"
 
 let WinDescJobName = "Local\\MaxonDescendants"
 let WinDescScratchBytes = 0x10000
@@ -2930,7 +2930,7 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 	return asm.finishFunction(WindowsProcessDescendantsName)
 end 'buildWindowsProcessDescendantsChunk'
 
-export let WindowsProcessTerminateName = b"mrt_win_proc_terminate"
+let WindowsProcessTerminateName = b"mrt_win_proc_terminate"
 
 let WinTermAccountingClass = 1
 let WinTermAccountingBytes = 48

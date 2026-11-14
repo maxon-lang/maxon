@@ -12,7 +12,7 @@ export enum CompilerLogGroup
 end 'CompilerLogGroup'
 
 // The level numbers the DebugStream ring carries and `maxon monitor` prints.
-module enum RingLogLevel
+enum RingLogLevel
 	error = 1
 	info = 2
 	debug = 3
@@ -81,7 +81,7 @@ export function installCompilerLogHandler()
 	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 end 'installCompilerLogHandler'
 
-module function attributeCompilerLog(unit TraceUnit)
+function attributeCompilerLog(unit TraceUnit)
 	try CompilerLogRoute.current().handler.attribute(unit) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then break
@@ -90,7 +90,7 @@ module function attributeCompilerLog(unit TraceUnit)
 	end 'refused'
 end 'attributeCompilerLog'
 
-module function compilerLogFence() returns ServiceFence
+function compilerLogFence() returns ServiceFence
 	let route = CompilerLogRoute.current()
 	let fence = ServiceFence.create()
 	fence.enrollShared(route.handler.clone() as Fenceable.handle, arrivals: route.arrivals.clone(), issued: route.issued.clone())
@@ -115,7 +115,7 @@ export function compilerLogger(group CompilerLogGroup) returns Logger
 	return Log.default().withGroup(group.name).withAttrs(bound)
 end 'compilerLogger'
 
-module function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
+function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
 	return level.rank >= Log.groupLevel(group.name).rank
 end 'compilerLogEnabled'
 
@@ -129,7 +129,7 @@ export function compilerLogShowsDetail() returns bool
 	return false
 end 'compilerLogShowsDetail'
 
-module function ringLogLevelOf(level LogLevel) returns RingLogLevel
+function ringLogLevelOf(level LogLevel) returns RingLogLevel
 	if level.rank <= LogLevel.trace.rank 'trace'
 		return RingLogLevel.trace
 	end 'trace'

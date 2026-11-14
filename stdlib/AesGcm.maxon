@@ -263,7 +263,7 @@ public type AesGcm implements Aead
 	end 'create'
 
 	// `bitsliced: true` forces the software backing, so a spec can compare the two on one CPU.
-	module static function build(key ByteArray, bitsliced bool) returns AesGcm throws AeadError
+	static function build(key ByteArray, bitsliced bool) returns AesGcm throws AeadError
 		if bitsliced or not aesHardwareAvailable() 'software'
 			let software = try AesGcmSoftware.create(key) otherwise (failure) 'softwareRefused'
 				throw aesGcmKeyFailure(failure)
@@ -283,7 +283,7 @@ public type AesGcm implements Aead
 		#endif
 	end 'build'
 
-	module function usesHardware() returns bool
+	function usesHardware() returns bool
 		match backing 'backing'
 			bitsliced then return false
 

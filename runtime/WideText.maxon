@@ -1,4 +1,4 @@
-module typealias WideTextWord = int(i64.min to i64.max)
+typealias WideTextWord = int(i64.min to i64.max)
 
 #if os(Windows)
 	let NarrowUnitBytes = 1
@@ -211,7 +211,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		return written + 4
 	end 'wideTextStoreCodepointBytes'
 
-	module function __wt_widen(src WideTextWord, byteLen WideTextWord, dst WideTextWord) returns WideTextWord
+	function __wt_widen(src WideTextWord, byteLen WideTextWord, dst WideTextWord) returns WideTextWord
 		var index = 0 as WideTextWord
 		var written = 0 as WideTextWord
 
@@ -316,7 +316,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 
 	// A verbatim or device path is never resolved: `GetFullPathNameW` collapses `..` even inside
 	// `\\?\`, which would change the path's meaning.
-	module function __wt_path_needs_resolution(text WideTextWord, units WideTextWord) returns bool
+	function __wt_path_needs_resolution(text WideTextWord, units WideTextWord) returns bool
 		let root = widePathRootOf(text, units: units)
 
 		if root == WidePathRoot.device 'verbatimOrDevice'
@@ -326,7 +326,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		return units >= ExtendedPathThresholdUnits or root == WidePathRoot.relative
 	end '__wt_path_needs_resolution'
 
-	module function __wt_path_extension_fits(written WideTextWord, capacity WideTextWord) returns bool
+	function __wt_path_extension_fits(written WideTextWord, capacity WideTextWord) returns bool
 		if written >= capacity 'tooSmall'
 			return false
 		end 'tooSmall'
@@ -334,7 +334,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		return written < ExtendedPathThresholdUnits or written + ExtendedPathSlackUnits < capacity
 	end '__wt_path_extension_fits'
 
-	module function __wt_extend_resolved(text WideTextWord, units WideTextWord, capacity WideTextWord) returns bool
+	function __wt_extend_resolved(text WideTextWord, units WideTextWord, capacity WideTextWord) returns bool
 		if units < ExtendedPathThresholdUnits 'short'
 			return true
 		end 'short'
@@ -358,7 +358,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		return true
 	end '__wt_extend_resolved'
 
-	module function __wt_narrow(src WideTextWord, units WideTextWord, dst WideTextWord) returns WideTextWord
+	function __wt_narrow(src WideTextWord, units WideTextWord, dst WideTextWord) returns WideTextWord
 		var index = 0 as WideTextWord
 		var written = 0 as WideTextWord
 
@@ -391,7 +391,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 
 	// One byte per unit, so the value fits the caller's `capacity`-byte buffer. Its callers parse
 	// ASCII grammars, and 0xFF is a byte none of them accepts.
-	module function __wt_narrow_ascii(src WideTextWord, units WideTextWord, dst WideTextWord, capacity WideTextWord)
+	function __wt_narrow_ascii(src WideTextWord, units WideTextWord, dst WideTextWord, capacity WideTextWord)
 		let count = units if units < capacity else 0
 		var index = 0 as WideTextWord
 
@@ -405,7 +405,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		wideTextStoreByte(dst, index: count, value: 0)
 	end '__wt_narrow_ascii'
 
-	module function __wt_text_length(src WideTextWord, unitBytes WideTextWord) returns WideTextWord
+	function __wt_text_length(src WideTextWord, unitBytes WideTextWord) returns WideTextWord
 		var index = 0 as WideTextWord
 
 		while wideTextUnitOfWidth(src, index: index, unitBytes: unitBytes) != 0 'each'
@@ -415,7 +415,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		return index
 	end '__wt_text_length'
 
-	module function __wt_block_extent(src WideTextWord) returns WideTextWord
+	function __wt_block_extent(src WideTextWord) returns WideTextWord
 		var index = 0 as WideTextWord
 
 		while wideTextByte(src, index: index) != 0 'entries'

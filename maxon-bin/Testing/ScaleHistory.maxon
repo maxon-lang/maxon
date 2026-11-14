@@ -173,7 +173,7 @@ let LeadingColumns = NoteColumnIndex + 1
 // before the column existed carries `MintedAtUnrecorded`, and those rows' byte deltas are as
 // unverifiable as a mismatched pair's — which is a different claim from "they match", and an empty
 // string would have said neither.
-export union MintedAt
+union MintedAt
 	unrecorded
 	path(text String)
 end 'MintedAt'
@@ -182,7 +182,7 @@ end 'MintedAt'
 // COMPARED against cannot be assembled differently. Both halves are in it because the byte column
 // carries a term proportional to each (see the header); comparison stays whole-string equality, which
 // needs no assumption about which half moved.
-export function mintedAtCell(compilerPath String, corpusRoot String) returns String
+function mintedAtCell(compilerPath String, corpusRoot String) returns String
 	return "{compilerPath} (corpus {corpusRoot})"
 end 'mintedAtCell'
 
@@ -193,7 +193,7 @@ let MintedAtUnrecorded = "*(unrecorded)*"
 
 // The counts as the tables print them. Signed because a delta is, and because `groupDigits` walks a
 // rendered number that may carry a minus sign.
-export typealias Delta = int(i64.min to i64.max)
+typealias Delta = int(i64.min to i64.max)
 
 typealias GroupIndex = int(0 to u64.max)
 
@@ -208,13 +208,13 @@ let DigitGroupSize = 3 as GroupIndex
 // A union rather than an empty-array sentinel, because here the distinction is real: "the log has no
 // rows yet" is a first datapoint, and "the log's last row was all zeroes" would be a broken compiler.
 // An empty array would say both.
-export union LoggedMemory
+union LoggedMemory
 	absent
 	present(date String, mintedAt MintedAt, note String, allocs AllocCountArray, bytes ByteCountArray)
 
 	// How many rungs the memory tables are keyed by. A run with a different ladder length cannot be
 	// appended to them without going ragged — see `assertRecordable`.
-	export function loggedRungCount() returns RungCount throws ScaleError
+	function loggedRungCount() returns RungCount throws ScaleError
 		match self 'm'
 			absent then throw ScaleError.reason("the log has no rows, so it pins no ladder length")
 			present(_, _, _, allocs, _) then return allocs.count() as RungCount
@@ -238,7 +238,7 @@ end 'LoggedMemory'
 // ⚠ IT IS NOT A VERDICT ABOUT THE COMPILER. The run still exits 0, still reports every count it
 // measured, and still records the row if it was asked to. What is refused is one SUBTRACTION, on the
 // ground that its two operands were not measured against the same yardstick.
-export union ByteDelta
+union ByteDelta
 	comparable
 	withheld(why String)
 end 'ByteDelta'
@@ -246,7 +246,7 @@ end 'ByteDelta'
 // Compare the whole path, for the reason the header gives: equal paths allocate equally, and no
 // assumption about which PART of the path multiplies has to hold for that to be true — an assumption
 // the allocation column has since been measured to break.
-export function byteComparability(trend LoggedMemory, mintedAt String) returns ByteDelta
+function byteComparability(trend LoggedMemory, mintedAt String) returns ByteDelta
 	match trend 'm'
 		absent then return ByteDelta.comparable
 		present(date, logged, _, _, _) then return byteComparabilityAgainst(logged, mintedAt: mintedAt, date: date)
@@ -303,7 +303,7 @@ end 'LogTableRow'
 // write-only log. The `minted at` cell is
 // read back because it decides whether one of the two columns may be differenced at all, which is a
 // question about THIS document rather than about a curve.
-export function loadScaleTrend() returns LoggedMemory throws ScaleError
+function loadScaleTrend() returns LoggedMemory throws ScaleError
 	let path = try FilePath.from(OptimizationLogRelativePath) otherwise throw ScaleError.reason("'{OptimizationLogRelativePath}' is not a valid path")
 
 	// The log is hand-written prose with machine-appended table rows. The instrument extends it and
@@ -329,7 +329,7 @@ end 'loadScaleTrend'
 // `source` is that name, and it is a parameter rather than a constant every message interpolates: a
 // refusal raised over a fixture must not tell its reader that `docs/optimization-log.md` is broken when
 // that file is fine.
-export function parseScaleTrend(text String, source String) returns LoggedMemory throws ScaleError
+function parseScaleTrend(text String, source String) returns LoggedMemory throws ScaleError
 	// SPLIT ONCE. The three markers are three anchors in ONE document, so a per-table split would walk
 	// the whole file three times to find them.
 	let lines = text.split("\n")
@@ -786,7 +786,7 @@ end 'parseGroupedCount'
 // per-cell comparison, while this function answers the same question for the recording sentence, writes
 // the withheld rule twice in two files with nothing to make them agree — and they disagree about a run
 // whose ladder is shorter than the log's. One run, one answer.
-export function anyMemoryMoved(trend LoggedMemory, results RungResultArray, bytes ByteDelta) returns bool
+function anyMemoryMoved(trend LoggedMemory, results RungResultArray, bytes ByteDelta) returns bool
 	return match trend 'm'
 		absent gives true
 		present(_, _, _, allocs, loggedBytes) gives memoryDiffers(results, loggedAllocs: allocs, loggedBytes: loggedBytes, bytes: bytes)
@@ -832,7 +832,7 @@ end 'bytesMoved'
 // Refuse a `--note` this run could not honestly record — BEFORE the ladder is climbed, not after.
 // Rejecting the command line once the run has already spent thirty seconds compiling six rungs would
 // be a rude way to report a typo.
-export function assertRecordable(trend LoggedMemory, note String, mintedAt String, rungs RungCount) throws ScaleError
+function assertRecordable(trend LoggedMemory, note String, mintedAt String, rungs RungCount) throws ScaleError
 	try assertCellSafe(note, what: "a --note")
 
 	// The minting paths go into a cell of the same row, so they are screened by the same door. A path
@@ -882,7 +882,7 @@ end 'assertCellSafe'
 // edits, and the edit that matters most — a paragraph of prose explaining the row about to be
 // written — is one they may well make WHILE the six rungs are compiling. Writing back a copy read
 // thirty seconds ago would silently discard it.
-export function recordScaleRun(results RungResultArray, note String, mintedAt String) throws ScaleError
+function recordScaleRun(results RungResultArray, note String, mintedAt String) throws ScaleError
 	// SCREENED HERE, AT THE WRITE, and not only up front. `assertRecordable` asks the same question
 	// before the ladder is climbed so that a typo is reported in a second rather than in thirty — but
 	// that makes it a COURTESY, and if it were the only check then the guarantee would rest on every
@@ -928,7 +928,7 @@ end 'recordScaleRun'
 // log.md` — so a self-test driving that entry point would either edit the project's trend record or
 // prove the refusal against a copy, and the second is a parser of the same document in a second place.
 // This one takes the text and gives text back, so the refusal is provable without either.
-export function insertRowBefore(text String, marker String, row String, source String) returns String throws ScaleError
+function insertRowBefore(text String, marker String, row String, source String) returns String throws ScaleError
 	let parts = text.split(marker)
 
 	if parts.count() != MarkerSplitParts 'notExactlyOnce'
@@ -989,7 +989,7 @@ end 'renderRow'
 
 // 19261978 -> "19,261,978". Six-figure allocation counts stacked in a column are unreadable without
 // separators, and these tables exist to be read at a glance.
-export function groupDigits(value Delta) returns String
+function groupDigits(value Delta) returns String
 	if value < 0 'negative'
 		return "-{groupDigits(-value)}"
 	end 'negative'

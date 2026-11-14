@@ -60,23 +60,23 @@
 // The distinction is load-bearing on this lane: `osThreadCreate` here is a real `clone`
 // (`StdToArm64Conversion.lowerOsThreadCreate`), so a green-thread program runs worker Ms, and 93 would
 // end the calling thread and leave the others running.
-export let Arm64LinuxSyscallWrite = 64
-export let Arm64LinuxSyscallMmap = 222
-export let Arm64LinuxSyscallExitGroup = 94
+let Arm64LinuxSyscallWrite = 64
+let Arm64LinuxSyscallMmap = 222
+let Arm64LinuxSyscallExitGroup = 94
 
 // The page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
 // backing while keeping the mapping. AArch64's numbers, NOT x86-64's (11 and 28 there — see the twin block in
 // `Targets/X64/X64LinuxRuntime.maxon`), which is the whole reason this table carries an arch prefix. There is
 // deliberately no recommit number: a `MADV_DONTNEED`ed page refaults on the next touch, so re-backing one is a
 // Windows-only call and arm64 emits nothing for it.
-export let Arm64LinuxSyscallMunmap = 215
-export let Arm64LinuxSyscallMadvise = 233
+let Arm64LinuxSyscallMunmap = 215
+let Arm64LinuxSyscallMadvise = 233
 let Arm64LinuxSyscallMremap = 216
 
 // `gettid` answers the kernel thread id `tgkill` addresses a preemption signal by
 // (`__gt_preempt_self_register`). 178 on AArch64, 186 on x86-64 (`X64LinuxRuntime`'s twin), which is exactly
 // why these numbers wear the arch prefix.
-export let Arm64LinuxSyscallGettid = 178
+let Arm64LinuxSyscallGettid = 178
 
 // ⭐⭐ **ASYNCHRONOUS PREEMPTION'S THREE, AND THE `ucontext` THE KERNEL SAVES A STOPPED THREAD'S FILE INTO.**
 // `rt_sigaction` publishes the SIGURG handler, `sigaltstack` gives each thread the stack that handler runs
@@ -85,25 +85,25 @@ export let Arm64LinuxSyscallGettid = 178
 // ⚠ **AArch64 NEEDS NO `SA_RESTORER`**, where x86-64 makes one mandatory: the kernel points the signal
 // frame's return at its own vDSO trampoline, so `Arm64LinuxSigactionFlags` carries only the three that say
 // something.
-export let Arm64LinuxSyscallRtSigaction = 134
-export let Arm64LinuxSyscallSigaltstack = 132
-export let Arm64LinuxSyscallTgkill = 131
+let Arm64LinuxSyscallRtSigaction = 134
+let Arm64LinuxSyscallSigaltstack = 132
+let Arm64LinuxSyscallTgkill = 131
 
 // sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*), which is the only way it
 // reaches the saved register file) | SA_ONSTACK (0x8000000) | SA_RESTART (0x10000000 — a machine that
 // entered a kernel call between the monitor's decision and the delivery resumes its call rather than
 // failing it). MEASURED by a C probe over this lane's headers, together with the offsets below.
-export let Arm64LinuxSigactionFlags = 0x18000004
+let Arm64LinuxSigactionFlags = 0x18000004
 
 // ⭐⭐ **WHERE A SIGNAL HANDLER FINDS THE INTERRUPTED REGISTERS.** `ucontext_t.uc_mcontext` is an INLINE
 // `struct sigcontext` here rather than a pointer (which is what Darwin has), so these are offsets into the
 // ucontext the handler is handed. MEASURED by a C probe on this lane: `uc_mcontext` 176, `regs[0]` 184,
 // `regs[30]` 424, `sp` 432, `pc` 440, `pstate` 448, `sizeof(ucontext_t)` 4560. The frame pointer is
 // `regs[29]`, one word below `regs[30]`.
-export let Arm64LinuxUcontextOffFp = 416 as MachineWord
-export let Arm64LinuxUcontextOffLr = 424 as MachineWord
-export let Arm64LinuxUcontextOffSp = 432 as MachineWord
-export let Arm64LinuxUcontextOffPc = 440 as MachineWord
+let Arm64LinuxUcontextOffFp = 416 as MachineWord
+let Arm64LinuxUcontextOffLr = 424 as MachineWord
+let Arm64LinuxUcontextOffSp = 432 as MachineWord
+let Arm64LinuxUcontextOffPc = 440 as MachineWord
 
 // --- The rest of the table: the FILESYSTEM syscalls ---
 //
@@ -123,7 +123,7 @@ export let Arm64LinuxUcontextOffPc = 440 as MachineWord
 let Arm64LinuxSyscallReadlinkat = 78
 let Arm64LinuxSyscallClockGettime = 113
 let Arm64LinuxSyscallSchedGetaffinity = 123
-export let Arm64LinuxSyscallGetPid = 172
+let Arm64LinuxSyscallGetPid = 172
 
 // ⚠ **29 HERE AND 16 ON x86-64** — the two Linux lanes disagree about `ioctl` as they disagree about every
 // number in this table, which is why it is declared per arch and only the REQUEST word is shared. VERIFIED
@@ -140,8 +140,8 @@ let Arm64LinuxSyscallRenameat = 38
 // `CreateFileMappingW` does in one. VERIFIED by invoking 46 on an aarch64 guest against a `/dev/shm` file
 // whose `st_size` then read back as the requested length.
 let Arm64LinuxSyscallFtruncate = 46
-export let Arm64LinuxSyscallOpenat = 56
-export let Arm64LinuxSyscallClose = 57
+let Arm64LinuxSyscallOpenat = 56
+let Arm64LinuxSyscallClose = 57
 let Arm64LinuxSyscallGetdents64 = 61
 let Arm64LinuxSyscallRead = 63
 let Arm64LinuxSyscallNewfstatat = 79
@@ -182,10 +182,10 @@ let Arm64LinuxSyscallWaitid = 95
 
 // The per-descriptor flag change a polled pipe end needs — see `NetpollVerb.armPipeSource` for why the flag
 // cannot come from `pipe2`.
-export let Arm64LinuxSyscallFcntl = 25
+let Arm64LinuxSyscallFcntl = 25
 let Arm64LinuxSyscallMprotect = 226
-export let Arm64LinuxSyscallSetPriority = 140
-export let Arm64LinuxSyscallGetPriority = 141
+let Arm64LinuxSyscallSetPriority = 140
+let Arm64LinuxSyscallGetPriority = 141
 
 // --- The CHILD-PROCESS band's syscalls ---
 //
@@ -242,13 +242,13 @@ let Arm64LinuxSyscallProcessVmReadv = 270
 // address a connected stream socket does not use (`LinuxSocketNoPeerAddress`). That is the OPPOSITE
 // constraint from the macOS lane, where libSystem exports the four-argument forms and the six-argument ones
 // would cost two more registers for nothing.
-export let Arm64LinuxSyscallSocket = 198
+let Arm64LinuxSyscallSocket = 198
 
 // `getsockopt` — the verdict of a non-blocking connect (`StdOp.osSocketError`).
-export let Arm64LinuxSyscallGetsockopt = 209
-export let Arm64LinuxSyscallConnect = 203
-export let Arm64LinuxSyscallSendto = 206
-export let Arm64LinuxSyscallRecvfrom = 207
+let Arm64LinuxSyscallGetsockopt = 209
+let Arm64LinuxSyscallConnect = 203
+let Arm64LinuxSyscallSendto = 206
+let Arm64LinuxSyscallRecvfrom = 207
 
 // --- The SERVER side of the socket band ---
 //
@@ -258,11 +258,11 @@ export let Arm64LinuxSyscallRecvfrom = 207
 // so its descriptor comes back without `O_NONBLOCK` and `FD_CLOEXEC`. A check that reads only "did
 // it answer a descriptor" passes on the wrong call; the descriptor's flags tell the two apart, and
 // a blocking descriptor holds a machine on its first `recv`.
-export let Arm64LinuxSyscallBind = 200
-export let Arm64LinuxSyscallListen = 201
-export let Arm64LinuxSyscallAccept4 = 242
-export let Arm64LinuxSyscallGetsockname = 204
-export let Arm64LinuxSyscallShutdown = 210
+let Arm64LinuxSyscallBind = 200
+let Arm64LinuxSyscallListen = 201
+let Arm64LinuxSyscallAccept4 = 242
+let Arm64LinuxSyscallGetsockname = 204
+let Arm64LinuxSyscallShutdown = 210
 
 // ⭐⭐ **THE WAIT OBJECT ON THIS LANE — ONE `mmap`'d PAGE, AND `Arm64PosixRuntime` OWNS EVERY FIELD IN IT.**
 // Darwin's twin carries a `pthread_mutex_t` and a `pthread_cond_t` ABOVE the shared prefix, because a
@@ -402,7 +402,7 @@ function arm64LinuxEmitErrnoAddr(asm Arm64RuntimeAsm, dest Arm64Register, errnoH
 	end 'home'
 end 'arm64LinuxEmitErrnoAddr'
 
-module function arm64LinuxEmitSlotBlockBase(asm Arm64RuntimeAsm, dest Arm64Register)
+function arm64LinuxEmitSlotBlockBase(asm Arm64RuntimeAsm, dest Arm64Register)
 	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: Arm64ThreadPointerSource.linuxWritable)
 end 'arm64LinuxEmitSlotBlockBase'
 
@@ -419,7 +419,7 @@ end 'arm64LinuxEmitStashErrno'
 // Publish a KNOWN errno rather than one a syscall just answered — the walk's clear before each step
 // (`PosixErrno.cleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the two
 // places a reason has to be invented because no call failed.
-module function arm64LinuxEmitPublishErrno(asm Arm64RuntimeAsm, value FullRangeInt, errnoHome LinuxErrnoHome)
+function arm64LinuxEmitPublishErrno(asm Arm64RuntimeAsm, value FullRangeInt, errnoHome LinuxErrnoHome)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: value as MachineWord)
 	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16, errnoHome: errnoHome)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x16, byteOffset: 0)
@@ -428,7 +428,7 @@ end 'arm64LinuxEmitPublishErrno'
 // ⭐ **THE TAIL OF EVERY SYSCALL IN THIS FILE: a negative answer is a failure, and the reason goes in the
 // word.** x0 is left exactly as the kernel wrote it, so a caller that wants a count, a descriptor or a
 // sentinel decides that for itself immediately after.
-export function arm64LinuxEmitStashIfFailed(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome)
+function arm64LinuxEmitStashIfFailed(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome)
 	let succeeded = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -2885,12 +2885,12 @@ function arm64LinuxShmHost(errnoHome LinuxErrnoHome) returns PosixShmHost
 	return PosixShmHost.create(PosixShmNaming.devShmPath, exclusiveCreateFlags: LinuxShmCreateFlags, stat: arm64LinuxStatLayout(), ftruncate: PosixHostCall.syscall(Arm64LinuxSyscallFtruncate, errnoHome: errnoHome), fstat: PosixHostCall.syscall(Arm64LinuxSyscallFstat, errnoHome: errnoHome), close: PosixHostCall.syscall(Arm64LinuxSyscallClose, errnoHome: errnoHome))
 end 'arm64LinuxShmHost'
 
-module function arm64LinuxEmitShmPath(asm Arm64RuntimeAsm, pathSlot StackSize)
+function arm64LinuxEmitShmPath(asm Arm64RuntimeAsm, pathSlot StackSize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: pathSlot)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxShmPathName)
 end 'arm64LinuxEmitShmPath'
 
-module function arm64LinuxEmitShmOpenPath(asm Arm64RuntimeAsm, pathSlot StackSize, flags MachineWord, mode MachineWord)
+function arm64LinuxEmitShmOpenPath(asm Arm64RuntimeAsm, pathSlot StackSize, flags MachineWord, mode MachineWord)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: pathSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: flags or LinuxOpenCloseOnExec)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: mode)
@@ -2898,7 +2898,7 @@ module function arm64LinuxEmitShmOpenPath(asm Arm64RuntimeAsm, pathSlot StackSiz
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
 end 'arm64LinuxEmitShmOpenPath'
 
-module function arm64LinuxEmitShmUnlinkPath(asm Arm64RuntimeAsm, pathSlot StackSize)
+function arm64LinuxEmitShmUnlinkPath(asm Arm64RuntimeAsm, pathSlot StackSize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: pathSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxUnlinkFileFlags)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
@@ -3141,7 +3141,7 @@ function buildArm64LinuxRandomFillChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostRandomFillName)
 end 'buildArm64LinuxRandomFillChunk'
 
-export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
+function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	assertLinuxSearchGeometry()
 
 	let errnoHome = linuxErrnoHome(usage)
@@ -3619,7 +3619,7 @@ function buildArm64LinuxNetpollCounterChunk(name ByteArray, syscallNumber Machin
 	return asm.finishFunction(name)
 end 'buildArm64LinuxNetpollCounterChunk'
 
-module function arm64LinuxEmitTreeListMap(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome, bytes MachineWord)
+function arm64LinuxEmitTreeListMap(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome, bytes MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: bytes)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
@@ -3630,11 +3630,11 @@ module function arm64LinuxEmitTreeListMap(asm Arm64RuntimeAsm, errnoHome LinuxEr
 	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 end 'arm64LinuxEmitTreeListMap'
 
-module function arm64LinuxEmitTreeListUnmap(asm Arm64RuntimeAsm)
+function arm64LinuxEmitTreeListUnmap(asm Arm64RuntimeAsm)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
 end 'arm64LinuxEmitTreeListUnmap'
 
-module function arm64LinuxEmitTreeGrow(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome, stateSlot StackSize)
+function arm64LinuxEmitTreeGrow(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome, stateSlot StackSize)
 	let failed = asm.newLabel()
 	let done = asm.newLabel()
 
@@ -3663,12 +3663,12 @@ module function arm64LinuxEmitTreeGrow(asm Arm64RuntimeAsm, errnoHome LinuxErrno
 	asm.placeLabel(done)
 end 'arm64LinuxEmitTreeGrow'
 
-module function arm64LinuxEmitSessionOf(asm Arm64RuntimeAsm, pidSlot StackSize)
+function arm64LinuxEmitSessionOf(asm Arm64RuntimeAsm, pidSlot StackSize)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetsid)
 end 'arm64LinuxEmitSessionOf'
 
-module function arm64LinuxEmitBranchIfSessionRootGone(asm Arm64RuntimeAsm, gone BlockId)
+function arm64LinuxEmitBranchIfSessionRootGone(asm Arm64RuntimeAsm, gone BlockId)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: gone)
 end 'arm64LinuxEmitBranchIfSessionRootGone'
@@ -3707,11 +3707,11 @@ function arm64LinuxEmitSkipEndedProcess(asm Arm64RuntimeAsm, skip BlockId)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: skip)
 end 'arm64LinuxEmitSkipEndedProcess'
 
-module function arm64LinuxEndedProbeSlots() returns StackSize
+function arm64LinuxEndedProbeSlots() returns StackSize
 	return 2 + runtimeFrameSlots(LinuxProcStateProbeBytes) + runtimeFrameSlots(LinuxProcPathBytes)
 end 'arm64LinuxEndedProbeSlots'
 
-module function arm64LinuxEmitBranchIfPidEnded(asm Arm64RuntimeAsm, pidSlot StackSize, probeSlot StackSize, ended BlockId)
+function arm64LinuxEmitBranchIfPidEnded(asm Arm64RuntimeAsm, pidSlot StackSize, probeSlot StackSize, ended BlockId)
 	let SlotFd = probeSlot
 	let SlotRead = probeSlot + 1
 	let SlotStat = probeSlot + 2
@@ -4057,11 +4057,11 @@ function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxEr
 	return asm.finishFunction(chunkName)
 end 'buildArm64LinuxProcTreeAdoptChunk'
 
-module function arm64LinuxEmitOwnPid(asm Arm64RuntimeAsm)
+function arm64LinuxEmitOwnPid(asm Arm64RuntimeAsm)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetPid)
 end 'arm64LinuxEmitOwnPid'
 
-module function arm64LinuxEmitDescendantsTrack(asm Arm64RuntimeAsm)
+function arm64LinuxEmitDescendantsTrack(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxPrSetChildSubreaper as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 1)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
@@ -4070,12 +4070,12 @@ module function arm64LinuxEmitDescendantsTrack(asm Arm64RuntimeAsm)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPrctl)
 end 'arm64LinuxEmitDescendantsTrack'
 
-module function arm64LinuxEmitDescendantsUnmap(asm Arm64RuntimeAsm)
+function arm64LinuxEmitDescendantsUnmap(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DescendantsMapBytes as MachineWord)
 	arm64LinuxEmitTreeListUnmap(asm)
 end 'arm64LinuxEmitDescendantsUnmap'
 
-module function arm64LinuxEmitDescendantName(asm Arm64RuntimeAsm)
+function arm64LinuxEmitDescendantName(asm Arm64RuntimeAsm)
 	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x4), rn: arm64RuntimeReg(Arm64Register.x0), sh: DescendantsCommShift)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x4, rhs: Arm64Register.x2)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: PosixTreeInitialBytes as Imm32)

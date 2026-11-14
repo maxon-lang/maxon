@@ -1,7 +1,7 @@
 // ⭐ **THE FORMAT IS A DIRECTORY, `<root>/maxon/<cache>/v<n>/`, SO A SUPERSEDED ONE CAN BE FOUND.** A key is a
 // hash, so a slot of an older format sits under a name no run computes; only the directory above it says
 // which format it belongs to. Short, because every slot path spends from Windows' 260-character budget.
-module let CacheFormatPrefix = "v"
+let CacheFormatPrefix = "v"
 
 // A format directory's name split at the prefix: nothing before it, and the number after it.
 let FormatNameParts = 2
@@ -38,7 +38,7 @@ let CacheVendorDirName = "maxon"
 // These are names, not signatures. 64 bits distinguishes the builds one developer's cache holds;
 // the collision it risks is a stale binary served for changed inputs, at a population no cache
 // reaches.
-module let CacheNameDigestBytes = 8 as DigestPrefixBytes
+let CacheNameDigestBytes = 8 as DigestPrefixBytes
 
 // ⭐ **`<home>/.maxon` IS THE INSTALL SCRIPT'S OWN DEFAULT INSTALL ROOT** (`website/public/install.sh`,
 // `install.ps1`), so under a home directory the cache sits beside the `bin/` and `stdlib/` it belongs to
@@ -55,16 +55,16 @@ let ChainSeparator = ", then "
 //
 // ⛔ **NOTHING PUBLISHED CAN END IN THE PENDING MARKER**, which is what keeps a half-written file out of
 // every hit test: a published name ends in its key's hex digits or its own extension, and `p` is not one.
-module let PendingBuildMarker = ".tmp"
+let PendingBuildMarker = ".tmp"
 
 // Manifest fields are tab-separated and one fact per line, because a path may contain a space.
-module let ManifestFieldSeparator = "\t"
-module let ManifestLineSeparator = "\n"
+let ManifestFieldSeparator = "\t"
+let ManifestLineSeparator = "\n"
 
-module typealias CompileInputArray = Array with FilePath
+typealias CompileInputArray = Array with FilePath
 
 typealias CacheRootCandidateArray = Array with CacheRootCandidate
-export typealias CacheRootArray = Array with FilePath
+typealias CacheRootArray = Array with FilePath
 
 // ⛔ **ONE ARM CARRYING THE SENTENCE.** Every cause — no writable root, an unreadable source, a compiler
 // that cannot name itself — is the SAME fact to the caller (there is no cache to build in) and a DIFFERENT
@@ -87,7 +87,7 @@ export function identityKeyOf(identity FilePath) returns String
 	return identity.comparisonSpelling()
 end 'identityKeyOf'
 
-export function pathKeyOf(identity FilePath) returns String
+function pathKeyOf(identity FilePath) returns String
 	return hexOfLeadingBytes(sha256(identityKeyOf(identity).toByteArray()), count: CacheNameDigestBytes)
 end 'pathKeyOf'
 
@@ -175,7 +175,7 @@ function withAbsentComponents(physical FilePath, absent StringArray) returns Fil
 	return joined.normalize()
 end 'withAbsentComponents'
 
-export function keepRecordsTidy(directory FilePath, extension String, most ElementIndex, format CacheFormatNumber)
+function keepRecordsTidy(directory FilePath, extension String, most ElementIndex, format CacheFormatNumber)
 	discardAllButNewestIn(directory, kept: most, admits: function(entry) gives entry.filename().endsWith(extension))
 	sweepLeftoversOfEndedOwners(directory, livenessOf: leftoverLivenessOf, keyOf: leftoverIsItsOwnKey, discardKeyed: removeOwnedFile)
 
@@ -187,13 +187,13 @@ function leftoverLivenessOf(name String) returns ScratchStanding
 	return standingOfScratchName(name, family: ScratchFamily.beforeSuffix(PendingBuildMarker))
 end 'leftoverLivenessOf'
 
-export function pendingSpellingOf(published String) returns String
+function pendingSpellingOf(published String) returns String
 	return "{scratchNameFor(published)}{PendingBuildMarker}"
 end 'pendingSpellingOf'
 
 // One manifest line: a label and its fields. Everything a key or a record is computed over comes through
 // here, so no caller assembles a separator of its own.
-module function manifestLine(label String, fields StringArray) returns String
+function manifestLine(label String, fields StringArray) returns String
 	var line = ""
 	line.append(label)
 
@@ -249,7 +249,7 @@ end 'cacheRootCandidates'
 //
 // One entry per directory however many variables name it: `TEMP` and `TMPDIR` routinely hold one
 // path, and a caller acting per entry would act on that directory twice.
-export function hostCacheRoots() returns CacheRootArray throws RunCacheError
+function hostCacheRoots() returns CacheRootArray throws RunCacheError
 	let roots = CacheRootArray.create(0)
 
 	for candidate in cacheRootCandidates() 'eachCandidate'
@@ -294,7 +294,7 @@ export function hostCacheRoot() returns FilePath throws RunCacheError
 	end 'decided'
 end 'hostCacheRoot'
 
-module union CacheRootInUse
+union CacheRootInUse
 	usable(directory FilePath)
 	noneUsable
 end 'CacheRootInUse'
@@ -306,7 +306,7 @@ end 'CacheRootInUse'
 // It answers true for a directory that already exists, so a root that exists and cannot be written
 // under passes here, and the run fails later in `slotDirectory` about that one directory. Closing
 // that needs a write probe on every run.
-module function cacheRootARunUses(roots CacheRootArray) returns CacheRootInUse
+function cacheRootARunUses(roots CacheRootArray) returns CacheRootInUse
 	for root in roots 'eachRoot'
 		if Directory.create(root) 'created'
 			return CacheRootInUse.usable(root)
@@ -318,7 +318,7 @@ end 'cacheRootARunUses'
 
 // The refusal names the variables THIS host consults, read off the same roster that consulted them: a
 // sentence naming a variable nothing reads sends its reader to set something that changes nothing.
-module function noCacheRootMessage() returns String
+function noCacheRootMessage() returns String
 	var named = ""
 
 	for candidate in cacheRootCandidates() 'eachCandidate'
@@ -347,7 +347,7 @@ export function cacheFormatDirectoryName(format CacheFormatNumber) returns Strin
 end 'cacheFormatDirectoryName'
 
 // A prefixed name that is not the prefix and a number was written by no driver, and is left alone.
-export function isOlderCacheFormatName(name String, than CacheFormatNumber) returns bool
+function isOlderCacheFormatName(name String, than CacheFormatNumber) returns bool
 	let parts = name.split(CacheFormatPrefix)
 
 	if not name.startsWith(CacheFormatPrefix) or parts.count() != FormatNameParts 'notAFormatName'

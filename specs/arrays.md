@@ -502,7 +502,7 @@ declaration nothing in its own file spells is unused. Both ends agree.
 The alias appears exactly once at the use site, as the base of a static call, in a file that did not
 declare it.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 export union Thing
 	made(detail String)
 end 'Thing'
@@ -518,14 +518,14 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: <fragment>:11:11: typealias 'ThingArray' is not exported
-error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
+error E3062: probe/<fragment>:7:11: unused typealias: 'ThingArray'
 ```
 
 <!-- test: error.generic-instance-consumer-alias-as-a-receiver-and-a-return-type -->
 Same two files, same alias, same declaration — the use site additionally names `ThingArray` in a
 TYPE position, as a return type. Each spelling is refused.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 export union Thing
 	made(detail String)
 end 'Thing'
@@ -546,7 +546,7 @@ end 'main'
 ```maxoncstderr
 error E3008: <fragment>:10:31: typealias 'ThingArray' is not exported
 error E3008: <fragment>:11:9: typealias 'ThingArray' is not exported
-error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
+error E3062: probe/<fragment>:7:11: unused typealias: 'ThingArray'
 ```
 
 <!-- test: error.generic-instance-consumer-a-second-file-declares-the-alias -->
@@ -3332,10 +3332,10 @@ end 'main'
 ```
 
 <!-- test: error.an-array-from-head-another-file-keeps-private-is-refused -->
-The head of `<alias> from […]` names a type, so a file-private alias declared in another file is refused there
+The head of `<alias> from […]` names a type, so an unmarked alias declared in another directory is refused there
 as it is in every other type position.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 typealias Smalls = Array with ExitCode
 
 export function probeSmalls() returns ExitCode

@@ -147,7 +147,7 @@ abandoned body is unknown: what it waits for, writes and returns fits every chec
 its results. A type name that denotes nothing is reported where it is written, and a value of that type
 is unresolved, so each use of it is covered by that report. An error inside one method's body covers that
 method, and the rest of its type is checked. Unneeded casts (**E3010**), unused bindings (**E3012**,
-**E3077**), unused exports (**E3092**–**E3094**), unused file-private declarations (**E3219**), dropped
+**E3077**), unused exports (**E3092**), unused unexported declarations (**E3219**), dropped
 promises (**E3212**, **E3213**), target refusals and the checks made while generating code are reported
 once the program has no other error, so fixing every reported error can surface more.
 

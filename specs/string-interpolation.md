@@ -1051,7 +1051,7 @@ local to the declaring parse survives to answer here.
 <!-- test: cross-file-float-enum-interpolation -->
 ```maxon
 // --- file: weights.maxon
-export enum Weight
+enum Weight
 	light = 2.5
 	heavy = 4.0
 end 'Weight'

@@ -111,7 +111,7 @@
 // declaration.
 export typealias NotOwnedBufferCapacity = int(i64.min to -1)
 
-export let ViewBufferCapacity = -1 as NotOwnedBufferCapacity
+let ViewBufferCapacity = -1 as NotOwnedBufferCapacity
 export let RdataBufferCapacity = -2 as NotOwnedBufferCapacity
 export let InlineBufferCapacity = -3 as NotOwnedBufferCapacity
 
@@ -150,7 +150,7 @@ let CoAllocatedBufferMark = 1
 // is 0 so no reader ever strides off the slot. It is the same null a `__managed_create` record is born
 // holding, which is what makes an imaged empty container and an allocated one the same object to every
 // runtime entry that reads them.
-export let NoImmortalBlob = 0 as ByteOffset
+let NoImmortalBlob = 0 as ByteOffset
 
 // --- ⭐⭐ THE BUFFER RECORD, DECLARED ONCE AND EMBEDDED WHOLE BY THE STRING RECORD ---
 //
@@ -176,7 +176,7 @@ export let ManagedRecordBufferOffset = 0 as ByteOffset
 export let ManagedRecordLengthOffset = 8 as ByteOffset
 export let ManagedRecordCapacityOffset = 16 as ByteOffset
 export let ManagedRecordElementSizeOffset = 24 as ByteOffset
-export let ManagedRecordParentOffset = 32 as ByteOffset
+let ManagedRecordParentOffset = 32 as ByteOffset
 
 // The per-element destructor a managed-element array carries; for a TRIVIAL element it is
 // `TrivialElementDestroy` and the drop path releases the buffer without walking. It sits with the
@@ -191,7 +191,7 @@ export let ManagedRecordBytes = 48 as BytePos
 
 // A buffer record's slot is one machine word. Named here rather than written `8` at each producer: the six
 // offsets above are eight apart because of it, and a String record's seventh slot is the same width.
-export let ManagedRecordSlotBytes = 8 as BytePos
+let ManagedRecordSlotBytes = 8 as BytePos
 
 // ⭐⭐ **THE SIX SLOTS OF A RECORD THAT *IS* IMAGE DATA, ASSEMBLED AS BYTES — one home, three producers.**
 // A String literal, a module-level constant array and a module-level EMPTY `Array with T` register the
@@ -217,7 +217,7 @@ export let ManagedRecordSlotBytes = 8 as BytePos
 //
 // Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
 // runtime loads by and the offsets this writes are one set of constants that cannot drift.
-export function immortalRecordBytes(blobOffset ByteOffset, length FullRangeInt, elementSize FullRangeInt, elementDestroy FullRangeInt) returns ByteArray
+function immortalRecordBytes(blobOffset ByteOffset, length FullRangeInt, elementSize FullRangeInt, elementDestroy FullRangeInt) returns ByteArray
 	let record = ByteArray.create(0)
 	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as FullRangeInt)
 	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
@@ -328,13 +328,13 @@ end 'registerImmortalRecord'
 // ⭐ **REGISTER AN IMMORTAL RECORD UNDER AN EXACT, STRUCTURAL LABEL** — the twin above's labelled door, for
 // a record whose bytes do not distinguish it from another (an empty `Array with T`, whose
 // `element_destroy@40` is a relocation rather than payload).
-export function registerImmortalRecordLabeled(globalData GlobalDataTable, label String, record ByteArray, kind RdataPayloadKind, debugStream bool) returns String
+function registerImmortalRecordLabeled(globalData GlobalDataTable, label String, record ByteArray, kind RdataPayloadKind, debugStream bool) returns String
 	return globalData.registerRdataConstantLabeled(label, bytes: immortalRecordPayload(record, kind: kind, debugStream: debugStream), kind: kind, labelAt: immortalBoxHeaderSize(debugStream))
 end 'registerImmortalRecordLabeled'
 
 // Append one machine-word slot at `expectedOffset`, refusing to write it anywhere else. Exported because a
 // String record's seventh slot rides the same rule.
-export function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value FullRangeInt)
+function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value FullRangeInt)
 	if record.count() as ByteOffset != expectedOffset 'offsetDrift'
 		panic("appendRecordSlot: a record slot is being written at offset {record.count()} but its constant says {expectedOffset} — the record layout the runtime reads and this writes have drifted")
 	end 'offsetDrift'
@@ -370,7 +370,7 @@ let LowestOwnedCapacity = 0
 // The record an `emitBufferNotOwned` compare tests, read back off the compare: `cmpImm lt
 // [record + capacity@16], LowestOwnedCapacity` once `foldConstOperands` has moved the constant into the
 // immediate. Beside the emitter, so the two spellings of one predicate sit together.
-export function bufferNotOwnedGuardRecord(reader StdShapeReader, condId ValueId) returns ValueId throws StdShapeMismatch
+function bufferNotOwnedGuardRecord(reader StdShapeReader, condId ValueId) returns ValueId throws StdShapeMismatch
 	if not reader.compareImmDefining(condId, pred: StdCmpPred.lt, imm: LowestOwnedCapacity) 'notTheCompare'
 		throw StdShapeMismatch.notTheShape
 	end 'notTheCompare'
@@ -411,7 +411,7 @@ end 'bufferNotOwnedGuardRecord'
 // (`buildManagedCowDetach`'s ask), so it buys the transfer no room the window did not already have and the
 // capacity test would refuse the same calls one block later — after an allocation and a copy that a refused
 // call must not pay for (`__managed_set_length`'s stated rule).
-export function emitRefuseNonOwnedFillTarget(module StdModule, block IrBlock, record ValueId, refuse IrBlock, fill IrBlock, ids ValueMinter)
+function emitRefuseNonOwnedFillTarget(module StdModule, block IrBlock, record ValueId, refuse IrBlock, fill IrBlock, ids ValueMinter)
 	let notWritable = emitBufferNotOwned(module, block: block, record: record, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(notWritable, thenBlockId: refuse.id, elseBlockId: fill.id))
 end 'emitRefuseNonOwnedFillTarget'
@@ -541,7 +541,7 @@ end 'emitCapacityIsSentinel'
 // test that names it. ⛔ **DO NOT COLLAPSE THE THREE SENTINEL ARMS INTO `capacity < ViewBufferCapacity`.**
 // The three safe values happen to be contiguous below `-1` today; an ordering test over that would ADMIT a
 // fifth provenance sight unseen, which is the one direction this file's header forbids failing in.
-export function emitRouteOnVouchedTerminatorSlot(module StdModule, func IrFunction, cur IrBlock, record ValueId, length ValueId, vouched IrBlock, unvouched IrBlock, ids ValueMinter)
+function emitRouteOnVouchedTerminatorSlot(module StdModule, func IrFunction, cur IrBlock, record ValueId, length ValueId, vouched IrBlock, unvouched IrBlock, ids ValueMinter)
 	let capacity = emitLoadField(module, block: cur, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
 
 	// `cur` dominates all three, so the one `capacity` load serves every arm — the same dominance argument
@@ -603,7 +603,7 @@ end 'emitRouteOnCapacitySentinel'
 // though the drop paths call the two back to back. A DETACH must SPLIT them across its byte copy — the
 // base is read before the record is republished and spent only after the copy — so a fused helper would
 // serve some call sites and quietly invite the ones that must not fuse them to do so.
-export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	let viewBase = module.addBlock(func, label: b"vbase", heat: BlockHeat.normal)
 	let ownBase = module.addBlock(func, label: b"obase", heat: BlockHeat.normal)
 
@@ -630,18 +630,18 @@ end 'emitOwedAllocationBase'
 // buffer is a box payload and box payloads are 16-aligned, so none can sit at `record + 56`, though a
 // plain record's separate buffer often sits at `record + 64`. `checkManagedGeometry` refuses an offset
 // that is 16-aligned or not word-aligned, the alignment of the widest element.
-export function coAllocatedBufferOffset() returns FullRangeInt
+function coAllocatedBufferOffset() returns FullRangeInt
 	let pastRefcount = (ManagedRecordBytes as FullRangeInt) + (CoAllocatedRefcountBytes as FullRangeInt)
 
 	return (pastRefcount + BoxSlotAlignment - 1) / BoxSlotAlignment * BoxSlotAlignment
 end 'coAllocatedBufferOffset'
 
-export function emitMarkBufferCoAllocated(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
+function emitMarkBufferCoAllocated(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
 	let mark = emitConst(module, block: block, value: CoAllocatedBufferMark, ids: ids)
 	emitStoreField(module, block: block, record: record, offset: ManagedRecordParentOffset, value: mark)
 end 'emitMarkBufferCoAllocated'
 
-export function emitClearBufferParent(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
+function emitClearBufferParent(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
 	let noParent = emitConst(module, block: block, value: NoOwedAllocation, ids: ids)
 	emitStoreField(module, block: block, record: record, offset: ManagedRecordParentOffset, value: noParent)
 end 'emitClearBufferParent'
@@ -649,7 +649,7 @@ end 'emitClearBufferParent'
 // Exact only once `record` is known to be an owner (`emitBufferNotOwned` false): a non-owned record's
 // `buffer@0` points into bytes it does not allocate, such as an `.rdata` blob that may sit at exactly
 // `record + coAllocatedBufferOffset()`.
-export function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, absent IrBlock, coAllocated IrBlock, separate IrBlock, ids ValueMinter)
+function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, absent IrBlock, coAllocated IrBlock, separate IrBlock, ids ValueMinter)
 	let probe = module.addBlock(func, label: b"obufprobe", heat: BlockHeat.normal)
 
 	let isAbsent = emitBufferAbsent(module, block: cur, buffer: buffer, ids: ids)
@@ -659,7 +659,7 @@ export function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur Ir
 	emitBranchOnCompare(module, block: probe, value: mark, pred: StdCmpPred.eq, against: CoAllocatedBufferMark, whenTrue: coAllocated, whenFalse: separate, ids: ids)
 end 'emitRouteOnOwnedBuffer'
 
-export function emitCarryOwnedBufferBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, buffer ValueId, ids ValueMinter)
+function emitCarryOwnedBufferBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, buffer ValueId, ids ValueMinter)
 	let coAllocated = module.addBlock(func, label: b"obaseco", heat: BlockHeat.normal)
 	let separate = module.addBlock(func, label: b"obasesep", heat: BlockHeat.normal)
 
@@ -682,7 +682,7 @@ end 'emitCarryOwnedBufferBase'
 // have merely keeps the buffer alive and the leak gate reports 101, where a `__mm_free` would hand a live
 // allocation back to the slab — a use-after-free. A new non-owned-buffer kind must be taught to the drop
 // path, not only to the write check.
-export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
+function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
 	let step = module.addBlock(func, label: b"rcstep", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rccont", heat: BlockHeat.normal)
 
@@ -696,7 +696,7 @@ export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlo
 end 'emitReleaseOwedBase'
 
 // `base != NoOwedAllocation` → `whenOwed`, otherwise `whenNone`: the null guard every step on an owed base takes.
-export function emitRouteOnOwedBase(module StdModule, block IrBlock, base ValueId, whenOwed IrBlock, whenNone IrBlock, ids ValueMinter)
+function emitRouteOnOwedBase(module StdModule, block IrBlock, base ValueId, whenOwed IrBlock, whenNone IrBlock, ids ValueMinter)
 	emitBranchOnCompare(module, block: block, value: base, pred: StdCmpPred.ne, against: NoOwedAllocation, whenTrue: whenOwed, whenFalse: whenNone, ids: ids)
 end 'emitRouteOnOwedBase'
 
@@ -751,7 +751,7 @@ end 'emitRouteOnOwedBase'
 // INLINE: the view increfs the RECORD, so the record's drop finds a non-zero count, lowers it and keeps the
 // record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is exactly
 // right because it owes nothing else. NOTHING-HOSTS-IT: nothing happens, twice.
-export function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	let viewed = module.addBlock(func, label: b"hostview", heat: BlockHeat.normal)
 	let owned = module.addBlock(func, label: b"hostown", heat: BlockHeat.normal)
 	let separate = module.addBlock(func, label: b"hostsep", heat: BlockHeat.normal)
@@ -850,7 +850,7 @@ end 'emitBufferHostAllocation'
 // loaded AFTER the owed base is read, a ZERO-LENGTH record still detaches (no early-out — `__mm_alloc(0, 0)`
 // is a legal empty box, and skipping would leave a sentinel capacity on a pointer that has no header for the
 // next reallocation to read), and the fresh buffer comes from `__mm_alloc`, which zeroes.
-export function buildMmCowDetach(module StdModule)
+function buildMmCowDetach(module StdModule)
 	let func = IrFunction.createFromStd(MmCowDetachName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(2)
 

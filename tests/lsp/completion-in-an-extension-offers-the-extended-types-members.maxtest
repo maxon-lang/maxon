@@ -1,5 +1,5 @@
 let ExtendedSiblingRootName = "completion-in-an-extension-offers-the-extended-types-members"
-let ExtendedSiblingRosterFileName = "roster.maxon"
+let ExtendedSiblingRosterFileName = "lib/roster.maxon"
 let ExtendedSiblingMainFileName = "main.maxon"
 let ExtendedSiblingSelfLine = 2
 let ExtendedSiblingSelfCharacter = 20
@@ -11,13 +11,13 @@ test 'completion in an extension of a sibling type offers that types members'
 	writeCorpusFile(root, fileName: ExtendedSiblingRosterFileName, content: extendedSiblingRosterSource())
 	writeCorpusFile(root, fileName: ExtendedSiblingMainFileName, content: extendedSiblingMainSource())
 
-	let labels = completionLabelsForAtUri(fileUriOf(root.join(ExtendedSiblingMainFileName)), source: extendedSiblingMainSource(), line: ExtendedSiblingSelfLine, character: ExtendedSiblingSelfCharacter, after: "`self.`, inside `extension Roster`, where `Roster` is `export`ed by a sibling file")
+	let labels = completionLabelsForAtUri(fileUriOf(root.join(ExtendedSiblingMainFileName)), source: extendedSiblingMainSource(), line: ExtendedSiblingSelfLine, character: ExtendedSiblingSelfCharacter, after: "`self.`, inside `extension Roster`, where `Roster` is `export`ed by a file of `lib/`")
 
 	discardStagedDir(root)
 
-	assertCompletionOffersEach(labels, wanted: ["tally", "isVacant", "names"], after: "`self.`, inside `extension Roster`, where `Roster` is `export`ed by a sibling file")
+	assertCompletionOffersEach(labels, wanted: ["tally", "isVacant", "names"], after: "`self.`, inside `extension Roster`, where `Roster` is `export`ed by a file of `lib/`")
 
-	Expect.isFalse(completionOffersLabel(labels, label: "secret"), message: "completion after `self.` inside `extension Roster` offered `secret`, which `Roster` declares with no visibility modifier in another file: the compiler refuses the read from an extension (E3014).")
+	Expect.isFalse(completionOffersLabel(labels, label: "secret"), message: "completion after `self.` inside `extension Roster` offered `secret`, which `Roster` declares with no visibility modifier in `lib/`, a directory the extension's file is outside of: the compiler refuses the read (E3014).")
 end 'completion in an extension of a sibling type offers that types members'
 
 test 'completion in an extension of a type in the buffer offers that types members'

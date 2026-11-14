@@ -1,14 +1,14 @@
-export typealias DapSeq = int(0 to u64.max)
-export typealias DapNumber = int(i64.min to i64.max)
-export typealias DapObjectArray = Array with DapObject
+typealias DapSeq = int(0 to u64.max)
+typealias DapNumber = int(i64.min to i64.max)
+typealias DapObjectArray = Array with DapObject
 
 let SeqKey = "seq"
-module let TypeKey = "type"
+let TypeKey = "type"
 let CommandKey = "command"
 let ArgumentsKey = "arguments"
 let RequestSeqKey = "request_seq"
 let SuccessKey = "success"
-module let MessageKey = "message"
+let MessageKey = "message"
 let BodyKey = "body"
 let EventKey = "event"
 
@@ -18,26 +18,26 @@ let EventType = "event"
 
 let FirstAdapterSeq = 1
 
-export enum DapProtocolError implements Error
+enum DapProtocolError implements Error
 	notJson
 	notARequest
 end 'DapProtocolError'
 
-export union DapArgumentError implements Error
+union DapArgumentError implements Error
 	missing(name String)
 	wrongType(name String)
 end 'DapArgumentError'
 
-export union DapBody
+union DapBody
 	none
 	object(node JsonNodeId)
 end 'DapBody'
 
-export type DapObject
+type DapObject
 	let doc as JsonDoc
 	let node as JsonNodeId
 
-	export static function over(doc JsonDoc, node JsonNodeId) returns DapObject
+	static function over(doc JsonDoc, node JsonNodeId) returns DapObject
 		return Self{doc: doc, node: node}
 	end 'over'
 
@@ -45,7 +45,7 @@ export type DapObject
 		return self.doc.hasChild(self.node, key: key)
 	end 'has'
 
-	export function text(key String) returns String throws DapArgumentError
+	function text(key String) returns String throws DapArgumentError
 		if not self.has(key) 'absent'
 			throw DapArgumentError.missing(key)
 		end 'absent'
@@ -53,7 +53,7 @@ export type DapObject
 		return try self.doc.getString(self.node, key: key) otherwise throw DapArgumentError.wrongType(key)
 	end 'text'
 
-	export function textOr(key String, fallback String) returns String throws DapArgumentError
+	function textOr(key String, fallback String) returns String throws DapArgumentError
 		if not self.has(key) 'absent'
 			return fallback
 		end 'absent'
@@ -61,7 +61,7 @@ export type DapObject
 		return try self.text(key)
 	end 'textOr'
 
-	export function number(key String) returns DapNumber throws DapArgumentError
+	function number(key String) returns DapNumber throws DapArgumentError
 		if not self.has(key) 'absent'
 			throw DapArgumentError.missing(key)
 		end 'absent'
@@ -74,7 +74,7 @@ export type DapObject
 		end 'whole'
 	end 'number'
 
-	export function numberOr(key String, fallback DapNumber) returns DapNumber throws DapArgumentError
+	function numberOr(key String, fallback DapNumber) returns DapNumber throws DapArgumentError
 		if not self.has(key) 'absent'
 			return fallback
 		end 'absent'
@@ -82,11 +82,11 @@ export type DapObject
 		return try self.number(key)
 	end 'numberOr'
 
-	export function launchAsk(key String) returns NumberAsk throws DapArgumentError
+	function launchAsk(key String) returns NumberAsk throws DapArgumentError
 		return try numberAskIn(self.doc, node: self.node, key: key) otherwise throw DapArgumentError.wrongType(key)
 	end 'launchAsk'
 
-	export function flagOr(key String, fallback bool) returns bool throws DapArgumentError
+	function flagOr(key String, fallback bool) returns bool throws DapArgumentError
 		if not self.has(key) 'absent'
 			return fallback
 		end 'absent'
@@ -94,7 +94,7 @@ export type DapObject
 		return try self.doc.getBool(self.node, key: key) otherwise throw DapArgumentError.wrongType(key)
 	end 'flagOr'
 
-	export function object(key String) returns DapObject throws DapArgumentError
+	function object(key String) returns DapObject throws DapArgumentError
 		if not self.has(key) 'absent'
 			throw DapArgumentError.missing(key)
 		end 'absent'
@@ -108,7 +108,7 @@ export type DapObject
 		return DapObject.over(self.doc, node: child)
 	end 'object'
 
-	export function objects(key String) returns DapObjectArray throws DapArgumentError
+	function objects(key String) returns DapObjectArray throws DapArgumentError
 		let held = try self.elements(key)
 		let found = DapObjectArray.create(held.count(), zeroed: false)
 
@@ -123,7 +123,7 @@ export type DapObject
 		return found
 	end 'objects'
 
-	export function texts(key String) returns StringArray throws DapArgumentError
+	function texts(key String) returns StringArray throws DapArgumentError
 		let held = try self.elements(key)
 		let found = StringArray.create(held.count(), zeroed: false)
 
@@ -140,7 +140,7 @@ export type DapObject
 		return found
 	end 'texts'
 
-	export function textMap(key String) returns EnvMap throws DapArgumentError
+	function textMap(key String) returns EnvMap throws DapArgumentError
 		let found = EnvMap.create()
 
 		if not self.has(key) 'absent'
@@ -183,12 +183,12 @@ export type DapObject
 	end 'elements'
 end 'DapObject'
 
-export type DapRequest
+type DapRequest
 	export let seq as DapSeq
 	export let command as String
 	export let arguments as DapObject
 
-	export static function parse(body String) returns DapRequest throws DapProtocolError
+	static function parse(body String) returns DapRequest throws DapProtocolError
 		let doc = try Json.parse(body) otherwise throw DapProtocolError.notJson
 
 		if doc.rootKind() != JsonKind.jsonObject 'notAnObject'
@@ -218,27 +218,27 @@ export type DapRequest
 	end 'parse'
 end 'DapRequest'
 
-export type DapWriter
+type DapWriter
 	var nextSeq as DapSeq
 
-	export static function create() returns DapWriter
+	static function create() returns DapWriter
 		return Self{nextSeq: FirstAdapterSeq}
 	end 'create'
 
-	export function respond(request DapRequest, doc JsonDoc, body DapBody)
+	function respond(request DapRequest, doc JsonDoc, body DapBody)
 		let envelope = self.responseEnvelope(request, doc: doc, success: true)
 		addBody(envelope, body: body)
 		self.send(doc, envelope: envelope)
 	end 'respond'
 
-	export function refuse(request DapRequest, message String)
+	function refuse(request DapRequest, message String)
 		let doc = JsonDoc.create()
 		let envelope = self.responseEnvelope(request, doc: doc, success: false)
 		envelope.addString(doc, key: MessageKey, value: message)
 		self.send(doc, envelope: envelope)
 	end 'refuse'
 
-	export function event(name String, doc JsonDoc, body DapBody)
+	function event(name String, doc JsonDoc, body DapBody)
 		let envelope = self.envelope(doc, messageType: EventType)
 		envelope.addString(doc, key: EventKey, value: name)
 		addBody(envelope, body: body)

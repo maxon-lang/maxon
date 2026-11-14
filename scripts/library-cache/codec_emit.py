@@ -257,7 +257,7 @@ class Emitter:
             node = self.resolve(name)
             assert node.kind in ("uint", "sint"), name
             out.append("")
-            out.append("module function cacheRead%s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (name, name))
+            out.append("function cacheRead%s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (name, name))
             out.append("	return (try reader.%s) as %s" % (self.read_call(node), name))
             out.append("end 'cacheRead%s'" % name)
 
@@ -638,7 +638,7 @@ class Emitter:
         declaration = self.tree.types["IrModule"]
         columns = [field for field in declaration.fields if field.name in ("functions", "blocks", "ops", "spans")]
         out = [""]
-        out.append("export function cacheWriteMaxonModule(writer LibraryCacheWriter, value MaxonModule)")
+        out.append("function cacheWriteMaxonModule(writer LibraryCacheWriter, value MaxonModule)")
         reads = []
 
         for field in columns:
@@ -658,7 +658,7 @@ class Emitter:
 
         out.append("end 'cacheWriteMaxonModule'")
         out.append("")
-        out.append("export function cacheReadMaxonModule(reader LibraryCacheReader) returns MaxonModule throws LibraryCacheDamage")
+        out.append("function cacheReadMaxonModule(reader LibraryCacheReader) returns MaxonModule throws LibraryCacheDamage")
         out.append("\tlet assembled = MaxonModule.create()")
         out.append("")
 
@@ -699,4 +699,4 @@ class Emitter:
         return self.agreement_function(visibility, name, ["cacheTableAgrees%s" % enum for enum in enums])
 
     def enum_tables_aggregate(self, calls, host_enums):
-        return self.agreement_function("export ", "cacheEnumTablesAgree", calls + ["cacheTableAgrees%s" % enum for enum in host_enums])
+        return self.agreement_function("", "cacheEnumTablesAgree", calls + ["cacheTableAgrees%s" % enum for enum in host_enums])

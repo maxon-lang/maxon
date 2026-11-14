@@ -13,13 +13,13 @@ let MainFunctionHeader = "func @main"
 
 let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
-export union GenerateIrProbe
+union GenerateIrProbe
 	answered(result GenerateIrResult)
 	unanswered(reason String)
 end 'GenerateIrProbe'
 
 // Spawn, drive, release. The probe is a VALUE, so no assertion can run before the handle is freed.
-export function probeGenerateIr(source String) returns GenerateIrProbe
+function probeGenerateIr(source String) returns GenerateIrProbe
 	let client = LspClient.start()
 	let probe = collectGenerateIr(client, source: source)
 	client.release()
@@ -43,7 +43,7 @@ function generateIrAnswer(client LspClient, source String) returns GenerateIrRes
 end 'generateIrAnswer'
 
 // Every error an answer carried, for a report.
-export function renderedIrErrors(result GenerateIrResult) returns String
+function renderedIrErrors(result GenerateIrResult) returns String
 	var rendered = ""
 
 	for entry in result.errors 'eachError'

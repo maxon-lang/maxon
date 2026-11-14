@@ -16,7 +16,7 @@ let SharedValueChainNextOffset = 0x00
 let SharedValueChainValueOffset = 0x08
 let SharedValueChainNodeBytes = 0x10
 
-module let SharedValueHolderCellOffset = 0x00 as ByteOffset
+let SharedValueHolderCellOffset = 0x00 as ByteOffset
 let SharedValueBoxBytes = 8
 
 let SharedValueInitialRefs = 1
@@ -25,10 +25,10 @@ let SharedValueRefDown = -1
 let SharedValueReaderEnters = 1
 let SharedValueReaderLeaves = -1
 let SharedValueLastRef = 1
-module let ReleasedHolder = 0
+let ReleasedHolder = 0
 export let NoRuntimeFunction = 0 as FullRangeInt
-module let PublishedAnswer = 1
-module let DeclinedAnswer = 0
+let PublishedAnswer = 1
+let DeclinedAnswer = 0
 
 let SharedValueRuntimePrefix = b"__shv_"
 let SharedValueNewName = b"__shv_new"
@@ -43,7 +43,7 @@ export let SharedValueBoxCloneName = b"__shv_box_clone"
 export let SharedValueBoxRetainName = b"__shv_box_retain"
 export let SharedValueBoxDropName = b"__shv_box_drop"
 
-export function isSharedValueRuntimeCallee(callee ByteArray) returns bool
+function isSharedValueRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: SharedValueRuntimePrefix)
 end 'isSharedValueRuntimeCallee'
 
@@ -72,7 +72,7 @@ function emitSkipIfReleased(module StdModule, func IrFunction, block IrBlock, he
 	return live
 end 'emitSkipIfReleased'
 
-module function openRuntimeFunction(name ByteArray, paramCount ParamCount, returnsAWord bool, guarded bool = false) returns IrFunction
+function openRuntimeFunction(name ByteArray, paramCount ParamCount, returnsAWord bool, guarded bool = false) returns IrFunction
 	return IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64) if returnsAWord else StdReturnType.void, paramCount: paramCount, paramTypes: i64Params(paramCount), needsGreenThreadStackGuard: guarded, pinsItsThread: guarded)
 end 'openRuntimeFunction'
 

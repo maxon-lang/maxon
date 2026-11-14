@@ -1,9 +1,5 @@
-// UnusedExportCheck — E3092 / E3093 / E3094: a declaration more widely visible than its uses require.
-//
-// Three diagnostics, one walk (`specs/unused-export.md`):
-//   • E3092 `semanticUnusedExportedSymbol`  — an `export` decl no file outside its declaring one names
-//   • E3093 `semanticExportableAsModule`    — an `export` decl named only inside its declaring subtree
-//   • E3094 `semanticUnusedModuleSymbol`    — a `module` decl no file outside its declaring one names
+// UnusedExportCheck — E3092 `semanticUnusedExportedSymbol`: an `export` declaration no file outside its
+// declaring directory's subtree names (`specs/unused-export.md`, `specs/directory-scope.md`).
 //
 // ⭐⭐ **`public` IS THE WHOLE REASON THIS PASS EXISTS AT ALL, AND IT IS WHY THERE IS NO STDLIB
 // CARVE-OUT HERE.** Without it the audit conflates two things: `export` states VISIBILITY, and reading it
@@ -27,31 +23,24 @@
 // declaration being `public`; a `runtime/` declaration is not, so an `export`ed one would be audited like
 // an author's. It cannot be: every runtime declaration is permanently "unused" to this pass by
 // construction, because a runtime entry is reached by the COMPILER looking up a NAME, never by a source
-// file referencing it. There is no program in which one of them acquires a reader, so E3092/E3093/E3094
+// file referencing it. There is no program in which one of them acquires a reader, so E3092
 // over that tier report nothing a change could ever fix. Keyed on `isRuntimeSourceFile` so it fails
 // CLOSED: a file outside `runtime/` is audited.
 //
 // ⛔ **A SCRIPTLIB PACKAGE IS EXEMPT BY PATH TOO.** A script builds only the package bodies it reaches,
-// so its `export` and `module` declarations would be judged by whichever bodies one script's compile
-// built, raising E3092/E3094 in scripts that never touch the package; under `check-scriptlib` no
+// so its `export` declarations would be judged by whichever bodies one script's compile
+// built, raising E3092 in scripts that never touch the package; under `check-scriptlib` no
 // caller exists at all.
 //
 // ⛔ **THE SECOND EXEMPTION IS A SIGNATURE DEMAND, AND IT IS PER DECLARATION RATHER THAN BY PATH** — see
-// `reachedSignatureDemands`. A type that E3167 requires an exported or `module` surface to be able to
+// `reachedSignatureDemands`. A type that E3167 requires an exported surface to be able to
 // name is credited at the tier E3167 judges that surface at, so this pass and E3167 cannot contradict each other on one
 // program.
-//
-// ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its `module` declarations.**
-// That is deliberate — `module` is the marked, narrower tier there, and E3094 is exactly the signal its
-// author wants if a door stops being reached. A stdlib file's bodies are built only once a path from
-// `main` reaches the file, so a sibling file's reference to a `module` declaration is usually in a body no
-// op exists for; `noteSpelledUnbuiltReferences` credits it from the source, so E3094 fires only when no
-// built body calls the name and no skipped body spells it.
 
 // ── Gates ────────────────────────────────────────────────────────────────────────────────────────
 
 // A program with any diagnostic is not audited: a refused use or an abandoned body leaves its
-// declaration with no reader, so the audit would report a spurious E3092/E3093/E3094 beside the
+// declaration with no reader, so the audit would report a spurious E3092 beside the
 // error.
 
 // ── What is seeded ───────────────────────────────────────────────────────────────────────────────
@@ -62,11 +51,10 @@ enum TrackedDeclKind
 	trackedBinding
 end 'TrackedDeclKind'
 
-// One `export`/`module` declaration and the widest scope anything has been seen to read it from.
+// One `export` declaration and whether anything outside its declaring directory's subtree reads it.
 //
-// ⚠ **THE TWO BITS ARE MONOTONIC AND ARE NEVER NARROWED.** A declaration read from two files is read
-// from the wider of them, so every `note` widens or does nothing; a `set` that could clear one would make
-// the answer depend on which reader was visited last.
+// ⚠ **THE BIT IS MONOTONIC AND IS NEVER CLEARED.** Every `note` sets it or does nothing; a `set` that
+// could clear it would make the answer depend on which reader was visited last.
 type TrackedDecl
 	export var kind as TrackedDeclKind
 
@@ -82,26 +70,16 @@ type TrackedDecl
 	export var declFile as AuditedFile
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
-	export var sawOutsideFile as bool
-	export var sawOutsideModule as bool
+	export var sawOutsideSubtree as bool
 	export let isAlias as bool
 
 	static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber, isAlias bool) returns TrackedDecl
-		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false, isAlias: isAlias}
+		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideSubtree: false, isAlias: isAlias}
 	end 'create'
 
 	function spelling() returns immutable ByteArray
 		return unqualifiedMemberOf(freeze self.displayName.toByteArray())
 	end 'spelling'
-
-	function isVisibleFrom(reader AuditedFile) returns bool
-		match self.visibility 'tier'
-			module then return moduleDirectoryContains(self.declFile.moduleDirectory, inner: reader.moduleDirectory)
-			global then return true
-			file or
-			public then panic("TrackedDecl.isVisibleFrom: a `{self.visibility.name}` declaration ({self.noun} '{self.displayName}') is never tracked — `tierIsAudited` filters it at seed time")
-		end 'tier'
-	end 'isVisibleFrom'
 end 'TrackedDecl'
 
 typealias TrackedDeclArray = Array with TrackedDecl
@@ -154,11 +132,10 @@ type AuditedFile
 	export let index as ElementIndex
 	export let path as FilePath
 	export let pathText as String
-	export let moduleDirectory as String
-	export let isLibrary as bool
+	let scope as DirectoryScope
 
-	static function create(index ElementIndex, path FilePath, pathText String, moduleDirectory String, isLibrary bool) returns AuditedFile
-		return Self{index: index, path: path, pathText: pathText, moduleDirectory: moduleDirectory, isLibrary: isLibrary}
+	static function create(index ElementIndex, path FilePath, pathText String, scope DirectoryScope) returns AuditedFile
+		return Self{index: index, path: path, pathText: pathText, scope: scope}
 	end 'create'
 end 'AuditedFile'
 
@@ -167,23 +144,21 @@ typealias AuditedFileMap = Map with (String, AuditedFile)
 // The LIBRARY's source files, keyed by the `FilePath.toString()` spelling. A SET and not a second walk,
 // because `isStdlibSourceFile` is a memo probe on a `FilePath` key — which clones and lower-cases the path —
 // while this is asked of every reader and every declaration, and a String key hashes in place.
-module typealias LibrarySourcePathSet = Set with String
+typealias LibrarySourcePathSet = Set with String
 
-module typealias EntryPointNameSet = Set with ByteArray
+typealias EntryPointNameSet = Set with ByteArray
 
 // The author's files, the library's, and the unaudited tiers' (runtime and scriptlib), told apart in ONE
 // walk over `project.db.sourcePaths`. All three come from the same answers per path, so the populations
-// cannot come to disagree about a file the way independently-filtered walks could. `unauditedFiles` is a
-// SUBSET of `libraryFiles`: a runtime or scriptlib file is the library's for `noteRead`'s rule and
-// additionally exempt from emission.
-module type SourcePathSplit
+// cannot come to disagree about a file the way independently-filtered walks could. A runtime or scriptlib
+// file is the library's for `noteRead`'s rule and additionally exempt from emission.
+type SourcePathSplit
 	export let userFiles as FilePathArray
 	export let stdlibFiles as FilePathArray
-	export let libraryFiles as LibrarySourcePathSet
 	export let unauditedFiles as LibrarySourcePathSet
 
-	static function create(userFiles FilePathArray, stdlibFiles FilePathArray, libraryFiles LibrarySourcePathSet, unauditedFiles LibrarySourcePathSet) returns SourcePathSplit
-		return Self{userFiles: userFiles, stdlibFiles: stdlibFiles, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles}
+	static function create(userFiles FilePathArray, stdlibFiles FilePathArray, unauditedFiles LibrarySourcePathSet) returns SourcePathSplit
+		return Self{userFiles: userFiles, stdlibFiles: stdlibFiles, unauditedFiles: unauditedFiles}
 	end 'create'
 end 'SourcePathSplit'
 
@@ -196,12 +171,8 @@ type TrackedDecls
 	export var typeIndex as TrackedDeclIndexMap
 	export var bindingIndex as TrackedDeclIndexMap
 
-	// Which files are the library's, for `noteRead`'s rule: a property of the PROGRAM rather than of any one
-	// credit, so it rides here instead of being threaded through every `note*`.
-	export let libraryFiles as LibrarySourcePathSet
-
 	// The fourth index, and the only one keyed by something other than a source name — see
-	// `GlobalLabelIndexMap`. It rides here for `libraryFiles`' reason.
+	// `GlobalLabelIndexMap`.
 	export let globalLabels as GlobalLabelIndexMap
 
 	var files as AuditedFileMap
@@ -209,8 +180,8 @@ type TrackedDecls
 	var creditedTypeNames as CreditedTypeNameKeySet
 	var creditedNominalNames as CreditedTypeNameKeySet
 
-	static function create(libraryFiles LibrarySourcePathSet, globalLabels GlobalLabelIndexMap) returns TrackedDecls
-		return Self{entries: TrackedDeclArray.create(0), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create(), creditedNominalNames: CreditedTypeNameKeySet.create()}
+	static function create(globalLabels GlobalLabelIndexMap) returns TrackedDecls
+		return Self{entries: TrackedDeclArray.create(0), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create(), creditedNominalNames: CreditedTypeNameKeySet.create()}
 	end 'create'
 
 	function fileOf(path FilePath, signatures ProgramSignatures) returns AuditedFile
@@ -220,7 +191,7 @@ type TrackedDecls
 			return known
 		end 'known'
 
-		let file = AuditedFile.create(self.files.count(), path: path, pathText: pathText, moduleDirectory: signatures.moduleDirectoryOf(path), isLibrary: self.libraryFiles.contains(pathText))
+		let file = AuditedFile.create(self.files.count(), path: path, pathText: pathText, scope: signatures.scopeOf(path))
 		self.files.upsert(pathText, value: file)
 		return file
 	end 'fileOf'
@@ -305,7 +276,7 @@ end 'TrackedDecls'
 
 // ── The pass ─────────────────────────────────────────────────────────────────────────────────────
 
-module function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
+function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
 	if projectHasErrors(project) 'aRefusedUseHidesAReader'
 		return
 	end 'aRefusedUseHidesAReader'
@@ -314,7 +285,7 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 
 	let entryPoints = try entryPointNamesOf(project, userFiles: sources.userFiles)
 
-	let tracked = TrackedDecls.create(sources.libraryFiles, globalLabels: indexGlobalLabels(signatures))
+	let tracked = TrackedDecls.create(indexGlobalLabels(signatures))
 	seedFunctions(module, signatures: signatures, entryPoints: entryPoints, tracked: tracked)
 	try seedTypes(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	seedBindings(signatures, tracked: tracked)
@@ -333,21 +304,18 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 	emitDiagnostics(project, tracked: tracked, unauditedFiles: sources.unauditedFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
 end 'checkUnusedExports'
 
-module function splitSourcePaths(project Project) returns SourcePathSplit
+function splitSourcePaths(project Project) returns SourcePathSplit
 	let paths = FilePathArray.create(0)
 	let stdlibPaths = FilePathArray.create(0)
-	let libraryFiles = LibrarySourcePathSet.create()
 	let unauditedFiles = LibrarySourcePathSet.create()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
-			libraryFiles.insert(path.toString())
 			stdlibPaths.push(path)
 			continue
 		end 'stdlibFile'
 
 		if isRuntimeSourceFile(project, path: path) or isScriptlibSourceFile(project, path: path) 'unauditedTierFile'
-			libraryFiles.insert(path.toString())
 			unauditedFiles.insert(path.toString())
 			continue
 		end 'unauditedTierFile'
@@ -355,7 +323,7 @@ module function splitSourcePaths(project Project) returns SourcePathSplit
 		paths.push(path)
 	end 'eachFile'
 
-	return SourcePathSplit.create(paths, stdlibFiles: stdlibPaths, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles)
+	return SourcePathSplit.create(paths, stdlibFiles: stdlibPaths, unauditedFiles: unauditedFiles)
 end 'splitSourcePaths'
 
 // One pass over the declaration arena, so `noteGlobalLabel` is a lookup and not a scan of it.
@@ -394,16 +362,15 @@ end 'indexGlobalLabels'
 // gets, and `public` is the author's statement that "nobody here calls it" is not a finding.
 function tierIsAudited(visibility Visibility) returns bool
 	return match visibility 'tier'
-		file gives false
+		unexported gives false
 		public gives false
-		module gives true
 		global gives true
 	end 'tier'
 end 'tierIsAudited'
 
 // ⭐ **THE NAMES NO SOURCE LINE DECLARES.** A synthesized helper has no `export` an author could drop, so
 // a finding about one is a finding about the compiler.
-module function isSynthesizedName(signatures ProgramSignatures, name ByteArray) returns bool
+function isSynthesizedName(signatures ProgramSignatures, name ByteArray) returns bool
 	return isCompilerReservedName(name) or isLiftedClosureName(name) or namesWithinAUnionCasesCompanion(signatures, name: name)
 end 'isSynthesizedName'
 
@@ -429,7 +396,7 @@ end 'namesWithinAUnionCasesCompanion'
 // this build enters at: the driver compiles the file with one of them as the entry and reaches the
 // others by name. They are read through the driver's own `taskNamesIn`, so the two cannot disagree
 // on what one is.
-module function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
+function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
 	let names = EntryPointNameSet.create()
 	names.insert(project.entryFunctionName)
 
@@ -464,9 +431,8 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 		end 'noSourceLevelCaller'
 
 		// ⭐ **A METHOD TAKES ITS TIER FROM ITS DECLARING TYPE, SO THE TYPE OWNS THE DIAGNOSTIC.** Auditing
-		// `Point.sum` on its own reports an internal helper of a public type as dead, and — worse — an
-		// un-`export`ed method of a `module` type would report as E3093, advising a narrowing that is not
-		// expressible. `specs/unused-export.md`'s `error.unused-exported-type` PINS it: `LocalPoint`
+		// `Point.sum` on its own reports an internal helper of a public type as dead.
+		// `specs/unused-export.md`'s `error.unused-exported-type` PINS it: `LocalPoint`
 		// declares two exported methods and the case expects exactly ONE diagnostic, about the type.
 		if namesAMethodOnATrackedType(signatures, qualifiedName: func.name) 'theTypeOwnsIt'
 			continue
@@ -542,7 +508,7 @@ function declaredTypeVisibility(signatures ProgramSignatures, decl TypeNameDecl)
 		structType then return declaredStructVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
 		enumType then return declaredEnumVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
 		unionType then return declaredEnumVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
-		interfaceType then return Visibility.file
+		interfaceType then return Visibility.unexported
 		rangedAlias or
 		functionAlias or
 		genericAlias or
@@ -553,14 +519,14 @@ end 'declaredTypeVisibility'
 function declaredStructVisibility(signatures ProgramSignatures, name ByteArray, declFilePath FilePath) returns Visibility
 	return match signatures.structFor(name, readerFilePath: declFilePath) 'lookup'
 		declared(layout) gives layout.visibility
-		undeclared gives Visibility.file
+		undeclared gives Visibility.unexported
 	end 'lookup'
 end 'declaredStructVisibility'
 
 function declaredEnumVisibility(signatures ProgramSignatures, name ByteArray, declFilePath FilePath) returns Visibility
 	return match signatures.enumFor(name, readerFilePath: declFilePath) 'lookup'
 		declared(layout) gives layout.visibility
-		undeclared gives Visibility.file
+		undeclared gives Visibility.unexported
 	end 'lookup'
 end 'declaredEnumVisibility'
 
@@ -637,8 +603,8 @@ end 'collectReferences'
 //
 // ⛔ **WHAT THAT COSTS IS A SUPPRESSED TRUE FINDING, NOT A FALSE ONE, AND THAT IS THE HALF NO GREEN CASE
 // CAN SEE.** A misresolved id credits WHATEVER NAME occupies that slot in the other table — a name the
-// reader never wrote — so a declaration nothing outside its file reaches is recorded as reached and its
-// E3092/3/4 never fires. (The mirror is harmless here: the name that LOSES the credit was, by construction,
+// reader never wrote — so a declaration nothing outside its directory reaches is recorded as reached and its
+// E3092 never fires. (The mirror is harmless here: the name that LOSES the credit was, by construction,
 // written by that reader, and `collectFileTypeReferences` credits it from `usedTypeNames` anyway.) Which
 // declarations are credited then depends on unrelated files that declare types. `specs/unused-export.md`'s
 // `error.unused-exported-type-when-the-two-interners-disagree` is the smallest program that shows it.
@@ -832,7 +798,7 @@ function unreadDeclSpellingsOf(tracked TrackedDecls, unauditedFiles LibrarySourc
 	for i in 0 upto tracked.entries.count() 'eachTracked'
 		let decl = tracked.at(i)
 
-		if decl.sawOutsideModule or unauditedFiles.contains(decl.declFile.pathText) 'readOrUnaudited'
+		if decl.sawOutsideSubtree or unauditedFiles.contains(decl.declFile.pathText) 'readOrUnaudited'
 			continue
 		end 'readOrUnaudited'
 
@@ -867,7 +833,7 @@ end 'noteSpelledNamesInUnbuiltBodies'
 
 function noteSpelledNamesInConditionalRegions(project Project, signatures ProgramSignatures, tracked TrackedDecls, unread TrackedDeclIndexMap, files FilePathArray) throws CompileError
 	for path in files 'eachFile'
-		let spellings = try conditionalSpellingsOf(project, path: path)
+		let spellings = (try conditionalSpellingsOf(project, path: path)).names
 
 		if spellings.isEmpty() 'noConditionalRegion'
 			continue
@@ -885,9 +851,7 @@ function noteSpelledName(tracked TrackedDecls, name ByteArray, unread TrackedDec
 	let claimants = try unread.get(name) otherwise return
 
 	for at in claimants 'eachClaimant'
-		if tracked.at(at).isVisibleFrom(reader) 'theReaderCanNameIt'
-			noteRead(tracked, index: at, reader: reader)
-		end 'theReaderCanNameIt'
+		noteRead(tracked, index: at, reader: reader)
 	end 'eachClaimant'
 end 'noteSpelledName'
 
@@ -963,7 +927,7 @@ function noteTypeNameDenoting(signatures ProgramSignatures, tracked TrackedDecls
 		noteEveryClaimant(signatures, tracked: tracked, name: source, meant: meant, denotation: denotation, claimants: claimants, reader: reader)
 	end 'tracked'
 
-	// A type this pass does not TRACK is still walked through: a file-private struct may hold a field of
+	// A type this pass does not TRACK is still walked through: an unexported struct may hold a field of
 	// an exported type, and a reader that reaches the one reaches the other.
 	let meaningFile = meaningFileOf(meant, denotation: denotation, reader: reader)
 	noteStructFieldTypes(signatures, tracked: tracked, name: source, reader: reader, meaningFile: meaningFile)
@@ -1133,20 +1097,12 @@ function noteGlobalLabel(signatures ProgramSignatures, tracked TrackedDecls, lab
 	noteSlotType(signatures, tracked: tracked, index: index, reader: reader)
 end 'noteGlobalLabel'
 
-// ⭐⭐ **THE CLASSIFICATION RULE, AND ITS ONE DELIBERATE DIVERGENCE FROM WHAT `module` MEANS.** A reader in
-// the SAME DIRECTORY as the declaration counts as OUTSIDE its module subtree, even though
-// `Visibility.module` would make the declaration visible to it. It is not an oversight: without it,
-// every flat two-file program would be told to downgrade its `export`s to `module`, which is advice
-// about a program's directory layout rather than about its visibility. Only a STRICTLY NESTED reader
-// keeps a declaration downgradable — which is why the equality case is excluded here rather than left
-// to `moduleDirectoryContains`, whose own answer includes it.
 function noteRead(tracked TrackedDecls, index ElementIndex, reader AuditedFile)
 	let decl = tracked.at(index)
 
-	// Both bits only ever widen, so a declaration already read from outside its subtree has nothing left to learn.
-	if decl.sawOutsideModule or decl.declFile.index == reader.index 'nothingToWidenOrItsOwnFile'
+	if decl.sawOutsideSubtree 'nothingToWiden'
 		return
-	end 'nothingToWidenOrItsOwnFile'
+	end 'nothingToWiden'
 
 	// ⭐⭐ **A LIBRARY FILE CANNOT NAME AN AUTHOR'S DECLARATION — A CREDIT THAT SAYS OTHERWISE IS A
 	// MONOMORPH'S SIGNATURE, NOT A REFERENCE.** `stdlib/` is compiled with no knowledge whatever of user
@@ -1157,24 +1113,18 @@ function noteRead(tracked TrackedDecls, index ElementIndex, reader AuditedFile)
 	//
 	// ⛔ **CREDITING ONE SUPPRESSES TRUE FINDINGS, UNPREDICTABLY.** Whether a monomorphized iterator's
 	// signature mentions the author's `Item` at all turns on what the reading file happens to declare, so two
-	// programs differing in nothing else answer differently about one `export type Item`. It also makes the
-	// E3093 half unfalsifiable: every route by which an outside file reaches a container's ELEMENT type runs
-	// through a library generic.
+	// programs differing in nothing else answer differently about one `export type Item`.
 	//
-	// ⚠ **ONE DIRECTION ONLY.** A library file reading a LIBRARY declaration is an ordinary reference, and it
-	// is what keeps the stdlib's `module` declarations audited (see this file's header).
-	if reader.isLibrary and not decl.declFile.isLibrary 'aLibraryBodyNamedNothingTheAuthorWrote'
+	// ⚠ **ONE DIRECTION ONLY.** A library file reading a LIBRARY declaration is an ordinary reference.
+	if reader.scope.isLibrary and not decl.declFile.scope.isLibrary 'aLibraryBodyNamedNothingTheAuthorWrote'
 		return
 	end 'aLibraryBodyNamedNothingTheAuthorWrote'
 
-	decl.sawOutsideFile = true
+	if decl.declFile.scope.contains(reader.scope) 'insideTheSubtree'
+		return
+	end 'insideTheSubtree'
 
-	let declModuleDirectory = decl.declFile.moduleDirectory
-	let strictlyNested = moduleDirectoryContains(declModuleDirectory, inner: reader.moduleDirectory) and not declModuleDirectory.equals(reader.moduleDirectory)
-
-	if not strictlyNested 'outsideTheSubtree'
-		decl.sawOutsideModule = true
-	end 'outsideTheSubtree'
+	decl.sawOutsideSubtree = true
 
 	try tracked.entries.set(index, value: decl) otherwise panic("checkUnusedExports: entries.set OOB at {index} — the index came from this seed")
 end 'noteRead'
@@ -1187,7 +1137,7 @@ typealias DemandedTierMap = Map with (ByteArray, Visibility)
 // so two declarations of one name are demanded apart. A demand is `checkSignatureVisibility`'s
 // record that some declaration's surface names the type and so needs it at the tier E3167 judges that
 // surface at; it is reached when the demanding declaration is itself referenced from outside the type's
-// declaring file, since a declaration nothing outside reaches is an `export` the author may drop, and
+// declaring directory, since a declaration nothing outside reaches is an `export` the author may drop, and
 // crediting the type off it would suppress the finding that says so.
 //
 // A demand whose declaration is not reached still holds once its OWNER type is credited at the demand's
@@ -1197,8 +1147,8 @@ typealias DemandedTierMap = Map with (ByteArray, Visibility)
 // linear in the demands, where re-sweeping every demand until nothing changes is quadratic in a chain of
 // types that expose each other.
 //
-// `Visibility.file` is the "no reached demand" value and no demand can carry it — the pass never judges a
-// file-private surface.
+// `Visibility.unexported` is the "no reached demand" value and no demand can carry it — the pass never
+// judges an unexported surface.
 function reachedSignatureDemands(project Project, tracked TrackedDecls) returns DemandedTierMap
 	let demanded = DemandedTierMap.create()
 	let awaiting = DemandsAwaitingOwnerMap.create()
@@ -1239,7 +1189,7 @@ typealias DemandsAwaitingOwnerMap = Map with (ByteArray, SignatureTypeDemandArra
 function creditDemand(demand SignatureTypeDemand, demanded DemandedTierMap, widened SignatureTypeDemandArray)
 	let key = fileScopedDeclKey(demand.typeName, declFilePath: demand.declFilePath)
 
-	if tierIsAtLeastAsVisible(try demanded.get(key) otherwise Visibility.file, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
+	if tierIsAtLeastAsVisible(try demanded.get(key) otherwise Visibility.unexported, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
 		return
 	end 'aWiderDemandIsAlreadyHeld'
 
@@ -1293,7 +1243,7 @@ function ownerIsCredited(tracked TrackedDecls, demand SignatureTypeDemand, owner
 
 	for at in claimants 'eachClaimant'
 		let claimant = tracked.at(at)
-		let held = try demanded.get(fileScopedDeclKey(claimant.key, declFilePath: claimant.declFile.path)) otherwise Visibility.file
+		let held = try demanded.get(fileScopedDeclKey(claimant.key, declFilePath: claimant.declFile.path)) otherwise Visibility.unexported
 
 		if tierIsAtLeastAsVisible(held, floor: demand.demandingTier) 'aReachedSignatureAsksAsMuchOfIt'
 			return true
@@ -1305,7 +1255,7 @@ end 'ownerIsCredited'
 
 function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) returns bool
 	match demand.demandingKind 'kind'
-		constantBinding then return reachedFromOutsideItsFile(tracked.bindingIndex, tracked: tracked, name: demand.demandingName)
+		constantBinding then return reachedFromOutsideItsSubtree(tracked.bindingIndex, tracked: tracked, name: demand.demandingName)
 		structDeclaration or
 		enumDeclaration or
 		unionDeclaration or
@@ -1317,7 +1267,7 @@ function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) retur
 	end 'kind'
 
 	match splitQualifiedName(demand.demandingName) 'split'
-		notQualified then return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingName)
+		notQualified then return reachedFromOutsideItsSubtree(tracked.functionIndex, tracked: tracked, name: demand.demandingName)
 		parts(owner, _) then return memberDemandIsReached(tracked, demand: demand, owner: owner)
 	end 'split'
 end 'demandIsReached'
@@ -1334,7 +1284,7 @@ function declarationDemandIsReached(tracked TrackedDecls, demand SignatureTypeDe
 		return false
 	end 'aDeclarationCannotWidenItself'
 
-	return reachedFromOutsideItsFile(tracked.typeIndex, tracked: tracked, name: demand.demandingName)
+	return reachedFromOutsideItsSubtree(tracked.typeIndex, tracked: tracked, name: demand.demandingName)
 end 'declarationDemandIsReached'
 
 // A method's OWNER TYPE stands in for it: this audit records no reference against a method at all — the
@@ -1346,26 +1296,26 @@ function memberDemandIsReached(tracked TrackedDecls, demand SignatureTypeDemand,
 	end 'aMemberCannotWidenItsOwnType'
 
 	if tracked.functionIndex.contains(demand.demandingName) 'theMemberIsAuditedItself'
-		return reachedFromOutsideItsFile(tracked.functionIndex, tracked: tracked, name: demand.demandingName)
+		return reachedFromOutsideItsSubtree(tracked.functionIndex, tracked: tracked, name: demand.demandingName)
 	end 'theMemberIsAuditedItself'
 
-	return reachedFromOutsideItsFile(tracked.typeIndex, tracked: tracked, name: owner)
+	return reachedFromOutsideItsSubtree(tracked.typeIndex, tracked: tracked, name: owner)
 end 'memberDemandIsReached'
 
-function reachedFromOutsideItsFile(index TrackedDeclIndexMap, tracked TrackedDecls, name ByteArray) returns bool
+function reachedFromOutsideItsSubtree(index TrackedDeclIndexMap, tracked TrackedDecls, name ByteArray) returns bool
 	// A name the seed never tracked — a `public` declaration, an entry point, a task — is one whose reach
 	// this pass does not measure, so its demand stands. Answering true can only credit the type and so
 	// suppress a finding; it never invents one.
 	let claimants = try index.get(name) otherwise return true
 
 	for at in claimants 'eachClaimant'
-		if tracked.at(at).sawOutsideFile 'reachedFromOutside'
+		if tracked.at(at).sawOutsideSubtree 'reachedFromOutside'
 			return true
 		end 'reachedFromOutside'
 	end 'eachClaimant'
 
 	return false
-end 'reachedFromOutsideItsFile'
+end 'reachedFromOutsideItsSubtree'
 
 // In DECLARATION order, which is the order the seed was built in — see `TrackedDecls`.
 //
@@ -1387,47 +1337,28 @@ end 'emitDiagnostics'
 
 function demandedTierOf(decl TrackedDecl, demanded DemandedTierMap) returns Visibility
 	if decl.kind != TrackedDeclKind.trackedType 'onlyATypeIsNamedByASignature'
-		return Visibility.file
+		return Visibility.unexported
 	end 'onlyATypeIsNamedByASignature'
 
-	return try demanded.get(fileScopedDeclKey(decl.key, declFilePath: decl.declFile.path)) otherwise Visibility.file
+	return try demanded.get(fileScopedDeclKey(decl.key, declFilePath: decl.declFile.path)) otherwise Visibility.unexported
 end 'demandedTierOf'
 
 function emitOne(project Project, decl TrackedDecl, demandedTier Visibility)
 	match decl.visibility 'tier'
-		file then panic("checkUnusedExports: a `file` declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time")
+		unexported then panic("checkUnusedExports: an unexported declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time")
 		public then panic("checkUnusedExports: a `public` declaration reached emit ({decl.noun} '{decl.displayName}') — `tierIsAudited` filters it at seed time, which is the whole of the exemption")
-		module then emitForModuleTier(project, decl: decl, demandedTier: demandedTier)
 		global then emitForGlobalTier(project, decl: decl, demandedTier: demandedTier)
 	end 'tier'
 end 'emitOne'
 
-function emitForModuleTier(project Project, decl TrackedDecl, demandedTier Visibility)
-	if tierIsAtLeastAsVisible(demandedTier, floor: Visibility.module) 'aReachedSignatureAsksForThisTier'
-		return
-	end 'aReachedSignatureAsksForThisTier'
-
-	if not decl.sawOutsideFile 'nothingOutsideNamesIt'
-		reportPositioned(project, code: ErrorCode.semanticUnusedModuleSymbol, message: "module {decl.noun} '{decl.displayName}' is never referenced outside its declaring file", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
-	end 'nothingOutsideNamesIt'
-end 'emitForModuleTier'
-
-// The demand excuses each arm on its own terms, not the declaration as a whole: a `module` demand answers
-// "nothing outside names it" but leaves "`module` would do" true and worth saying, so only a program-wide
-// demand silences both arms.
 function emitForGlobalTier(project Project, decl TrackedDecl, demandedTier Visibility)
 	if isProgramWideTier(demandedTier) 'aReachedSignatureAsksForThisTier'
 		return
 	end 'aReachedSignatureAsksForThisTier'
 
-	if not decl.sawOutsideFile and demandedTier == Visibility.file 'nothingOutsideNamesIt'
-		reportPositioned(project, code: ErrorCode.semanticUnusedExportedSymbol, message: "exported {decl.noun} '{decl.displayName}' is never referenced outside its declaring file", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
-		return
-	end 'nothingOutsideNamesIt'
-
-	if not decl.sawOutsideModule 'onlyItsOwnSubtreeNamesIt'
-		reportPositioned(project, code: ErrorCode.semanticExportableAsModule, message: "exported {decl.noun} '{decl.displayName}' is only referenced inside its declaring module subtree; consider 'module' visibility", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
-	end 'onlyItsOwnSubtreeNamesIt'
+	if not decl.sawOutsideSubtree 'nothingOutsideItsDirectoryNamesIt'
+		reportPositioned(project, code: ErrorCode.semanticUnusedExportedSymbol, message: "exported {decl.noun} '{decl.displayName}' is never referenced outside its declaring directory", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
+	end 'nothingOutsideItsDirectoryNamesIt'
 end 'emitForGlobalTier'
 
 // How a credited name is read: `nominal` names its declaration by itself, and `readIn` is a spelling whose
@@ -1444,7 +1375,7 @@ end 'Denotation'
 // IS NOT SAFE.** Crediting a spare claimant only ever SUPPRESSES a warning, so the direction is right for
 // two declarations a reader genuinely could mean — but a cross-KIND contested name is two declarations
 // that CANNOT both be meant, and crediting the wrong one makes this audit's answer depend on an unrelated
-// file's spelling: a file-private alias in `a.maxon` named like `b.maxon`'s `export union Container` would
+// file's spelling: an unexported alias in `a.maxon` named like `b.maxon`'s `export union Container` would
 // have its OWN uses counted as references to that union, silencing a true E3092.
 //
 // ⚠ A use that names ONE declaration — a mint or a qualified spelling (`WrittenAliasFile.declaredIn`) —

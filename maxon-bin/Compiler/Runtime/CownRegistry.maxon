@@ -2,7 +2,7 @@
 // (`RegistryLockLabel`), so a lookup takes its share of the cown before a concurrent register can
 // drop the handle it read; an emitted line pays I/O anyway. Nothing allocates and no handle is
 // dropped while that lock is held.
-export let RegistryLockLabel = b"__maxon_registry_lock"
+let RegistryLockLabel = b"__maxon_registry_lock"
 
 let ServiceRegistryRuntimePrefix = b"__reg_service_"
 export let RegistryServiceCurrentName = b"__reg_service_current"
@@ -30,11 +30,11 @@ end 'installServiceRegistryRuntime'
 
 let RegistryReleasedMessage = b"a `default` key was looked up or registered after the exit drain released the registry"
 
-module function releasedRegistryPanicLabel(globalData GlobalDataTable) returns immutable ByteArray
+function releasedRegistryPanicLabel(globalData GlobalDataTable) returns immutable ByteArray
 	return registerPanicLabel(globalData, message: RegistryReleasedMessage)
 end 'releasedRegistryPanicLabel'
 
-module function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsRegistryLock bool, ids ValueMinter) returns IrBlock
+function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsRegistryLock bool, ids ValueMinter) returns IrBlock
 	let releasedBlock = module.addBlock(func, label: b"regreleased", heat: BlockHeat.cold)
 	let live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: releasedBlock, whenFalse: live, ids: ids)

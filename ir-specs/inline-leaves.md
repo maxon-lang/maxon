@@ -28,7 +28,7 @@ does not touch — out of the way; a tier callee spliced into a caller the compi
 by it, and the row then ends the compile rather than falling back to a call.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_wide(seed MachineWord) returns MachineWord
+function __probe_wide(seed MachineWord) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	var acc = seed + 1
@@ -432,13 +432,13 @@ TWO calls, so the leaf rule refuses it outright and the called-once rule never s
 compiler renders `callDirect __probe_outer` twice here.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_inner(seed MachineWord) returns MachineWord
+function __probe_inner(seed MachineWord) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	return seed + 1
 end '__probe_inner'
 
-module function __probe_outer(seed MachineWord) returns MachineWord
+function __probe_outer(seed MachineWord) returns MachineWord
 	__Raw.splicedAtEverySite()
 
 	return __probe_inner(seed) + __probe_inner(seed + 1)
@@ -760,7 +760,7 @@ that is not, so a runtime callee reaches only a runtime caller — and the pair 
 which the harness counts as a SKIP naming this case.
 ```maxon
 // --- runtime-file: Probe.maxon
-module function __probe_tls_read(tebOffset MachineWord) returns MachineWord
+function __probe_tls_read(tebOffset MachineWord) returns MachineWord
 	return __Raw.tlsSlotLoad(tebOffset)
 end '__probe_tls_read'
 
@@ -11985,7 +11985,7 @@ func @main {
     x64.callDirect __managed_push
     x64.jmp __im_cont
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1119: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1113: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -12184,7 +12184,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont
   tryerr:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at String.maxon:1119: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at String.maxon:1113: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -12389,7 +12389,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont
   tryerr:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at String.maxon:1119: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at String.maxon:1113: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

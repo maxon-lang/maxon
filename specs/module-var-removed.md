@@ -44,19 +44,6 @@ end 'main'
 error E2001: <fragment>:2:8: Expected function declaration, got 'var'
 ```
 
-<!-- test: error.a-module-modifier-var-is-refused -->
-Neither does the `module` modifier.
-```maxon
-module var featureState = 0 as FullRangeInt
-
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2001: <fragment>:2:8: Expected function declaration, got 'var'
-```
-
 <!-- test: error.a-static-var-is-refused -->
 After `static` a type body takes a function or a `let`, so a `static var` is refused at the `var` token.
 ```maxon

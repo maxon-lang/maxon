@@ -358,9 +358,9 @@ end 'main'
 ```
 
 <!-- test: error.a-set-from-head-another-file-keeps-private-is-refused -->
-A `Set` instance alias at the head of `from […]` is a type name, and another file's file-private one is refused.
+A `Set` instance alias at the head of `from […]` is a type name, and another directory's unexported one is refused.
 ```maxon
-// --- file: probe.maxon
+// --- file: probe/probe.maxon
 typealias Counts = Set with ExitCode
 
 export function probeCounts() returns ExitCode
@@ -609,14 +609,14 @@ error E3017: <fragment>:17:10: Type 'Spot' does not satisfy constraint 'Equatabl
 Two files that each build a bare `Set from` over the same element mint one instance between them.
 ```maxon
 // --- file: a.maxon
-module function countA(codes Codes) returns Count
+function countA(codes Codes) returns Count
 	let s = Set from codes
 	return s.count()
 end 'countA'
 
 // --- file: main.maxon
-module typealias Code = int(0 to 100)
-module typealias Codes = Array with Code
+typealias Code = int(0 to 100)
+typealias Codes = Array with Code
 
 function main() returns ExitCode
 	let codes = Codes.create(0)

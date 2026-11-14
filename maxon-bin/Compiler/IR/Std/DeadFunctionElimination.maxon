@@ -380,7 +380,7 @@ end 'functionRecordCodesOf'
 // a declaration under ANY name here is refused (the legality of a name must not turn on which runtime
 // floor this program carries — E4015's ruling), and only a name called HERE is rooted or kept out of the
 // called-once rule. A second, ungated list would be the same roster spelled twice.
-module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns CompilerOwnedRootArray
+function compilerOwnedRoots(target Target, stub EntryStubCalls) returns CompilerOwnedRootArray
 	let roots = CompilerOwnedRootArray.create(0)
 	roots.push(CompilerOwnedRoot.create(ModuleInitName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GlobalCleanupName, isCalledHere: true))
@@ -407,7 +407,7 @@ module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns C
 end 'compilerOwnedRoots'
 
 // One name the compiler owns, and whether this build's stub or chunks call it (`compilerOwnedRoots`).
-export type CompilerOwnedRoot
+type CompilerOwnedRoot
 	export let name as immutable ByteArray
 	export let isCalledHere as bool
 
@@ -416,7 +416,7 @@ export type CompilerOwnedRoot
 	end 'create'
 end 'CompilerOwnedRoot'
 
-module typealias CompilerOwnedRootArray = Array with CompilerOwnedRoot
+typealias CompilerOwnedRootArray = Array with CompilerOwnedRoot
 
 // ⭐⭐ **A FOURTH KIND OF ROOT: EVERY `test` DECLARATION.** Nothing CALLS a test — that is what a test IS,
 // a body the program reaches by no edge — so this walk would drop every one of them and the binary would
@@ -442,7 +442,7 @@ end 'seedNamedRoots'
 
 // Also asked by `CalledOnceCensus.markRoots`: a root the census did not count is spliced into its one
 // call site and emptied, and `requireNotSplicedAway` then panics on it.
-module function isRootByName(project Project, name ByteArray) returns bool
+function isRootByName(project Project, name ByteArray) returns bool
 	return isTestFunctionName(name) or (project.stdlibBodies == LibraryBodies.every and project.libraryFacts.libraryFunctions.contains(name) and not project.libraryFacts.runtimeTier.contains(name))
 end 'isRootByName'
 
@@ -575,7 +575,7 @@ end 'markCalleeOf'
 
 // The kind of function reference one `StdOp` makes: a direct `call`, a direct `tryCall`, or a reference
 // that is neither.
-module enum StdFunctionReferenceKind
+enum StdFunctionReferenceKind
 	none
 	directCall
 	directTryCall
@@ -591,11 +591,11 @@ end 'StdFunctionReferenceKind'
 // its index is meaningful only under a kind other than `none`. A name the index does not know — a runtime
 // body installed after the pipeline, a hand-assembled chunk — is `none`: nothing to mark, nothing to count,
 // exactly what every reader does with an unresolvable name.
-module type StdFunctionReference
+type StdFunctionReference
 	export var kind as StdFunctionReferenceKind
 	export var funcIndex as ElementIndex
 
-	module static function create() returns StdFunctionReference
+	static function create() returns StdFunctionReference
 		return Self{kind: StdFunctionReferenceKind.none, funcIndex: 0}
 	end 'create'
 
@@ -633,7 +633,7 @@ end 'StdFunctionReference'
 //
 // The arms NAME every variant of the union, so a variant added later FAILS TO COMPILE here rather than
 // being classified by omission. A new variant that carries a callee name must be added as its own arm.
-module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into StdFunctionReference)
+function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into StdFunctionReference)
 	into.recordNone()
 
 	match op 'op'

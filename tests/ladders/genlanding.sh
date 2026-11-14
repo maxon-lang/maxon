@@ -69,42 +69,42 @@ emit_conformer() {
 }
 
 emit_total() {
-  local k="$1" visibility="$2" body="$3"
-  printf '%sfunction total%d(scale Tally = 2) returns Tally\n' "$visibility" "$k"
+  local k="$1" body="$2"
+  printf 'function total%d(scale Tally = 2) returns Tally\n' "$k"
   printf '%s' "${body//@K@/$k}"
   printf 'end '\''total%d'\''\n\n' "$k"
 }
 
 emit_unit() {
-  local k="$1" kind="$2" visibility="$3"
+  local k="$1" kind="$2"
   case "$kind" in
     param)
       printf 'function apply%d(f Op, x Tally) returns Tally\n\treturn f(x)\nend '\''apply%d'\''\n\n' "$k" "$k"
-      emit_total "$k" "$visibility" $'\tlet bump = function(n Tally) gives n + scale\n\n\treturn apply@K@(bump, x: scale)\n'
+      emit_total "$k" $'\tlet bump = function(n Tally) gives n + scale\n\n\treturn apply@K@(bump, x: scale)\n'
       ;;
     direct)
       printf 'function apply%d(x Tally) returns Tally\n\treturn x\nend '\''apply%d'\''\n\n' "$k" "$k"
-      emit_total "$k" "$visibility" $'\treturn apply@K@(scale)\n'
+      emit_total "$k" $'\treturn apply@K@(scale)\n'
       ;;
     shape)
       printf 'type Item%d\n\tvar weight as Tally\n\n\tstatic function create(weight Tally) returns Self\n\t\treturn Self{weight: weight}\n\tend '\''create'\''\n\n\tfunction value() returns Tally\n\t\treturn self.weight\n\tend '\''value'\''\nend '\''Item%d'\''\n\n' "$k" "$k"
       printf 'typealias Op%d = function(Item%d) returns Tally\n\n' "$k" "$k"
       printf 'function apply%d(f Op%d, item Item%d) returns Tally\n\treturn f(item)\nend '\''apply%d'\''\n\n' "$k" "$k" "$k" "$k"
-      emit_total "$k" "$visibility" $'\tlet bump = function(i Item@K@) gives i.value() + scale\n\n\treturn apply@K@(bump, item: Item@K@.create(scale))\n'
+      emit_total "$k" $'\tlet bump = function(i Item@K@) gives i.value() + scale\n\n\treturn apply@K@(bump, item: Item@K@.create(scale))\n'
       ;;
     shapedirect)
       printf 'type Item%d\n\tvar weight as Tally\n\n\tstatic function create(weight Tally) returns Self\n\t\treturn Self{weight: weight}\n\tend '\''create'\''\n\n\tfunction value() returns Tally\n\t\treturn self.weight\n\tend '\''value'\''\nend '\''Item%d'\''\n\n' "$k" "$k"
       printf 'function apply%d(item Item%d) returns Tally\n\treturn item.value()\nend '\''apply%d'\''\n\n' "$k" "$k" "$k"
-      emit_total "$k" "$visibility" $'\treturn apply@K@(Item@K@.create(scale))\n'
+      emit_total "$k" $'\treturn apply@K@(Item@K@.create(scale))\n'
       ;;
     paramactive)
       printf 'function apply%d(f Pass, b Box) returns Box\n\treturn f(b)\nend '\''apply%d'\''\n\n' "$k" "$k"
-      emit_total "$k" "$visibility" $'\tvar kept = BoxArray.create(0)\n\tlet echo = function(b Box) gives b if scale > 1 else Box.create(scale, hook: identityHook)\n\tvar got = apply@K@(echo, b: Box.create(scale, hook: identityHook))\n\tkept.push(got)\n\n\treturn got.heavy() + (kept.count() as Tally)\n'
+      emit_total "$k" $'\tvar kept = BoxArray.create(0)\n\tlet echo = function(b Box) gives b if scale > 1 else Box.create(scale, hook: identityHook)\n\tvar got = apply@K@(echo, b: Box.create(scale, hook: identityHook))\n\tkept.push(got)\n\n\treturn got.heavy() + (kept.count() as Tally)\n'
       ;;
     paramkeep)
       printf 'function keep%d(items mutable BoxArray, home mutable Shelf) returns Tally\n\treturn home.keep(items)\nend '\''keep%d'\''\n\n' "$k" "$k"
       printf 'function apply%d(f Keep, items mutable BoxArray, shelf mutable Shelf) returns Tally\n\treturn f(items, shelf)\nend '\''apply%d'\''\n\n' "$k" "$k"
-      emit_total "$k" "$visibility" $'\tvar shelf = Shelf.create()\n\tvar boxes = BoxArray.create(0)\n\tboxes.push(Box.create(scale))\n\n\treturn apply@K@(keep@K@, items: boxes, shelf: shelf)\n'
+      emit_total "$k" $'\tvar shelf = Shelf.create()\n\tvar boxes = BoxArray.create(0)\n\tboxes.push(Box.create(scale))\n\n\treturn apply@K@(keep@K@, items: boxes, shelf: shelf)\n'
       ;;
     witness)
       emit_conformer "$k"
@@ -115,10 +115,10 @@ emit_unit() {
       printf 'function look%d(s Sq%d) returns Tally\n\treturn s.side()\nend '\''look%d'\''\n\n' "$k" "$k" "$k"
       ;;
     generic)
-      emit_total "$k" "$visibility" $'\tlet h = Holder.create(function(n Tally) gives n + scale)\n\tlet r = Runner.create(scale)\n\n\treturn r.apply(h.step)\n'
+      emit_total "$k" $'\tlet h = Holder.create(function(n Tally) gives n + scale)\n\tlet r = Runner.create(scale)\n\n\treturn r.apply(h.step)\n'
       ;;
     genericfns)
-      emit_total "$k" "$visibility" $'\tlet h = Holder.create(function(n Tally) gives n + scale)\n\tlet r = Runner.create(scale)\n\n\treturn r.apply@K@(h.step)\n'
+      emit_total "$k" $'\tlet h = Holder.create(function(n Tally) gives n + scale)\n\tlet r = Runner.create(scale)\n\n\treturn r.apply@K@(h.step)\n'
       ;;
   esac
 }
@@ -188,10 +188,10 @@ if [ "$SHAPE" = "files" ] || [ "$SHAPE" = "filesdirect" ] || [ "$SHAPE" = "shape
   unit_kind="param"
   {
     echo "// ladder: $N file(s), shape $SHAPE"
-    echo "module typealias Tally = int(0 to 1000000)"
+    echo "typealias Tally = int(0 to 1000000)"
 
     case "$SHAPE" in
-      files) echo "module typealias Op = function(Tally) returns Tally" ;;
+      files) echo "typealias Op = function(Tally) returns Tally" ;;
       filesdirect) unit_kind="direct" ;;
       shapes) unit_kind="shape" ;;
       shapesdirect) unit_kind="shapedirect" ;;
@@ -200,7 +200,7 @@ if [ "$SHAPE" = "files" ] || [ "$SHAPE" = "filesdirect" ] || [ "$SHAPE" = "shape
 
   k=0
   while [ "$k" -lt "$N" ]; do
-    emit_unit "$k" "$unit_kind" "module " > "$OUT/unit$k.maxon"
+    emit_unit "$k" "$unit_kind" > "$OUT/unit$k.maxon"
     k=$(( k + 1 ))
   done
 
@@ -214,7 +214,7 @@ fi
 
   k=0
   while [ "$k" -lt "$N" ]; do
-    emit_unit "$k" "$SHAPE" ""
+    emit_unit "$k" "$SHAPE"
     k=$(( k + 1 ))
   done
 

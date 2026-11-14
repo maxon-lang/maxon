@@ -258,7 +258,7 @@ The reported location is the **caller's**, never a line inside `stdlib/Testing.m
 on adjacent lines report different lines, and a call from another file reports that file.
 ```maxon
 // --- file: helper.maxon
-export function assertFromHelper() throws TestFailure
+function assertFromHelper() throws TestFailure
 	try Expect.equal(1, expected: 2)
 end 'assertFromHelper'
 

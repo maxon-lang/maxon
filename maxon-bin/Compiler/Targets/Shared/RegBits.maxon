@@ -15,11 +15,11 @@ typealias BitWordArray = Array with MachineWord
 // addresses the 64-bit word holding it, and from the BYTE counts the object writers deal in: they
 // are all non-negative integers, and naming them alike is how a bit index ends up passed where a
 // word offset belongs.
-export typealias BitIndex = int(0 to u64.max) implements ElementIndex
+typealias BitIndex = int(0 to u64.max) implements ElementIndex
 
 // A bit's position within ONE 64-bit word. HARD BOUND: there are 64 of them, so a value outside
 // 0..63 is a bug in the word arithmetic, not a legal position.
-export typealias WordBitIndex = int(0 to 63) implements ElementIndex
+typealias WordBitIndex = int(0 to 63) implements ElementIndex
 
 // How many bits are SET in one 64-bit word. HARD BOUND at 64 — a full word — which is one MORE
 // than `WordBitIndex` admits, so the two are not interchangeable.
@@ -41,7 +41,7 @@ let PopcountByteSelect = 0xFF
 
 // Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
 // occupies a word and row arithmetic never touches a zero-width slice).
-export function bitsetWordsFor(bitCount BitIndex) returns ElementIndex
+function bitsetWordsFor(bitCount BitIndex) returns ElementIndex
 	let words = ((bitCount + BitsPerWord - 1) shr BitWordShift) as ElementIndex
 	return words if words > 0 else 1
 end 'bitsetWordsFor'
@@ -71,13 +71,13 @@ end 'summaryBitOf'
 // Two levels and not one: with a single level an enumeration still reads O(values/4096) words,
 // which on a large function is nearly all of the words it reads at all. A third level is the same
 // nesting again for a term 4096× smaller, and not worth an array per row.
-export type BitRow
+type BitRow
 	var words as BitWordArray
 	var summary as BitWordArray
 	var topSummary as BitWordArray
 	var wordsVisited as EventCount
 
-	export static function create() returns BitRow
+	static function create() returns BitRow
 		return Self{words: BitWordArray.create(0), summary: BitWordArray.create(0), topSummary: BitWordArray.create(0), wordsVisited: 0}
 	end 'create'
 
@@ -92,7 +92,7 @@ export type BitRow
 		self.topSummary.growFilled(bitsetWordsFor(summaryCount as BitIndex), value: 0)
 	end 'widen'
 
-	export function test(bit BitIndex) returns bool
+	function test(bit BitIndex) returns bool
 		let w = try self.words.get(wordIndexOf(bit)) otherwise panic("BitRow.test: word index out of range (bit={bit}, words={self.words.count()})")
 		return (w and bitOf(bit)) != 0
 	end 'test'
@@ -101,7 +101,7 @@ export type BitRow
 	// levels themselves, rather than sharing a helper: these are the allocator's hottest loops and a
 	// factoring puts a call or a closure on every one of them. `requireSummaryIsExact` is what covers
 	// the divergence four near-identical walks risk.
-	export function add(bit BitIndex)
+	function add(bit BitIndex)
 		let idx = wordIndexOf(bit)
 		let w = try self.words.get(idx) otherwise panic("BitRow.add: word index out of range (bit={bit}, words={self.words.count()})")
 		try self.words.set(idx, value: w or bitOf(bit)) otherwise panic("BitRow.add: word index out of range on set")
@@ -123,7 +123,7 @@ export type BitRow
 		try self.topSummary.set(t, value: tw or summaryBitOf(s)) otherwise panic("BitRow.add: top-summary word out of range on set")
 	end 'add'
 
-	export function remove(bit BitIndex)
+	function remove(bit BitIndex)
 		let idx = wordIndexOf(bit)
 		let w = try self.words.get(idx) otherwise panic("BitRow.remove: word index out of range (bit={bit}, words={self.words.count()})")
 		let left = w and not bitOf(bit)
@@ -232,7 +232,7 @@ export type BitRow
 		return visited
 	end 'takeWordsVisited'
 
-	export function sameAs(other BitRow) returns bool
+	function sameAs(other BitRow) returns bool
 		if self.words.count() != other.words.count() 'width'
 			return false
 		end 'width'
@@ -292,7 +292,7 @@ end 'appendSetBitsOfWord'
 // it on a non-zero word; the Hall census guards on an empty live set).
 // Binary search over the word width — 6 compares, no loop over 64 bits. The six increments below
 // sum to at most 32+16+8+4+2+1 = 63, which is why the result fits `WordBitIndex` by construction.
-export function trailingZeroCount(word MachineWord) returns WordBitIndex
+function trailingZeroCount(word MachineWord) returns WordBitIndex
 	var w = word
 	var count = 0 as WordBitIndex
 
@@ -379,7 +379,7 @@ end 'popcountWord'
 // check: a range bound is erased into the range check itself and is readable by no expression, so
 // there is nothing to compare against. It moves BY HAND with this constant; the failure is at
 // least loud (a widened file with a stale `RegNum` range-check-panics rather than mis-encoding).
-export let RegisterFileSize = 63
+let RegisterFileSize = 63
 
 // A per-TARGET register file: how many registers it has, and where its GPR/vector boundary
 // falls. The class masks and the "is this pool full?" denominators are asked against THIS, never
@@ -432,7 +432,7 @@ export function arm64RegisterFile() returns RegisterFile
 	return RegisterFile.create(63, firstVector: Arm64FirstVectorRegister)
 end 'arm64RegisterFile'
 
-export function isArm64RegisterFile(file RegisterFile) returns bool
+function isArm64RegisterFile(file RegisterFile) returns bool
 	return file.firstVector == Arm64FirstVectorRegister
 end 'isArm64RegisterFile'
 
@@ -442,7 +442,7 @@ end 'isArm64RegisterFile'
 // The pool masks (`allocatablePool`) dispatch on `target.cpu` separately and each arm names its own
 // file directly; this exists because the allocator's per-value class questions need the SAME file
 // carried through structures that hold `pool` but not `target` (the `LivenessResult`, the census).
-export function registerFileFor(target Target) returns RegisterFile
+function registerFileFor(target Target) returns RegisterFile
 	return match target.cpu 'cpu'
 		x64 gives x64RegisterFile()
 		arm64 gives arm64RegisterFile()
@@ -508,7 +508,7 @@ let FirstXmmRegisterNumber = 16 as RegNum
 // past the highest x64 register NUMBER" — a bit width — and a case COUNT equals that only under
 // those two properties. Add a non-register case or a gap and this check starts lying: fix it then,
 // do not widen the constant to satisfy it.
-export function assertRegisterFileMatchesEnum()
+function assertRegisterFileMatchesEnum()
 	let x64File = x64RegisterFile()
 
 	if x64File.size != X64Register.allCases.count() as RegCount 'fileSize'
@@ -553,7 +553,7 @@ end 'assertRegisterFileMatchesEnum'
 // `assertColouredInClass` classifies a COLORED register (x64's 0..31 at boundary 16, arm64's 0..62
 // at boundary 31), and an arm64 GPR in x19..x28 (RegNum 19..28, above x64's 16 but below arm64's 31)
 // classifies as a GPR here where the x64-boundary `regClassOf` would call it a vector.
-export function regClassIn(reg RegNum, file RegisterFile) returns RegClass
+function regClassIn(reg RegNum, file RegisterFile) returns RegClass
 	return RegClass.xmm if reg >= file.firstVector else RegClass.gpr
 end 'regClassIn'
 
@@ -612,7 +612,7 @@ end 'classRegisterMask'
 // about registers the value can never have. Use `classRegisterMask(regClassOf(v))`. The
 // remaining honest uses are whole-machine ones: complementing a pool to block everything
 // outside it, and forming a scratch mask.
-export function fullRegisterMask() returns RegMask
+function fullRegisterMask() returns RegMask
 	return (1 shl RegisterFileSize) - 1
 end 'fullRegisterMask'
 
@@ -627,7 +627,7 @@ export function regMaskAdd(mask RegMask, regNum RegNum) returns RegMask
 end 'regMaskAdd'
 
 // `mask` with register number `regNum` removed.
-export function regMaskRemove(mask RegMask, regNum RegNum) returns RegMask
+function regMaskRemove(mask RegMask, regNum RegNum) returns RegMask
 	return mask and not (1 shl regNum)
 end 'regMaskRemove'
 
@@ -643,7 +643,7 @@ end 'regMaskPopcount'
 
 // The lowest register number in `mask`, which must be non-empty (`trailingZeroCount` is undefined for
 // zero). With `regMaskRemove` this walks a mask's registers in as many steps as it has bits set.
-export function regMaskLowest(mask RegMask) returns RegNum
+function regMaskLowest(mask RegMask) returns RegNum
 	if mask == 0 'empty'
 		panic("regMaskLowest: the mask is empty — it has no lowest register")
 	end 'empty'
@@ -651,7 +651,7 @@ export function regMaskLowest(mask RegMask) returns RegNum
 	return trailingZeroCount(mask as MachineWord) as RegNum
 end 'regMaskLowest'
 
-export enum RegisterSearch implements Error
+enum RegisterSearch implements Error
 	everyRegisterBlocked
 end 'RegisterSearch'
 
@@ -661,7 +661,7 @@ end 'RegisterSearch'
 // blocks everything outside the value's pool (`fullRegisterMask() and not pool`) and the
 // pool is class-filtered. Hand it a mask that does not, and it will hand back an XMM for
 // an int whose GPRs are all taken.
-export function lowestClearRegister(blocked RegMask) returns RegNum throws RegisterSearch
+function lowestClearRegister(blocked RegMask) returns RegNum throws RegisterSearch
 	if not hasAClearRegister(blocked) 'everyRegisterBlocked'
 		throw RegisterSearch.everyRegisterBlocked
 	end 'everyRegisterBlocked'
@@ -669,6 +669,6 @@ export function lowestClearRegister(blocked RegMask) returns RegNum throws Regis
 	return regMaskLowest(fullRegisterMask() and not blocked)
 end 'lowestClearRegister'
 
-export function hasAClearRegister(blocked RegMask) returns bool
+function hasAClearRegister(blocked RegMask) returns bool
 	return (fullRegisterMask() and not blocked) != 0
 end 'hasAClearRegister'

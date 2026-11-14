@@ -127,7 +127,7 @@ type PhiIncomings
 	end 'noteIncoming'
 end 'PhiIncomings'
 
-module type CallbackFlows
+type CallbackFlows
 	var built as bool
 	var kinds as FlowContributionKindArray
 	var firsts as FuncIndexArray
@@ -138,11 +138,11 @@ module type CallbackFlows
 	var unions as LandingBodiesArray
 	var landings as FlowLandingMemo
 
-	module static function create() returns CallbackFlows
+	static function create() returns CallbackFlows
 		return Self{built: false, kinds: FlowContributionKindArray.create(0), firsts: FuncIndexArray.create(0), seconds: FuncIndexArray.create(0), targetFuncs: CsrColumn.create(0), targetPositions: FuncIndexArray.create(0), byTargetFunc: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), unions: LandingBodiesArray.create(0), landings: FlowLandingMemo.create()}
 	end 'create'
 
-	module function settle(project Project, module MaxonModule, calls CallSummaryIndex)
+	function settle(project Project, module MaxonModule, calls CallSummaryIndex)
 		if self.built 'alreadyBuilt'
 			return
 		end 'alreadyBuilt'
@@ -297,7 +297,7 @@ module type CallbackFlows
 		self.targetPositions.push(position)
 	end 'contribute'
 
-	module function landingOf(project Project, module MaxonModule, calls CallSummaryIndex, funcIndex ElementIndex, position ParamCount) returns CallLandingBodies
+	function landingOf(project Project, module MaxonModule, calls CallSummaryIndex, funcIndex ElementIndex, position ParamCount) returns CallLandingBodies
 		self.settle(project, module: module, calls: calls)
 		let key = flowKeyOf(funcIndex, position: position)
 

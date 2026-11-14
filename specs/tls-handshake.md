@@ -12,8 +12,8 @@ category: crypto
 `TlsClientHandshake` is the TLS 1.3 client (RFC 8446) as a state machine over records, with no socket: `receive`
 takes one inbound record, and the `TlsSession` it exposes through `session()` drains the records to send
 (`takeRecords`), adds application data and close_notify once the handshake is done (`write`, `close`) and drains the
-application data (`takeReceived`). It is `module` code in
-`stdlib/`, so a program outside `stdlib/` cannot name it (E3088); the cases here are library-tier
+application data (`takeReceived`). It is unexported code in
+`stdlib/`, so a program outside `stdlib/` cannot name it (E3008); the cases here are library-tier
 (`<!-- tier: stdlib/helpers/tls -->`) and reach it, and the test seam, as a stdlib source file does.
 
 It follows the canra `tls-handshake` contract. The ClientHello offers X25519 and secp256r1 (X25519 key share),
@@ -2262,7 +2262,7 @@ roots=true now=true purpose=serverAuth authenticates=true
 ```
 
 <!-- test: tls-handshake.a-user-program-cannot-name-the-replay-seam -->
-A program outside `stdlib/` cannot name `TlsClientReplay`, the test seam's driver: it is `module` code, and the replay seam is reached only by library-tier source.
+A program outside `stdlib/` cannot name `TlsClientReplay`, the test seam's driver: it is unexported code, and the replay seam is reached only by library-tier source.
 ```maxon
 function main() returns ExitCode
 	let seam = TlsClientReplay.create()
@@ -2271,11 +2271,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:13: type 'TlsClientReplay' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:13: type 'TlsClientReplay' is not exported
 ```
 
 <!-- test: tls-handshake.a-user-program-cannot-name-the-unauthenticated-peer -->
-A program outside `stdlib/` cannot name `TlsUnauthenticatedPeer`, the peer that skips every check: it is `module` code, and the replay seam is reached only by library-tier source.
+A program outside `stdlib/` cannot name `TlsUnauthenticatedPeer`, the peer that skips every check: it is unexported code, and the replay seam is reached only by library-tier source.
 ```maxon
 function main() returns ExitCode
 	let seam = TlsUnauthenticatedPeer.create()
@@ -2284,11 +2284,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:13: type 'TlsUnauthenticatedPeer' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:13: type 'TlsUnauthenticatedPeer' is not exported
 ```
 
 <!-- test: tls-handshake.a-user-program-cannot-name-the-replaced-client-hello -->
-A program outside `stdlib/` cannot name `TlsReplacedClientHello`, the source that replaces the ClientHello: it is `module` code, and the replay seam is reached only by library-tier source.
+A program outside `stdlib/` cannot name `TlsReplacedClientHello`, the source that replaces the ClientHello: it is unexported code, and the replay seam is reached only by library-tier source.
 ```maxon
 function main() returns ExitCode
 	let seam = TlsReplacedClientHello.create()
@@ -2297,6 +2297,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:13: type 'TlsReplacedClientHello' is module-scoped and not visible from this directory
+error E3008: <fragment>:3:13: type 'TlsReplacedClientHello' is not exported
 ```
 

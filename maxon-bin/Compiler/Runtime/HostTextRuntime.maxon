@@ -16,7 +16,7 @@ export let WideTextTierFileName = "WideText.maxon"
 
 let WidenName = b"__wt_widen"
 let PathNeedsResolutionName = b"__wt_path_needs_resolution"
-export let PathExtensionFitsName = b"__wt_path_extension_fits"
+let PathExtensionFitsName = b"__wt_path_extension_fits"
 let ExtendResolvedName = b"__wt_extend_resolved"
 let NarrowName = b"__wt_narrow"
 let NarrowAsciiName = b"__wt_narrow_ascii"
@@ -34,11 +34,11 @@ let SurrogatePayloadBits = 10 as FullRangeInt
 let ByteValueMask = 0xFF as FullRangeInt
 let ByteValueBits = 8 as FullRangeInt
 
-export function hostTextIsWide(module StdModule) returns bool
+function hostTextIsWide(module StdModule) returns bool
 	return module.hostText == HostTextEncoding.utf16
 end 'hostTextIsWide'
 
-export function emitByteCountOfUnits(module StdModule, block IrBlock, units ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+function emitByteCountOfUnits(module StdModule, block IrBlock, units ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	if encoding == HostTextEncoding.utf8 'narrow'
 		return units
 	end 'narrow'
@@ -48,7 +48,7 @@ export function emitByteCountOfUnits(module StdModule, block IrBlock, units Valu
 	return emitBin(module, block: block, a: units, b: width, opcode: StdBinOpcode.mul, ids: ids)
 end 'emitByteCountOfUnits'
 
-export function hostCStringBytes(module StdModule, text String) returns immutable ByteArray
+function hostCStringBytes(module StdModule, text String) returns immutable ByteArray
 	if hostTextIsWide(module) 'wide'
 		return freeze utf16CStringBytes(text)
 	end 'wide'
@@ -82,7 +82,7 @@ function appendUtf16Unit(bytes ByteArray, unit FullRangeInt)
 	bytes.push(((unit shr ByteValueBits) and ByteValueMask) as Byte)
 end 'appendUtf16Unit'
 
-export function emitLiteralHostString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
+function emitLiteralHostString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
 	if not hostTextIsWide(module) 'narrow'
 		return emitLiteralCString(module, block: block, ids: ids, text: text)
 	end 'narrow'
@@ -92,12 +92,12 @@ export function emitLiteralHostString(module StdModule, block IrBlock, ids Value
 	return emitLiteralInSlab(module, block: block, ids: ids, text: units, byteCount: units.count() as FullRangeInt)
 end 'emitLiteralHostString'
 
-export enum TextAllocation
+enum TextAllocation
 	slab
 	raw
 end 'TextAllocation'
 
-export enum Utf8Extent
+enum Utf8Extent
 	cstring
 	block
 end 'Utf8Extent'
@@ -124,7 +124,7 @@ function emitWidenUtf8(module StdModule, block IrBlock, source ValueId, byteLeng
 	return (wide, widenedUnits)
 end 'emitWidenUtf8'
 
-export function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, extent Utf8Extent, ids ValueMinter) returns ValueId
+function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, extent Utf8Extent, ids ValueMinter) returns ValueId
 	let byteLength = match extent 'extent'
 		cstring gives emitTextLength(module, block: block, text: source, encoding: HostTextEncoding.utf8, ids: ids)
 		block gives emitRuntimeCall(module, block: block, callee: BlockExtentName, args: argsOf(source), ids: ids)
@@ -135,7 +135,7 @@ export function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, 
 	return wide
 end 'emitUtf8ToWide'
 
-export function emitHostCString(module StdModule, block IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+function emitHostCString(module StdModule, block IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	if encoding == HostTextEncoding.utf8 'narrow'
 		return cstr
 	end 'narrow'
@@ -143,13 +143,13 @@ export function emitHostCString(module StdModule, block IrBlock, cstr ValueId, e
 	return emitUtf8ToWide(module, block: block, source: cstr, extent: Utf8Extent.cstring, ids: ids)
 end 'emitHostCString'
 
-export function emitReleaseHostCopy(module StdModule, block IrBlock, copy ValueId, encoding HostTextEncoding, ids ValueMinter)
+function emitReleaseHostCopy(module StdModule, block IrBlock, copy ValueId, encoding HostTextEncoding, ids ValueMinter)
 	if encoding == HostTextEncoding.utf16 'owned'
 		emitSlabFree(module, block: block, ptr: copy, kind: SlabBufferKind.hostText, ids: ids)
 	end 'owned'
 end 'emitReleaseHostCopy'
 
-export type HostPathText
+type HostPathText
 	export let block as IrBlock
 	export let text as ValueId
 
@@ -160,7 +160,7 @@ end 'HostPathText'
 
 // A path copy is a raw allocation, not a slab one: release it with `emitReleaseHostPath`, never
 // `emitReleaseHostCopy`.
-export function emitHostPath(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns HostPathText
+function emitHostPath(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns HostPathText
 	if encoding == HostTextEncoding.utf8 'narrow'
 		return HostPathText.create(cur, text: cstr)
 	end 'narrow'
@@ -172,7 +172,7 @@ export function emitHostPath(module StdModule, func IrFunction, cur IrBlock, cst
 	return HostPathText.create(join, text: text)
 end 'emitHostPath'
 
-export function emitReleaseHostPath(module StdModule, block IrBlock, text ValueId, encoding HostTextEncoding, ids ValueMinter)
+function emitReleaseHostPath(module StdModule, block IrBlock, text ValueId, encoding HostTextEncoding, ids ValueMinter)
 	if encoding == HostTextEncoding.utf16 'owned'
 		emitRawFree(module, block: block, ptr: text, ids: ids)
 	end 'owned'
@@ -211,7 +211,7 @@ function emitNulRefusedExtent(module StdModule, func IrFunction, cur IrBlock, bu
 	return NulRefusedExtent.create(joined, length: extent)
 end 'emitNulRefusedExtent'
 
-export function emitPathToText(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+function emitPathToText(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	let len = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let extent = emitNulRefusedExtent(module, func: func, cur: cur, buf: buf, len: len, ids: ids)
@@ -261,7 +261,7 @@ function emitWin32Path(module StdModule, func IrFunction, cur IrBlock, join IrBl
 	return text
 end 'emitWin32Path'
 
-export function emitTextToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, encoding HostTextEncoding, ids ValueMinter) returns IrBlock
+function emitTextToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, encoding HostTextEncoding, ids ValueMinter) returns IrBlock
 	if encoding == HostTextEncoding.utf8 'narrow'
 		return emitCStringToManaged(module, func: func, cur: cur, cstr: cstr, record: record, ids: ids)
 	end 'narrow'
@@ -278,7 +278,7 @@ function textUnitBytes(encoding HostTextEncoding) returns FullRangeInt
 	end 'width'
 end 'textUnitBytes'
 
-export function emitTextLength(module StdModule, block IrBlock, text ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+function emitTextLength(module StdModule, block IrBlock, text ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	let width = emitConst(module, block: block, value: textUnitBytes(encoding), ids: ids)
 
 	return emitRuntimeCall(module, block: block, callee: TextLengthName, args: twoArgs(text, second: width), ids: ids)
@@ -304,7 +304,7 @@ function emitUnitsToManaged(module StdModule, block IrBlock, host ValueId, units
 	return block
 end 'emitUnitsToManaged'
 
-export function emitStoreNulUnit(module StdModule, block IrBlock, base ValueId, encoding HostTextEncoding, ids ValueMinter)
+function emitStoreNulUnit(module StdModule, block IrBlock, base ValueId, encoding HostTextEncoding, ids ValueMinter)
 	let zeroIndex = emitConst(module, block: block, value: 0, ids: ids)
 	let nul = emitConst(module, block: block, value: NulByte, ids: ids)
 	emitStoreByte(module, block: block, base: base, index: zeroIndex, value: nul, ids: ids)
@@ -315,7 +315,7 @@ export function emitStoreNulUnit(module StdModule, block IrBlock, base ValueId, 
 	end 'secondByte'
 end 'emitStoreNulUnit'
 
-export function emitHostUnit(module StdModule, block IrBlock, base ValueId, unitIndex ValueId, ids ValueMinter) returns ValueId
+function emitHostUnit(module StdModule, block IrBlock, base ValueId, unitIndex ValueId, ids ValueMinter) returns ValueId
 	if not hostTextIsWide(module) 'narrow'
 		return emitLoadByte(module, block: block, base: base, index: unitIndex, ids: ids)
 	end 'narrow'
@@ -332,7 +332,7 @@ export function emitHostUnit(module StdModule, block IrBlock, base ValueId, unit
 	return emitBin(module, block: block, a: lowByte, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitHostUnit'
 
-export function emitHostEnvReadAscii(module StdModule, block IrBlock, name ValueId, valueBuf ValueId, capacity ValueId, ids ValueMinter) returns ValueId
+function emitHostEnvReadAscii(module StdModule, block IrBlock, name ValueId, valueBuf ValueId, capacity ValueId, ids ValueMinter) returns ValueId
 	let written = ids.mint()
 
 	if not hostTextIsWide(module) 'narrow'
@@ -350,7 +350,7 @@ export function emitHostEnvReadAscii(module StdModule, block IrBlock, name Value
 	return written
 end 'emitHostEnvReadAscii'
 
-export function emitHostTextToUtf8(module StdModule, block IrBlock, host ValueId, units ValueId, buffer ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter)
+function emitHostTextToUtf8(module StdModule, block IrBlock, host ValueId, units ValueId, buffer ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter)
 	let size = emitNarrowedRoom(module, block: block, host: host, units: units, byteLength: byteLength, ids: ids)
 	emitTextAllocInto(module, block: block, result: buffer, byteCount: size, allocation: allocation, ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NarrowName, args: threeArgs(host, second: units, third: buffer)))

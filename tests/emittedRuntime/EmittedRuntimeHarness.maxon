@@ -1,51 +1,51 @@
-export let FixturesDirName = "tests/emittedRuntime/fixtures"
-export let SpawnFixtureName = "spawn"
-export let PinnedMachineFixtureName = "pinned-machine"
-export let HeapFixtureName = "heap"
-export let PinnedMachineBlockedFixtureName = "pinned-machine-blocked"
+let FixturesDirName = "tests/emittedRuntime/fixtures"
+let SpawnFixtureName = "spawn"
+let PinnedMachineFixtureName = "pinned-machine"
+let HeapFixtureName = "heap"
+let PinnedMachineBlockedFixtureName = "pinned-machine-blocked"
 
-export let TargetOptionPrefix = "--target="
-export let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+let TargetOptionPrefix = "--target="
+let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
 let DebugStreamOption = "--debugstream"
-export let PoisonFreedOption = "--poison-freed"
-export let EmittedNameSeparator = ","
+let PoisonFreedOption = "--poison-freed"
+let EmittedNameSeparator = ","
 let IrFileSuffix = ".ir"
 
-export let MacosTargetName = "arm64-macos"
-export let LinuxTargetName = "arm64-linux"
+let MacosTargetName = "arm64-macos"
+let LinuxTargetName = "arm64-linux"
 
 let FunctionHeaderPrefix = "func @"
 let FunctionHeaderSuffix = " \{"
 let FunctionBodyEndLine = "\}"
 
-export let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
-export let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
-export let AcquireLoadMnemonic = "arm64.ldar.word64"
-export let ReleaseStoreMnemonic = "arm64.stlr.word64"
+let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
+let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
+let AcquireLoadMnemonic = "arm64.ldar.word64"
+let ReleaseStoreMnemonic = "arm64.stlr.word64"
 let AtomicClaimMnemonic = "arm64.arm64AtomicCas"
-export let RegisterMovePrefix = "arm64.movRegReg "
-export let GlobalAddressPrefix = "arm64.leaGlobal "
-export let ArgumentSeparator = ", "
-export let NoFurtherDemand = ""
+let RegisterMovePrefix = "arm64.movRegReg "
+let GlobalAddressPrefix = "arm64.leaGlobal "
+let ArgumentSeparator = ", "
+let NoFurtherDemand = ""
 let WordSeparator = " "
 let OperandSeparator = ","
 let LineSeparator = "\n"
 let DisplacedAddressInfix = " + "
 let DestinationWordIndex = 1
 
-export typealias ProcessorCount = int(1 to 1024)
+typealias ProcessorCount = int(1 to 1024)
 
-export typealias FieldOffset = int(0 to 65535)
-export typealias LineIndex = int(0 to u64.max)
-export typealias LineTally = int(0 to u64.max)
-export typealias AccessTally = int(0 to 65535)
+typealias FieldOffset = int(0 to 65535)
+typealias LineIndex = int(0 to u64.max)
+typealias LineTally = int(0 to u64.max)
+typealias AccessTally = int(0 to 65535)
 
-export enum IrScanError implements Error
+enum IrScanError implements Error
 	noSuchLine
 	noDestinationRegister
 end 'IrScanError'
 
-export enum RegisterUse
+enum RegisterUse
 	plainLoad
 	plainStore
 	acquireLoad
@@ -56,26 +56,26 @@ export enum RegisterUse
 	untouched
 end 'RegisterUse'
 
-export type RegisterEvent
+type RegisterEvent
 	export let use as RegisterUse
 	export let overwrites as bool
 	export let line as String
 	export let index as LineIndex
 
-	export static function create(use RegisterUse, overwrites bool, line String, index LineIndex) returns RegisterEvent
+	static function create(use RegisterUse, overwrites bool, line String, index LineIndex) returns RegisterEvent
 		return Self{use: use, overwrites: overwrites, line: line, index: index}
 	end 'create'
 end 'RegisterEvent'
 
-export typealias RegisterEventArray = Array with RegisterEvent
+typealias RegisterEventArray = Array with RegisterEvent
 
-export type WordAccesses
+type WordAccesses
 	export var plainLoads as StringArray
 	export var plainStores as StringArray
 	export var acquires as AccessTally
 	export var releases as AccessTally
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{plainLoads: StringArray.create(0), plainStores: StringArray.create(0), acquires: 0, releases: 0}
 	end 'create'
 
@@ -99,7 +99,7 @@ export type WordAccesses
 	end 'claimAccess'
 end 'WordAccesses'
 
-export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns FilePath
+function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}-{target}")
 	let ir = staged.join("{OutputFileStem}-{caseLabel}-{target}{IrFileSuffix}")
 
@@ -122,7 +122,7 @@ export function buildStagedProgram(staged FilePath, caseLabel String, target Str
 	return ir
 end 'buildStagedProgram'
 
-export function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
+function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}{executableSuffix()}")
 
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: StringArray.create(0))
@@ -139,19 +139,19 @@ function environmentWithProcessors(procs ProcessorCount) returns Environment
 	return Environment.inheritUpdating(overrides)
 end 'environmentWithProcessors'
 
-export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs WaitDeadlineMs, standardInput InputSource) returns CollectedOutput
+function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs WaitDeadlineMs, standardInput InputSource) returns CollectedOutput
 	return spawnIn(Executable.path(executable), arguments: StringArray.create(0), staged: staged, what: "the staged program at {executable.toString()}", environment: environmentWithProcessors(procs), standardInput: standardInput, deadline: WaitDeadline.within(deadlineMs))
 end 'runStagedForHost'
 
-export function runStagedFedAfterLine(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs WaitDeadlineMs, afterLine String, feed String) returns FedRun
+function runStagedFedAfterLine(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs WaitDeadlineMs, afterLine String, feed String) returns FedRun
 	return runFedAfterLine(executable, workingDirectory: staged, environment: environmentWithProcessors(procs), deadlineMs: deadlineMs, afterLine: afterLine, feed: feed)
 end 'runStagedFedAfterLine'
 
-export function irLines(path FilePath) returns StringArray
+function irLines(path FilePath) returns StringArray
 	return fileText(path).split(LineSeparator)
 end 'irLines'
 
-export function functionBody(lines StringArray, functionName String, target String) returns StringArray
+function functionBody(lines StringArray, functionName String, target String) returns StringArray
 	let header = "{FunctionHeaderPrefix}{functionName}{FunctionHeaderSuffix}"
 	let body = StringArray.create(0)
 	var found = false
@@ -182,7 +182,7 @@ export function functionBody(lines StringArray, functionName String, target Stri
 	return body
 end 'functionBody'
 
-export function bodyLineCount(body StringArray, startingWith String, containing String, endingWith String) returns LineTally
+function bodyLineCount(body StringArray, startingWith String, containing String, endingWith String) returns LineTally
 	var found = 0 as LineTally
 
 	for text in body 'eachLine'
@@ -194,7 +194,7 @@ export function bodyLineCount(body StringArray, startingWith String, containing 
 	return found
 end 'bodyLineCount'
 
-export function firstLineIndex(body StringArray, startingWith String, containing String, endingWith String) returns LineIndex throws IrScanError
+function firstLineIndex(body StringArray, startingWith String, containing String, endingWith String) returns LineIndex throws IrScanError
 	for (iter, text) in body.withIterator() 'eachLine'
 		if lineMatches(text, startingWith: startingWith, containing: containing, endingWith: endingWith) 'theLine'
 			return iter.index()
@@ -207,7 +207,7 @@ end 'firstLineIndex'
 // Every line that touches `register`, in body order, carrying TWO facts about each: what the line does
 // through the register, and whether it overwrites it. `ldr x1, [x1 + 48]` is both, and an event that had to
 // pick one would hide the other from whichever caller wanted it.
-export function registerEvents(body StringArray, register String) returns RegisterEventArray
+function registerEvents(body StringArray, register String) returns RegisterEventArray
 	let events = RegisterEventArray.create(0)
 
 	for (iter, text) in body.withIterator() 'eachLine'
@@ -262,7 +262,7 @@ function writesRegister(text String, register String) returns bool
 	return written == register
 end 'writesRegister'
 
-export function firstWriteOfRegister(body StringArray, register String) returns LineIndex throws IrScanError
+function firstWriteOfRegister(body StringArray, register String) returns LineIndex throws IrScanError
 	for event in registerEvents(body, register: register) 'eachEvent'
 		if event.overwrites 'theWrite'
 			return event.index
@@ -272,7 +272,7 @@ export function firstWriteOfRegister(body StringArray, register String) returns 
 	throw IrScanError.noSuchLine
 end 'firstWriteOfRegister'
 
-export function registerHoldingArgument(body StringArray, argument String) returns String throws IrScanError
+function registerHoldingArgument(body StringArray, argument String) returns String throws IrScanError
 	for event in registerEvents(body, register: argument) 'eachEvent'
 		if event.use != RegisterUse.copiedOut 'notACopy'
 			continue
@@ -284,7 +284,7 @@ export function registerHoldingArgument(body StringArray, argument String) retur
 	throw IrScanError.noSuchLine
 end 'registerHoldingArgument'
 
-export function accessThrough(body StringArray, site LineIndex, register String) returns RegisterEvent throws IrScanError
+function accessThrough(body StringArray, site LineIndex, register String) returns RegisterEvent throws IrScanError
 	for event in registerEvents(body, register: register) 'eachEvent'
 		if event.index <= site 'atOrBeforeTheMaterialisation'
 			continue
@@ -304,14 +304,14 @@ export function accessThrough(body StringArray, site LineIndex, register String)
 	throw IrScanError.noSuchLine
 end 'accessThrough'
 
-export function notePlainFieldLoad(findings StringArray, body StringArray, target String, register String, offset FieldOffset, functionName String, field String)
+function notePlainFieldLoad(findings StringArray, body StringArray, target String, register String, offset FieldOffset, functionName String, field String)
 	let addressed = "[{register} + {offset}]"
 	let index = try firstLineIndex(body, startingWith: PlainLoadPrefix, containing: addressed, endingWith: NoFurtherDemand) otherwise return
 
 	findings.push("on {target}, `{functionName}` still reads {field} with a plain load — `{lineAt(body, index: index)}`")
 end 'notePlainFieldLoad'
 
-export function oneLine(raw String) returns String
+function oneLine(raw String) returns String
 	return withoutCarriageReturns(raw).replace("\n", with: " ").trim()
 end 'oneLine'
 
@@ -327,20 +327,20 @@ function lineMatches(text String, startingWith String, containing String, ending
 	return endingWith.isEmpty() or text.endsWith(endingWith)
 end 'lineMatches'
 
-export function lineAt(body StringArray, index LineIndex) returns String
+function lineAt(body StringArray, index LineIndex) returns String
 	return try body.get(index as ElementIndex) otherwise panic("emitted-runtime tests: the gate could not run — line {index} was read out of a body of {body.count()} lines, and every line a case reads is one a scan of that same body found or the one after it, which a function body always holds.")
 end 'lineAt'
 
 // The destination is read off the line's own second word rather than off a roster of the ops that write, so
 // a line that merely CARRIES the register there — a compare — reads as a write. That is the direction that
 // costs a caller a refusal rather than a pass it did not earn.
-export function destinationRegisterOf(text String) returns String throws IrScanError
+function destinationRegisterOf(text String) returns String throws IrScanError
 	let spelled = try text.split(WordSeparator).get(DestinationWordIndex) otherwise throw IrScanError.noDestinationRegister
 
 	return try spelled.split(OperandSeparator).get(0) otherwise throw IrScanError.noDestinationRegister
 end 'destinationRegisterOf'
 
-export function buildMacosImage(staged FilePath, label String) returns FilePath
+function buildMacosImage(staged FilePath, label String) returns FilePath
 	let image = staged.join("{OutputFileStem}-{label}-{MacosTargetName}")
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: image, label: label, extraArguments: ["{TargetOptionPrefix}{MacosTargetName}"])
 
@@ -349,7 +349,7 @@ export function buildMacosImage(staged FilePath, label String) returns FilePath
 	return image
 end 'buildMacosImage'
 
-export function noteImageName(findings StringArray, image ByteArray, name String, present bool, why String)
+function noteImageName(findings StringArray, image ByteArray, name String, present bool, why String)
 	if image.containsSequence(asciiBytes(name)) == present 'asDemanded'
 		return
 	end 'asDemanded'
@@ -370,7 +370,7 @@ function asciiBytes(name String) returns ByteArray
 	return bytes
 end 'asciiBytes'
 
-module let RunDeadline = 30000 as WaitDeadlineMs
-module let SoleProcessor = 1
-module let TwoProcessors = 2
-module let FourProcessors = 4
+let RunDeadline = 30000 as WaitDeadlineMs
+let SoleProcessor = 1
+let TwoProcessors = 2
+let FourProcessors = 4

@@ -28,17 +28,17 @@
 
 // A 0-based LSP line number. Distinct from `LineNumber`, which is this compiler's 1-based one, and
 // deliberately not an alias of it: the whole point is that the two are not interchangeable.
-module typealias LspLineNumber = int(0 to u64.max) implements ElementIndex
+typealias LspLineNumber = int(0 to u64.max) implements ElementIndex
 
 // A 0-based offset in UTF-16 CODE UNITS from the start of a line. Not bytes, not codepoints.
-module typealias LspCharacter = int(0 to u64.max)
+typealias LspCharacter = int(0 to u64.max)
 
 // One position, exactly as the protocol spells it: 0-based line, 0-based UTF-16 character.
-module type LspPosition
+type LspPosition
 	export let line as LspLineNumber
 	export let character as LspCharacter
 
-	module static function create(line LspLineNumber, character LspCharacter) returns LspPosition
+	static function create(line LspLineNumber, character LspCharacter) returns LspPosition
 		return Self{line: line, character: character}
 	end 'create'
 end 'LspPosition'
@@ -48,13 +48,13 @@ end 'LspPosition'
 // Built once per document version and re-used by every request against it: a server answers many
 // positions per keystroke, and a per-request scan of the whole buffer would make every feature
 // O(file) in a place the user can feel.
-module type LspLineIndex
+type LspLineIndex
 	var lineStarts as ByteOffsetArray
 
 	// ⭐ **WHERE EACH LINE'S CONTENT ENDS — recorded by the SAME scan that finds the starts, because
 	// the alternative was unreachable.** Clamping a character past the end of a line needs to know
 	// where that line's text stops, which means distinguishing `\r\n` from `\n`; `String.byteAt` is
-	// `module`-visible inside `stdlib/`, so `Compiler/` cannot index a byte at all. The scan below
+	// unexported inside `stdlib/`, so `Compiler/` cannot index a byte at all. The scan below
 	// already visits every byte and already knows the previous one, so it records the answer instead —
 	// no second pass, and no reaching for something that is not ours to reach.
 	//
@@ -68,7 +68,7 @@ module type LspLineIndex
 	//
 	// The first line always starts at 0, including in an empty buffer: a document with no bytes still
 	// has one line, and an editor can put a cursor in it.
-	module static function build(source String) returns LspLineIndex
+	static function build(source String) returns LspLineIndex
 		let starts = ByteOffsetArray.create(0)
 		let contentEnds = ByteOffsetArray.create(0)
 		starts.push(0)
@@ -155,7 +155,7 @@ module type LspLineIndex
 	end 'endOfLineContent'
 
 	/// The LSP position of a byte offset. An offset past the buffer clamps to its end.
-	module function positionOf(source String, offset ByteOffset) returns LspPosition
+	function positionOf(source String, offset ByteOffset) returns LspPosition
 		let length = source.byteLength() as ByteOffset
 		let target = length if offset > length else offset
 		let line = lineContaining(target)
@@ -174,7 +174,7 @@ module type LspLineIndex
 	/// The byte offset of an LSP position. A line past the buffer clamps to its end; a character past
 	/// the line's content clamps to the end of that content — both of which an editor legitimately
 	/// sends, because a cursor sits one past the last character.
-	module function offsetOf(source String, position LspPosition) returns ByteOffset
+	function offsetOf(source String, position LspPosition) returns ByteOffset
 		if position.line >= lineCount() 'linePastEnd'
 			return source.byteLength()
 		end 'linePastEnd'
@@ -198,11 +198,11 @@ end 'LspLineIndex'
 
 // A half-open byte range `[startByte, endByte)` in a source buffer — the same convention
 // `SourceRange` uses, so the two cannot be read as different kinds of interval.
-module type LspSpan
+type LspSpan
 	export let startByte as ByteOffset
 	export let endByte as ByteOffset
 
-	module static function create(startByte ByteOffset, endByte ByteOffset) returns LspSpan
+	static function create(startByte ByteOffset, endByte ByteOffset) returns LspSpan
 		return Self{startByte: startByte, endByte: endByte}
 	end 'create'
 
@@ -212,7 +212,7 @@ module type LspSpan
 		return Self{startByte: 0, endByte: 0}
 	end 'none'
 
-	module function isEmpty() returns bool
+	function isEmpty() returns bool
 		return startByte == endByte
 	end 'isEmpty'
 end 'LspSpan'
@@ -250,7 +250,7 @@ end 'LspSpan'
 // ⚠ A binary search, so a publish is O(diagnostics × log tokens). It is sound because `tokenize` pushes
 // every token at the position its scan started and scans never overlap, so anchors never decrease; two
 // tokens may share one (an empty string fragment and the `{` after it), and the FIRST of them answers.
-module function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
+function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
 	var low = 0 as Count
 	var high = tokens.count()
 

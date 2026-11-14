@@ -898,7 +898,7 @@ end 'main'
 3
 ```
 
-### A conformer's file-private cursor does not refuse an `Iterable` extension call
+### A conformer's unmarked cursor does not refuse an `Iterable` extension call
 
 <!-- test: a-file-private-cursor-conformer-and-an-iterable-extension-call -->
 ```maxon
@@ -960,7 +960,7 @@ end 'main'
 
 <!-- test: error.another-file-naming-a-file-private-cursor-is-still-refused -->
 ```maxon
-// --- file: lib.maxon
+// --- file: lib/lib.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 type BagIter implements Iterator with Integer

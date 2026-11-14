@@ -164,7 +164,7 @@
 // straight-line Std IR with their loops already hand-hoisted — a second run there would walk every
 // appended function to find nothing, and it is also what keeps Rule 1's thread premise narrow, because
 // the runtime's own handshakes never pass through here.
-module function hoistLoopInvariantsHeadline(funcCount ElementIndex) returns String
+function hoistLoopInvariantsHeadline(funcCount ElementIndex) returns String
 	return "hoistLoopInvariants: {funcCount} function(s)"
 end 'hoistLoopInvariantsHeadline'
 
@@ -179,7 +179,7 @@ end 'hoistLoopInvariantsHeadline'
 // ⚠ Applying a hoist moves op REFERENCES between blocks and creates and deletes no block, so the
 // dominator tree, the CFG adjacency, the back edges and every member set stay valid across it. That is
 // why they are built ONCE per function here rather than per loop.
-module function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
+function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
 	let blockCount = func.blockRefs.count()
 
 	// Fewer than two blocks cannot hold a loop this pass can serve: the only loop a one-block function
@@ -248,7 +248,7 @@ end 'hoistIntoPreheader'
 typealias PredecessorCount = int(0 to u64.max)
 
 // Which block a loop is entered THROUGH, when there is exactly one and it goes nowhere else.
-module union LoopPreheader
+union LoopPreheader
 	none
 	position(preheader ElementIndex)
 end 'LoopPreheader'
@@ -268,7 +268,7 @@ end 'LoopPreheader'
 // block and re-pointing branch-edge argument lists — a CFG change this pass does not make, and one whose
 // interaction with `branchEdges` (the phi model the register allocator consumes) is a change of its
 // own. A loop entered from two places, or through a conditional branch, is skipped whole.
-module function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header ElementIndex) returns LoopPreheader
+function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header ElementIndex) returns LoopPreheader
 	var found = LoopPreheader.none
 	var entries = 0 as PredecessorCount
 
@@ -346,7 +346,7 @@ end 'blockLeavesTheLoop'
 
 // What one loop's ops say about the two questions this pass asks of them, filled by ONE walk because
 // they are answered from the same two metadata flags and a second walk would read the same ops twice.
-module type LoopEffects
+type LoopEffects
 	// Any op that may write memory (`stdOpMayWriteMemory`) — anything that can change a location. Rule 1.
 	var writesMemory as bool
 
@@ -619,7 +619,7 @@ end 'appendToPreheader'
 // `growFilled(blockCount)` per loop is the Θ(loops × blocks) `LoopMembership`'s header measures, and it
 // is the same defect one column over: this record is created once per module run and each loop pays only
 // for the chains it actually climbed.
-module type MustExecuteCounter
+type MustExecuteCounter
 	// Block position -> how many of the climbs below passed through it. A COUNT keyed by a position, so
 	// it is a `DominatorChainCount` column and not a column of positions, whatever the two aliases have
 	// in common underneath.
@@ -699,7 +699,7 @@ typealias DominatorChainCountColumn = Array with DominatorChainCount
 // (docs/internals/names-and-values.md, Data representation; `StdValueUseSet`'s header measures what
 // breaking that costs). That is also what makes the witness test O(1) rather than a scan of the loads
 // hoisted so far, which would have been quadratic in a loop that reads many fields of one record.
-module type LoadWitnessTable
+type LoadWitnessTable
 	// Address value -> the bytes a load hoisted under Rule 2a through it proves readable, this loop.
 	var proven as WitnessCoverageMap
 
@@ -748,7 +748,7 @@ typealias WitnessCoverageMap = LoopValueMap with LoadCoverage
 // parameters at every level — they are created together, cleared together and reset together, and a walk
 // that took them separately would have to name all seven at each of six call sites (`CseScratch`'s
 // reason, and the same shape).
-module type LicmScratch
+type LicmScratch
 	// Every value the CURRENT loop defines, and the subset of those this pass has decided to hoist. Two
 	// sets rather than one mutable "variant" set: a removal would need a second column anyway, and a
 	// value moving from one set to the other is exactly what the analysis records.
@@ -781,7 +781,7 @@ module type LicmScratch
 	export var load as StdLoadOperands
 	export var def as StdDefinedValues
 
-	module static function create() returns LicmScratch
+	static function create() returns LicmScratch
 		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), walkOrder: BlockPositionColumn.create(0), hoisted: OpIndexArray.create(0), leaving: BlockOpPosArray.create(0), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
 	end 'create'
 

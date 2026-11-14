@@ -8,7 +8,7 @@
   Parser 13, Testing 12); `String.from(bytes ByteArray)` is the sharpest, `ByteArray` being file-private
   to String.maxon:26. Treat the count as an order of magnitude — the scan does not resolve file scope.
   ⚠ The compiler already polices the OPPOSITE direction and only that one: E3092 (an `export` nothing
-  uses) and E3093 (an `export` that could be `module`). It objects to visibility that is too broad and
+  outside its directory uses). It objects to visibility that is too broad and
   says nothing about visibility that leaks.
   Needs deciding before building: whether the rule covers all named types or only typealiases, whether
   it reaches struct fields and generic arguments, and a new error code in the 3xxx band.
@@ -137,7 +137,7 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   landed on the OLD image. Needs a sample on 20260925.250.1 (the diag workflow keeps crash dumps). The VEH is the
   only converter: no `SetUnhandledExceptionFilter` exists in the tree.
 - E3077 (`semanticVarShouldBeLet`) covers locals only, so a `var` field nothing writes goes unflagged — 21 such fields
-  sat in `MxdbgReader.maxon` until c7a076e57. A user-approved design: extend E3077 to file-private and `module` `var`
+  sat in `MxdbgReader.maxon` until c7a076e57. A user-approved design: extend E3077 to unmarked `var`
   fields of the program's own types (`public`/`export` exempt, library tiers not audited in a user compile) with
   "field 'T.f' is never written; use 'let' instead of 'var'", every such field reported; `maxon check-stdlib`, which
   compiles every stdlib function as reached, is where stdlib's fields are audited. The test is "would `let` compile": a field needs `var` wherever a `let`

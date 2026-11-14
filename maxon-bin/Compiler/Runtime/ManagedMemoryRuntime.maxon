@@ -87,7 +87,7 @@
 // that this value and `NoOwedAllocation` both come pre-zeroed from `__mm_alloc`, so `__managed_create`
 // never writes either — the same zeroing contract `__mm_alloc` relies on, and the reason a String record's
 // own `element_destroy@40` needs no store either (`StringRuntime.emitAllocOwnedInlineString`).
-export let TrivialElementDestroy = 0 as FullRangeInt
+let TrivialElementDestroy = 0 as FullRangeInt
 
 // The value `buffer@0` holds when a record has no element buffer at all — an array that never grew. It
 // is the zero `__mm_alloc` leaves the record at, and `emitBufferAbsent` is the one test for it.
@@ -823,7 +823,7 @@ let MemoryInvalidAllocationFlag = MemoryInvalidAllocationOrdinal + ErrorFlagOrdi
 
 // Is `callee` one of the three MANAGED-element array copies — the `usesManagedElementCopy` gate. Their install is
 // decoupled from `usesManagedMemory` so a program that only touches TRIVIAL arrays does not carry them.
-export function isManagedElementCopyCallee(callee ByteArray) returns bool
+function isManagedElementCopyCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedSliceManagedName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedAppendManagedName)
 end 'isManagedElementCopyCallee'
 
@@ -958,7 +958,7 @@ export let ManagedGeometryTierFileName = "ManagedGeometry.maxon"
 // what that composer exists to prevent. The name is `SignatureIndex.ArrayErrorTypeName` — the RESERVED
 // `__ArrayError` the enum is registered under, not the bare `ArrayError` a user source may write in a `throws`
 // clause; see that constant for why the two are different strings on purpose.
-export function arrayErrorThrows() returns ThrowsClause
+function arrayErrorThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ArrayErrorTypeName))
 end 'arrayErrorThrows'
 
@@ -966,7 +966,7 @@ end 'arrayErrorThrows'
 // reads to set `usesManagedMemory` (and `usesHeap`).
 let ManagedMemoryRuntimePrefix = b"__managed_"
 
-export function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
+function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ManagedMemoryRuntimePrefix)
 end 'isManagedMemoryRuntimeCallee'
 
@@ -988,7 +988,7 @@ end 'isManagedMemoryRuntimeCallee'
 // ⚠ A `FixedArray` `get`/`set` whose index the parser proved inside the size is not on this list: the
 // proof is a fact about the call site, so lowering replaces that call to the shared corpus body with
 // `__managed_get_unchecked` / `__managed_set_unchecked` (`Project.provenFixedArrayAccesses`).
-export function isThrowingManagedMemoryRuntimeCallee(callee ByteArray) returns bool
+function isThrowingManagedMemoryRuntimeCallee(callee ByteArray) returns bool
 	// The `__ManagedMemory` members throw `__ManagedMemoryError` rather than `ArrayError` — a
 	// different enum, but the same "throwing vs not" answer this predicate exists to give
 	// (`funcSignatureResultValTypes` reads the SECONDARY-SLOT predicate,
@@ -1014,13 +1014,13 @@ end 'isThrowingManagedMemoryRuntimeCallee'
 // CHECKS that** — it fails the install for a `__managed_` entry named here without a `throws` stamp and for one
 // stamped without being named. Their infallibility is the position invariant every member above maintains;
 // see `buildManagedCursorCurrent`.
-export function isThrowingCursorRuntimeCallee(callee ByteArray) returns bool
+function isThrowingCursorRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedCursorAdvanceName) or callee.equals(ManagedCursorRetreatName) or callee.equals(ManagedCursorSeekName) or callee.equals(ManagedCursorPeekName)
 end 'isThrowingCursorRuntimeCallee'
 
 // ⭐ **WHAT THE AUTHOR WROTE, for the cursor family** — `managedMemorySourceMethodName`'s twin, read through
 // the same composer and panicking off its own domain for the same reason.
-export function cursorSourceMethodName(callee ByteArray) returns immutable ByteArray
+function cursorSourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedCursorAdvanceName) 'advance'
 		return CursorAdvanceMethod
 	end 'advance'
@@ -1073,7 +1073,7 @@ end 'isThrowingArrayAccessorCallee'
 // ⚠ `get` and `slice` remain on `ArrayError`, so a user function cannot
 // declare ONE `throws` clause and propagate a buffer `set` and a buffer `get` through it; moving those two
 // needs buffer entries of their own (`get` carries the empty-slot arm), not a rename.
-export function isManagedMemoryMemberCallee(callee ByteArray) returns bool
+function isManagedMemoryMemberCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedMemCreateName) or callee.equals(ManagedSetLengthName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedMemGrowName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) or callee.equals(ManagedMemShiftRightName) or callee.equals(ManagedMemShiftLeftName) or callee.equals(ManagedCursorCreateName)
 end 'isManagedMemoryMemberCallee'
 
@@ -1090,7 +1090,7 @@ end 'isManagedMemoryMemberCallee'
 // map can name them; see that block. Asked only on the
 // COLD path, and only behind `isManagedMemoryMemberCallee` — which is what the panic states rather than
 // answers.
-export function managedMemorySourceMethodName(callee ByteArray) returns immutable ByteArray
+function managedMemorySourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedMemCreateName) 'create'
 		return ManagedMemoryCreateMethod
 	end 'create'
@@ -1161,7 +1161,7 @@ end 'managedMemorySourceMethodName'
 // opposite shape — ONE callee two authors could have written — and nothing here needs it, because
 // the three slice entries are picked by the ELEMENT's ownership and `__managed_index_refused` by
 // the inliner, and the author spells neither.
-export function arrayAccessorSourceMethodName(callee ByteArray) returns immutable ByteArray
+function arrayAccessorSourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedGetName) 'get'
 		return GetMethod
 	end 'get'
@@ -1464,7 +1464,7 @@ end 'verifyThrowingAccessorsMatchPredicate'
 // ⭐ **WHAT A RECORD-GATED ENTRY DOES ONCE THE WORD IS NON-ZERO** — the one thing its instances differ in. It
 // rides a union rather than a bool because the actions also differ in what they take and RETURN, and a bool
 // plus a second parameter would be one fact spelled twice.
-module union RecordGatedAction
+union RecordGatedAction
 	// CALL the loaded word on `value` with a `callIndirect` — `__drop_type_param`, `__drop_existential`
 	// (the destroy) and `__mm_share_existential` (the share walk). A void `(i64, i64) -> void`, so the taken
 	// path falls into the shared exit.
@@ -1527,7 +1527,7 @@ end 'RecordGatedAction'
 // ⚠ **THE RETAIN'S TAKEN PATH RETURNS FROM `doact` RATHER THAN FALLING INTO `done`**, so the two
 // exits are two `ret` terminators and no block-arg join is needed: `done` answers what it was handed and
 // `doact` answers what the word handed back.
-module function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffset ByteOffset, action RecordGatedAction)
+function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffset ByteOffset, action RecordGatedAction)
 	let func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: RecordGatedParamCount, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(RecordGatedParamCount)
 
@@ -1630,7 +1630,7 @@ let RecordGatedParamCount = 2
 // reason `emitCStringToManaged` records: that one THROWS, and these builders are non-throwing, so routing
 // through it would give a function with no error edge somewhere to send one. The call here is the one
 // `__managed_mem_create` itself makes.
-export function emitManagedByteBuffer(module StdModule, block IrBlock, record ValueId, byteCount ValueId, ids ValueMinter) returns ValueId
+function emitManagedByteBuffer(module StdModule, block IrBlock, record ValueId, byteCount ValueId, ids ValueMinter) returns ValueId
 	let elementSize = emitConst(module, block: block, value: ByteStringElementSize, ids: ids)
 	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
 	emitCreateSizedEmpty(module, block: block, record: record, elementSize: elementSize, capacity: byteCount, elementDestroy: trivial, ids: ids)
@@ -1639,7 +1639,7 @@ end 'emitManagedByteBuffer'
 
 // `emitManagedByteBuffer` leaves the length 0, so the reserved, unpublished record IS the empty
 // answer.
-export function emitEmptyManaged(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+function emitEmptyManaged(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let record = ids.mint()
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	_ = emitManagedByteBuffer(module, block: block, record: record, byteCount: zero, ids: ids)
@@ -1743,7 +1743,7 @@ end 'emitCopyRuns'
 // copy loop is the duplication this file's own header argues against ("One implementation of each … so the
 // element-stride arithmetic lives in exactly one place per direction"), and the low-address-first direction
 // is exactly what a fresh buffer needs.
-export function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter, widest CopyChunk = CopyChunk.word) returns IrBlock
+function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter, widest CopyChunk = CopyChunk.word) returns IrBlock
 	let split = openCopyRunSplit(module, func: func, cur: cur, byteCount: byteCount, widest: widest, label: b"cpyf", ids: ids)
 	let afterRuns = emitCopyRuns(module, func: func, cur: split.run, dest: dest, src: src, split: split, fromTheTop: false, ids: ids)
 
@@ -1844,7 +1844,7 @@ end 'emitDestroyOccupant'
 // record-gated entries (`buildRecordGatedAction` — `__drop_type_param`, `__drop_existential` and
 // `__retain_existential`), so the copies cannot drift if that ABI changes. The caller has already
 // loaded `destroy` and confirmed it non-null; this only emits the indirect call.
-export function emitElementDestructorCall(module StdModule, block IrBlock, destroy ValueId, elem ValueId, ids ValueMinter)
+function emitElementDestructorCall(module StdModule, block IrBlock, destroy ValueId, elem ValueId, ids ValueMinter)
 	let dropped = ids.mint()
 	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(elem)))
 end 'emitElementDestructorCall'
@@ -1946,7 +1946,7 @@ end 'emitCowDetachInto'
 // `buildManagedCowDetach` for the rule). The call sits on a cold block that `emitBranchOnDetachNeeded`
 // enters only when the detach has work to do. Returns the block to keep emitting into; `block` is
 // terminated.
-export function emitCowDetachWhenNeeded(module StdModule, func IrFunction, block IrBlock, arr ValueId, prefix String, ids ValueMinter) returns IrBlock
+function emitCowDetachWhenNeeded(module StdModule, func IrFunction, block IrBlock, arr ValueId, prefix String, ids ValueMinter) returns IrBlock
 	let detached = module.addBlock(func, label: freeze "{prefix}ddone".toByteArray(), heat: BlockHeat.normal)
 	emitCowDetachInto(module, func: func, entry: block, arr: arr, continuation: detached, prefix: prefix, ids: ids)
 
@@ -1960,7 +1960,7 @@ end 'emitCowDetachWhenNeeded'
 // ⚠ **IT IS EXPORTED WHERE `ManagedReserveName` IS NOT, AND THAT IS THE POINT.** Its second caller is
 // `StringRuntime.buildMmToCString`, which reserves one byte of room for a terminator; giving that file the
 // NAME instead would put the callee's spelling in two files, where this puts the OPERATION in one.
-export function emitManagedReserve(module StdModule, block IrBlock, record ValueId, elementCount ValueId, ids ValueMinter)
+function emitManagedReserve(module StdModule, block IrBlock, record ValueId, elementCount ValueId, ids ValueMinter)
 	let reserved = ids.mint()
 	module.appendOp(block, op: StdOp.call(reserved, callee: ManagedReserveName, args: twoArgs(record, second: elementCount)))
 end 'emitManagedReserve'
@@ -2224,7 +2224,7 @@ end 'emitBitsToBytes'
 // ⚠ **IT SURVIVES AS A NAMED DOOR RATHER THAN A SPELLED-OUT CALL AT EACH SITE BECAUSE IT TAKES TWO
 // ARGUMENTS OF ONE TYPE.** Nine sites in four files pass a count and a stride as bare `ValueId`s; written
 // as an argument array at each, a swapped pair is a wrong answer nothing would report.
-export function emitElementByteLen(module StdModule, block IrBlock, count ValueId, es ValueId, ids ValueMinter) returns ValueId
+function emitElementByteLen(module StdModule, block IrBlock, count ValueId, es ValueId, ids ValueMinter) returns ValueId
 	return emitRuntimeCall(module, block: block, callee: MgElementByteLenName, args: twoArgs(count, second: es), ids: ids)
 end 'emitElementByteLen'
 
@@ -3375,7 +3375,7 @@ end 'limitFieldRecord'
 // exported: the two differ ONLY in that end, so a private copy in the list runtime would be one rule written
 // down twice, in the file least likely to hear about a change to it. The unsigned reading and its
 // `length >= 0` precondition are the twins' shared half and live at `BoundsCompareOperandType` above.
-export function emitBoundaryPositionOutOfRange(module StdModule, block IrBlock, position ValueId, length ValueId, ids ValueMinter) returns ValueId
+function emitBoundaryPositionOutOfRange(module StdModule, block IrBlock, position ValueId, length ValueId, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: position, b: length, pred: StdCmpPred.gt, ids: ids, operandType: BoundsCompareOperandType)
 end 'emitBoundaryPositionOutOfRange'
 
@@ -3413,7 +3413,7 @@ end 'emitSliceRangeViolated'
 // synthesized `List` owes that enum's ordinal — and `ArrayErrorIndexOutOfBoundsFlag` is the fact, written here once
 // and asserted by `verifyManagedMemoryRuntimeOrdinals`. A private copy in the list runtime would be a second
 // transcription of an ordinal only this file's guard checks.
-export function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
+function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
 	emitErrorReturn(module, block: block, flag: ArrayErrorIndexOutOfBoundsFlag, ids: ids)
 end 'emitOobReturn'
 
@@ -3986,23 +3986,23 @@ export enum BufferPlacement
 end 'BufferPlacement'
 
 type SizedCreateFrame
-	module var func as IrFunction
-	module var emptyArm as IrBlock
-	module var measure as IrBlock
-	module var coAllocatedArm as IrBlock
-	module var alloc as IrBlock
-	module var coPublish as IrBlock
-	module var done as IrBlock
-	module let recordBytes as ValueId
-	module let noBuffer as ValueId
-	module let bytes as ValueId
-	module let room as ValueId
-	module let coAllocatedBytes as ValueId
-	module let allocBytes as ValueId
-	module let reservedRoom as ValueId
-	module let elementSize as ValueId
-	module let elementDestroy as ValueId
-	module let length as ValueId
+	var func as IrFunction
+	var emptyArm as IrBlock
+	var measure as IrBlock
+	var coAllocatedArm as IrBlock
+	var alloc as IrBlock
+	var coPublish as IrBlock
+	var done as IrBlock
+	let recordBytes as ValueId
+	let noBuffer as ValueId
+	let bytes as ValueId
+	let room as ValueId
+	let coAllocatedBytes as ValueId
+	let allocBytes as ValueId
+	let reservedRoom as ValueId
+	let elementSize as ValueId
+	let elementDestroy as ValueId
+	let length as ValueId
 
 	static function create(func IrFunction, emptyArm IrBlock, measure IrBlock, coAllocatedArm IrBlock, alloc IrBlock, coPublish IrBlock, done IrBlock, recordBytes ValueId, noBuffer ValueId, bytes ValueId, room ValueId, coAllocatedBytes ValueId, allocBytes ValueId, reservedRoom ValueId, elementSize ValueId, elementDestroy ValueId, length ValueId) returns SizedCreateFrame
 		return Self{func: func, emptyArm: emptyArm, measure: measure, coAllocatedArm: coAllocatedArm, alloc: alloc, coPublish: coPublish, done: done, recordBytes: recordBytes, noBuffer: noBuffer, bytes: bytes, room: room, coAllocatedBytes: coAllocatedBytes, allocBytes: allocBytes, reservedRoom: reservedRoom, elementSize: elementSize, elementDestroy: elementDestroy, length: length}
@@ -4336,7 +4336,7 @@ end 'buildManagedVacate'
 // `__managed_vacate` and `GtRuntime`'s `__gt_promise_field_vacate`. They differ only in how the slot ADDRESS
 // is formed (a strided element, a field offset); the check that refuses a second consume is one body, so an
 // array slot and a struct field cannot come apart on it. `ManagedVacateName` carries the contract.
-module function emitPromiseSlotVacateTail(module StdModule, func IrFunction, entry IrBlock, consumedTwice IrBlock, empty IrBlock, slot ValueId, read ValueId, ids ValueMinter)
+function emitPromiseSlotVacateTail(module StdModule, func IrFunction, entry IrBlock, consumedTwice IrBlock, empty IrBlock, slot ValueId, read ValueId, ids ValueMinter)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let occupant = emitLoadField(module, block: entry, record: slot, offset: 0, ids: ids)
 	let occupantMoved = emitCmp(module, block: entry, a: occupant, b: read, pred: StdCmpPred.ne, ids: ids)
@@ -4478,7 +4478,7 @@ end 'emitElementStore'
 // The null guard is `emitElementDestructorCall`'s stated precondition ("the caller has already loaded
 // `destroy` and confirmed it non-null"), honoured at a second call site rather than assumed away.
 // Threads `cur` and returns the continuation block.
-export function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, destroyOffset ByteOffset, ids ValueMinter) returns IrBlock
+function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, destroyOffset ByteOffset, ids ValueMinter) returns IrBlock
 	let checkNull = module.addBlock(func, label: b"rejchk", heat: BlockHeat.normal)
 	let drop = module.addBlock(func, label: b"rejdrop", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rejcont", heat: BlockHeat.normal)
@@ -6105,7 +6105,7 @@ end 'emitCursorElementAt'
 // FEATURE for a program whose feature is present. This enum's case ORDER is a wire format so a
 // handler can discriminate it, and a wire format with no reader is a claim nothing checks;
 // `managed-memory-error-variants` pins all three reachable cases.
-export function managedMemoryThrows() returns ThrowsClause
+function managedMemoryThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedMemoryErrorTypeName))
 end 'managedMemoryThrows'
 
@@ -6321,7 +6321,7 @@ function buildManagedWalk(module StdModule, name ByteArray, walksElements bool, 
 	finishWalkBody(module, body: body)
 end 'buildManagedWalk'
 
-export function emitWalkedRecordElements(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
+function emitWalkedRecordElements(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	let buffer = emitLoadField(module, block: cursor.block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let length = emitLoadField(module, block: cursor.block, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let es = emitLoadElementStride(module, block: cursor.block, record: arr, ids: ids)
@@ -6333,7 +6333,7 @@ end 'emitWalkedRecordElements'
 // is walked as a box (`emitBoxWalkStep`), because that allocation may be a String record the graph also owns; an owner's
 // separate buffer is a share walk's to mark, and no owner reference but the record's reaches it. A
 // move then detaches either, since a move is a write. Answers the cursor the walk continues at.
-export function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
+function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	let ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
 	let viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
 	let meetParent = module.addBlock(func, label: b"viewparent", heat: BlockHeat.normal)

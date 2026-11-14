@@ -9,16 +9,16 @@ end 'LexSweepFile'
 
 export typealias LexSweepFileArray = Array with LexSweepFile
 
-module type LexSweepRun
+type LexSweepRun
 	let project as Project
 	let pool as FrontEndPool
-	module let landed as LexLandedArray
+	let landed as LexLandedArray
 
-	module static function create(project Project, generationBase DrainGeneration) returns LexSweepRun
+	static function create(project Project, generationBase DrainGeneration) returns LexSweepRun
 		return Self{project: project, pool: FrontEndPool.create(generationBase), landed: LexLandedArray.create(0)}
 	end 'create'
 
-	module function begin(receiver CompileReceiver.handle) returns CompileStep throws CompileError
+	function begin(receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		let inFlight = try self.pool.beginLex(self.project, receiver: receiver)
 
 		if inFlight 'drainIsOut'
@@ -28,7 +28,7 @@ module type LexSweepRun
 		return try self.finished()
 	end 'begin'
 
-	module function answered(generation DrainGeneration, job ElementIndex, answer isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+	function answered(generation DrainGeneration, job ElementIndex, answer isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		if not (try self.pool.landAnswered(self.project, generation: generation, job: job, answered: answer, receiver: receiver)) 'notOurs'
 			return CompileStep.awaiting
 		end 'notOurs'
@@ -40,7 +40,7 @@ module type LexSweepRun
 		return try self.finished()
 	end 'answered'
 
-	module function abandon()
+	function abandon()
 		self.pool.close(self.project)
 		self.project.retiredWorkers.release()
 	end 'abandon'
@@ -54,7 +54,7 @@ module type LexSweepRun
 	end 'finished'
 end 'LexSweepRun'
 
-module function lexedOnDriver(driver CompileDriver.handle, project Project) throws CompileError
+function lexedOnDriver(driver CompileDriver.handle, project Project) throws CompileError
 	let unlexed = try unlexedSourcesOf(project)
 
 	if unlexed.isEmpty() 'everyStreamIsHeld'

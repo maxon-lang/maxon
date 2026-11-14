@@ -3137,10 +3137,10 @@ time this file is swept the alias is registered and the field type has already r
 it.
 ```maxon
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias BufArray = Array with __ManagedMemory
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
 
-export function seed(x BufArray) returns Int
+function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 
@@ -3191,10 +3191,10 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias BufArray = Array with __ManagedMemory
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
 
-export function seed(x BufArray) returns Int
+function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 ```
@@ -3621,10 +3621,10 @@ by the time the union is swept, the payload's declared type has already resolved
 read-door derivation cannot fire, and the declaration's own token bit is what carries it.
 ```maxon
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias BufArray = Array with __ManagedMemory
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
 
-export function seed(x BufArray) returns Int
+function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 
@@ -3673,10 +3673,10 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-export typealias Int = int(i64.min to i64.max)
-export typealias BufArray = Array with __ManagedMemory
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
 
-export function seed(x BufArray) returns Int
+function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 ```
@@ -3962,11 +3962,11 @@ TOKEN bit is what carries the surface. Deleting the stored bit in favour of the 
 half wrong.
 ```maxon
 // --- file: alias.maxon
-export typealias Byte = int(0 to u8.max)
-export typealias Int = int(i64.min to i64.max)
-export typealias ByteBuffer = __ManagedMemory with Byte
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias ByteBuffer = __ManagedMemory with Byte
 
-export function seed(x ByteBuffer) returns Int
+function seed(x ByteBuffer) returns Int
 	return x.length()
 end 'seed'
 
@@ -4012,11 +4012,11 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: alias.maxon
-export typealias Byte = int(0 to u8.max)
-export typealias Int = int(i64.min to i64.max)
-export typealias ByteBuffer = __ManagedMemory with Byte
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias ByteBuffer = __ManagedMemory with Byte
 
-export function seed(x ByteBuffer) returns Int
+function seed(x ByteBuffer) returns Int
 	return x.length()
 end 'seed'
 ```
@@ -4024,10 +4024,10 @@ end 'seed'
 7
 ```
 
-### A buffer alias's surface is FILE-SCOPED, exactly as its instance is
+### A buffer alias's surface is DIRECTORY-SCOPED, exactly as its instance is
 
 ⭐⭐ **THE TWO SPELLING REGISTRIES ARE WHOLE-PROGRAM NAME SETS, AND A GENERIC ALIAS NAME IS NOT
-WHOLE-PROGRAM.** A plain `typealias` is file-local, so two files may each declare `B` and mean different
+WHOLE-PROGRAM.** A plain `typealias` is directory-local, so two files may each declare `B` and mean different
 things; the three-tier resolution
 (`ProgramSignatures.scopedGenericAliasInstance`) exists to answer *"which declaration does THIS file mean?"*. But
 `bufferSurfaceAliases` and `bufferElementAliases` are keyed by the bare name with no file in the key, so
@@ -4050,7 +4050,7 @@ empty map and allocates nothing.
 
 Both halves in one program, so neither can be satisfied by handing everything one surface: `bufferWidth`'s
 parameter must reach `length` (its file spelled the buffer) and `arrayWidth`'s must reach `count` (its file
-did not), under one alias name. Both `B`s are file-private, so each file sees one.
+did not), under one alias name. Both `B`s are unmarked, so each file sees one.
 ```maxon
 // --- file: buffer/buffer.maxon
 export typealias Int = int(i64.min to i64.max)
@@ -4138,14 +4138,14 @@ end 'main'
 <!-- tier: stdlib -->
 
 An alias whose name a nominal type in another directory also holds is a declaration of its own, and it keeps
-the surface its spelling gives it. `buf.maxon` spells `B` as the buffer; `shapes/` declares a `module type B`,
+the surface its spelling gives it. `buf.maxon` spells `B` as the buffer; `shapes/` declares an unmarked `type B`,
 which `buf.maxon` cannot see, so the bare `B` there means the alias and `width`'s parameter reaches `length`.
 ```maxon
 // --- file: shapes/b.maxon
-module type B
+type B
 	export let n as ExitCode
 
-	module static function make() returns Self
+	static function make() returns Self
 		return Self{n: 2}
 	end 'make'
 end 'B'
@@ -4158,7 +4158,7 @@ function width(k B) returns Int
 	return k.length()
 end 'width'
 
-module function textWidth(t String) returns ExitCode
+function textWidth(t String) returns ExitCode
 	let k = t.toByteArray() as B
 	return width(k) as ExitCode
 end 'textWidth'
@@ -4503,7 +4503,7 @@ error E3185: <fragment>:5:14: '.managed' read from outside the library tiers: a 
 
 A user file is refused at the first raw door it names — here the `__ManagedMemory` type — with **E3185**.
 
-The same gate, and the second member behind it. Its corpus declaration is a `module function`
+The same gate, and the second member behind it. Its corpus declaration is an unmarked function
 (`stdlib/String.maxon:321`) whose stated contract is *"callers must guarantee `pos + len <=
 byteLength()`"* — a PRECONDITION, so the graph it forwards to (`__char_at`, the one door a `Character` is
 born through) copies the window without checking it. `__char_at` is shared with `for c in s`, whose window

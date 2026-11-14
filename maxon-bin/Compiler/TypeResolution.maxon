@@ -56,12 +56,12 @@
 // string — the alias spelling is a contract shared with the parser's interner. Grows
 // into a builtin-alias table (Character, etc.) when the stdlib cone lands.
 //
-// ⚠ **FILE-PRIVATE, AND IT IS THE `builtinTypeNameTag` BELOW THAT CARRIES THE NAME ACROSS FILES.** The
+// ⚠ **UNEXPORTED, AND IT IS THE `builtinTypeNameTag` BELOW THAT CARRIES THE NAME ACROSS FILES.** The
 // re-derivation doors — a function typealias's stored return and parameter NAMES —
 // need the ANSWER, not the bytes: handed the bytes, each door spells its own copy of the rule. Nothing
 // outside this file names the constant; the doors ask the table, which is the only thing that keeps them
 // from drifting.
-module let ExitCodeBuiltinName = b"ExitCode"
+let ExitCodeBuiltinName = b"ExitCode"
 
 // ⭐⭐ **THE TAG A BUILTIN TYPE NAME DENOTES — THE ONE ANSWER FOR EVERY DOOR THAT HOLDS A TYPE ONLY AS ITS
 // SOURCE-SPELLED NAME.** A FUNCTION TYPEALIAS stores its parameters and return INTERNER-FREE, as the bytes
@@ -145,7 +145,7 @@ module let ExitCodeBuiltinName = b"ExitCode"
 // while a door holding a RENDERED TYPE NAME has already established that the name denotes *some* type, so
 // its no-answer is `named` — the positive statement "this is a declared type", which is what every caller
 // here branches on.
-export function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
+function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
 	let primitive = primitiveTagOfTypeName(name)
 
 	if primitive != ValueTypeTag.unresolved 'aPrimitive'
@@ -191,7 +191,7 @@ export union AliasSlotIdentity
 end 'AliasSlotIdentity'
 
 // @generated library-cache begin
-module function cacheWriteAliasSlotIdentity(writer LibraryCacheWriter, value AliasSlotIdentity)
+function cacheWriteAliasSlotIdentity(writer LibraryCacheWriter, value AliasSlotIdentity)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
@@ -209,7 +209,7 @@ function cacheWriteAliasSlotIdentityGenericInstance(writer LibraryCacheWriter, a
 	writer.unsigned(a0 as CacheUnsigned)
 end 'cacheWriteAliasSlotIdentityGenericInstance'
 
-module function cacheReadAliasSlotIdentity(reader LibraryCacheReader) returns AliasSlotIdentity throws LibraryCacheDamage
+function cacheReadAliasSlotIdentity(reader LibraryCacheReader) returns AliasSlotIdentity throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
@@ -250,8 +250,8 @@ end 'cacheReadAliasSlotIdentityGenericInstance'
 // what keeps the two interners' rebuilds one function, and neither caller has to know that two arms of the
 // union are not about interning.
 //
-// ⚠ **FILE-PRIVATE.** The only callers are the two slot doors below, so an `export` here would be `E3092:
-// never referenced outside its declaring file` — which only the self-compile can see, because
+// ⚠ **UNEXPORTED.** The only callers are the two slot doors below, so an `export` here would be `E3092:
+// never referenced outside its declaring directory` — which only the self-compile can see, because
 // `checkUnusedExports` runs when the compiler compiles a PROGRAM. A caller holding a stored alias should
 // reach the RETURN or PARAM door, which know that record's column list, rather than spell the columns itself.
 function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, typeNames TypeNameInterner, identity AliasSlotIdentity) returns MaxonType
@@ -276,7 +276,7 @@ end 'maxonTypeOfStoredTypeName'
 // ⛔⛔ **ONE BODY, BECAUSE TWO WOULD HAVE TO MOVE IN LOCKSTEP.** A column added to one and not the other
 // would have the two tiers rebuild ONE stored alias into two different `MaxonType`s — a wrong answer with no
 // compile error anywhere.
-export function maxonTypeOfStoredAliasReturn(alias FunctionTypeAlias, typeNames TypeNameInterner) returns MaxonReturnType
+function maxonTypeOfStoredAliasReturn(alias FunctionTypeAlias, typeNames TypeNameInterner) returns MaxonReturnType
 	if alias.returnTag == ValueTypeTag.void 'returnsNothing'
 		return MaxonReturnType.void
 	end 'returnsNothing'
@@ -288,11 +288,11 @@ end 'maxonTypeOfStoredAliasReturn'
 // record's column list, which `functionAliasShapesIn` below and `Parser.closureParamOfferAt` both
 // rebuild through, so the parameter half cannot drift from the return half by one reader spelling the columns
 // differently.
-export function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
+function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
 	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, typeNames: typeNames, identity: param.identity)
 end 'maxonTypeOfStoredAliasParam'
 
-export function functionAliasSlotIdentity(declared MaxonType) returns AliasSlotIdentity
+function functionAliasSlotIdentity(declared MaxonType) returns AliasSlotIdentity
 	let tag = maxonTypeTag(declared)
 
 	if tag == ValueTypeTag.typeParameter 'anOpaqueParameter'
@@ -306,7 +306,7 @@ export function functionAliasSlotIdentity(declared MaxonType) returns AliasSlotI
 	return AliasSlotIdentity.nameOnly
 end 'functionAliasSlotIdentity'
 
-export function remappedAliasSlotIdentity(identity AliasSlotIdentity, remap TypeIdRemap) returns AliasSlotIdentity
+function remappedAliasSlotIdentity(identity AliasSlotIdentity, remap TypeIdRemap) returns AliasSlotIdentity
 	return match identity 'identity'
 		genericInstance(id) gives AliasSlotIdentity.genericInstance(remap.applyInstance(id))
 		typeParamToken or
@@ -326,7 +326,7 @@ end 'UnknownTypeName'
 // (SemanticCheck's source of truth). A closure parameter typed by `ClosureParamOffer.deferred`, and a
 // declared type that names nothing, stay `unresolved`: a reported refusal rejects the program before
 // lowering, and `requireNoUnresolvedTagsSurvivedTheMaxonTier` guards that.
-module function resolveTypes(project Project, module MaxonModule)
+function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
 	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by FrontEndRun before the pipeline runs, so it cannot fail fresh here")
@@ -377,12 +377,13 @@ end 'resolveTypes'
 // ⚠ It runs in a pass, and the pipeline's gate fires only BETWEEN passes, so both lists are drained
 // before anything stops the build — which is the second half of the same requirement: two diagnostics
 // in one program, in one order.
-module function reportDeferredNameDiagnostics(project Project, signatures ProgramSignatures)
+function reportDeferredNameDiagnostics(project Project, signatures ProgramSignatures)
 	// ⚠ Captured BEFORE the loop, because the loop APPENDS to the very array `declarationAlreadyReported`
 	// scans: without the bound, each E3062 emitted here would be a row every later candidate compares
 	// against — turning k unused aliases into O(k²) comparisons, and (worse) letting one unused alias
 	// suppress another that happens to share its line in a different file.
 	let alreadyReported = project.diagnostics.count()
+	noteConstInitializerTypeNamesWritten(project, signatures: signatures)
 
 	for unusedIndex in 0 upto project.unusedTypeAliasDiagnostics.count() 'eachUnused'
 		let entry = try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")
@@ -411,13 +412,9 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 			continue
 		end 'aRegionWasAbandonedWhereItCouldBeNamed'
 
-		// ⚠ Only the `readerMeansKind` half of the second call can fail here — nothing enters
-		// `genericAliasNamesWrittenByAFile` except through `ParseStaging.noteWrittenGenericAliasNames`,
-		// which asks the same door of the spelling file. The whole door is asked anyway because that
-		// agreement is cross-file and unenforced: a second insert site leaves this the only check of it.
-		if project.genericAliasNamesWrittenByAFile.contains(entry.name) and signatures.fileMeansTheSoleGenericAliasDeclaration(entry.name, readerFilePath: entry.filePath) 'namedAcrossTheFileBoundary'
+		if project.aliasDeclarationsNamed.contains(fileScopedDeclKey(entry.name, declFilePath: entry.filePath)) 'namedWithinItsDirectory'
 			continue
-		end 'namedAcrossTheFileBoundary'
+		end 'namedWithinItsDirectory'
 
 		let line = entry.line
 		let column = entry.column
@@ -429,14 +426,19 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 	end 'eachHidden'
 end 'reportDeferredNameDiagnostics'
 
-// Another file's lost text holds back only a generic-instance alias, the one form a spelling in another
-// file credits; widening it would drop a true E3062 for every alias in a program with one lost region.
-function aSpellingOfTheAliasMayHaveBeenLost(project Project, entry DeferredNameDiagnostic, signatures ProgramSignatures) returns bool
-	if project.poison.lostTextIn(entry.filePath) 'itsOwnFileLostARegion'
-		return true
-	end 'itsOwnFileLostARegion'
+function noteConstInitializerTypeNamesWritten(project Project, signatures ProgramSignatures)
+	for i in 0 upto signatures.constInitializerTypeSiteCount() 'eachSite'
+		let site = signatures.constInitializerTypeSiteAt(i)
+		noteWrittenTypeName(project, name: site.name, signatures: signatures, readerPath: site.readerFilePath)
+	end 'eachSite'
+end 'noteConstInitializerTypeNamesWritten'
 
-	return project.poison.holdsLostText() and signatures.fileMeansTheSoleGenericAliasDeclaration(entry.name, readerFilePath: entry.filePath)
+function aSpellingOfTheAliasMayHaveBeenLost(project Project, entry DeferredNameDiagnostic, signatures ProgramSignatures) returns bool
+	if project.poison.lostTextWithin(signatures.scopeOf(entry.filePath), signatures: signatures) 'aFileThatCouldNameItLostARegion'
+		return true
+	end 'aFileThatCouldNameItLostARegion'
+
+	return project.poison.holdsLostText() and signatures.namesTheSoleGenericAliasDeclaration(entry.name)
 end 'aSpellingOfTheAliasMayHaveBeenLost'
 
 // Is there already a diagnostic against this declaration's own source line? See the caller for the
@@ -583,7 +585,7 @@ end 'functionAliasSlotIn'
 // a struct return read as an int (a false E3005), or an int dereferenced as a record at run time.
 // `ProgramSignatures.funcReturnDeclFiles`' header states the rule this parameter carries: *"the scope
 // file is the SLOT's declaring file and never a reader's."*
-module function resolveNamedStruct(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures, scopeFilePath FilePath) returns MaxonType
+function resolveNamedStruct(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures, scopeFilePath FilePath) returns MaxonType
 	if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 		return t
 	end 'notNamed'
@@ -597,7 +599,7 @@ module function resolveNamedStruct(t MaxonType, typeNames TypeNameInterner, sign
 	return MaxonType.structRef(id)
 end 'resolveNamedStruct'
 
-module function parsedFunctionTypeRegistryOf(project Project, signatures ProgramSignatures) returns FunctionTypeRegistry
+function parsedFunctionTypeRegistryOf(project Project, signatures ProgramSignatures) returns FunctionTypeRegistry
 	return FunctionTypeRegistry.create(project.funcSignatures, funcReturnTypes: project.funcReturnTypes, aliasShapes: functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.parsed), typeNames: project.typeNames)
 end 'parsedFunctionTypeRegistryOf'
 
@@ -613,7 +615,7 @@ end 'parsedFunctionTypeRegistryOf'
 // keep a type name and a function name from colliding — so the order they are tried in cannot matter.
 //
 // `undeclared` is the honest answer for a name in neither, and every caller must handle it rather than assume.
-module union DeclaredFunctionShape
+union DeclaredFunctionShape
 	declared(shape FunctionShape)
 	undeclared
 end 'DeclaredFunctionShape'
@@ -633,7 +635,7 @@ function signatureReturnIdentity(registry FunctionTypeRegistry, sig FuncSignatur
 end 'signatureReturnIdentity'
 
 // The registries this reads travel as one `FunctionTypeRegistry` — see there for why all four move together.
-module function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
+function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
 		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: signatureReturnIdentity(registry, sig: sig), paramCapabilities: sig.shapeParamCapabilities(), returnCapability: sig.returnCapability, byRefParams: sig.byRefParams, markedParams: sig.writtenParams))
@@ -648,7 +650,7 @@ end 'declaredFunctionShapeOf'
 
 // The registry a `Project` denotes, assembled where a pass first needs one. It copies four references and
 // nothing else, so it is not a cache and cannot go stale against the project it was taken from within a pass.
-export function functionTypeRegistryOf(project Project) returns FunctionTypeRegistry
+function functionTypeRegistryOf(project Project) returns FunctionTypeRegistry
 	return FunctionTypeRegistry.create(project.funcSignatures, funcReturnTypes: project.funcReturnTypes, aliasShapes: project.functionAliasShapes, typeNames: project.typeNames)
 end 'functionTypeRegistryOf'
 
@@ -664,7 +666,7 @@ end 'functionTypeRegistryOf'
 // `fn(FullRangeFloat) returns FullRangeFloat` — the very silent wrong answer this exists to
 // close. A value merge asks it too, of parse-time shapes; FunctionShape states why a door and a
 // merge get different rules.
-export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
+function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
 	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: FunctionTypePairArray.create(0), readerFilePath: readerFilePath, comparison: ShapeComparison.exact)
 end 'functionShapesAgree'
 
@@ -674,7 +676,7 @@ function typeMentionsATypeParameter(registry FunctionTypeRegistry, signatures Pr
 	return typeMentionsATypeParameterWithin(registry, signatures: signatures, t: t, depth: 0)
 end 'typeMentionsATypeParameter'
 
-export function functionShapeMentionsATypeParameter(registry FunctionTypeRegistry, signatures ProgramSignatures, shape FunctionShape) returns bool
+function functionShapeMentionsATypeParameter(registry FunctionTypeRegistry, signatures ProgramSignatures, shape FunctionShape) returns bool
 	return shapeMentionsATypeParameterWithin(registry, signatures: signatures, shape: shape, depth: 0)
 end 'functionShapeMentionsATypeParameter'
 
@@ -738,7 +740,7 @@ function declaredMarkerIsRelaxable(marker ParamCapability) returns bool
 	end 'marker'
 end 'declaredMarkerIsRelaxable'
 
-export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
+function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
 	if not functionShapeMentionsATypeParameter(registry, signatures: signatures, shape: declared) 'nothingToSubstitute'
 		return functionShapesAgree(registry, signatures: signatures, declared: declared, got: got, readerFilePath: readerFilePath)
 	end 'nothingToSubstitute'
@@ -870,7 +872,7 @@ end 'exactParameterAgrees'
 // check compares by name), and a second loop here would be a second spelling that could drift from it. So the
 // only local work is putting each erased position's identity back as the `named` type it was before
 // resolution, which is precisely what the shared renderer already knows how to print.
-export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
+function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	let unerasedParams = MaxonTypeArray.create(shape.paramTypes.count(), zeroed: false)
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
@@ -905,11 +907,11 @@ end 'unerasedType'
 
 // One position's entry in a shape's pre-erasure identity column. The two columns are built in lockstep with
 // `paramTypes` at both fill sites, so an out-of-range read is a compiler bug rather than a program's.
-export function shapeParamIdentity(shape FunctionShape, index ParamCount) returns immutable ByteArray
+function shapeParamIdentity(shape FunctionShape, index ParamCount) returns immutable ByteArray
 	return try shape.paramAggregateNames.get(index) otherwise panic("shapeParamIdentity: paramAggregateNames.get OOB at {index} below count {shape.paramAggregateNames.count()} — a shape's parameter columns are built in lockstep with its {shape.paramTypes.count()} parameter type(s)")
 end 'shapeParamIdentity'
 
-export function shapeParamSpelling(shape FunctionShape, index ParamCount) returns immutable ByteArray
+function shapeParamSpelling(shape FunctionShape, index ParamCount) returns immutable ByteArray
 	return try shape.paramDeclaredNames.get(index) otherwise panic("shapeParamSpelling: paramDeclaredNames.get OOB at {index} below count {shape.paramDeclaredNames.count()} — a shape's parameter columns are filled in lockstep with paramTypes")
 end 'shapeParamSpelling'
 
@@ -963,7 +965,7 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 	return not tagIsIdentifiedByName(declaredTag) or typeNameIdOf(declared) == typeNameIdOf(got)
 end 'resolvedTypesMatch'
 
-export function tagIsIdentifiedByName(tag ValueTypeTag) returns bool
+function tagIsIdentifiedByName(tag ValueTypeTag) returns bool
 	return match tag 'k'
 		// Every one of these IS its own type: there is nothing else about an `int`, a `float`, a `bool`, an
 		// `ExitCode`, a `void`, a `String` or a `Character` to disagree about.
@@ -1042,7 +1044,7 @@ end 'nestedFunctionTypesAgree'
 // the NAME, because that is what the registries are keyed by. All of them read it here: the ids are remapped
 // project-global at merge, so one table answers for all three passes and none of them can resolve it its own
 // way. SemanticCheck and LowerMaxonToStd each had a private copy of exactly this before.
-export function functionTypeNameOf(registry FunctionTypeRegistry, nameId TypeNameId) returns immutable ByteArray
+function functionTypeNameOf(registry FunctionTypeRegistry, nameId TypeNameId) returns immutable ByteArray
 	return try registry.typeNames.nameOf(nameId) otherwise panic("functionTypeNameOf: type-name id {nameId} is not in the project interner — a function type's name id is remapped project-global at merge (mergeArtifact)")
 end 'functionTypeNameOf'
 
@@ -1058,14 +1060,14 @@ end 'functionTypeNameOf'
 // `parseClosureExpression` for a lifted closure), and every caller has already established that both its tags
 // are `function`. A missing shape therefore means a producer was added without a registry entry, which is a
 // compiler bug and never user input.
-export function requireFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray, side String) returns FunctionShape
+function requireFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray, side String) returns FunctionShape
 	match declaredFunctionShapeOf(registry, name: name) 'shape'
 		declared(shape) then return shape
 		undeclared then panic("requireFunctionShapeOf: the {side} function type's governing name '{String.from(name)}' names neither a declared function/closure nor a function typealias — a `function` tag is minted only from one of the three (Parser.parseTypeReference / emitFunctionRef / parseClosureExpression)")
 	end 'shape'
 end 'requireFunctionShapeOf'
 
-module function functionShapeIsMissingBesideAFailedFile(project Project, registry FunctionTypeRegistry, name ByteArray) returns bool
+function functionShapeIsMissingBesideAFailedFile(project Project, registry FunctionTypeRegistry, name ByteArray) returns bool
 	if project.poison.isEmpty() 'noFileFailed'
 		return false
 	end 'noFileFailed'
@@ -1245,7 +1247,7 @@ end 'resolveReturnType'
 // be erased exactly as this pass erased every other slot of the shapes being compared. A second erasure
 // written there would be a second answer to "what does this name denote", which is the disagreement this
 // file's header is about.
-export function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey = PositionlessSite, declaration immutable ByteArray = EmptySourceText) returns MaxonType
+function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey = PositionlessSite, declaration immutable ByteArray = EmptySourceText) returns MaxonType
 	match t 'r'
 		boolean then return t
 		integer then return t
@@ -1438,7 +1440,7 @@ end 'resolveType'
 // The three literal marker interfaces that `Project.isBuiltinManagedWrapperInterface` tests are on the list
 // because a contest would rename the library's `implements BuiltinStringLiteral` away from the name it tests,
 // and `String` would lose its fused record.
-export function isCompilerOwnedTypeName(name ByteArray) returns bool
+function isCompilerOwnedTypeName(name ByteArray) returns bool
 	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(RunProcessErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName) or name.equals(BuiltinStringLiteralInterfaceName) or name.equals(BuiltinCharLiteralInterfaceName) or name.equals(BuiltinArrayLiteralInterfaceName)
 end 'isCompilerOwnedTypeName'
 
@@ -1458,7 +1460,7 @@ end 'isCompilerOwnedTypeName'
 // `i64.min as FullRangeInt` resolved to a USER program's `type FullRangeInt` and the E3009 named a library line
 // the author never opened. The reader for a stored DECLARATION's type is its DECLARING file, never the
 // caller's — see `resolveNamedType`, which is where each of the three is obtained.
-export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns MaxonType throws UnknownTypeName
+function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns MaxonType throws UnknownTypeName
 	// ⭐⭐ **THE NAME *AND* THE ANSWER ARE `builtinTypeNameTag`'S — THIS ARM OWNS NEITHER.** Spelling
 	// `ExitCode` and `MaxonType.exitCode` here instead makes the AUTHORITY for what a type name
 	// denotes and the TABLE the interner-free doors re-derive two independent lists of which builtin
@@ -1616,7 +1618,7 @@ end 'denotedNamedType'
 // and by every POSITIONED site in the parser — the two `as` casts and the three member-access doors,
 // all through `Queries.parseErrorDiagnostic`'s one `unknownTypeName` arm — so one fact has one text
 // however it is reached.
-export function unknownTypeMessage(typeName String) returns String
+function unknownTypeMessage(typeName String) returns String
 	return "Unknown type '{typeName}'"
 end 'unknownTypeMessage'
 
@@ -1659,11 +1661,11 @@ function barePrimitiveExampleRangeFor(spelling String) returns String
 	panic("barePrimitiveExampleRangeFor: '{spelling}' is not a ranged primitive — see `barePrimitiveAliasNameFor`")
 end 'barePrimitiveExampleRangeFor'
 
-export function barePrimitiveTypeMessage(spelling String) returns String
+function barePrimitiveTypeMessage(spelling String) returns String
 	return "Cannot use bare '{spelling}' as a type. Define a typealias with range constraints, e.g., typealias {barePrimitiveAliasNameFor(spelling)} = {spelling}({barePrimitiveExampleRangeFor(spelling)})"
 end 'barePrimitiveTypeMessage'
 
-export function barePrimitiveCastMessage(spelling String) returns String
+function barePrimitiveCastMessage(spelling String) returns String
 	return "Cannot cast to bare '{spelling}'. Define a typealias with range constraints, e.g., 'value as {barePrimitiveAliasNameFor(spelling)}' where 'typealias {barePrimitiveAliasNameFor(spelling)} = {spelling}({barePrimitiveExampleRangeFor(spelling)})'"
 end 'barePrimitiveCastMessage'
 
@@ -1693,7 +1695,7 @@ function denotedDeclaredType(signatures ProgramSignatures, name ByteArray, id Ty
 	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: into)
 end 'denotedDeclaredType'
 
-export function declaredNameDenotesNothing(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns bool
+function declaredNameDenotesNothing(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns bool
 	let _ = try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) otherwise 'notANamedType'
 		let _ = try signatures.aliasFormFor(name, readerFilePath: readerFilePath) otherwise return true
 
@@ -1738,7 +1740,7 @@ function requireUnplacedUnknownTypesWereReported(project Project)
 	end 'eachUnplaced'
 end 'requireUnplacedUnknownTypesWereReported'
 
-export function denotedAliasForm(signatures ProgramSignatures, name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns MaxonType throws UnknownTypeName
+function denotedAliasForm(signatures ProgramSignatures, name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns MaxonType throws UnknownTypeName
 	let form = try signatures.aliasFormFor(name, readerFilePath: readerFilePath)
 
 	match form 'form'

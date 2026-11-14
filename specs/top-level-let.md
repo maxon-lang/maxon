@@ -355,7 +355,7 @@ end 'main'
 ```
 
 <!-- test: file-private-same-name-cross-file -->
-A file-private (non-exported) top-level `let` is scoped to its declaring file, so two files may declare the same bare name with different values. Each file's reads resolve to its OWN constant.
+An unmarked (non-exported) top-level `let` is scoped to its declaring directory, so files in two directories may declare the same bare name with different values. Each file's reads resolve to its OWN directory's constant.
 ```maxon
 // --- file: featA/a.maxon
 let SHARED = 99
@@ -987,7 +987,7 @@ end 'main'
 export let MIDDLE = ROOT * 4
 
 // --- file: api/root.maxon
-export let ROOT = 10
+let ROOT = 10
 ```
 ```exitcode
 42
@@ -1017,8 +1017,8 @@ error E2012: app/<fragment>:3:12: Circular dependency detected among global cons
 ```
 
 <!-- test: error.file-private-constant-cross-file -->
-A file-private (non-exported) top-level `let` is not a constant another file may read, so a
-cross-file reference to one from a constant initializer is undefined — the whole-program view the
+An unmarked top-level `let` is not a constant another directory may read, so a reference to one
+from another directory's constant initializer is undefined — the whole-program view the
 compiler takes of constant DECLARATIONS does not widen their VISIBILITY.
 ```maxon
 // --- file: api/secret.maxon
@@ -1059,9 +1059,9 @@ error E2004: app/<fragment>:11:13: Undefined variable 'SECRET'
 ```
 
 <!-- test: cross-file-exported-reads-own-private-declared-last -->
-An exported constant whose initializer reads a constant PRIVATE to its own declaring file resolves
-to the right value from another file — because it is folded in ITS declarer's perspective, where
-that private is visible, not in the demander's. The declaring file is fed LAST here; it must give
+An exported constant whose initializer reads a constant UNEXPORTED from its own directory resolves
+to the right value from another directory — because it is folded in ITS declarer's perspective, where
+that constant is visible, not in the demander's. The declaring file is fed LAST here; it must give
 the same result as when fed first (below).
 ```maxon
 // --- file: app/main.maxon
@@ -1138,8 +1138,8 @@ end 'main'
 ```
 
 <!-- test: cross-file-private-constant-name-collision -->
-Two files each declare a PRIVATE constant of the same name with different values, each read through
-an exported constant. The exported constants must fold against their OWN file's private — proving
+Two directories each declare an UNMARKED constant of the same name with different values, each read through
+an exported constant. The exported constants must fold against their OWN directory's constant — proving
 the fold memo keys by declaration identity, not by bare name. A name-keyed memo would serve the
 first `SECRET` folded (20) for the second, making BVAL 21 and the total 42 instead of 122.
 ```maxon
@@ -1441,10 +1441,10 @@ error E3220: <fragment>:8:11: the initializer of 'big' calls 'larger': a module-
 
 
 <!-- test: error.a-static-initializer-calling-a-sibling-static-past-a-hidden-free-function-is-not-a-constant -->
-Another file of the directory declares a file-private free `makeSeed`; inside `Registry` the bare call means
+Another directory declares an unmarked free `makeSeed`; inside `Registry` the bare call means
 the sibling static, as a body call would, so it is refused as a call rather than as a hidden function.
 ```maxon
-// --- file: hidden.maxon
+// --- file: hidden/hidden.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 function makeSeed() returns Integer
@@ -1478,7 +1478,7 @@ error E2045: <fragment>:15:20: Function calls are not allowed in global variable
 
 
 <!-- test: a-builtin-call-past-a-hidden-same-name-declaration-folds-to-a-constant -->
-Another file declares a file-private `sqrt`; from `main.maxon` the bare call means the math builtin, as a
+Another directory declares an unmarked `sqrt`; from `main.maxon` the bare call means the math builtin, as a
 body call does, and a builtin over a constant is the constant the body knows it to be, so `R` is 2.0.
 ```maxon
 // --- file: main.maxon
@@ -1494,7 +1494,7 @@ function main() returns ExitCode
 	return 0
 end 'main'
 
-// --- file: a.maxon
+// --- file: a/a.maxon
 function sqrt(x Real) returns Real
 	return x
 end 'sqrt'
@@ -1523,7 +1523,7 @@ function main() returns ExitCode
 	return 0
 end 'main'
 
-// --- file: a.maxon
+// --- file: a/a.maxon
 function sqrt(x Real) returns Real
 	return x
 end 'sqrt'
@@ -1537,7 +1537,7 @@ end 'useSqrt'
 ```
 
 <!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-both -->
-An unused typealias in another file is reported beside an initializer's refused call.
+An unused typealias in another directory is reported beside an initializer's refused call.
 ```maxon
 // --- file: main.maxon
 let G = nothere(7)
@@ -1546,12 +1546,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 
-// --- file: other.maxon
+// --- file: lib/other.maxon
 typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
+error E3062: lib/<fragment>:10:11: unused typealias: 'Unused'
 error E3220: <fragment>:3:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
-error E3062: <fragment>:10:11: unused typealias: 'Unused'
 ```
 
 <!-- test: error.a-refused-function-body-call-beside-an-unused-typealias-reports-both -->
@@ -1690,8 +1690,8 @@ error E3005: b/<fragment>:18:15: argument type mismatch for 'n': expected 'b.Dig
 ```
 
 <!-- test: error.a-failed-file-beside-a-same-named-private-function-reports-the-healthy-declarations-refusal -->
-The file that fails to parse declares a private `helper`, which no other file can name. A healthy file calls
-a `helper` that another healthy file keeps private: that refusal is the healthy declaration's, so it is
+The file that fails to parse declares an unmarked `helper`, which no other directory can name. A healthy file calls
+a `helper` that a healthy file in another directory keeps unexported: that refusal is the healthy declaration's, so it is
 reported beside the parse error.
 ```maxon
 // --- file: a/broken.maxon
@@ -1700,7 +1700,7 @@ function helper(n ExitCode) returns ExitCode
 	return n
 end 'helper'
 
-// --- file: b/lib.maxon
+// --- file: c/lib.maxon
 function helper(n ExitCode) returns ExitCode
 	return n
 end 'helper'
@@ -2570,7 +2570,7 @@ error E3220: <fragment>:5:20: the initializer of 'Registry.seed' calls 'Registry
 ```
 
 <!-- test: error.a-top-level-initializer-call-to-a-hidden-generic-is-not-exported -->
-The only `larger` is a file-private generic in `other.maxon`, so `main.maxon` cannot name it.
+The only `larger` is an unmarked generic in `other/`, so `main.maxon`, outside it, cannot name it.
 ```maxon
 // --- file: main.maxon
 let big = larger(1 as Integer, b: 2 as Integer)
@@ -2579,7 +2579,7 @@ function main() returns ExitCode
 	return (big + useLarger()) as ExitCode
 end 'main'
 
-// --- file: other.maxon
+// --- file: other/other.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 function larger(a T, b T) uses T returns T where T is Comparable
@@ -2882,7 +2882,7 @@ function main() returns ExitCode
 	return 0
 end 'main'
 
-// --- file: steps.maxon
+// --- file: steps/steps.maxon
 export typealias Tally = int(0 to 1000000)
 export typealias Step = function(Tally) returns Tally
 
@@ -3592,7 +3592,7 @@ function broken() returns Digit
 	return foo(1,
 end 'broken'
 
-module function helper() returns ExitCode
+function helper() returns ExitCode
 	return nothere(7)
 end 'helper'
 
@@ -4543,7 +4543,7 @@ error E2004: <fragment>:23:11: Cannot operate on Digit and String
 was lost is not evidence that `Tallies` is unused. The undefined call in `main` stays reported.
 ```maxon
 // --- file: a.maxon
-module typealias Tally = int(0 to 1000)
+typealias Tally = int(0 to 1000)
 typealias Tallies = Array with Tally
 
 // --- file: main.maxon
@@ -4569,7 +4569,7 @@ spells `Tallies` after its syntax error, and the lost spelling is not evidence t
 call in `main.maxon` stays reported.
 ```maxon
 // --- file: a.maxon
-module typealias Tally = int(0 to 1000)
+typealias Tally = int(0 to 1000)
 typealias Tallies = Array with Tally
 
 // --- file: b.maxon

@@ -1754,7 +1754,7 @@ end 'RangeCheckEmitter'
 // The return after an aborting op: never executed, present so the block leaves `func` with the arity its
 // type declares. Shared with the inliner, which ends a copied aborting block the same way in the CALLER
 // (`SiteSplicer.copyBodies`), so the two cannot disagree about how a dead return is made.
-module function appendDeadReturn(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
+function appendDeadReturn(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
 	if functionUsesSecondaryReturnSlot(func.maxonReturnType, throws: func.throwsTypeName) 'aSecondReturnWord'
 		let dead = appendZeroConst(module, block: block, valueType: stdDefaultPrimaryReturnType(func.returnType), ids: ids)
 		let second = appendZeroConst(module, block: block, valueType: StdType.i64, ids: ids)
@@ -1773,7 +1773,7 @@ end 'appendDeadReturn'
 // same immortal-rdata path a String literal's blob uses, deduped by bytes — and `osPanic`
 // carries its label to the backend, which loads the address into the ABI's first-arg register and
 // calls `mrt_panic`.
-module function appendPanicBlock(module StdModule, func IrFunction, globalData GlobalDataTable, label ByteArray, message ByteArray, ids ValueMinter) returns IrBlock
+function appendPanicBlock(module StdModule, func IrFunction, globalData GlobalDataTable, label ByteArray, message ByteArray, ids ValueMinter) returns IrBlock
 	let panicBlock = module.addBlock(func, label: label, heat: BlockHeat.cold)
 	let blobLabel = registerStringBlob(globalData, bytes: message)
 	module.appendOp(panicBlock, op: StdOp.osPanic(freeze blobLabel.toByteArray()))
@@ -1835,7 +1835,7 @@ let RangeCheckPanicLabel = b"__rc_panic"
 // nothing. ⇒ The product term is LINEAR IN PRACTICE, not absent. A primitive that carves MID-block,
 // or a pass that merges a throwing call's blocks, reinstates it with nothing in the way — take
 // `splitChainEnd` then.
-export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
+function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
 	let headBlock = head
 	let tailOps = OpIndexArray.create(headBlock.bodyOpCount() - position, zeroed: false)
 

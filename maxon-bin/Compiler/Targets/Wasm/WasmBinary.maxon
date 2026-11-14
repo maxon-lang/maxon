@@ -29,7 +29,7 @@
 // counts are all u32 in the binary format. UNSIGNED, which also makes `shr` on this type a
 // LOGICAL shift (see writeUleb128) — exactly what unsigned LEB128 wants.
 export typealias Wasm32Index = int(0 to u32.max) implements ElementIndex
-export typealias Wasm32IndexArray = Array with Wasm32Index
+typealias Wasm32IndexArray = Array with Wasm32Index
 
 // --- LEB128 ---
 // wasm uses two variable-length integer encodings, and mixing them up is a silent
@@ -104,14 +104,14 @@ end 'writeSleb128'
 // The wasm value types the backend produces. i32 backs i1/i8..i32; i64 backs i64/u64;
 // f64 backs a Maxon `float`. f32 is declared for completeness but nothing produces one (the
 // language's `float` is f64), so no f32 ALU exists in this file. StdToWasm chooses the width per op.
-export enum WasmValType
+enum WasmValType
 	i32
 	i64
 	f32
 	f64
 end 'WasmValType'
 
-export typealias WasmValTypeArray = Array with WasmValType
+typealias WasmValTypeArray = Array with WasmValType
 
 // The binary-format encoding of each value type (a single negative-sleb byte in the spec,
 // stored here as its unsigned byte value). Kept as an explicit map rather than enum raw
@@ -364,10 +364,10 @@ let wasmElemTableStartOffset = 0
 // Each method APPENDS the encoded instruction(s) to the body's byte buffer. `bytes()` returns
 // the raw instruction stream ONLY — the local declarations and the trailing `end` are framed
 // by WasmModuleBuilder.addFunction, which is the one place that knows a body's locals.
-export type WasmBody
+type WasmBody
 	var buf as ByteArray
 
-	export static function create() returns WasmBody
+	static function create() returns WasmBody
 		return Self{buf: ByteArray.create(0)}
 	end 'create'
 
@@ -410,7 +410,7 @@ export type WasmBody
 		writeUleb128(self.buf, value: relativeDepth)
 	end 'brIf'
 
-	export function brTable(targets Wasm32IndexArray, defaultTarget Wasm32Index)
+	function brTable(targets Wasm32IndexArray, defaultTarget Wasm32Index)
 		self.buf.push(opBrTable)
 		writeUleb128(self.buf, value: targets.count() as Wasm32Index)
 
@@ -980,7 +980,7 @@ end 'writeI32ConstOffsetExpr'
 // for results. Exported so `StdToWasm.buildIndirectCallTypeIdxMap`/`emitCallIndirect` can key an indirect
 // call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on — one
 // encoder, so the intern-time key and the emit-time lookup key cannot disagree.
-export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns immutable ByteArray
+function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns immutable ByteArray
 	let enc = ByteArray.create(0) as isolated ByteArray
 
 	modify enc 'fill'
@@ -1082,7 +1082,7 @@ typealias FuncTypeDedupMap = Map with (ByteArray, Wasm32Index)
 // addImportFunc call order; defined functions take importCount, importCount+1, … in addFunction
 // call order. So StdToWasm must add ALL imports before ANY function — addFunction returns the index it
 // assigned, computed from the import count at that moment.
-export type WasmModuleBuilder
+type WasmModuleBuilder
 	// Interned functype encodings, position = type index. Deduplicated so identical signatures
 	// share one entry; `funcTypeDedup` keys the encoded bytes → index so the dedup is O(1), not a
 	// scan of every prior entry per interned type.
@@ -1134,7 +1134,7 @@ export type WasmModuleBuilder
 	// value byte-identical — no table (id 4) and no element (id 9) section at all.
 	var funcrefTable as bool
 
-	export static function create() returns WasmModuleBuilder
+	static function create() returns WasmModuleBuilder
 		return Self{funcTypes: ByteBlobArray.create(0), funcTypeDedup: FuncTypeDedupMap.create(), importModules: NameRoster.create(0), importFields: NameRoster.create(0), importTypeIndices: Wasm32IndexArray.create(0), funcTypeIndices: Wasm32IndexArray.create(0), funcBodies: ByteBlobArray.create(0), funcDebugNames: NameRoster.create(0), exportEntries: WasmExportArray.create(0), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(0), funcrefTable: false}
 	end 'create'
 
@@ -1143,7 +1143,7 @@ export type WasmModuleBuilder
 	// here made interning N functions with D distinct signatures O(N·D) — up to O(N²) when signatures
 	// vary — a findFirst-over-an-array in a per-function loop. The map returns the FIRST-interned
 	// index for identical bytes, exactly as the scan did, so the emitted type section is byte-identical.
-	export function internFuncType(params WasmValTypeArray, results WasmValTypeArray) returns Wasm32Index
+	function internFuncType(params WasmValTypeArray, results WasmValTypeArray) returns Wasm32Index
 		let enc = encodeFuncType(params, results: results)
 
 		return try self.funcTypeDedup.get(enc) otherwise 'fresh'
@@ -1172,7 +1172,7 @@ export type WasmModuleBuilder
 	// instructions); this frames it with the local declarations and the trailing `end`. `debugName` is
 	// the name the "name" section gives this index — for a module function its own `IrFunction.name`, so
 	// a backtrace frame reads the source's word for it.
-	export function addFunction(typeIdx Wasm32Index, localTypes WasmValTypeArray, body ByteArray, debugName ByteArray) returns Wasm32Index
+	function addFunction(typeIdx Wasm32Index, localTypes WasmValTypeArray, body ByteArray, debugName ByteArray) returns Wasm32Index
 		let funcIdx = (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
 		self.requireDebugNameSlot(funcIdx, what: debugName)
 

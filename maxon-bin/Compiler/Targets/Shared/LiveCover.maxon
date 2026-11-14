@@ -8,14 +8,14 @@
 // holds no peak has no leaf there (`found`), so it never wins.
 typealias DemandTreeArray = Array with DemandTree
 
-export type LiveCover
+type LiveCover
 	var leafBase as ElementIndex
 	var cells as PressureDeltaColumn
 	var trees as DemandTreeArray
 	var armed as bool
 	var nodes as CfgIndexArray
 
-	export static function create() returns LiveCover
+	static function create() returns LiveCover
 		return Self{leafBase: 1, cells: PressureDeltaColumn.create(0), trees: DemandTreeArray.create(0), armed: false, nodes: CfgIndexArray.create(0)}
 	end 'create'
 
@@ -54,7 +54,7 @@ export type LiveCover
 		return try self.trees.get(class.ordinal) otherwise panic("LiveCover.treeOf: the {class.name} demand tree was asked for before the cover was armed")
 	end 'treeOf'
 
-	export function add(class RegClass, lo ElementIndex, hi ElementIndex, by PressureDelta)
+	function add(class RegClass, lo ElementIndex, hi ElementIndex, by PressureDelta)
 		let base = self.cellBase(class)
 		let covering = self.nodes
 		collectCoveringNodes(self.leafBase, lo: lo, hi: hi, out: covering)
@@ -73,7 +73,7 @@ export type LiveCover
 		try self.cells.set(cell, value: (try self.cells.get(cell) otherwise panic("LiveCover.bump: cells.get OOB at {cell}")) + by) otherwise panic("LiveCover.bump: cells.set OOB at {cell}")
 	end 'bump'
 
-	export function at(class RegClass, blockLocal ElementIndex) returns PressureDelta
+	function at(class RegClass, blockLocal ElementIndex) returns PressureDelta
 		let base = self.cellBase(class)
 		var node = self.leafBase + blockLocal
 		var total = 0 as PressureDelta
@@ -86,14 +86,14 @@ export type LiveCover
 		return total
 	end 'at'
 
-	export function setBase(class RegClass, blockLocal ElementIndex, base PressureDelta, found bool)
+	function setBase(class RegClass, blockLocal ElementIndex, base PressureDelta, found bool)
 		let tree = self.treeOf(class)
 		tree.setLeaf(blockLocal, effective: base + self.at(class, blockLocal: blockLocal), found: found)
 	end 'setBase'
 
 	// Only between `arm` and `pullAllTrees`, with no `add` in between: `pullAll` recomputes every
 	// inner node from its children, which would silently drop a range add still pending on one.
-	export function setBaseUnpulled(class RegClass, blockLocal ElementIndex, base PressureDelta, found bool)
+	function setBaseUnpulled(class RegClass, blockLocal ElementIndex, base PressureDelta, found bool)
 		let tree = self.treeOf(class)
 		tree.setLeafUnpulled(blockLocal, effective: base + self.at(class, blockLocal: blockLocal), found: found)
 	end 'setBaseUnpulled'
@@ -104,7 +104,7 @@ export type LiveCover
 		end 'eachTree'
 	end 'pullAllTrees'
 
-	export function leafValue(class RegClass, blockLocal ElementIndex) returns PressureDelta
+	function leafValue(class RegClass, blockLocal ElementIndex) returns PressureDelta
 		let tree = self.treeOf(class)
 		return tree.leafValue(blockLocal)
 	end 'leafValue'
@@ -119,7 +119,7 @@ export type LiveCover
 		return tree.hasTop()
 	end 'hasTop'
 
-	export function topValue(class RegClass) returns PressureDelta
+	function topValue(class RegClass) returns PressureDelta
 		let tree = self.treeOf(class)
 		return tree.topValue()
 	end 'topValue'
@@ -275,12 +275,12 @@ end 'DemandTree'
 // Each block's whole clobber mask, OR-ed over a range of blocks in O(log) — what a value live
 // straight through those blocks must avoid (`LiveSets.runClobbersOf`). Built once by the first
 // liveness build and never updated: the ops a split inserts clobber nothing.
-export type BlockClobbers
+type BlockClobbers
 	var leafBase as ElementIndex
 	var tree as RegMaskColumn
 	var nodes as CfgIndexArray
 
-	export static function create() returns BlockClobbers
+	static function create() returns BlockClobbers
 		return Self{leafBase: 1, tree: RegMaskColumn.create(0), nodes: CfgIndexArray.create(0)}
 	end 'create'
 

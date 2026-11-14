@@ -17,36 +17,36 @@
 // flipped between runs could not be diffed.
 //
 // ⛔ **THE WHOLE FILE IS GATED.** `not os(Wasi)` is `TargetFacilities.processSampling`'s row, and a lane
-// off that row has nothing to build a report out of: the symbols below are all `module`-tier, so ungated
-// they would be module symbols with no reader outside their own file there — E3094 at the self-compile,
-// which is the only gate that runs `checkUnusedExports` at all.
+// off that row has nothing to build a report out of: the symbols below are unmarked, so ungated they
+// would be declarations nothing live in their directory names there — E3219 at the self-compile, which is
+// the only gate that audits this source at all.
 #if not os(Wasi)
 	// How many samples something was given, and how many ticks the loop took.
-	export typealias ProfileTally = int(0 to u64.max)
+	typealias ProfileTally = int(0 to u64.max)
 
 	// How many samples one capture carries: every tick's worth of CPU its thread was charged when it was taken.
-	export typealias ProfileCharges = int(1 to u64.max)
+	typealias ProfileCharges = int(1 to u64.max)
 
 	// A share of the run, as the reporting floor and as a rendered percentage.
-	export typealias ProfileShare = float(0.0 to f64.max)
+	typealias ProfileShare = float(0.0 to f64.max)
 
 	// Samples per second — asked for, and achieved.
-	export typealias ProfileRate = float(0.0 to f64.max)
+	typealias ProfileRate = float(0.0 to f64.max)
 
 	// A measured duration in seconds.
-	export typealias ProfileSeconds = float(0.0 to f64.max)
+	typealias ProfileSeconds = float(0.0 to f64.max)
 
 	// How deep a call-tree node sits. A POSITION in one of the report's tables is stdlib's own
 	// `ElementIndex` instead, because that is the type every `get` on those tables takes and a purpose-named
 	// alias of the same range would be a cast at each of them.
-	export typealias ProfileDepth = int(0 to u64.max)
+	typealias ProfileDepth = int(0 to u64.max)
 
-	export typealias ProfileStackBase = int(0 to u64.max)
+	typealias ProfileStackBase = int(0 to u64.max)
 
-	export typealias ProfileStringArray = Array with String
-	export typealias ProfileFunctionArray = Array with ProfileFunctionRow
-	export typealias ProfileNodeArray = Array with ProfileNode
-	export typealias ProfileStackArray = Array with ProfileStackRow
+	typealias ProfileStringArray = Array with String
+	typealias ProfileFunctionArray = Array with ProfileFunctionRow
+	typealias ProfileNodeArray = Array with ProfileNode
+	typealias ProfileStackArray = Array with ProfileStackRow
 	typealias ProfileTallyMap = Map with (String, ProfileTally)
 	typealias ProfileStackMap = Map with (ProfileStackBase, ProfileStackRow)
 	typealias ElementIndexArray = Array with ElementIndex
@@ -58,15 +58,15 @@
 	let ProfileSyntheticFramePrefix = "["
 
 	// The frame a sample gets when its leaf is not in this binary's code and no loaded module claims it.
-	module let ProfileOutsideTextFrame = "[outside .text]"
+	let ProfileOutsideTextFrame = "[outside .text]"
 
 	// An address that IS in `.text` but that no function record covers — a runtime helper the sidecar does not
 	// name. Distinct from the frame above because the two send a reader somewhere different: this one is our
 	// code, that one is not.
-	module let ProfileUnnamedTextFrame = "[unnamed .text]"
+	let ProfileUnnamedTextFrame = "[unnamed .text]"
 
 	// A stack that could not be read at all, so not even a leaf survives.
-	module let ProfileUnreadableStackFrame = "[unreadable stack]"
+	let ProfileUnreadableStackFrame = "[unreadable stack]"
 
 	// ⭐ **BELOW THIS MANY CAPTURES, A BREAKDOWN IS ARITHMETIC RATHER THAN MEASUREMENT.** At forty captures a row
 	// shown as "5.0%" rests on two stacks and one more would have made it 7.5%, so the report says so instead of
@@ -113,7 +113,7 @@
 
 	// One function's share. `selfSamples` is samples caught EXECUTING it; `totalSamples` is samples anywhere
 	// beneath it, counted once per STACK so recursion cannot multiply a function by its own depth.
-	export type ProfileFunctionRow
+	type ProfileFunctionRow
 		export var name as String
 		export var selfSamples as ProfileTally
 		export var totalSamples as ProfileTally
@@ -126,7 +126,7 @@
 	// One node of the call tree, carried FLAT: `path` is the whole chain from the root and `depth` is how
 	// many separators precede it. Its subtree is the run of nodes after it at a greater depth — see this
 	// file's header for why the ordinal sort makes that run contiguous.
-	export type ProfileNode
+	type ProfileNode
 		export var path as String
 		export var name as String
 		export var depth as ProfileDepth
@@ -144,7 +144,7 @@
 	//
 	// Two rows may share a name, and that is information rather than a defect: two separate stacks were
 	// running the same entry function.
-	export type ProfileStackRow
+	type ProfileStackRow
 		export var rootFunction as String
 		export var samples as ProfileTally
 
@@ -155,12 +155,12 @@
 
 	// The status the measured program returned, or the absence of one. ABSENT — not zero — for a run that was
 	// still going when sampling stopped: printing a 0 there would be this tool inventing a status nobody saw.
-	export union ProfileTargetStatus
+	union ProfileTargetStatus
 		notObserved
 		exited(code ProfileTargetExitCode)
 	end 'ProfileTargetStatus'
 
-	export typealias ProfileTargetExitCode = int(0 to u32.max)
+	typealias ProfileTargetExitCode = int(0 to u32.max)
 
 	// What a sampling run measured — the ONE model all three faces render.
 	//
@@ -170,7 +170,7 @@
 	// how much of the profile landed in code this binary's sidecar cannot name, and therefore how much of the
 	// rest to trust; `stacksTruncated` matters more than its size suggests, because a walk runs leaf-to-ROOT
 	// and a truncated stack has lost its outermost frames.
-	export type ProfileReport
+	type ProfileReport
 		export var exePath as String
 		export var targetStatus as ProfileTargetStatus
 		export var runCompleted as bool
@@ -206,7 +206,7 @@
 		// tick's worth of CPU it consumed, so samples-per-second drifts from the tick rate in BOTH directions
 		// by a program-dependent amount — up when threads run concurrently, down when none has. Both are real
 		// quantities; only this one answers the question `--rate` asks.
-		export function achievedRateHz() returns ProfileRate
+		function achievedRateHz() returns ProfileRate
 			if self.durationSeconds <= 0.0 'noWindow'
 				return 0.0
 			end 'noWindow'
@@ -220,7 +220,7 @@
 	// ========================================================================================
 
 	// Turns captured stacks into the tables above, one call per capture from the tick loop.
-	export type ProfileAccumulator
+	type ProfileAccumulator
 		var selfByName as ProfileTallyMap
 		var totalByName as ProfileTallyMap
 		var pathTotal as ProfileTallyMap
@@ -233,7 +233,7 @@
 		var unreadable as ProfileTally
 		var truncated as ProfileTally
 
-		export static function create() returns ProfileAccumulator
+		static function create() returns ProfileAccumulator
 			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stacks: ProfileStackMap.create(), samples: 0, captures: 0, unsymbolized: 0, inRuntime: 0, unreadable: 0, truncated: 0}
 		end 'create'
 
@@ -242,7 +242,7 @@
 		// derived from that one list — so the hot-function table, the tree and the stack list cannot disagree
 		// about what was sampled. The tables are weighted by `charged`; the capture counts and the truncated and
 		// unreadable STACK counts are not, because each is a count of stacks read.
-		export function accept(frames ProfileStringArray, charged ProfileCharges, stackIdentity ProfileStackBase, lostItsRoot bool, hadNoChain bool)
+		function accept(frames ProfileStringArray, charged ProfileCharges, stackIdentity ProfileStackBase, lostItsRoot bool, hadNoChain bool)
 			let weight = self.countCapture(charged, lostItsRoot: lostItsRoot, hadNoChain: hadNoChain)
 
 			// The LEAF is what decides whether this sample was symbolized: it is the code that was actually
@@ -295,7 +295,7 @@
 			end 'firstSample'
 		end 'countStack'
 
-		export function acceptRuntime(charged ProfileCharges, lostItsRoot bool, hadNoChain bool)
+		function acceptRuntime(charged ProfileCharges, lostItsRoot bool, hadNoChain bool)
 			let weight = self.countCapture(charged, lostItsRoot: lostItsRoot, hadNoChain: hadNoChain)
 			self.inRuntime = self.inRuntime + weight
 		end 'acceptRuntime'
@@ -310,7 +310,7 @@
 			return weight
 		end 'countCapture'
 
-		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
+		function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
 			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, samplesInRuntime: self.inRuntime, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stacks))
 		end 'finish'
 	end 'ProfileAccumulator'
@@ -432,7 +432,7 @@
 	// THE TEXT FACE
 	// ========================================================================================
 
-	module function renderProfileText(report ProfileReport) returns String
+	function renderProfileText(report ProfileReport) returns String
 		var out = "profile: {report.exePath}{ProfileLineFeed}"
 		out.append(profileTargetStatusLine(report.targetStatus))
 
@@ -630,7 +630,7 @@
 	// FLOOR.** That floor exists to keep a HUMAN's table stable; a flamegraph tool does its own thresholding
 	// and would rather be given everything. Sorted ordinally so two runs of one program produce diffable
 	// output.
-	module function renderProfileFolded(report ProfileReport) returns String
+	function renderProfileFolded(report ProfileReport) returns String
 		let lines = ProfileStringArray.create(0)
 
 		for node in report.nodes 'eachNode'
@@ -657,7 +657,7 @@
 	// ⭐ The FULL tables travel to an agent, unfiltered by the reporting floor: that floor keeps a printed
 	// table stable for a human, and truncating a machine-readable answer to a display setting would make this
 	// face a worse instrument than the text one.
-	module function renderProfileJson(report ProfileReport) returns String
+	function renderProfileJson(report ProfileReport) returns String
 		var out = "\{\"exe\":{profileJsonText(report.exePath)},"
 		out.append(profileJsonTargetStatus(report.targetStatus))
 		out.append("\"runCompleted\":{report.runCompleted},")

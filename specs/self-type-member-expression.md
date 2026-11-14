@@ -682,16 +682,16 @@ The rewritten token's name is a slice of THIS file's source buffer and it feeds 
 interner, so a `Self.` resolved in one file must not leak an id the other file's merge cannot resolve.
 ```maxon
 // --- file: gate.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
-export type Gate
-	export var n as Num
+type Gate
+	var n as Num
 
-	export static function make(v Num) returns Gate
+	static function make(v Num) returns Gate
 		return Self{n: v}
 	end 'make'
 
-	export static function twice(v Num) returns Gate
+	static function twice(v Num) returns Gate
 		return Self.make(v + v)
 	end 'twice'
 end 'Gate'

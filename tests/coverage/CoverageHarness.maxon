@@ -13,8 +13,8 @@
 //
 // ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006).
 // So the corpus gets ONE shared half, exported from this file, and a case file beside it declares
-// only what that case alone uses. A file-private `let` does NOT collide, so a constant declared
-// twice is the half nothing catches: every constant this corpus shares is declared here or in
+// only what that case alone uses. A constant collides the same way, and a copy in another directory
+// does not, which is the half nothing catches: every constant this corpus shares is declared here or in
 // `tests/support/`.
 //
 // ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
@@ -33,15 +33,15 @@
 // Where the corpus lives, relative to the checkout root. Staging goes to this process's test scratch
 // directory outside the checkout (`testScratchDir`): a live `.maxon` under `tests/` is one `maxon fmt`
 // over the checkout rewrites.
-export let FixturesDirName = "tests/coverage/fixtures"
+let FixturesDirName = "tests/coverage/fixtures"
 
 // The program this corpus stages: it carries every line state and both branch shapes.
-export let StatesFixtureName = "states"
+let StatesFixtureName = "states"
 
 // The driver surface under test, spelled as the command line takes it.
 let CoverageCommandName = "coverage"
 let RunVerbName = "run"
-export let CoverageBuildFlag = "--coverage"
+let CoverageBuildFlag = "--coverage"
 
 // The counter file an instrumented binary writes on its way out, named for the binary with its extension
 // still on: `out.exe` -> `out.exe.mxcov`.
@@ -49,19 +49,19 @@ let CoverageDataSuffix = ".mxcov"
 
 // What an instrumented binary is built as. One spelling, because every case that measures one builds it
 // under this name and a second spelling would be a name two cases could come to disagree about.
-export let CoveredOutputStem = "covered"
+let CoveredOutputStem = "covered"
 
 // The summary line every tally is read off, and the separator that splits a tally in two. Everything else
 // about the report's shape belongs to the one case that reads it.
-export let LinesSummaryKey = "lines: "
+let LinesSummaryKey = "lines: "
 let RatioSeparator = "/"
 
 // The two markers that stand where a count would be, homed here because more than one case reads each.
 // They are the report's vocabulary for the states a NUMBER cannot express, and the difference between
 // them is the whole reason the fourth state exists: `#####` blames the RUN for not reaching code that is
 // there to reach, `-----` says the optimizer emitted none, so there is nothing a test could ever cover.
-export let NotCoveredMarker = "#####"
-export let EliminatedMarker = "-----"
+let NotCoveredMarker = "#####"
+let EliminatedMarker = "-----"
 
 // ============================================================================================
 // STAGING AND SPAWNING
@@ -69,7 +69,7 @@ export let EliminatedMarker = "-----"
 
 // The counter file a binary writes on exit: the WHOLE output name plus the suffix, which is how both the
 // emitted runtime and every reader derive it.
-export function coverageDataPath(executable FilePath) returns FilePath
+function coverageDataPath(executable FilePath) returns FilePath
 	let spelled = "{executable.toString()}{CoverageDataSuffix}"
 
 	return try FilePath.from(spelled) otherwise panic("coverage tests: the gate could not run — '{spelled}' is not a spellable path")
@@ -78,7 +78,7 @@ end 'coverageDataPath'
 // An instrumented build, asserted rather than panicked: accepting `--coverage` and writing a binary for
 // it is part of the surface this corpus gates, so a compiler that refuses the flag must FAIL a case
 // rather than abort it as an environment problem.
-export function requireCoverageBuild(staged FilePath, output FilePath) throws TestFailure
+function requireCoverageBuild(staged FilePath, output FilePath) throws TestFailure
 	let arguments = StringArray.create(0)
 	arguments.push(CoverageBuildFlag)
 
@@ -87,7 +87,7 @@ export function requireCoverageBuild(staged FilePath, output FilePath) throws Te
 end 'requireCoverageBuild'
 
 // An ORDINARY build of the same staged program — the control an instrumented one is measured against.
-export function requirePlainBuild(staged FilePath, output FilePath) throws TestFailure
+function requirePlainBuild(staged FilePath, output FilePath) throws TestFailure
 	let noArguments = StringArray.create(0)
 
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: output, label: BuildCommandName, extraArguments: noArguments)
@@ -100,7 +100,7 @@ end 'requirePlainBuild'
 //
 // The executable comes FIRST on the command line and the options after it: the first argument that is
 // not an option is the executable, and everything past it belongs to the target.
-export function requireCoverageRunReport(staged FilePath, executable FilePath) returns String throws TestFailure
+function requireCoverageRunReport(staged FilePath, executable FilePath) returns String throws TestFailure
 	let arguments = StringArray.create(0)
 	arguments.push(CoverageCommandName)
 	arguments.push(RunVerbName)
@@ -122,7 +122,7 @@ end 'requireCoverageRunReport'
 // The word that follows a summary key on the summary line — `15/17` for `lines:`, `2` for
 // `eliminated:`. Empty when the key is absent, which fails the assertion that consumes it
 // rather than standing in for a tally nobody printed.
-export function summaryTokenAfter(report String, key String) returns String
+function summaryTokenAfter(report String, key String) returns String
 	let keyWord = key.trim()
 
 	for line in outputLines(report) 'eachLine'
@@ -146,14 +146,14 @@ end 'summaryTokenAfter'
 
 // The halves of an `N/M` ratio. A token spelling no separator reads 0 on both sides, which fails the
 // assertion that consumes it.
-export function ratioNumerator(token String) returns PrintedNumber
+function ratioNumerator(token String) returns PrintedNumber
 	let halves = token.split(RatioSeparator)
 	let covered = try halves.get(0) otherwise ""
 
 	return decimalValue(covered)
 end 'ratioNumerator'
 
-export function ratioDenominator(token String) returns PrintedNumber
+function ratioDenominator(token String) returns PrintedNumber
 	let halves = token.split(RatioSeparator)
 	let instrumented = try halves.get(1) otherwise ""
 

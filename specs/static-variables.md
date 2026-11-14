@@ -2723,8 +2723,8 @@ error E3005: specs/static-variables/error.an-array-literal-may-not-mix-two-enums
 
 ### A STATIC MEMBER'S VISIBILITY IS THE MEMBER'S, NOT ITS TYPE'S
 
-<!-- test: error.module-scoped-static-read-different-directory -->
-`module` on a static member scopes that member to the declaring directory's subtree while the type
+<!-- test: error.an-unmarked-static-read-from-another-directory -->
+An unmarked static member is visible in the declaring directory's subtree only, while the type
 around it stays exported and nameable everywhere. A reader outside the subtree may therefore write
 `Config` and must still be refused `used`, at the member token — the base is not the problem here and a
 sentence about it sends the author to a name that is perfectly visible.
@@ -2732,7 +2732,7 @@ sentence about it sends the author to a name that is perfectly visible.
 ```maxon
 // --- file: dir_a/config.maxon
 export type Config
-	module static let used = 42 as FullRangeInt
+	static let used = 42 as FullRangeInt
 end 'Config'
 
 // --- file: dir_b/main.maxon
@@ -2741,7 +2741,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: dir_b/specs/static-variables/error.module-scoped-static-read-different-directory.maxon:9:16: static 'Config.used' is module-scoped and not visible from this directory
+error E3008: dir_b/<fragment>:9:16: static 'Config.used' is not exported
 ```
 
 <!-- test: error.static-bound-name-on-a-struct-base -->

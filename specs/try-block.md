@@ -1417,46 +1417,46 @@ of the error union` for a member it plainly has. The outer block throws `A_B.kab
 must win sets 11.
 ```maxon
 // --- file: errors.maxon
-export typealias Score = int(0 to 100)
+typealias Score = int(0 to 100)
 
-export enum A_B implements Error
+enum A_B implements Error
     kaboom
 end 'A_B'
 
-export enum C implements Error
+enum C implements Error
     splat
 end 'C'
 
-export enum A implements Error
+enum A implements Error
     zonk
 end 'A'
 
-export enum B_C implements Error
+enum B_C implements Error
     whap
 end 'B_C'
 
-export function callAB(x bool) returns Score throws A_B
+function callAB(x bool) returns Score throws A_B
     if x 'c'
         throw A_B.kaboom
     end 'c'
     return 5
 end 'callAB'
 
-export function callC(x bool) returns Score throws C
+function callC(x bool) returns Score throws C
     if x 'c'
         throw C.splat
     end 'c'
     return 6
 end 'callC'
 
-export function callA(x bool) returns Score throws A
+function callA(x bool) returns Score throws A
     if x 'c'
         throw A.zonk
     end 'c'
     return 7
 end 'callA'
 
-export function callBC(x bool) returns Score throws B_C
+function callBC(x bool) returns Score throws B_C
     if x 'c'
         throw B_C.whap
     end 'c'

@@ -45,7 +45,7 @@
 // tests run under either runner against one server.
 let LspServerCommandName = "lsp-server"
 
-export let StagedTierDirName = "tier"
+let StagedTierDirName = "tier"
 
 // How long the server is given to exit once its stdin is closed or `exit` has been sent. It is well
 // under `maxon test`'s 5000 ms shard deadline on purpose: a server that hangs should be reported by this
@@ -445,7 +445,7 @@ let FastPublishesPerDocumentVersion = 1
 
 // A failure bound and nothing else: the waits count publishes and outcome lines, so a passing case never
 // runs it out.
-export let ProjectCheckPublishFailureBoundMs = 100000 as DurationMs
+let ProjectCheckPublishFailureBoundMs = 100000 as DurationMs
 let ProjectCheckPollPauseMs = 50
 let ProjectCheckPublishedOutcome = "published"
 
@@ -1493,12 +1493,12 @@ function arrayMember(doc JsonDoc, of JsonNodeId, index ElementIndex) returns Jso
 	end 'absent'
 end 'arrayMember'
 
-export function fileUriOf(file FilePath) returns String
+function fileUriOf(file FilePath) returns String
 	let slashed = file.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 	return "{FileUriScheme}{slashed}" if slashed.startsWith(PortablePathSeparator) else "{FileUriScheme}{PortablePathSeparator}{slashed}"
 end 'fileUriOf'
 
-export function editorUriOf(file FilePath) returns String
+function editorUriOf(file FilePath) returns String
 	let uri = fileUriOf(file)
 	let pieces = file.toString().split(DriveColon)
 
@@ -2234,11 +2234,11 @@ let HoverSectionSeparator = "\n"
 
 let RecordedProjectSubdirName = "proj"
 let RecordedCacheDirName = "cache"
-export let RecordedManifestFileName = "app.maxproj"
+let RecordedManifestFileName = "app.maxproj"
 let RecordedManifestSource = "export function build() returns ExitCode\n\tBuild.build(\".\", output: \"program\")\n\treturn 0\nend 'build'\n"
-export let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let RecordedMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
-export function recordedProjectOf(staged FilePath) returns FilePath
+function recordedProjectOf(staged FilePath) returns FilePath
 	return staged.join(RecordedProjectSubdirName)
 end 'recordedProjectOf'
 
@@ -2246,7 +2246,7 @@ function recordedCacheEnvironment(staged FilePath) returns Environment
 	return Environment.inheritUpdating([CacheRootVariable: staged.join(RecordedCacheDirName).toString()])
 end 'recordedCacheEnvironment'
 
-export function stageRecordedProject(staged FilePath, recording String) returns FilePath throws TestFailure
+function stageRecordedProject(staged FilePath, recording String) returns FilePath throws TestFailure
 	let project = recordedProjectOf(staged)
 
 	if not Directory.create(project) 'couldNotCreate'
@@ -2264,7 +2264,7 @@ export function stageRecordedProject(staged FilePath, recording String) returns 
 	return record
 end 'stageRecordedProject'
 
-export function buildRecordedProject(staged FilePath)
+function buildRecordedProject(staged FilePath)
 	let project = recordedProjectOf(staged)
 	let built = spawnCompiler([BuildCommandName], staged: project, what: "`maxon {BuildCommandName}` in {project.toString()}", environment: recordedCacheEnvironment(staged))
 
@@ -2273,15 +2273,15 @@ export function buildRecordedProject(staged FilePath)
 	end 'buildFailed'
 end 'buildRecordedProject'
 
-export function recordedDocumentUri(staged FilePath, fileName String) returns String
+function recordedDocumentUri(staged FilePath, fileName String) returns String
 	return fileUriOf(recordedProjectOf(staged).join(fileName))
 end 'recordedDocumentUri'
 
-export function startedOverRecordedCache(staged FilePath) returns LspClient
+function startedOverRecordedCache(staged FilePath) returns LspClient
 	return LspClient.start(environment: recordedCacheEnvironment(staged))
 end 'startedOverRecordedCache'
 
-export function recordedManifestDiagnostics(client LspClient, project FilePath) returns PublishedDiagnosticArray throws LspClientError
+function recordedManifestDiagnostics(client LspClient, project FilePath) returns PublishedDiagnosticArray throws LspClientError
 	let uri = fileUriOf(project.join(RecordedManifestFileName))
 
 	_ = try client.initializeAtRootWithTrust(project, trusted: true)
@@ -2293,7 +2293,7 @@ export function recordedManifestDiagnostics(client LspClient, project FilePath) 
 	return published.items
 end 'recordedManifestDiagnostics'
 
-export function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
+function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
 	let notices = StringArray.create(0)
 
 	for item in items 'eachItem'
@@ -2314,8 +2314,8 @@ export function expectBreakingChangeNotices(items PublishedDiagnosticArray) thro
 	try Expect.equal(terminatedLines(notices), expected: terminatedLines(expected), message: "the `.maxproj` of a project last built by maxon {OlderRelease} did not carry exactly one Information-severity notice per breaking change RELEASE_NOTES.md names since that release, newest first.")
 end 'expectBreakingChangeNotices'
 
-module let MaxprojFileName = "app.maxproj"
-module let MaxprojSource = "export function app() returns ExitCode\n\treturn projectHelper()\nend 'app'\n"
-module let MaxprojMainFileName = "main.maxon"
-module let MaxprojMainSource = "function main() returns ExitCode\n\treturn projectHelper()\nend 'main'\n\nexport function projectHelper() returns ExitCode\n\treturn 0\nend 'projectHelper'\n"
-module let RuntimeTierDirName = "runtime"
+let MaxprojFileName = "app.maxproj"
+let MaxprojSource = "export function app() returns ExitCode\n\treturn projectHelper()\nend 'app'\n"
+let MaxprojMainFileName = "main.maxon"
+let MaxprojMainSource = "function main() returns ExitCode\n\treturn projectHelper()\nend 'main'\n\nexport function projectHelper() returns ExitCode\n\treturn 0\nend 'projectHelper'\n"
+let RuntimeTierDirName = "runtime"

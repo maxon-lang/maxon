@@ -1,11 +1,11 @@
-export type GapPlan
+type GapPlan
 	var starts as CfgIndexArray
 	var entries as CfgIndexArray
 	var ends as CfgIndexArray
 	var opens as BoolArray
 	var tailKeys as OpSeqArray
 
-	export static function create() returns GapPlan
+	static function create() returns GapPlan
 		return Self{starts: CfgIndexArray.create(0), entries: CfgIndexArray.create(0), ends: CfgIndexArray.create(0), opens: BoolArray.create(0), tailKeys: OpSeqArray.create(0)}
 	end 'create'
 
@@ -17,7 +17,7 @@ export type GapPlan
 		self.tailKeys.clear()
 	end 'clear'
 
-	export function push(start ElementIndex, entry ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq)
+	function push(start ElementIndex, entry ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq)
 		self.starts.push(start)
 		self.entries.push(entry)
 		self.ends.push(endRecord)
@@ -41,7 +41,7 @@ export type GapPlan
 		return try self.ends.get(k) otherwise panic("GapPlan.endAt: gap {k} out of range")
 	end 'endAt'
 
-	export function tailKeyAt(k ElementIndex) returns OpSeq
+	function tailKeyAt(k ElementIndex) returns OpSeq
 		return try self.tailKeys.get(k) otherwise panic("GapPlan.tailKeyAt: gap {k} out of range")
 	end 'tailKeyAt'
 
@@ -60,12 +60,12 @@ function gapCellCountOf(slotCount ElementIndex) returns ElementIndex
 	return gapCellOf(slotCount - 1) + 1
 end 'gapCellCountOf'
 
-export type GapTreePair
+type GapTreePair
 	export var finite as GapTree
 	export var tail as GapTree
 	let sleepable as bool
 
-	export static function create(sleepable bool) returns GapTreePair
+	static function create(sleepable bool) returns GapTreePair
 		return Self{finite: GapTree.create(), tail: GapTree.create(), sleepable: sleepable}
 	end 'create'
 
@@ -79,29 +79,29 @@ export type GapTreePair
 		self.tail.growValues(valueCount)
 	end 'growValues'
 
-	export function dropValue(v ValueId, index UseIndex)
+	function dropValue(v ValueId, index UseIndex)
 		self.finite.dropValue(v, index: index)
 		self.tail.dropValue(v, index: index)
 	end 'dropValue'
 
-	export function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
+	function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
 		self.finite.relocate(scratch, pressure: pressure, index: index)
 		self.tail.relocate(scratch, pressure: pressure, index: index)
 	end 'relocate'
 
-	export function sleepForever(v ValueId, index UseIndex)
+	function sleepForever(v ValueId, index UseIndex)
 		self.requireSleepable()
 		self.finite.sleepForever(v, index: index)
 		self.tail.sleepForever(v, index: index)
 	end 'sleepForever'
 
-	export function sleepUntil(v ValueId, epoch DenseInt, index UseIndex)
+	function sleepUntil(v ValueId, epoch DenseInt, index UseIndex)
 		self.requireSleepable()
 		self.finite.sleepUntil(v, epoch: epoch, index: index)
 		self.tail.sleepUntil(v, epoch: epoch, index: index)
 	end 'sleepUntil'
 
-	export function wakeUpTo(epoch DenseInt, index UseIndex)
+	function wakeUpTo(epoch DenseInt, index UseIndex)
 		self.requireSleepable()
 		self.finite.wakeUpTo(epoch, index: index)
 		self.tail.wakeUpTo(epoch, index: index)
@@ -127,12 +127,12 @@ end 'GapTreePair'
 // rematerializable values (tier 1), `spill` every value (tier 2). Only `spill` sleeps — a value
 // whose store cannot fit the pool yet (`storeFitsPoolRemembering`), or that is already stored —
 // because a remat has no store gate to wait on.
-export type VictimGaps
+type VictimGaps
 	export var spill as GapTreePair
 	export var constant as GapTreePair
 	export var plan as GapPlan
 
-	export static function create() returns VictimGaps
+	static function create() returns VictimGaps
 		return Self{spill: GapTreePair.create(true), constant: GapTreePair.create(false), plan: GapPlan.create()}
 	end 'create'
 
@@ -143,7 +143,7 @@ export type VictimGaps
 		self.constant.tail.beginBulk()
 	end 'beginBulk'
 
-	export function endBulk(index UseIndex)
+	function endBulk(index UseIndex)
 		self.spill.finite.endBulk(index)
 		self.spill.tail.endBulk(index)
 		self.constant.finite.endBulk(index)
@@ -160,30 +160,30 @@ export type VictimGaps
 		self.constant.growValues(valueCount)
 	end 'growValues'
 
-	export function dropValue(v ValueId, index UseIndex)
+	function dropValue(v ValueId, index UseIndex)
 		self.spill.dropValue(v, index: index)
 		self.constant.dropValue(v, index: index)
 	end 'dropValue'
 
-	export function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
+	function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
 		self.spill.relocate(scratch, pressure: pressure, index: index)
 		self.constant.relocate(scratch, pressure: pressure, index: index)
 	end 'relocate'
 
-	export function sleepForever(v ValueId, index UseIndex)
+	function sleepForever(v ValueId, index UseIndex)
 		self.spill.sleepForever(v, index: index)
 	end 'sleepForever'
 
-	export function sleepUntil(v ValueId, epoch DenseInt, index UseIndex)
+	function sleepUntil(v ValueId, epoch DenseInt, index UseIndex)
 		self.spill.sleepUntil(v, epoch: epoch, index: index)
 	end 'sleepUntil'
 
-	export function wakeUpTo(epoch DenseInt, index UseIndex)
+	function wakeUpTo(epoch DenseInt, index UseIndex)
 		self.spill.wakeUpTo(epoch, index: index)
 	end 'wakeUpTo'
 end 'VictimGaps'
 
-export type GapTree
+type GapTree
 	var leafBase as ElementIndex
 	var best as CfgIndexArray
 	var headAt as CfgIndexArray
@@ -207,7 +207,7 @@ export type GapTree
 	var moving as CfgIndexArray
 	var bulk as bool
 
-	export static function create() returns GapTree
+	static function create() returns GapTree
 		return Self{leafBase: 1, best: CfgIndexArray.create(0), headAt: CfgIndexArray.create(0), gapValue: ValueIdArray.create(0), gapStart: PressureSlotColumn.create(0), gapEnd: CfgIndexArray.create(0), gapOpen: BoolArray.create(0), gapTailKey: OpSeqArray.create(0), gapEntryBlock: CfgIndexArray.create(0), gapNextAt: CfgIndexArray.create(0), gapPrevAt: CfgIndexArray.create(0), gapNextOfValue: CfgIndexArray.create(0), gapMasked: BoolArray.create(0), firstOfValue: CfgIndexArray.create(0), asleep: BoolArray.create(0), wakeAt: DenseColumn.create(0), wakeEpochs: DenseColumn.create(0), wakeValues: ValueIdArray.create(0), freeIds: CfgIndexArray.create(0), maskedStack: CfgIndexArray.create(0), moving: CfgIndexArray.create(0), bulk: false}
 	end 'create'
 
@@ -252,7 +252,7 @@ export type GapTree
 		return count
 	end 'gapCountOf'
 
-	export function holdsGap(value ValueId, startSlot ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq) returns bool
+	function holdsGap(value ValueId, startSlot ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq) returns bool
 		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.holdsGap: firstOfValue.get OOB for value {value}")
 
 		while g != 0 'eachGap'
@@ -268,7 +268,7 @@ export type GapTree
 		return false
 	end 'holdsGap'
 
-	export function aggregatesAreExact(index UseIndex) returns bool
+	function aggregatesAreExact(index UseIndex) returns bool
 		for cell in 0 upto self.leafBase 'eachLeaf'
 			if (try self.best.get(self.leafBase + cell) otherwise panic("GapTree.aggregatesAreExact: best.get OOB at cell {cell}")) != self.leafWinner(cell, index: index) 'staleLeaf'
 				return false
@@ -380,7 +380,7 @@ export type GapTree
 		end 'towardTheRoot'
 	end 'refreshAncestors'
 
-	export function bestStartingUpTo(slot ElementIndex, afterSeq OpSeq, index UseIndex) returns ElementIndex
+	function bestStartingUpTo(slot ElementIndex, afterSeq OpSeq, index UseIndex) returns ElementIndex
 		let cell = gapCellOf(slot)
 		var left = self.leafBase
 		var right = self.leafBase + cell
@@ -412,13 +412,13 @@ export type GapTree
 		return winner
 	end 'bestStartingUpTo'
 
-	export function mask(gap ElementIndex, index UseIndex)
+	function mask(gap ElementIndex, index UseIndex)
 		try self.gapMasked.set(gap - 1, value: true) otherwise panic("GapTree.mask: gapMasked.set OOB at {gap - 1}")
 		self.maskedStack.push(gap)
 		self.refreshLeaf((try self.gapStart.get(gap - 1) otherwise panic("GapTree.mask: gapStart.get OOB at {gap - 1}")), index: index)
 	end 'mask'
 
-	export function unmaskAll(index UseIndex)
+	function unmaskAll(index UseIndex)
 		while self.maskedStack.count() > 0 'eachMasked'
 			let gap = try self.maskedStack.pop() otherwise panic("GapTree.unmaskAll: pop on a non-empty stack failed")
 			try self.gapMasked.set(gap - 1, value: false) otherwise panic("GapTree.unmaskAll: gapMasked.set OOB at {gap - 1}")
@@ -472,7 +472,7 @@ export type GapTree
 		end 'hasASuccessor'
 	end 'unlinkFromBucket'
 
-	export function addGap(value ValueId, startSlot ElementIndex, entryBlock ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq, index UseIndex)
+	function addGap(value ValueId, startSlot ElementIndex, entryBlock ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq, index UseIndex)
 		var id = 0 as ElementIndex
 
 		if self.freeIds.count() > 0 'reuse'
@@ -533,20 +533,20 @@ export type GapTree
 		end 'eachGap'
 	end 'refreshValue'
 
-	export function sleepForever(value ValueId, index UseIndex)
+	function sleepForever(value ValueId, index UseIndex)
 		try self.asleep.set(value, value: true) otherwise panic("GapTree.sleepForever: asleep.set OOB for value {value}")
 		try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.sleepForever: wakeAt.set OOB for value {value}")
 		self.refreshValue(value, index: index)
 	end 'sleepForever'
 
-	export function sleepUntil(value ValueId, epoch DenseInt, index UseIndex)
+	function sleepUntil(value ValueId, epoch DenseInt, index UseIndex)
 		try self.asleep.set(value, value: true) otherwise panic("GapTree.sleepUntil: asleep.set OOB for value {value}")
 		try self.wakeAt.set(value, value: epoch) otherwise panic("GapTree.sleepUntil: wakeAt.set OOB for value {value}")
 		self.refreshValue(value, index: index)
 		self.pushWake(epoch, value: value)
 	end 'sleepUntil'
 
-	export function wakeUpTo(epoch DenseInt, index UseIndex)
+	function wakeUpTo(epoch DenseInt, index UseIndex)
 		while self.wakeEpochs.count() > 0 and (try self.wakeEpochs.get(0) otherwise panic("GapTree.wakeUpTo: wakeEpochs.get(0) on a non-empty heap failed")) <= epoch 'eachDue'
 			let due = try self.wakeEpochs.get(0) otherwise panic("GapTree.wakeUpTo: wakeEpochs.get(0) failed")
 			let value = try self.wakeValues.get(0) otherwise panic("GapTree.wakeUpTo: wakeValues.get(0) failed")

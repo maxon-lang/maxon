@@ -23,9 +23,9 @@ typealias CountArray = Array with Count
 typealias CountMap = Map with (Count, Count)
 
 type Big
-	module var items = CountArray.create(0)
-	module var lookup = CountMap.create()
-	module var flag = false
+	var items = CountArray.create(0)
+	var lookup = CountMap.create()
+	var flag = false
 
 	static function create() returns Big
 		return Self{}
@@ -33,9 +33,9 @@ type Big
 end 'Big'
 
 type Holder
-	module var own as Big
-	module let shared as Big
-	module let reads as bool
+	var own as Big
+	let shared as Big
+	let reads as bool
 
 	static function create() returns Holder
 		return Self{own: Big.create(), shared: Big.create(), reads: false}
@@ -1072,7 +1072,7 @@ pin below holds the `__mm_retain` that reference is, and the release that ends i
 typealias Count = int(0 to 1000000)
 
 type Note
-	module var weight as Count
+	var weight as Count
 
 	static function create(weight Count) returns Note
 		return Note{weight: weight}

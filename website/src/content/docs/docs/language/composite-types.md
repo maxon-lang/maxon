@@ -38,9 +38,9 @@ end 'main'
 - A field without a default names its type after `as` (`var x as Coord`); a field with a default takes its
   type from the default (see [Required Field Initialization](#required-field-initialization)). The type is an
   alias, `bool`, a type, or another named type — a bare `int` or `float` is refused.
-- **Fields are private to the type** unless marked `export`, `module` or `public`. The boundary is the type,
-  not the file: another type in the same file reading a private field is **E3014** (`cannot access
-  unexported field`). A type's own methods may read the private fields of any instance of that type.
+- **An unmarked field is visible to its type's declaring directory** and that directory's subdirectories:
+  a method of another type, a free function and an `extension` written there all read and write it. Reading
+  or writing it from any other directory is **E3014** (`field 'Box.v' is not exported`).
 - A type cannot contain itself, directly or through other types: `var next as Node` inside `Node` is
   **E4014** (`recursive type references are not allowed`). Use a container such as `Array with Node` or an
   index.
@@ -128,8 +128,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A method is private to its file unless marked `export`, `module` or `public`; its visibility does not
-  inherit from the type's. Calling a non-exported method from another file is **E3008**.
+- An unmarked method is visible to its declaring directory's subtree, like a top-level declaration; its
+  visibility does not inherit from the type's. Calling it from another directory is **E3008**.
 - A local declaration inside a method (a `let`/`var`, parameter, pattern binding or loop variable) may not
   reuse a field's name (**E3006**).
 - `self` cannot be bound by any declaration (**E2051** / **E2010**).
@@ -678,10 +678,10 @@ because the caller granted the conformance by passing the type. The grant reache
 the copy too. The calls the language makes on the author's behalf over a value of a type parameter —
 interpolation's conversion to text (`"{a}"`, `"{a:q}"`), a record's `==` and `<`, and the iteration a `for`
 performs — are judged for the caller that instantiated the copy, so a generic declared in another file, such
-as `Expect.equal`, accepts the caller's file-private type. Every other member of the type, and a `match`,
+as `Expect.equal`, accepts the caller's unexported type. Every other member of the type, and a `match`,
 accessor or `.rawValue` the body writes over a value of it, needs ordinary visibility from the declaring
 file. A generic
-function is itself visible like any function: a private one called from another file is **E3008**.
+function is itself visible like any function: an unmarked one called from another directory is **E3008**.
 
 A generic function and a non-generic one of the same name in one directory are two declarations of one name
 (**E3006**); name each its own.
@@ -812,7 +812,7 @@ end 'Shape'
 ```
 
 - `self` is the conforming value; the extension may call any requirement of the interface, including one a
-  conformer implements with a file-private function.
+  conformer implements with an unexported function.
 - Associated types resolve to each conformer's binding. A member may take or return an associated type a
   conformer binds to an interface: for that conformer the parameter or result is held at the interface,
   as in a plain function declared with it.
