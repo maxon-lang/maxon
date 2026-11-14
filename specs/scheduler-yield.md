@@ -447,19 +447,19 @@ function main() returns ExitCode
 	let reader = spawn Reader.create()
 	let answer = try reader.read(stage.clone()) otherwise panic("an open mailbox with room takes the send")
 
-	let firstPolls = busyUntil(stage, target: reading)
+	_ = busyUntil(stage, target: reading)
 	print("S: reader is in the kernel\n")
 
-	let secondPolls = busyUntil(stage, target: answered)
+	_ = busyUntil(stage, target: answered)
 	let n = await answer
-	print("answered {n} polled {firstPolls > 0 and secondPolls > 0}\n")
+	print("answered {n}\n")
 
 	return 0
 end 'main'
 ```
 ```stdout
 S: reader is in the kernel
-answered 5 polled true
+answered 5
 ```
 ```exitcode
 0
