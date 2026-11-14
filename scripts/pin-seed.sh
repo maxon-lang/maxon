@@ -21,6 +21,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/seed.sh
+maxon_require_long_paths pin-seed.sh || exit 1
 
 Remote="origin"
 Branch="main"

@@ -164,6 +164,10 @@ jobs:
     outputs:
       seeded: ${{ steps.seed.outputs.seeded }}
     steps:
+      - &long-paths
+        name: Let git check out paths past 260 characters
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
       - &checkout
         uses: actions/checkout@v5
 
@@ -213,6 +217,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults: *bash-steps
     steps:
+      - *long-paths
       - *checkout
 
       # A role is matched with a comma on each side, so a role named inside another cannot select a lane.
@@ -517,6 +522,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults: *bash-steps
     steps:
+      - *long-paths
       - *checkout
       - *download-compiler
       - *unpack-compiler
@@ -571,6 +577,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults: *bash-steps
     steps:
+      - *long-paths
       - *checkout
       - *download-compiler
       - *unpack-compiler
@@ -600,6 +607,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults: *bash-steps
     steps:
+      - *long-paths
       - *checkout
       - *download-compiler
       - *unpack-compiler

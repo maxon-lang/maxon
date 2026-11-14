@@ -30,6 +30,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
+maxon_require_long_paths build-from-seed.sh || exit 1
 
 seed="$(maxon_downloaded_path)"
 built="$(maxon_compiler_path)"

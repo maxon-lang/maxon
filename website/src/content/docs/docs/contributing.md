@@ -77,10 +77,12 @@ report what felt awkward, what was missing, and what worked.
 
 Maxon is written in Maxon, so building it needs a Maxon compiler as a seed: a frozen compiler, published
 as a `seed-*` pre-release and pinned by `scripts/seed-tag`. The build scripts are bash: on Windows, run
-them in Git Bash. Fetching the seed needs the [GitHub CLI](https://cli.github.com/), signed in. Then:
+them in Git Bash. On Windows the checkout needs `core.longpaths=true`: some paths in it pass 260 characters, a
+clone without the setting leaves them out, and `scripts/build-from-seed.sh` refuses such a checkout. Fetching the
+seed needs the [GitHub CLI](https://cli.github.com/), signed in. Then:
 
 ```bash
-git clone https://github.com/maxon-lang/maxon.git
+git clone -c core.longpaths=true https://github.com/maxon-lang/maxon.git
 cd maxon
 
 scripts/fetch-seed.sh              # seed .bootstrap/ with the pinned seed's compiler

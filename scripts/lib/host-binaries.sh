@@ -18,6 +18,14 @@ case "$(uname -s)" in
 	*)                               MAXON_EXE_EXT="";     MAXON_HOST_IS_WINDOWS=0 ;;
 esac
 
+maxon_require_long_paths() {
+	[ "$MAXON_HOST_IS_WINDOWS" = 1 ] || return 0
+	[ "$(git config --type=bool --get core.longpaths)" = "true" ] && return 0
+
+	echo "$1: this Windows checkout lacks core.longpaths=true, so git skips every file whose path passes 260 characters and exits 0 — run: git config core.longpaths true; git ls-files -z --deleted | xargs -0 git checkout --" >&2
+	return 1
+}
+
 # The compiler in <tree> — the one everything here runs. Gitignored; `./maxon-bin/.maxon/maxon run build` at the root makes it.
 maxon_compiler_path() { printf '%s/maxon-bin/.maxon/maxon%s' "${1:-.}" "${2-$MAXON_EXE_EXT}"; }
 
