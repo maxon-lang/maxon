@@ -123,3 +123,12 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   declaration named like a directive word escapes E3092/E3219.
 - repro: one file with `#if debug` … `#end`, another in the same directory declaring an unused unmarked
   `let debug = 1`; expect E3219, observe none
+
+## A generic function that is never instantiated may close with the wrong `end` label
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/ParserDeclarations.maxon, recordTemplateParamReassigns and noteDeclarationCloser
+- seen: the spec-suite speed plan's deletion of the global-alias-return fact; the seed compiler pinned
+  at 55d03beeee17 accepts it too. An instantiated template and a non-generic function are refused E2008.
+- repro: `public function pick(value T) uses T returns T`, a body `return value`, closed `end 'pikc'`,
+  and a `main` that never calls it: it compiles. The same as a `public static` method of a type.
