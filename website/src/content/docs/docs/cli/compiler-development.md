@@ -48,7 +48,9 @@ directory, `maxon spec-test ir-specs`.
 
 Every worker starts from the [library cache](/docs/cli/#the-library-cache). After the summary, the run prints
 `library cache: <n> loaded, <n> written, <n> rejected` on stderr: the entries its workers loaded, wrote
-and rejected, summed over the run.
+and rejected, summed over the run. The next line, `batch claims: <n> case(s) asked, library names read
+<n> time(s)`, counts the cases whose declared and mentioned names were read to batch them, and the times
+the workers read the standard library's names for those passes, summed over the run.
 
 A spec's shared batch program that the harness cannot build for a reason of the environment, or cannot
 isolate the breaking case of within its budget of trial builds, prints a `harness error:` line on stderr

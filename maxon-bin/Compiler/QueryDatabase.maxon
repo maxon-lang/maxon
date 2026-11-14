@@ -566,13 +566,31 @@ end 'SharedMemoMiss'
 
 export typealias SharedFileMemoEntryMap = Map with (HashDigest, SharedFileMemo)
 
+export typealias ClaimsPassTally = int(0 to u64.max)
+export typealias LibraryNameReadTally = int(0 to u64.max)
+
+export type ClaimsTally
+	export var passes as ClaimsPassTally
+	export var libraryNameReads as LibraryNameReadTally
+
+	export static function create() returns ClaimsTally
+		return Self{passes: 0, libraryNameReads: 0}
+	end 'create'
+
+	export function add(other ClaimsTally)
+		self.passes = self.passes + other.passes
+		self.libraryNameReads = self.libraryNameReads + other.libraryNameReads
+	end 'add'
+end 'ClaimsTally'
+
 export type SharedFileMemoMap
 	export var entries as SharedFileMemoEntryMap
 	export var library as LibraryCache
 	module var libraryNames as LibraryNameRosterMap
+	module var claims as ClaimsTally
 
 	static function over(library LibraryCache) returns SharedFileMemoMap
-		return Self{entries: SharedFileMemoEntryMap.create(), library: library, libraryNames: LibraryNameRosterMap.create()}
+		return Self{entries: SharedFileMemoEntryMap.create(), library: library, libraryNames: LibraryNameRosterMap.create(), claims: ClaimsTally.create()}
 	end 'over'
 
 	export static function create() returns SharedFileMemoMap
@@ -586,6 +604,13 @@ export type SharedFileMemoMap
 	export static function withoutLibraryCache() returns SharedFileMemoMap
 		return Self.over(LibraryCache.withoutDiskTier())
 	end 'withoutLibraryCache'
+
+	export function takeClaims() returns ClaimsTally
+		let taken = self.claims
+		self.claims = ClaimsTally.create()
+
+		return taken
+	end 'takeClaims'
 end 'SharedFileMemoMap'
 
 // The byte-contents this compile is willing to hand to the shared memo — filled by
@@ -671,14 +696,19 @@ export typealias LibraryInterfaceMap = Map with (String, LibraryInterface)
 
 module type LibraryNameRoster
 	let stamps as SourceFileStampMap
+	let buildKey as BuildKey
 	export let names as NameRoster
 	export let interfaces as LibraryInterfaceMap
 
-	module static function create(stamps SourceFileStampMap, names NameRoster, interfaces LibraryInterfaceMap) returns LibraryNameRoster
-		return Self{stamps: stamps, names: names, interfaces: interfaces}
+	module static function create(stamps SourceFileStampMap, buildKey BuildKey, names NameRoster, interfaces LibraryInterfaceMap) returns LibraryNameRoster
+		return Self{stamps: stamps, buildKey: buildKey, names: names, interfaces: interfaces}
 	end 'create'
 
-	module function describes(paths MaxonSourcePathArray) returns bool
+	module function describes(paths MaxonSourcePathArray, forBuild BuildKey) returns bool
+		if forBuild != self.buildKey 'anotherBuild'
+			return false
+		end 'anotherBuild'
+
 		if paths.count() != self.stamps.count() 'anotherFileSet'
 			return false
 		end 'anotherFileSet'

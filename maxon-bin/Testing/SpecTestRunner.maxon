@@ -2237,7 +2237,7 @@ function prepareBatch(tests SpecTestArray, actions IrActionArray, specName Strin
 		return BatchPreparation.create(batches, refusals: refusals, harnessErrors: harnessErrors)
 	end 'tooFewToShare'
 
-	let claimed = claimedMembersOf(candidates, tests: tests, specDirName: specDirName, tempDir: tempDir, effectiveTarget: effectiveTarget)
+	let claimed = claimedMembersOf(candidates, tests: tests, specDirName: specDirName, tempDir: tempDir, effectiveTarget: effectiveTarget, driver: driver)
 
 	for (iter, group) in partitionedByClaims(claimed).withIterator() 'eachProgram'
 		emitWorkerStep(WorkerStep.compile, label: "{specName}: program {iter.index()} for {group.members.count()} run case(s)")
@@ -2267,13 +2267,13 @@ end 'prepareBatch'
 // One front-end pass per candidate, before any program is built: it answers whether the case's
 // initializers run program code, which library names it shadows, and the names it declares and
 // mentions, from which the partition keeps conflicting cases apart. A case it keeps out runs alone.
-function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDirName String, tempDir FilePath, effectiveTarget Target) returns ClaimedMemberArray
+function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDirName String, tempDir FilePath, effectiveTarget Target, driver CompileDriver.handle) returns ClaimedMemberArray
 	let kept = ClaimedMemberArray.create(0)
 
 	for member in members 'eachMember'
 		let test = try tests.get(member.testIndex) otherwise panic("claimedMembersOf: member names test {member.testIndex}, past the {tests.count()} the spec selected")
 
-		match claimedPlacementOf(member, answer: claimAnswerFor(tempDir, test: test, specDirName: specDirName, effectiveTarget: effectiveTarget)) 'placement'
+		match claimedPlacementOf(member, answer: claimAnswerFor(tempDir, test: test, specDirName: specDirName, effectiveTarget: effectiveTarget, driver: driver)) 'placement'
 			together(claimed) then kept.push(claimed)
 			apart then continue
 		end 'placement'
@@ -2282,15 +2282,17 @@ function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDir
 	return kept
 end 'claimedMembersOf'
 
-function claimAnswerFor(tempDir FilePath, test SpecTest, specDirName String, effectiveTarget Target) returns ClaimAnswer
+function claimAnswerFor(tempDir FilePath, test SpecTest, specDirName String, effectiveTarget Target, driver CompileDriver.handle) returns ClaimAnswer
 	match stageTest(tempDir, test: test, specDirName: specDirName) 'staging'
 		failed then return ClaimAnswer.refused
-		staged(case) then return stagedClaimAnswer(case, effectiveTarget: effectiveTarget)
+		staged(case) then return stagedClaimAnswer(case, effectiveTarget: effectiveTarget, driver: driver)
 	end 'staging'
 end 'claimAnswerFor'
 
-function stagedClaimAnswer(staged StagedTest, effectiveTarget Target) returns ClaimAnswer
-	let claims = try claimsOfSources(staged.buildTargets, target: effectiveTarget, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir)) otherwise 'refused'
+function stagedClaimAnswer(staged StagedTest, effectiveTarget Target, driver CompileDriver.handle) returns ClaimAnswer
+	let session = DriverSession.discarding()
+	let request = freeze CompileRequest.create(DriverWork.claims, origin: ProjectOrigin.sources, target: effectiveTarget, session: session, inputPaths: staged.buildTargets, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), scriptlib: ScriptlibLoad.omitted).clone()
+	let claims = try claimsOnDriver(driver, request: request, session: session) otherwise 'refused'
 		deleteWrittenFiles(staged.writtenFiles)
 		return ClaimAnswer.refused
 	end 'refused'

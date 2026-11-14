@@ -94,9 +94,21 @@ export function compileToProduct(driver CompileDriver.handle, request immutable 
 		failed(error) then throw error
 		checked or
 		warmed or
-		swept then panic("compileToProduct: the driver answered a build with another kind of job")
+		swept or
+		claimed then panic("compileToProduct: the driver answered a build with another kind of job")
 	end 'outcome'
 end 'compileToProduct'
+
+export function claimsOnDriver(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns SourceClaims throws CompileError
+	match driverOutcomeOf(driver, request: request, session: session) 'outcome'
+		claimed(claims) then return claims.clone()
+		failed(error) then throw error
+		built or
+		checked or
+		warmed or
+		swept then panic("claimsOnDriver: the driver answered a claims pass with another kind of job")
+	end 'outcome'
+end 'claimsOnDriver'
 
 module union CheckAnswer
 	checked(compiled bool, diagnostics DiagnosticArray, irText String)
@@ -111,7 +123,8 @@ module function checkOnDriver(driver CompileDriver.handle, origin ProjectOrigin,
 		failed(error) gives CheckAnswer.failed(error)
 		built or
 		warmed or
-		swept panic("checkOnDriver: the driver answered a check with another kind of job")
+		swept or
+		claimed panic("checkOnDriver: the driver answered a check with another kind of job")
 	end 'outcome'
 end 'checkOnDriver'
 
@@ -183,6 +196,7 @@ module type JobRun
 			check then return self.beginCheck(receiver)
 			warm(step) then return self.beginWarm(step, receiver: receiver)
 			lexSweep(root, stdlibDir, runtimeDir, files) then return self.beginSweep(root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, files: files, receiver: receiver)
+			claims then return self.beginClaims()
 		end 'work'
 	end 'begin'
 
@@ -239,12 +253,14 @@ module type JobRun
 		return DriverAnswer.of(self.outcomes.held().clone(), lines: self.session.diagnostics.capturedLines.clone(), lock: self.session.treeLock.holdings().clone())
 	end 'answer'
 
+	function requestRootUnit() returns TraceUnit throws CompileError
+		return traceUnitOf(try commonAncestorOf(self.spec.inputPaths))
+	end 'requestRootUnit'
+
 	function beginBuild(receiver CompileReceiver.handle) returns CompileStep
-		let root = try commonAncestorOf(self.spec.inputPaths) otherwise (failure) 'noRoot'
+		self.unit = try self.requestRootUnit() otherwise (failure) 'noRoot'
 			return self.failed(failure)
 		end 'noRoot'
-
-		self.unit = traceUnitOf(root)
 
 		attributeCompilerLogThen(self.unit, receiver: receiver.clone())
 
@@ -271,9 +287,15 @@ module type JobRun
 		return self.startMachine(CompileGoal.codeResult, receiver: receiver)
 	end 'afterAttribution'
 
+	function loadedRequestProject(library LibraryLoad) returns Project throws CompileError
+		let request = self.spec
+
+		return try loadProject(request.inputPaths.clone(), target: request.target, stdlibDirOverride: request.stdlibDirOverride, runtimeDirOverride: request.runtimeDirOverride, scriptlib: request.scriptlib, entryFunction: request.entryFunction, compilerWrittenSources: request.compilerWrittenSources.clone(), sourceSelection: request.sourceSelection, stagedSourceOrigins: request.stagedSourceOrigins.clone(), debugStream: request.debugStream, session: self.session, library: library, defines: request.defines.clone(), productVersion: request.productVersion.clone(), tallied: request.allocationsByTag, tallyPhases: request.allocationsPhase, openPhaseSpans: self.spans)
+	end 'loadedRequestProject'
+
 	function loadedBuildProject() returns Project throws CompileError
 		let request = self.spec
-		let project = try loadProject(request.inputPaths.clone(), target: request.target, stdlibDirOverride: request.stdlibDirOverride, runtimeDirOverride: request.runtimeDirOverride, scriptlib: request.scriptlib, entryFunction: request.entryFunction, compilerWrittenSources: request.compilerWrittenSources.clone(), sourceSelection: request.sourceSelection, stagedSourceOrigins: request.stagedSourceOrigins.clone(), debugStream: request.debugStream, session: self.session, defines: request.defines.clone(), productVersion: request.productVersion.clone(), tallied: request.allocationsByTag, tallyPhases: request.allocationsPhase, openPhaseSpans: self.spans)
+		let project = try self.loadedRequestProject(LibraryLoad.included)
 		project.asyncTrace = request.asyncTrace
 		project.poisonFreed = request.poisonFreed
 		project.debugInfo = request.debugInfo
@@ -364,7 +386,8 @@ module type JobRun
 			warm(step) then return self.compiledSlotAndGoalOf(step)
 			build or
 			check or
-			lexSweep then panic("JobRun.warmSlotAndGoal: only a warm compile names a slot")
+			lexSweep or
+			claims then panic("JobRun.warmSlotAndGoal: only a warm compile names a slot")
 		end 'work'
 	end 'warmSlotAndGoal'
 
@@ -431,6 +454,32 @@ module type JobRun
 		return CompileStep.finished
 	end 'sweepStepped'
 
+	function beginClaims() returns CompileStep
+		let memos = self.session.fileMemos
+		memos.claims.passes = memos.claims.passes + 1
+
+		let claims = try self.claimedSources() otherwise (failure) 'refused'
+			return self.failed(failure)
+		end 'refused'
+
+		self.outcomes.fill(DriverOutcome.claimed(claims))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'beginClaims'
+
+	function claimedSources() returns SourceClaims throws CompileError
+		match self.spec.origin 'origin'
+			sources then break
+			libraryProgram or
+			document then panic("JobRun.claimedSources: a claims pass reads the request's source files, and no other origin names any")
+		end 'origin'
+
+		self.unit = try self.requestRootUnit()
+
+		return try claimsOfUserFiles(try self.loadedRequestProject(LibraryLoad.omitted))
+	end 'claimedSources'
+
 	function createdCheckProject() returns Project throws CompileError
 		let request = self.spec
 
@@ -444,7 +493,8 @@ module type JobRun
 			check(rendersTargetIr, _) then project.rendersTargetIr = rendersTargetIr
 			build or
 			warm or
-			lexSweep then break
+			lexSweep or
+			claims then break
 		end 'work'
 
 		return project
@@ -486,7 +536,8 @@ module type JobRun
 			build then return self.writeImage(receiver)
 			check then return self.checkFinished()
 			warm then return self.warmFinished()
-			lexSweep then panic("JobRun.machineFinished: a lex sweep runs no compile machine")
+			lexSweep or
+			claims then panic("JobRun.machineFinished: a lex sweep and a claims pass run no compile machine")
 		end 'work'
 	end 'machineFinished'
 
@@ -495,7 +546,8 @@ module type JobRun
 			build then return self.buildFailed(failure)
 			check then return self.checkRefused()
 			warm then return self.warmFailed(failure)
-			lexSweep then panic("JobRun.compileFailed: a lex sweep runs no compile machine")
+			lexSweep or
+			claims then panic("JobRun.compileFailed: a lex sweep and a claims pass run no compile machine")
 		end 'work'
 	end 'compileFailed'
 
@@ -556,7 +608,8 @@ module type JobRun
 			check(rendersTargetIr, _) then return self.checkedOutcome(true, irText: self.renderedIr(rendersTargetIr))
 			build or
 			warm or
-			lexSweep then panic("JobRun.checkFinished: only a check ends here")
+			lexSweep or
+			claims then panic("JobRun.checkFinished: only a check ends here")
 		end 'work'
 	end 'checkFinished'
 
@@ -583,7 +636,8 @@ module type JobRun
 			check(_, reading) then return self.readStanding(project, compiled: compiled, reading: reading)
 			build or
 			warm or
-			lexSweep then panic("JobRun.standingDiagnostics: only a check answers diagnostics")
+			lexSweep or
+			claims then panic("JobRun.standingDiagnostics: only a check answers diagnostics")
 		end 'work'
 	end 'standingDiagnostics'
 
@@ -1470,17 +1524,6 @@ export enum LibraryLoad
 	included
 	omitted
 end 'LibraryLoad'
-
-export function claimsOfSources(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), defines DefineArray = DefineArray.create(0)) returns SourceClaims throws CompileError
-	let project = try userFilesProjectOf(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, compilerWrittenSources: compilerWrittenSources, defines: defines)
-	return try claimsOfUserFiles(project)
-end 'claimsOfSources'
-
-function userFilesProjectOf(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText, runtimeDirOverride StatedText, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, compilerWrittenSources CompilerWrittenSourceArray, defines DefineArray) returns Project throws CompileError
-	let probe = CompileSession.discarding()
-	let project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: ScriptlibLoad.omitted, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, session: probe, library: LibraryLoad.omitted, defines: defines)
-	return project
-end 'userFilesProjectOf'
 
 // ⭐ **WHICH `stdlib/` THIS COMPILE READS — the walk-up, or a directory the CALLER names.**
 //

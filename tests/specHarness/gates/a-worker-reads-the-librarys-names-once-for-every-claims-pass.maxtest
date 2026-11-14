@@ -1,0 +1,103 @@
+let ClaimsPassWorkersFlag = "--workers=1"
+let ClaimsPassNorthSpecName = "claims-north"
+let ClaimsPassNorthCaseNames = ["claims-north.pair", "claims-north.heading", "claims-north.label"]
+let ClaimsPassSouthSpecName = "claims-south"
+let ClaimsPassSouthCaseNames = ["claims-south.span", "claims-south.signal", "claims-south.tag"]
+let ClaimsPassSpecFileCount = 2
+let ClaimsPassCasesPerSpecFile = 3
+let ClaimsPassBatchableCaseCount = ClaimsPassSpecFileCount * ClaimsPassCasesPerSpecFile
+let ClaimsPassCasesRunAlone = 0
+let ClaimsPassRosterBuildsPerWorker = 1
+let ClaimsPassReportPrefix = "batch claims: "
+let ClaimsPassReportAskedLabel = " case(s) asked, library names read "
+let ClaimsPassReportBuildsLabel = " time(s)"
+let ClaimsPassReportShape = "batch claims: <N> case(s) asked, library names read <K> time(s)"
+let ClaimsPassReportFieldCount = 2
+
+typealias RosterBuildTally = int(0 to u64.max)
+
+union ClaimsPassReportReading
+	read(asked CaseTally, rosterBuilds RosterBuildTally)
+	unreadable(why String)
+end 'ClaimsPassReportReading'
+
+test 'a worker reads the librarys names once for every claims pass'
+	let run = runGateFixtureOnce([ClaimsPassWorkersFlag])
+	let said = everythingSaid(run)
+	let brokenRun = StringArray.create(0)
+
+	collectNotPassed(said, specName: ClaimsPassNorthSpecName, testNames: ClaimsPassNorthCaseNames, broken: brokenRun)
+	collectNotPassed(said, specName: ClaimsPassSouthSpecName, testNames: ClaimsPassSouthCaseNames, broken: brokenRun)
+	collectMissingSummary(said, expected: batchSummaryLine(ClaimsPassBatchableCaseCount, programs: ClaimsPassSpecFileCount, alone: ClaimsPassCasesRunAlone), broken: brokenRun)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		brokenRun.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(brokenRun, headline: "the fixture's {ClaimsPassBatchableCaseCount} cases pass, batched one program to a spec file, under one worker")
+
+	match claimsPassReportIn(run.stderr) 'report'
+		unreadable(why) then Expect.fail(why)
+		read(asked, rosterBuilds) then requireOneRosterBuild(asked, rosterBuilds: rosterBuilds, stderr: run.stderr)
+	end 'report'
+end 'a worker reads the librarys names once for every claims pass'
+
+function requireOneRosterBuild(asked CaseTally, rosterBuilds RosterBuildTally, stderr String) throws TestFailure
+	let broken = StringArray.create(0)
+
+	if asked != ClaimsPassBatchableCaseCount 'wrongCaseCount'
+		broken.push("`spec-test` reports {asked} claims pass(es), and the fixture holds {ClaimsPassBatchableCaseCount} batchable cases ({ClaimsPassCasesPerSpecFile} in each of {ClaimsPassSpecFileCount} spec files), each asked for its claims once before its spec's program is built. It wrote to stderr:\n{stderr}\n")
+	end 'wrongCaseCount'
+
+	if rosterBuilds != ClaimsPassRosterBuildsPerWorker 'rosterRebuilt'
+		broken.push("the run's one worker read the library's names {rosterBuilds} time(s) over {asked} claims pass(es), where a worker reads them {ClaimsPassRosterBuildsPerWorker} time however many cases it claims. {ClaimsPassBatchableCaseCount} means every claims pass rebuilt the roster from the stdlib's files; {ClaimsPassSpecFileCount} means it was rebuilt once per spec file rather than once per worker. It wrote to stderr:\n{stderr}\n")
+	end 'rosterRebuilt'
+
+	try requireNothingBroken(broken, headline: "a worker reads the library's names once for every claims pass")
+end 'requireOneRosterBuild'
+
+function claimsPassReportLine(asked CaseTally, rosterBuilds RosterBuildTally) returns String
+	return "{ClaimsPassReportPrefix}{asked}{ClaimsPassReportAskedLabel}{rosterBuilds}{ClaimsPassReportBuildsLabel}"
+end 'claimsPassReportLine'
+
+function claimsPassReportIn(stderr String) returns ClaimsPassReportReading
+	let lines = StringArray.create(0)
+
+	for line in stderr.split(LineFeed) 'eachLine'
+		if line.trim().startsWith(ClaimsPassReportPrefix) 'aReport'
+			lines.push(line.trim())
+		end 'aReport'
+	end 'eachLine'
+
+	if lines.count() != 1 'notOneLine'
+		return ClaimsPassReportReading.unreadable("`spec-test` did not report its claims passes: it printed {lines.count()} line(s) opening `{ClaimsPassReportPrefix}` on stderr, where it reports once, after its library cache line, `{ClaimsPassReportShape}`. It wrote to stderr:\n{stderr}\n")
+	end 'notOneLine'
+
+	let line = try lines.get(0) otherwise panic("spec-harness tests: a list holding one line has a first line")
+	let misshapen = "`spec-test`'s claims line does not read `{ClaimsPassReportShape}`. It wrote: {line}\n"
+	let counts = try line.split(ClaimsPassReportPrefix).get(1) otherwise panic("spec-harness tests: a line opening with a prefix splits after it")
+	let fields = counts.split(ClaimsPassReportAskedLabel)
+
+	if fields.count() != ClaimsPassReportFieldCount 'noAskedLabel'
+		return ClaimsPassReportReading.unreadable(misshapen)
+	end 'noAskedLabel'
+
+	let askedWord = try fields.get(0) otherwise panic("spec-harness tests: a line already counted to hold both fields has no first one")
+	let buildsField = try fields.get(1) otherwise panic("spec-harness tests: a line already counted to hold both fields has no second one")
+	let buildsWord = try buildsField.split(ClaimsPassReportBuildsLabel).get(0) otherwise panic("spec-harness tests: a split always yields a first part")
+	let askedCount = try int.fromString(askedWord) otherwise return ClaimsPassReportReading.unreadable(misshapen)
+	let buildsCount = try int.fromString(buildsWord) otherwise return ClaimsPassReportReading.unreadable(misshapen)
+
+	if askedCount < 0 or buildsCount < 0 'aNegativeCount'
+		return ClaimsPassReportReading.unreadable(misshapen)
+	end 'aNegativeCount'
+
+	let asked = askedCount as CaseTally
+	let rosterBuilds = buildsCount as RosterBuildTally
+
+	if line != claimsPassReportLine(asked, rosterBuilds: rosterBuilds) 'mislabelled'
+		return ClaimsPassReportReading.unreadable(misshapen)
+	end 'mislabelled'
+
+	return ClaimsPassReportReading.read(asked, rosterBuilds: rosterBuilds)
+end 'claimsPassReportIn'

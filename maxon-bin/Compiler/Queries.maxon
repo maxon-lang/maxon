@@ -527,13 +527,14 @@ export function claimsOfUserFiles(project Project) returns SourceClaims throws C
 	let nominals = fold.signatures.userDeclaredNominalNames()
 	let aliases = fold.signatures.userDeclaredAliasNames()
 	let mentioned = try namesWritten(project, paths: fold.paths)
-	let shadowed = try namesTheLibraryAlsoDeclares(project, nominals: nominals, aliases: aliases)
+	let roster = try libraryRoster(project)
+	let shadowed = namesTheLibraryAlsoDeclares(roster, nominals: nominals, aliases: aliases)
 	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures)
-	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, libraryExtensionMethods: try libraryExtensionMethodsOnConformers(project, signatures: fold.signatures), mentionedNames: mentioned)
+	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, libraryExtensionMethods: libraryExtensionMethodsOnConformers(roster, signatures: fold.signatures), mentionedNames: mentioned)
 end 'claimsOfUserFiles'
 
-function libraryExtensionMethodsOnConformers(project Project, signatures ProgramSignatures) returns StringArray throws CompileError
-	let interfaces = (try libraryRoster(project)).interfaces
+function libraryExtensionMethodsOnConformers(roster LibraryNameRoster, signatures ProgramSignatures) returns StringArray
+	let interfaces = roster.interfaces
 	let pending = StringArray.create(0)
 	let reached = SourceNameSet.create()
 	let methods = StringArray.create(0)
@@ -619,7 +620,7 @@ function namesWritten(project Project, paths MaxonSourcePathArray) returns Strin
 	return written
 end 'namesWritten'
 
-function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, aliases StringArray) returns StringArray throws CompileError
+function namesTheLibraryAlsoDeclares(roster LibraryNameRoster, nominals StringArray, aliases StringArray) returns StringArray
 	let shadowed = StringArray.create(0)
 
 	if nominals.isEmpty() and aliases.isEmpty() 'nothingToShadowWith'
@@ -628,9 +629,7 @@ function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, alia
 
 	let library = SourceNameSet.create()
 
-	let libraryNames = (try libraryRoster(project)).names
-
-	for name in libraryNames 'eachLibraryName'
+	for name in roster.names 'eachLibraryName'
 		library.insert(String.from(name))
 	end 'eachLibraryName'
 

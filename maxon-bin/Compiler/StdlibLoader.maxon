@@ -388,23 +388,27 @@ function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePat
 end 'setAsideTheUsersOwnLibraryFiles'
 
 // The type names `stdlib/` declares and the methods its interface extensions add, held on the session's shared file memos and re-read when any file's
-// stamp stops describing it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
+// stamp stops describing it or the build key differs. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
 // same-size edit made in that second (see `SourceFileStamp`).
 module function libraryRoster(project Project) returns LibraryNameRoster throws CompileError
 	let found = MaxonSourcePathArray.create(0)
+	let buildKey = buildKeyOf(project)
 
 	if not Directory.exists(project.stdlibDir) 'theTierDidNotArrive'
-		return LibraryNameRoster.create(SourceFileStampMap.create(), names: NameRoster.create(0), interfaces: LibraryInterfaceMap.create())
+		return LibraryNameRoster.create(SourceFileStampMap.create(), buildKey: buildKey, names: NameRoster.create(0), interfaces: LibraryInterfaceMap.create())
 	end 'theTierDidNotArrive'
 
 	_ = try collectMaxonSources(project.stdlibDir, into: found)
 	let key = project.stdlibDir.toString()
 
 	if let held = try project.session.fileMemos.libraryNames.get(key) 'aRosterOfTheseFiles'
-		if held.describes(found) 'stillCurrent'
+		if held.describes(found, forBuild: buildKey) 'stillCurrent'
 			return held
 		end 'stillCurrent'
 	end 'aRosterOfTheseFiles'
+
+	let claims = project.session.fileMemos.claims
+	claims.libraryNameReads = claims.libraryNameReads + 1
 
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
 	let stamps = SourceFileStampMap.create()
@@ -427,7 +431,7 @@ module function libraryRoster(project Project) returns LibraryNameRoster throws 
 		try noteInterfacesOfLibraryFile(project, path: path, entries: written)
 	end 'eachFile'
 
-	let roster = LibraryNameRoster.create(stamps, names: names, interfaces: declaredInterfacesOnly(written))
+	let roster = LibraryNameRoster.create(stamps, buildKey: buildKey, names: names, interfaces: declaredInterfacesOnly(written))
 	project.session.fileMemos.libraryNames.upsert(key, value: roster)
 	return roster
 end 'libraryRoster'

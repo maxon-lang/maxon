@@ -15,6 +15,7 @@ export union DriverWork
 	check(rendersTargetIr bool, reading CheckedDiagnostics)
 	warm(step WarmStep)
 	lexSweep(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray)
+	claims
 
 	module function word() returns String
 		return match self 'work'
@@ -22,6 +23,7 @@ export union DriverWork
 			check gives "check"
 			warm(step) gives "warm {step.word()}"
 			lexSweep gives "lex sweep"
+			claims gives "claims"
 		end 'work'
 	end 'word'
 end 'DriverWork'
@@ -72,6 +74,7 @@ export union DriverOutcome
 	checked(compiled bool, diagnostics DiagnosticArray, irText String)
 	warmed(reading WarmReading)
 	swept(outcomes LexLandedArray)
+	claimed(claims SourceClaims)
 	failed(error CompileError)
 end 'DriverOutcome'
 
@@ -84,6 +87,15 @@ export type DriverAnswer
 		return Self{outcome: outcome, lines: lines, lock: lock}
 	end 'of'
 end 'DriverAnswer'
+
+export type DriverTotals
+	export let library as LibraryCacheTally
+	export let claims as ClaimsTally
+
+	export static function of(library LibraryCacheTally, claims ClaimsTally) returns DriverTotals
+		return Self{library: library, claims: claims}
+	end 'of'
+end 'DriverTotals'
 
 export type DriverSession
 	export let diagnostics as DiagnosticSink
@@ -137,9 +149,9 @@ export type CompileDriver implements CompileReceiver
 		return
 	end 'run'
 
-	export function libraryTotals() returns isolated LibraryCacheTally
-		return self.memos.library.takeTotals().clone()
-	end 'libraryTotals'
+	export function totals() returns isolated DriverTotals
+		return DriverTotals.of(self.memos.library.takeTotals(), claims: self.memos.takeClaims()).clone()
+	end 'totals'
 
 	export function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle)
 		self.settle(self.running.held().frontEndAnswered(generation, job: job, answered: answered, receiver: receiver.clone()), receiver: receiver)
@@ -207,10 +219,10 @@ module function driverAnswerOf(driver CompileDriver.handle, request immutable Co
 	return merge answer
 end 'driverAnswerOf'
 
-export function driverLibraryTotals(driver CompileDriver.handle) returns LibraryCacheTally
-	let asked = try driver.libraryTotals(sendTimeout: ForeverMs) otherwise panic("driverLibraryTotals: the compile driver stopped while its caller still held its handle")
+export function driverTotals(driver CompileDriver.handle) returns DriverTotals
+	let asked = try driver.totals(sendTimeout: ForeverMs) otherwise panic("driverTotals: the compile driver stopped while its caller still held its handle")
 
-	let tally = await asked
+	let totals = await asked
 
-	return merge tally
-end 'driverLibraryTotals'
+	return merge totals
+end 'driverTotals'

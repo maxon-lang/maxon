@@ -532,6 +532,11 @@ parses that an earlier compile with the same compiler and target wrote, so each 
 first loads the library from it. After the summary, `spec-test` prints
 `library cache: <n> loaded, <n> written, <n> rejected` on stderr, summed over its workers.
 
+A worker also keeps the standard library's names between the passes that read a batchable case's names, and
+reads them again only when a case's library files or build settings differ. The line after the library
+cache's, `batch claims: <n> case(s) asked, library names read <n> time(s)`, counts those passes and the
+times the library's names were read, summed over its workers.
+
 ### Batched runs
 
 A default run compiles a spec's plain run cases into the fewest programs whose cases can share a program
@@ -543,7 +548,7 @@ of that name), and a case declaring a `typealias` and another that names the wor
 a case declaring a type that implements `Iterable`, `Iterator` or any other library interface with extension methods and a
 case that names one of those methods: the extension's body is expanded over every conformer in the program, and it
 cannot name a cursor type that is file-private (E3008). The declared and mentioned names come from the compiler's own front end, one pass per case
-(`Compiler.claimsOfSources`). Each batched case
+in the worker's own compiler ([Workers start warm](#workers-start-warm)). Each batched case
 sits in its own directory, so its file-private names stay its own, with its `main` renamed to an exported
 `__spec_case_<n>`, and a generated entry runs the cases selected by `--select=`
 between begin and end markers carrying each case's exit code. After each case's `main` returns and before

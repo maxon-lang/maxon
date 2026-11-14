@@ -77,9 +77,14 @@
 //                                                     how many ran alone
 //       WORKER_JOB_LIBRARY:<loaded>:<written>:<rejected>
 //                                                     exactly once per job, immediately BEFORE that
-//                                                     job's WORKER_JOB_CPU: the library cache
+//                                                     job's WORKER_JOB_CLAIMS: the library cache
 //                                                     entries this worker loaded, wrote and
 //                                                     rejected since its previous job
+//       WORKER_JOB_CLAIMS:<passes>:<libraryNameReads>
+//                                                     exactly once per job, immediately BEFORE that
+//                                                     job's WORKER_JOB_CPU: how many batch claims
+//                                                     passes this worker ran, and how many times it
+//                                                     read the library's names, since its previous job
 //       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_READY: what compiling this spec's
@@ -158,6 +163,7 @@ let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let WorkerJobBatchMarker = "WORKER_JOB_BATCH:"
 let WorkerJobHarnessMarker = "WORKER_JOB_HARNESS:"
 let WorkerJobLibraryMarker = "WORKER_JOB_LIBRARY:"
+let WorkerJobClaimsMarker = "WORKER_JOB_CLAIMS:"
 let WorkerStepMarker = "WORKER_STEP:"
 let JobSinglesPrefix = "JOB:singles:"
 let JobAlonePrefix = "JOB:alone:"
@@ -744,13 +750,14 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 		print("{WorkerJobHarnessMarker}{encodeRecordPayload(text)}\n")
 	end 'eachHarnessError'
 
-	// LAST, after every record — the parent takes it off the end of the drained lines before it
-	// checks the records against its plan. See this file's protocol note.
-	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
+	// LAST, after every record and in this order — the parent takes them off the end of the drained
+	// lines, last first, before it checks the records against its plan. See this file's protocol note.
+	print("{batchRecordLine(run.batch)}\n")
 
-	let library = driverLibraryTotals(driver)
-	print("{jobCountsLine(WorkerJobLibraryMarker, first: library.loaded as ParsedCount, second: library.written as ParsedCount, third: library.rejected as ParsedCount)}\n")
-	print("{jobCountsLine(WorkerJobCpuMarker, first: run.cpu.ticks as ParsedCount, second: run.cpu.reported as ParsedCount, third: run.cpu.unreported as ParsedCount)}\n")
+	let totals = driverTotals(driver)
+	print("{libraryRecordLine(totals.library)}\n")
+	print("{claimsRecordLine(totals.claims)}\n")
+	print("{cpuRecordLine(run.cpu)}\n")
 end 'runSpecJob'
 
 // ⭐⭐ **THE BREADCRUMB: WHAT THIS WORKER IS ABOUT TO DO NEXT.** Printed by `SpecTestRunner` immediately
@@ -984,7 +991,8 @@ function splitAtFieldSep(body String, expected String, line String) returns Reco
 	return RecordSplit.create(body.slice(body.startIndex(), endIndex: sep), rest: body.slice(restStart, endIndex: body.endIndex()))
 end 'splitAtFieldSep'
 
-// Take the job's CPU record OFF THE END of its drained lines, leaving only the result records.
+// Take the job's CPU record OFF THE END of its drained lines, the first of the trailing records the
+// parent takes before only the result records are left.
 //
 // The record is MANDATORY and its position is exact: `runSpecJob` prints it after the last result
 // and before the WORKER_READY that ends the drain, so it is always the final line of a job that ran at
@@ -995,8 +1003,8 @@ end 'splitAtFieldSep'
 // Removing it here rather than teaching `resultsFromLines` to skip it keeps that function's count
 // check exact: it still compares record count against plan count with no allowance for an extra line.
 function takeJobCpuRecord(lines StringArray, specName String) returns SuiteCpuTally
-	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobCpuMarker, names: JobCountNames.create("tick total", second: "reported count", third: "unreported count"))
-	return SuiteCpuTally.create(counts.first as CpuTicks, reported: counts.second as TestTally, unreported: counts.third as TestTally)
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobCpuMarker, fields: CpuField.allCaseNames)
+	return SuiteCpuTally.create(counts.at(CpuField.ticks.ordinal) as CpuTicks, reported: counts.at(CpuField.reported.ordinal) as TestTally, unreported: counts.at(CpuField.unreported.ordinal) as TestTally)
 end 'takeJobCpuRecord'
 
 function takeJobHarnessRecords(lines StringArray) returns StringArray
@@ -1017,54 +1025,165 @@ function takeJobHarnessRecords(lines StringArray) returns StringArray
 end 'takeJobHarnessRecords'
 
 function takeJobBatchRecord(lines StringArray, specName String) returns BatchTally
-	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobBatchMarker, names: JobCountNames.create("batched count", second: "program count", third: "alone count"))
-	return BatchTally.create(counts.first as TestTally, programs: counts.second as TestTally, alone: counts.third as TestTally)
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobBatchMarker, fields: BatchField.allCaseNames)
+	return BatchTally.create(counts.at(BatchField.batched.ordinal) as TestTally, programs: counts.at(BatchField.programs.ordinal) as TestTally, alone: counts.at(BatchField.alone.ordinal) as TestTally)
 end 'takeJobBatchRecord'
 
 function takeJobLibraryRecord(lines StringArray, specName String) returns LibraryCacheTally
-	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobLibraryMarker, names: JobCountNames.create("loaded count", second: "written count", third: "rejected count"))
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobLibraryMarker, fields: LibraryField.allCaseNames)
 	let tally = LibraryCacheTally.create()
-	tally.loaded = counts.first as LibraryEntryTally
-	tally.written = counts.second as LibraryEntryTally
-	tally.rejected = counts.third as LibraryEntryTally
+	tally.loaded = counts.at(LibraryField.loaded.ordinal) as LibraryEntryTally
+	tally.written = counts.at(LibraryField.written.ordinal) as LibraryEntryTally
+	tally.rejected = counts.at(LibraryField.rejected.ordinal) as LibraryEntryTally
 
 	return tally
 end 'takeJobLibraryRecord'
 
-type JobCountNames
-	export let first as String
-	export let second as String
-	export let third as String
+function takeJobClaimsRecord(lines StringArray, specName String) returns ClaimsTally
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobClaimsMarker, fields: ClaimsField.allCaseNames)
+	let tally = ClaimsTally.create()
+	tally.passes = counts.at(ClaimsField.passes.ordinal) as ClaimsPassTally
+	tally.libraryNameReads = counts.at(ClaimsField.libraryNameReads.ordinal) as LibraryNameReadTally
 
-	static function create(first String, second String, third String) returns JobCountNames
-		return Self{first: first, second: second, third: third}
-	end 'create'
-end 'JobCountNames'
+	return tally
+end 'takeJobClaimsRecord'
+
+enum BatchField
+	batched
+	programs
+	alone
+end 'BatchField'
+
+enum LibraryField
+	loaded
+	written
+	rejected
+end 'LibraryField'
+
+enum ClaimsField
+	passes
+	libraryNameReads
+end 'ClaimsField'
+
+enum CpuField
+	ticks
+	reported
+	unreported
+end 'CpuField'
+
+function batchRecordLine(batch BatchTally) returns String
+	let counts = JobCountArray.create(0)
+
+	for field in BatchField.allCases 'eachField'
+		let count = match field 'field'
+			batched gives batch.batched as ParsedCount
+			programs gives batch.programs as ParsedCount
+			alone gives batch.alone as ParsedCount
+		end 'field'
+
+		counts.push(count)
+	end 'eachField'
+
+	return jobCountsLine(WorkerJobBatchMarker, counts: counts)
+end 'batchRecordLine'
+
+function libraryRecordLine(library LibraryCacheTally) returns String
+	let counts = JobCountArray.create(0)
+
+	for field in LibraryField.allCases 'eachField'
+		let count = match field 'field'
+			loaded gives library.loaded as ParsedCount
+			written gives library.written as ParsedCount
+			rejected gives library.rejected as ParsedCount
+		end 'field'
+
+		counts.push(count)
+	end 'eachField'
+
+	return jobCountsLine(WorkerJobLibraryMarker, counts: counts)
+end 'libraryRecordLine'
+
+function claimsRecordLine(claims ClaimsTally) returns String
+	let counts = JobCountArray.create(0)
+
+	for field in ClaimsField.allCases 'eachField'
+		let count = match field 'field'
+			passes gives claims.passes as ParsedCount
+			libraryNameReads gives claims.libraryNameReads as ParsedCount
+		end 'field'
+
+		counts.push(count)
+	end 'eachField'
+
+	return jobCountsLine(WorkerJobClaimsMarker, counts: counts)
+end 'claimsRecordLine'
+
+function cpuRecordLine(cpu SuiteCpuTally) returns String
+	let counts = JobCountArray.create(0)
+
+	for field in CpuField.allCases 'eachField'
+		let count = match field 'field'
+			ticks gives cpu.ticks as ParsedCount
+			reported gives cpu.reported as ParsedCount
+			unreported gives cpu.unreported as ParsedCount
+		end 'field'
+
+		counts.push(count)
+	end 'eachField'
+
+	return jobCountsLine(WorkerJobCpuMarker, counts: counts)
+end 'cpuRecordLine'
+
+typealias JobCountArray = Array with ParsedCount
 
 type JobCounts
-	export let first as ParsedCount
-	export let second as ParsedCount
-	export let third as ParsedCount
+	let values as JobCountArray
 
-	static function create(first ParsedCount, second ParsedCount, third ParsedCount) returns JobCounts
-		return Self{first: first, second: second, third: third}
+	static function create(values JobCountArray) returns JobCounts
+		return Self{values: values}
 	end 'create'
+
+	function at(position ElementIndex) returns ParsedCount
+		return try self.values.get(position) otherwise panic("spec worker pool: a job record holds {self.values.count()} count(s), and the reader asked for the one at {position}")
+	end 'at'
 end 'JobCounts'
 
-function jobCountsLine(marker String, first ParsedCount, second ParsedCount, third ParsedCount) returns String
-	return "{marker}{first}{ProtocolFieldSep}{second}{ProtocolFieldSep}{third}"
+function jobCountsLine(marker String, counts JobCountArray) returns String
+	let fields = StringArray.create(counts.count(), zeroed: false)
+
+	for count in counts 'eachCount'
+		fields.push("{count}")
+	end 'eachCount'
+
+	return "{marker}{joinedWith(fields, separator: ProtocolFieldSep)}"
 end 'jobCountsLine'
 
-function takeJobCounts(lines StringArray, specName String, marker String, names JobCountNames) returns JobCounts
+function takeJobRecord(lines StringArray, specName String, marker String) returns String
 	let last = try lines.pop() otherwise panic("spec worker pool: '{specName}' returned no {marker} record where one was owed")
 
 	if not last.startsWith(marker) 'notTheRecord'
 		panic("spec worker pool: '{specName}' ended with '{last}' where its {marker} record should be")
 	end 'notTheRecord'
 
-	let first = splitAtFieldSep(sliceAfterPrefix(last, prefix: marker), expected: names.second, line: last)
-	let second = splitAtFieldSep(first.rest, expected: names.third, line: last)
-	return JobCounts.create(decodeJobCount(first.field, marker: marker, what: names.first, line: last), second: decodeJobCount(second.field, marker: marker, what: names.second, line: last), third: decodeJobCount(second.rest, marker: marker, what: names.third, line: last))
+	return last
+end 'takeJobRecord'
+
+function takeJobCounts(lines StringArray, specName String, marker String, fields StringArray) returns JobCounts
+	let last = takeJobRecord(lines, specName: specName, marker: marker)
+	let raw = sliceAfterPrefix(last, prefix: marker).split(ProtocolFieldSep)
+
+	if raw.count() != fields.count() 'wrongFieldCount'
+		panic("spec worker pool: a {marker} record carries {raw.count()} count(s) where it has {fields.count()} ({joinedWith(fields, separator: ProtocolFieldSep)}): '{last}'")
+	end 'wrongFieldCount'
+
+	let counts = JobCountArray.create(raw.count(), zeroed: false)
+
+	for (iter, field) in raw.withIterator() 'eachField'
+		let name = try fields.get(iter.index()) otherwise panic("takeJobCounts: the field count was just checked against the {fields.count()} names")
+		counts.push(decodeJobCount(field, marker: marker, what: name, line: last))
+	end 'eachField'
+
+	return JobCounts.create(counts)
 end 'takeJobCounts'
 
 function decodeJobCount(raw String, marker String, what String, line String) returns ParsedCount
@@ -2043,6 +2162,7 @@ export type PoolRun
 	export let cpu as SuiteCpuTally
 	export let batch as BatchTally
 	export let library as LibraryCacheTally
+	export let claims as ClaimsTally
 	export let poolSize as WorkerPoolSize
 	export let harnessErrors as StringArray
 
@@ -2055,8 +2175,8 @@ export type PoolRun
 	export let unmatchedPatterns as FilterPatternArray
 	export let refused as bool
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, poolSize WorkerPoolSize, harnessErrors StringArray, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray, refused bool) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, harnessErrors: harnessErrors, excluded: excluded, unmatchedPatterns: unmatchedPatterns, refused: refused}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, claims ClaimsTally, poolSize WorkerPoolSize, harnessErrors StringArray, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray, refused bool) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, claims: claims, poolSize: poolSize, harnessErrors: harnessErrors, excluded: excluded, unmatchedPatterns: unmatchedPatterns, refused: refused}
 	end 'create'
 end 'PoolRun'
 
@@ -2119,7 +2239,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		//
 		// The excluded census rides out here too: a run whose whole selection was live-network reaches
 		// this return, and "no tests selected" alone would hide the cause.
-		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: WorkerPoolSize.unsized, harnessErrors: StringArray.create(0), excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
+		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), claims: ClaimsTally.create(), poolSize: WorkerPoolSize.unsized, harnessErrors: StringArray.create(0), excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir)
@@ -2224,6 +2344,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	var cpu = SuiteCpuTally.zero()
 	var batch = BatchTally.zero()
 	let library = LibraryCacheTally.create()
+	let claims = ClaimsTally.create()
 
 	// The watchdog's whole state. `dispatched + completed` counts every progress event this loop can
 	// make, so a poll that finds it unchanged since the previous poll found nothing moving — which is
@@ -2334,6 +2455,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			// plan, one per test with no allowance for a line of any other kind.
 			let records = recordLinesOf(lines)
 			cpu = cpu.plus(takeJobCpuRecord(records, specName: job.specName))
+			claims.add(takeJobClaimsRecord(records, specName: job.specName))
 			library.add(takeJobLibraryRecord(records, specName: job.specName))
 			batch = batch.plus(takeJobBatchRecord(records, specName: job.specName))
 			try harnessBuckets.set(job.planIndex, value: takeJobHarnessRecords(records)) otherwise panic("runSpecPool: harnessBuckets.set({job.planIndex}) is in bounds by construction")
@@ -2401,7 +2523,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
-	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: WorkerPoolSize.sized(poolSize), harnessErrors: harnessErrors, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, claims: claims, poolSize: WorkerPoolSize.sized(poolSize), harnessErrors: harnessErrors, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
 end 'runSpecPool'
 
 function concatHarnessErrors(buckets HarnessErrorBuckets) returns StringArray
