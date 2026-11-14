@@ -2257,6 +2257,7 @@ module type CompileRun
 
 	function frontEndFinished(folded MaxonModule, receiver CompileReceiver.handle) returns CompileStep throws CompileError
 		self.frontEnd.close()
+		self.frontEnd.release()
 		self.place = CompilePlace.pipeline
 
 		return match self.goal 'goal'
@@ -2298,7 +2299,7 @@ module type CompileRun
 			finished then break
 		end 'step'
 
-		self.backend.fill(try afterPipeline(self.project, lowered: self.lowered.held()))
+		self.backend.fill(try afterPipeline(self.project, lowered: self.lowered.take()))
 		self.place = CompilePlace.backend
 
 		let begun = try self.backend.held().begin(receiver) otherwise 'backendFailed'
@@ -2314,6 +2315,7 @@ module type CompileRun
 			finished(codeResult) then self.result.fill(codeResult)
 		end 'step'
 
+		self.backend.clear()
 		self.place = CompilePlace.finished
 
 		return CompileStep.finished

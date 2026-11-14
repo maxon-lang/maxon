@@ -208,6 +208,14 @@ export type LibraryCacheReader
 		return self.position
 	end 'offset'
 
+	export function endOffset() returns ElementIndex
+		return self.limit
+	end 'endOffset'
+
+	export function imageBytes() returns immutable ByteArray
+		return self.image
+	end 'imageBytes'
+
 	function remainingBytes() returns immutable ByteArray
 		return freeze try self.image.slice(self.position, endIndex: self.limit) otherwise panic("LibraryCacheReader.remainingBytes: {self.position} to {self.limit} lies outside the {self.image.count()} bytes the reader was opened over")
 	end 'remainingBytes'
@@ -437,6 +445,20 @@ export type LibraryPackBuilder
 	end 'sealed'
 end 'LibraryPackBuilder'
 
+export type PackSection
+	export let image as immutable ByteArray
+	export let start as ElementIndex
+	export let endIndex as ElementIndex
+
+	static function create(image immutable ByteArray, start ElementIndex, endIndex ElementIndex) returns PackSection
+		return Self{image: image, start: start, endIndex: endIndex}
+	end 'create'
+
+	function reader() returns LibraryCacheReader
+		return LibraryCacheReader.over(self.image, start: self.start, endIndex: self.endIndex)
+	end 'reader'
+end 'PackSection'
+
 export type LibraryPack
 	let image as immutable ByteArray
 	let rows as PackRowKeyArray
@@ -478,12 +500,12 @@ export type LibraryPack
 		return Self{image: image, rows: rows, starts: starts, ends: ends}
 	end 'open'
 
-	function readerAt(position ElementIndex) returns LibraryCacheReader
-		let start = try self.starts.get(position) otherwise panic("LibraryPack.readerAt: starts.get OOB at {position} below count {self.starts.count()}, which is index-parallel to the rows")
-		let finish = try self.ends.get(position) otherwise panic("LibraryPack.readerAt: ends.get OOB at {position} below count {self.ends.count()}, which is index-parallel to the rows")
+	function sectionAt(position ElementIndex) returns PackSection
+		let start = try self.starts.get(position) otherwise panic("LibraryPack.sectionAt: starts.get OOB at {position} below count {self.starts.count()}, which is index-parallel to the rows")
+		let finish = try self.ends.get(position) otherwise panic("LibraryPack.sectionAt: ends.get OOB at {position} below count {self.ends.count()}, which is index-parallel to the rows")
 
-		return LibraryCacheReader.over(self.image, start: start, endIndex: finish)
-	end 'readerAt'
+		return PackSection.create(self.image, start: start, endIndex: finish)
+	end 'sectionAt'
 
 	export function copiedInto(builder LibraryPackBuilder, mostPerGroup ElementIndex)
 		for (iter, row) in self.rows.withIterator() 'eachRow'
@@ -491,11 +513,15 @@ export type LibraryPack
 				continue
 			end 'notWorthCarrying'
 
-			builder.addRow(row, payload: self.readerAt(iter.index()).remainingBytes())
+			builder.addRow(row, payload: self.sectionAt(iter.index()).reader().remainingBytes())
 		end 'eachRow'
 	end 'copiedInto'
 
 	export function section(first HashDigest, second HashDigest, third HashDigest) returns LibraryCacheReader throws LibraryEntryMiss
-		return self.readerAt(try rowPositionIn(self.rows, key: PackRowKey.create(first, second: second, third: third)))
+		return (try self.sectionSpan(first, second: second, third: third)).reader()
 	end 'section'
+
+	export function sectionSpan(first HashDigest, second HashDigest, third HashDigest) returns PackSection throws LibraryEntryMiss
+		return self.sectionAt(try rowPositionIn(self.rows, key: PackRowKey.create(first, second: second, third: third)))
+	end 'sectionSpan'
 end 'LibraryPack'

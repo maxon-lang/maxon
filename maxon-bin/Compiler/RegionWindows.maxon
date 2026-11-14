@@ -638,14 +638,137 @@ end 'cacheReadDroppedOwnedArray'
 
 // @generated library-cache end
 
-export type CapabilityNotes
-	export var windowCallOps as FuncIndexArray
-	export var windowCallLabels as NameRoster
-	export var windowCallPausedOperands as PausedOperandMaskArray
+// `CapabilityNotes.holdsNothing` counts these: `IrModule.merge` shares a notes object that holds
+// nothing without shifting its op indices.
+export type SparseNotes
+	export var firstWait as WaitSite
+	export var droppedOwned as DroppedOwnedArray
+	export var liveLinearCallOps as FuncIndexArray
+	export var liveLinearCallNames as NameRoster
 	export var windowReceiverOps as FuncIndexArray
 	export var windowReceiverLabels as NameRoster
 	export var windowReceiverLines as LineNumberArray
 	export var windowReceiverColumns as ColumnNumberArray
+	export var keptMovedSites as FuncIndexArray
+
+	export static function create() returns SparseNotes
+		return Self{firstWait: WaitSite.none, droppedOwned: DroppedOwnedArray.create(0), liveLinearCallOps: FuncIndexArray.create(0), liveLinearCallNames: NameRoster.create(0), windowReceiverOps: FuncIndexArray.create(0), windowReceiverLabels: NameRoster.create(0), windowReceiverLines: LineNumberArray.create(0), windowReceiverColumns: ColumnNumberArray.create(0), keptMovedSites: FuncIndexArray.create(0)}
+	end 'create'
+
+	export function noteFirstWaitSite(site WaitSite)
+		match self.firstWait 'held'
+			none then self.firstWait = site
+			replyAwait or
+			unknownOriginAwait or
+			selectAwait or
+			timedSend or
+			acquire or
+			startAwait or
+			runtimePark then break
+		end 'held'
+	end 'noteFirstWaitSite'
+
+	export function shiftedBy(opOffset ElementIndex) returns SparseNotes
+		let shifted = SparseNotes.create()
+		shifted.firstWait = self.firstWait.shiftedBy(opOffset)
+
+		for dropped in self.droppedOwned 'eachDroppedOwned'
+			shifted.droppedOwned.push(dropped.atOp(dropped.op + opOffset))
+		end 'eachDroppedOwned'
+
+		for op in self.liveLinearCallOps 'eachLiveLinearCall'
+			shifted.liveLinearCallOps.push(op + opOffset)
+		end 'eachLiveLinearCall'
+
+		shifted.liveLinearCallNames = self.liveLinearCallNames.clone()
+
+		for op in self.windowReceiverOps 'eachWindowReceiver'
+			shifted.windowReceiverOps.push(op + opOffset)
+		end 'eachWindowReceiver'
+
+		shifted.windowReceiverLabels = self.windowReceiverLabels.clone()
+		shifted.windowReceiverLines = self.windowReceiverLines.clone()
+		shifted.windowReceiverColumns = self.windowReceiverColumns.clone()
+		shifted.keptMovedSites = self.keptMovedSites.clone()
+
+		return shifted
+	end 'shiftedBy'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteWaitSite(writer, value: self.firstWait)
+		cacheWriteDroppedOwnedArray(writer, value: self.droppedOwned)
+		cacheWriteFuncIndexArray(writer, value: self.liveLinearCallOps)
+		cacheWriteNameRoster(writer, value: self.liveLinearCallNames)
+		cacheWriteFuncIndexArray(writer, value: self.windowReceiverOps)
+		cacheWriteNameRoster(writer, value: self.windowReceiverLabels)
+		cacheWriteLineNumberArray(writer, value: self.windowReceiverLines)
+		cacheWriteColumnNumberArray(writer, value: self.windowReceiverColumns)
+		cacheWriteFuncIndexArray(writer, value: self.keptMovedSites)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns SparseNotes throws LibraryCacheDamage
+		let f_firstWait = try cacheReadWaitSite(reader)
+		let f_droppedOwned = try cacheReadDroppedOwnedArray(reader)
+		let f_liveLinearCallOps = try cacheReadFuncIndexArray(reader)
+		let f_liveLinearCallNames = try cacheReadNameRoster(reader)
+		let f_windowReceiverOps = try cacheReadFuncIndexArray(reader)
+		let f_windowReceiverLabels = try cacheReadNameRoster(reader)
+		let f_windowReceiverLines = try cacheReadLineNumberArray(reader)
+		let f_windowReceiverColumns = try cacheReadColumnNumberArray(reader)
+		let f_keptMovedSites = try cacheReadFuncIndexArray(reader)
+
+		return Self{firstWait: f_firstWait, droppedOwned: f_droppedOwned, liveLinearCallOps: f_liveLinearCallOps, liveLinearCallNames: f_liveLinearCallNames, windowReceiverOps: f_windowReceiverOps, windowReceiverLabels: f_windowReceiverLabels, windowReceiverLines: f_windowReceiverLines, windowReceiverColumns: f_windowReceiverColumns, keptMovedSites: f_keptMovedSites}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(SparseNotes) as CacheSize72
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'SparseNotes'
+
+export union SparseNotesSlot
+	none
+	held(notes SparseNotes)
+end 'SparseNotesSlot'
+
+// @generated library-cache begin
+function cacheWriteSparseNotesSlot(writer LibraryCacheWriter, value SparseNotesSlot)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break
+		held(a0) then cacheWriteSparseNotesSlotHeld(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteSparseNotesSlot'
+
+function cacheWriteSparseNotesSlotHeld(writer LibraryCacheWriter, a0 SparseNotes)
+	a0.cacheWrite(writer)
+end 'cacheWriteSparseNotesSlotHeld'
+
+function cacheReadSparseNotesSlot(reader LibraryCacheReader) returns SparseNotesSlot throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives SparseNotesSlot.none
+		1 gives try cacheReadSparseNotesSlotHeld(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadSparseNotesSlot'
+
+function cacheReadSparseNotesSlotHeld(reader LibraryCacheReader) returns SparseNotesSlot throws LibraryCacheDamage
+	let a0 = try SparseNotes.cacheRead(reader)
+
+	return SparseNotesSlot.held(a0)
+end 'cacheReadSparseNotesSlotHeld'
+
+// @generated library-cache end
+
+export type CapabilityNotes
+	export var windowCallOps as FuncIndexArray
+	export var windowCallLabels as NameRoster
+	export var windowCallPausedOperands as PausedOperandMaskArray
 	export var useSiteParams as ParamCountArray
 	export var useSiteMutable as BoolArray
 	export var useSiteLines as LineNumberArray
@@ -656,9 +779,6 @@ export type CapabilityNotes
 	export var captureSites as CaptureSiteArray
 	export var storedSlotArgs as StoredSlotArgArray
 	export var tiedAsyncOps as FuncIndexArray
-	export var droppedOwned as DroppedOwnedArray
-	export var liveLinearCallOps as FuncIndexArray
-	export var liveLinearCallNames as NameRoster
 	export var undecidedResultOps as FuncIndexArray
 	export var derivedResultValues as ValueIdArray
 	export var derivedResultOps as FuncIndexArray
@@ -683,14 +803,14 @@ export type CapabilityNotes
 	export var keptArgColumns as ColumnNumberArray
 	export var keptArgOrigins as UniqueOriginArray
 	export var keptNextLap as BoolArray
-	export var keptByMove as BoolArray
 	export var keptReadSites as FuncIndexArray
 	export var keptReadLines as LineNumberArray
 	export var keptReadColumns as ColumnNumberArray
 	export var keptReadBlocks as FuncIndexArray
+	export var sparse as SparseNotesSlot
 
 	export static function create() returns CapabilityNotes
-		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), windowReceiverOps: FuncIndexArray.create(0), windowReceiverLabels: NameRoster.create(0), windowReceiverLines: LineNumberArray.create(0), windowReceiverColumns: ColumnNumberArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedOwned: DroppedOwnedArray.create(0), liveLinearCallOps: FuncIndexArray.create(0), liveLinearCallNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0), keptArgOps: FuncIndexArray.create(0), keptArgPositions: ParamCountArray.create(0), keptArgNames: NameRoster.create(0), keptArgLines: LineNumberArray.create(0), keptArgColumns: ColumnNumberArray.create(0), keptArgOrigins: UniqueOriginArray.create(0), keptNextLap: BoolArray.create(0), keptByMove: BoolArray.create(0), keptReadSites: FuncIndexArray.create(0), keptReadLines: LineNumberArray.create(0), keptReadColumns: ColumnNumberArray.create(0), keptReadBlocks: FuncIndexArray.create(0)}
+		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0), keptArgOps: FuncIndexArray.create(0), keptArgPositions: ParamCountArray.create(0), keptArgNames: NameRoster.create(0), keptArgLines: LineNumberArray.create(0), keptArgColumns: ColumnNumberArray.create(0), keptArgOrigins: UniqueOriginArray.create(0), keptNextLap: BoolArray.create(0), keptReadSites: FuncIndexArray.create(0), keptReadLines: LineNumberArray.create(0), keptReadColumns: ColumnNumberArray.create(0), keptReadBlocks: FuncIndexArray.create(0), sparse: SparseNotesSlot.none}
 	end 'create'
 
 	export function noteArgumentName(op ElementIndex, position ParamCount, name immutable ByteArray)
@@ -700,7 +820,7 @@ export type CapabilityNotes
 	end 'noteArgumentName'
 
 	export function holdsNothing() returns bool
-		return self.windowCallOps.isEmpty() and self.windowReceiverOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.droppedOwned.isEmpty() and self.liveLinearCallOps.isEmpty() and self.undecidedResultOps.isEmpty() and self.derivedResultValues.isEmpty() and self.resultWriteOps.isEmpty() and self.retainOps.isEmpty() and self.joinedSources.isEmpty() and self.callArgSources.isEmpty() and self.resultUses.isEmpty() and self.heldParams.isEmpty() and self.heldResultOps.isEmpty() and self.constructionOps.isEmpty() and self.keptArgOps.isEmpty()
+		return self.windowCallOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.undecidedResultOps.isEmpty() and self.derivedResultValues.isEmpty() and self.resultWriteOps.isEmpty() and self.retainOps.isEmpty() and self.joinedSources.isEmpty() and self.callArgSources.isEmpty() and self.resultUses.isEmpty() and self.heldParams.isEmpty() and self.heldResultOps.isEmpty() and self.constructionOps.isEmpty() and self.keptArgOps.isEmpty() and not self.hasSparseNotes()
 	end 'holdsNothing'
 
 	export function shiftedBy(opOffset ElementIndex) returns CapabilityNotes
@@ -710,14 +830,6 @@ export type CapabilityNotes
 			shifted.windowCallOps.push(op + opOffset)
 		end 'eachWindowCall'
 
-		for op in self.windowReceiverOps 'eachWindowReceiver'
-			shifted.windowReceiverOps.push(op + opOffset)
-		end 'eachWindowReceiver'
-
-		shifted.windowReceiverLabels = self.windowReceiverLabels.clone()
-		shifted.windowReceiverLines = self.windowReceiverLines.clone()
-		shifted.windowReceiverColumns = self.windowReceiverColumns.clone()
-
 		for op in self.argNameOps 'eachNamedCall'
 			shifted.argNameOps.push(op + opOffset)
 		end 'eachNamedCall'
@@ -725,16 +837,6 @@ export type CapabilityNotes
 		for op in self.tiedAsyncOps 'eachTiedAsync'
 			shifted.tiedAsyncOps.push(op + opOffset)
 		end 'eachTiedAsync'
-
-		for dropped in self.droppedOwned 'eachDroppedOwned'
-			shifted.droppedOwned.push(dropped.atOp(dropped.op + opOffset))
-		end 'eachDroppedOwned'
-
-		for op in self.liveLinearCallOps 'eachLiveLinearCall'
-			shifted.liveLinearCallOps.push(op + opOffset)
-		end 'eachLiveLinearCall'
-
-		shifted.liveLinearCallNames = self.liveLinearCallNames.clone()
 
 		for op in self.undecidedResultOps 'eachUndecidedResult'
 			shifted.undecidedResultOps.push(op + opOffset)
@@ -792,7 +894,6 @@ export type CapabilityNotes
 		shifted.keptArgColumns = self.keptArgColumns.clone()
 		shifted.keptArgOrigins = self.keptArgOrigins.clone()
 		shifted.keptNextLap = self.keptNextLap.clone()
-		shifted.keptByMove = self.keptByMove.clone()
 		shifted.keptReadSites = self.keptReadSites.clone()
 		shifted.keptReadLines = self.keptReadLines.clone()
 		shifted.keptReadColumns = self.keptReadColumns.clone()
@@ -810,8 +911,53 @@ export type CapabilityNotes
 			shifted.storedSlotArgs.push(stored.atOp(stored.op + opOffset))
 		end 'eachStoredSlotArg'
 
+		match self.sparse 'sparse'
+			held(notes) then shifted.sparse = SparseNotesSlot.held(notes.shiftedBy(opOffset))
+			none then break
+		end 'sparse'
+
 		return shifted
 	end 'shiftedBy'
+
+	export function hasSparseNotes() returns bool
+		return match self.sparse 'sparse'
+			held gives true
+			none gives false
+		end 'sparse'
+	end 'hasSparseNotes'
+
+	export function sparseNotes() returns SparseNotes
+		return match self.sparse 'sparse'
+			held(notes) gives notes
+			none panic("CapabilityNotes.sparseNotes: no sparse note was filed for this function — ask hasSparseNotes first")
+		end 'sparse'
+	end 'sparseNotes'
+
+	export function sparseForWrite() returns SparseNotes
+		match self.sparse 'sparse'
+			held(notes) then return notes
+			none then break
+		end 'sparse'
+
+		let created = SparseNotes.create()
+		self.sparse = SparseNotesSlot.held(created)
+
+		return created
+	end 'sparseForWrite'
+
+	export function keptArgumentIsAMove(site ElementIndex) returns bool
+		return match self.sparse 'sparse'
+			held(notes) gives notes.keptMovedSites.contains(site)
+			none gives false
+		end 'sparse'
+	end 'keptArgumentIsAMove'
+
+	export function firstWaitSite() returns WaitSite
+		return match self.sparse 'sparse'
+			held(notes) gives notes.firstWait
+			none gives WaitSite.none
+		end 'sparse'
+	end 'firstWaitSite'
 
 	export function useSiteIndex(param ParamCount, mutable bool) returns ElementIndex throws AbsentError
 		for position in 0 upto self.useSiteParams.count() 'eachSite'
@@ -851,10 +997,6 @@ export type CapabilityNotes
 		cacheWriteFuncIndexArray(writer, value: self.windowCallOps)
 		cacheWriteNameRoster(writer, value: self.windowCallLabels)
 		cacheWritePausedOperandMaskArray(writer, value: self.windowCallPausedOperands)
-		cacheWriteFuncIndexArray(writer, value: self.windowReceiverOps)
-		cacheWriteNameRoster(writer, value: self.windowReceiverLabels)
-		cacheWriteLineNumberArray(writer, value: self.windowReceiverLines)
-		cacheWriteColumnNumberArray(writer, value: self.windowReceiverColumns)
 		cacheWriteParamCountArray(writer, value: self.useSiteParams)
 		cacheWriteBoolArray(writer, value: self.useSiteMutable)
 		cacheWriteLineNumberArray(writer, value: self.useSiteLines)
@@ -865,9 +1007,6 @@ export type CapabilityNotes
 		cacheWriteCaptureSiteArray(writer, value: self.captureSites)
 		cacheWriteStoredSlotArgArray(writer, value: self.storedSlotArgs)
 		cacheWriteFuncIndexArray(writer, value: self.tiedAsyncOps)
-		cacheWriteDroppedOwnedArray(writer, value: self.droppedOwned)
-		cacheWriteFuncIndexArray(writer, value: self.liveLinearCallOps)
-		cacheWriteNameRoster(writer, value: self.liveLinearCallNames)
 		cacheWriteFuncIndexArray(writer, value: self.undecidedResultOps)
 		cacheWriteValueIdArray(writer, value: self.derivedResultValues)
 		cacheWriteFuncIndexArray(writer, value: self.derivedResultOps)
@@ -892,21 +1031,17 @@ export type CapabilityNotes
 		cacheWriteColumnNumberArray(writer, value: self.keptArgColumns)
 		cacheWriteUniqueOriginArray(writer, value: self.keptArgOrigins)
 		cacheWriteBoolArray(writer, value: self.keptNextLap)
-		cacheWriteBoolArray(writer, value: self.keptByMove)
 		cacheWriteFuncIndexArray(writer, value: self.keptReadSites)
 		cacheWriteLineNumberArray(writer, value: self.keptReadLines)
 		cacheWriteColumnNumberArray(writer, value: self.keptReadColumns)
 		cacheWriteFuncIndexArray(writer, value: self.keptReadBlocks)
+		cacheWriteSparseNotesSlot(writer, value: self.sparse)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns CapabilityNotes throws LibraryCacheDamage
 		let f_windowCallOps = try cacheReadFuncIndexArray(reader)
 		let f_windowCallLabels = try cacheReadNameRoster(reader)
 		let f_windowCallPausedOperands = try cacheReadPausedOperandMaskArray(reader)
-		let f_windowReceiverOps = try cacheReadFuncIndexArray(reader)
-		let f_windowReceiverLabels = try cacheReadNameRoster(reader)
-		let f_windowReceiverLines = try cacheReadLineNumberArray(reader)
-		let f_windowReceiverColumns = try cacheReadColumnNumberArray(reader)
 		let f_useSiteParams = try cacheReadParamCountArray(reader)
 		let f_useSiteMutable = try cacheReadBoolArray(reader)
 		let f_useSiteLines = try cacheReadLineNumberArray(reader)
@@ -917,9 +1052,6 @@ export type CapabilityNotes
 		let f_captureSites = try cacheReadCaptureSiteArray(reader)
 		let f_storedSlotArgs = try cacheReadStoredSlotArgArray(reader)
 		let f_tiedAsyncOps = try cacheReadFuncIndexArray(reader)
-		let f_droppedOwned = try cacheReadDroppedOwnedArray(reader)
-		let f_liveLinearCallOps = try cacheReadFuncIndexArray(reader)
-		let f_liveLinearCallNames = try cacheReadNameRoster(reader)
 		let f_undecidedResultOps = try cacheReadFuncIndexArray(reader)
 		let f_derivedResultValues = try cacheReadValueIdArray(reader)
 		let f_derivedResultOps = try cacheReadFuncIndexArray(reader)
@@ -944,17 +1076,17 @@ export type CapabilityNotes
 		let f_keptArgColumns = try cacheReadColumnNumberArray(reader)
 		let f_keptArgOrigins = try cacheReadUniqueOriginArray(reader)
 		let f_keptNextLap = try cacheReadBoolArray(reader)
-		let f_keptByMove = try cacheReadBoolArray(reader)
 		let f_keptReadSites = try cacheReadFuncIndexArray(reader)
 		let f_keptReadLines = try cacheReadLineNumberArray(reader)
 		let f_keptReadColumns = try cacheReadColumnNumberArray(reader)
 		let f_keptReadBlocks = try cacheReadFuncIndexArray(reader)
+		let f_sparse = try cacheReadSparseNotesSlot(reader)
 
-		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, windowReceiverOps: f_windowReceiverOps, windowReceiverLabels: f_windowReceiverLabels, windowReceiverLines: f_windowReceiverLines, windowReceiverColumns: f_windowReceiverColumns, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedOwned: f_droppedOwned, liveLinearCallOps: f_liveLinearCallOps, liveLinearCallNames: f_liveLinearCallNames, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps, keptArgOps: f_keptArgOps, keptArgPositions: f_keptArgPositions, keptArgNames: f_keptArgNames, keptArgLines: f_keptArgLines, keptArgColumns: f_keptArgColumns, keptArgOrigins: f_keptArgOrigins, keptNextLap: f_keptNextLap, keptByMove: f_keptByMove, keptReadSites: f_keptReadSites, keptReadLines: f_keptReadLines, keptReadColumns: f_keptReadColumns, keptReadBlocks: f_keptReadBlocks}
+		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps, keptArgOps: f_keptArgOps, keptArgPositions: f_keptArgPositions, keptArgNames: f_keptArgNames, keptArgLines: f_keptArgLines, keptArgColumns: f_keptArgColumns, keptArgOrigins: f_keptArgOrigins, keptNextLap: f_keptNextLap, keptReadSites: f_keptReadSites, keptReadLines: f_keptReadLines, keptReadColumns: f_keptReadColumns, keptReadBlocks: f_keptReadBlocks, sparse: f_sparse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize392
-		return sizeof(CapabilityNotes) as CacheSize392
+	static function cacheLayoutBytes() returns CacheSize336
+		return sizeof(CapabilityNotes) as CacheSize336
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

@@ -387,18 +387,6 @@ export type SharedLibraryParse
 		return self.key
 	end 'keyOf'
 
-	export function cloned() returns SharedLibraryParse
-		return Self{variant: self.variant, key: self.key, footprint: self.footprint.clone(), artifact: self.artifact.clone()}
-	end 'cloned'
-
-	export function workingArtifact(consuming bool) returns FileParseArtifact
-		if consuming 'handedOver'
-			return self.artifact
-		end 'handedOver'
-
-		return self.artifact.clone()
-	end 'workingArtifact'
-
 	module function checkedAgainst(signatures ProgramSignatures, overrides RowSetOverrideTable) returns ParseRebaseCheck throws SharedMemoMiss
 		let rebase = (try signatures.rebaseFor(self.footprint)).clone()
 
@@ -440,7 +428,7 @@ export type SharedLibraryParse
 	end 'variantOf'
 end 'SharedLibraryParse'
 
-export typealias PendingSharedParseMap = Map with (HashDigest, SharedLibraryParse)
+export typealias PendingSharedParseMap = Map with (HashDigest, immutable SharedLibraryParse)
 
 export typealias StashedParsePackMap = Map with (HashDigest, LibraryPackBuilder)
 

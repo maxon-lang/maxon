@@ -1801,7 +1801,7 @@ export union WaitSite
 end 'WaitSite'
 
 // @generated library-cache begin
-function cacheWriteWaitSite(writer LibraryCacheWriter, value WaitSite)
+export function cacheWriteWaitSite(writer LibraryCacheWriter, value WaitSite)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
@@ -1844,7 +1844,7 @@ function cacheWriteWaitSiteRuntimePark(writer LibraryCacheWriter, a0 ElementInde
 	writer.unsigned(a0 as CacheUnsigned)
 end 'cacheWriteWaitSiteRuntimePark'
 
-function cacheReadWaitSite(reader LibraryCacheReader) returns WaitSite throws LibraryCacheDamage
+export function cacheReadWaitSite(reader LibraryCacheReader) returns WaitSite throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
@@ -2186,7 +2186,6 @@ export type IrFunction
 	export var resultMayBeUnknown as bool
 	export var mayWaitSeed as bool
 	export var mayYieldSeed as bool
-	export var firstWaitSite as WaitSite
 
 	export var brandOriginValues as ValueIdArray
 	export var brandOriginKeys as NameRoster
@@ -2379,7 +2378,6 @@ export type IrFunction
 			resultMayBeUnknown: false,
 			mayWaitSeed: false,
 			mayYieldSeed: false,
-			firstWaitSite: WaitSite.none,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
 			bodyStatus: BodyStatus.parsed,
@@ -2477,7 +2475,6 @@ export type IrFunction
 			resultMayBeUnknown: false,
 			mayWaitSeed: false,
 			mayYieldSeed: false,
-			firstWaitSite: WaitSite.none,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
 			bodyStatus: BodyStatus.parsed,
@@ -2566,7 +2563,6 @@ export type IrFunction
 			resultMayBeUnknown: src.resultMayBeUnknown,
 			mayWaitSeed: src.mayWaitSeed,
 			mayYieldSeed: src.mayYieldSeed,
-			firstWaitSite: src.firstWaitSite,
 			brandOriginValues: src.brandOriginValues,
 			brandOriginKeys: src.brandOriginKeys,
 			bodyStatus: src.bodyStatus,
@@ -2765,20 +2761,7 @@ export type IrFunction
 		self.closureStoreSites.push(site)
 	end 'noteClosureStoreSite'
 
-	export function noteFirstWaitSite(site WaitSite)
-		match self.firstWaitSite 'held'
-			none then self.firstWaitSite = site
-			replyAwait or
-			unknownOriginAwait or
-			selectAwait or
-			timedSend or
-			acquire or
-			startAwait or
-			runtimePark then break
-		end 'held'
-	end 'noteFirstWaitSite'
-
-	export function releaseMaxonTierData(emptyScope Scope)
+	export function releaseMaxonTierData(emptyScope Scope, emptyNotes CapabilityNotes)
 		// ⛔ `maxonReturnType` is NOT released, and it is the one field here that may not be.
 		// `irFunctionUsesSecondaryReturnSlot` reads it for wasm's `funcSignatureResultValTypes`, which runs in
 		// the BACKEND — so a released reading of `void` declares a functype with one result for a body that
@@ -2789,7 +2772,8 @@ export type IrFunction
 		self.valueNameIds = TypeNameIdArray.create(0)
 		self.valueBrandIds = TypeNameIdArray.create(0)
 		self.valueCapabilities = ValueCapabilityArray.create(0)
-		self.capabilityNotes = CapabilityNotes.create()
+		// One instance shared by every function: a note written to it after this lands in all of them.
+		self.capabilityNotes = emptyNotes
 		self.valueMintedSole = BoolArray.create(0)
 		self.valueWitnessIds = ValueIdArray.create(0)
 		self.valueExistentialInstances = ValueExistentialInstanceMap.create()
@@ -2865,7 +2849,6 @@ export type IrFunction
 		writer.flag(self.resultMayBeUnknown)
 		writer.flag(self.mayWaitSeed)
 		writer.flag(self.mayYieldSeed)
-		cacheWriteWaitSite(writer, value: self.firstWaitSite)
 		cacheWriteValueIdArray(writer, value: self.brandOriginValues)
 		cacheWriteNameRoster(writer, value: self.brandOriginKeys)
 		writer.unsigned(self.bodyStatus.ordinal as CacheUnsigned)
@@ -2938,7 +2921,6 @@ export type IrFunction
 		let f_resultMayBeUnknown = try reader.flag()
 		let f_mayWaitSeed = try reader.flag()
 		let f_mayYieldSeed = try reader.flag()
-		let f_firstWaitSite = try cacheReadWaitSite(reader)
 		let f_brandOriginValues = try cacheReadValueIdArray(reader)
 		let f_brandOriginKeys = try cacheReadNameRoster(reader)
 		let f_bodyStatus = try cacheReadBodyStatus(reader)
@@ -2956,11 +2938,11 @@ export type IrFunction
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 		let f_debugLocalSpans = try DebugSpanRows.cacheRead(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, firstWaitSite: f_firstWaitSite, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize568
-		return sizeof(IrFunction) as CacheSize568
+	static function cacheLayoutBytes() returns CacheSize560
+		return sizeof(IrFunction) as CacheSize560
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

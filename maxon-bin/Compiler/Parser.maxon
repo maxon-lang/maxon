@@ -48774,7 +48774,7 @@ export type Parser
 	end 'noteDroppedLinear'
 
 	function noteDroppedOwned(kind DroppedOwnedKind, op ElementIndex, name immutable ByteArray)
-		self.notesForWrite(self.bodyFunction()).droppedOwned.push(DroppedOwned.create(op, name: name, kind: kind))
+		self.notesForWrite(self.bodyFunction()).sparseForWrite().droppedOwned.push(DroppedOwned.create(op, name: name, kind: kind))
 	end 'noteDroppedOwned'
 
 	function noteLinearLiveAcrossOp(opIdx ElementIndex)
@@ -48794,7 +48794,7 @@ export type Parser
 	end 'noteLinearLiveAcrossOp'
 
 	function recordLinearLiveAt(opIdx ElementIndex, name ByteArray)
-		let notes = self.notesForWrite(self.bodyFunction())
+		let notes = self.notesForWrite(self.bodyFunction()).sparseForWrite()
 		notes.liveLinearCallOps.push(opIdx)
 		notes.liveLinearCallNames.push(name)
 	end 'recordLinearLiveAt'
@@ -64370,7 +64370,6 @@ export type Parser
 		notes.keptArgColumns.push(anchorTok.column)
 		notes.keptArgOrigins.push(origin)
 		notes.keptNextLap.push(false)
-		notes.keptByMove.push(false)
 	end 'fileLentKeptArgument'
 
 	function keptArgumentTokenAt(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg, anchor Token) returns Token throws AbsentError
@@ -64398,7 +64397,6 @@ export type Parser
 		notes.keptArgColumns.push(anchor.column)
 		notes.keptArgOrigins.push(UniqueOrigin.owned)
 		notes.keptNextLap.push(self.moveOfValueEscapesLoop(argValue) and not self.valueIsCarried(argValue))
-		notes.keptByMove.push(false)
 
 		for later in (position + 1) upto argAnchors.count() 'eachLaterArgument'
 			self.fileReadsInArgument(notes, site: site, value: argValue, holder: holder, argStart: try argAnchors.get(later) otherwise panic("fileKeptArgumentSite: argAnchors.get OOB at {later} below its own count"))
@@ -64474,7 +64472,7 @@ export type Parser
 		notes.keptArgColumns.push(anchorTok.column)
 		notes.keptArgOrigins.push(UniqueOrigin.owned)
 		notes.keptNextLap.push(false)
-		notes.keptByMove.push(true)
+		notes.sparseForWrite().keptMovedSites.push(site)
 		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: value, holder: holder))
 	end 'fileMovedLentUniqueSite'
 
@@ -92643,7 +92641,7 @@ export type Parser
 		end 'site'
 
 		func.mayWaitSeed = true
-		func.noteFirstWaitSite(site)
+		self.notesForWrite(func).sparseForWrite().noteFirstWaitSite(site)
 	end 'noteWaitSeed'
 
 	function noteRuntimeParkSeed()
@@ -103094,7 +103092,7 @@ export type Parser
 	end 'fileWindowReceiverMove'
 
 	function noteWindowReceiverMove(opIdx ElementIndex, line LineNumber, column ColumnNumber, label immutable ByteArray)
-		let notes = self.notesForWrite(self.bodyFunction())
+		let notes = self.notesForWrite(self.bodyFunction()).sparseForWrite()
 		notes.windowReceiverOps.push(opIdx)
 		notes.windowReceiverLabels.push(label)
 		notes.windowReceiverLines.push(line)

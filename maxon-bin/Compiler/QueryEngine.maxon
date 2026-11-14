@@ -508,7 +508,16 @@ function sharedParseFor(project Project, contentHash HashDigest, variant HashDig
 		end 'alreadyShared'
 	end 'fileShared'
 
-	let shared = freeze (try decodedParseFor(project, contentHash: contentHash, variant: variant, key: key, libraryHash: libraryHash)).clone()
+	let found = try parseSectionIn(project, contentHash: contentHash, variant: variant, key: key, libraryHash: libraryHash)
+	let image = found.section.image
+	let start = found.section.start
+	let endIndex = found.section.endIndex
+
+	let shared = freeze try decodedParseSection(image, start: start, endIndex: endIndex, variant: variant, key: key) otherwise (damage) 'damaged'
+		project.session.fileMemos.library.rejectDecoded(project.target, name: found.packName, damage: damage, tally: project.db.libraryTally)
+		throw SharedMemoMiss.notHeld
+	end 'damaged'
+
 	publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: shared, entryClass: project.session.fileMemos.library.entryClassOf(project)))
 
 	return shared
@@ -522,14 +531,31 @@ function parsesPackName(project Project, libraryHash HashDigest) returns String 
 	return libraryEntryName(LibraryEntryKind.parses, entryClass: entryClass, parts: [state, libraryHash])
 end 'parsesPackName'
 
-function decodedParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws SharedMemoMiss
-	let library = project.session.fileMemos.library
-	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise throw SharedMemoMiss.notHeld
-	let pack = try library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise throw SharedMemoMiss.notHeld
-	let reader = try pack.section(contentHash, second: variant, third: key) otherwise throw SharedMemoMiss.notHeld
+type ParseSectionInPack
+	export let packName as String
+	export let section as PackSection
 
-	return try decodedParseSection(reader, variant: variant, key: key) otherwise (damage) 'damaged'
-		library.rejectDecoded(project.target, name: name, damage: damage, tally: project.db.libraryTally)
+	static function create(packName String, section PackSection) returns ParseSectionInPack
+		return Self{packName: packName, section: section}
+	end 'create'
+end 'ParseSectionInPack'
+
+function parseSectionIn(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns ParseSectionInPack throws SharedMemoMiss
+	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise throw SharedMemoMiss.notHeld
+	let pack = try project.session.fileMemos.library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise throw SharedMemoMiss.notHeld
+	let section = try pack.sectionSpan(contentHash, second: variant, third: key) otherwise throw SharedMemoMiss.notHeld
+
+	return ParseSectionInPack.create(name, section: section)
+end 'parseSectionIn'
+
+function decodedParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws SharedMemoMiss
+	let found = try parseSectionIn(project, contentHash: contentHash, variant: variant, key: key, libraryHash: libraryHash)
+	let image = found.section.image
+	let start = found.section.start
+	let endIndex = found.section.endIndex
+
+	return try decodedParseSection(image, start: start, endIndex: endIndex, variant: variant, key: key) otherwise (damage) 'damaged'
+		project.session.fileMemos.library.rejectDecoded(project.target, name: found.packName, damage: damage, tally: project.db.libraryTally)
 		throw SharedMemoMiss.notHeld
 	end 'damaged'
 end 'decodedParseFor'
@@ -609,6 +635,10 @@ export function stashParse(project Project, plan SharedParsePlan, artifact FileP
 	end 'plan'
 end 'stashParse'
 
+// The compile goes on with the decoded copy, not the parse it built, so a compile that writes the
+// cache and one that reads it work from the same canonical objects and emit the same bytes
+// (`tests/cli/library-cache-warm-build-is-byte-identical`). `LibraryBaseline.persistedBaseline`
+// does the same for the baseline.
 function stashShareableParse(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, artifact FileParseArtifact) returns FileParseArtifact
 	if artifact.refusesAnything() 'carriesFaults'
 		return artifact
@@ -620,26 +650,33 @@ function stashShareableParse(project Project, contentHash HashDigest, variant Ha
 
 	let retains = project.session.fileMemos.library.retainsWhatItLoads()
 
-	let canonical = try persistedCanonicalParse(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
+	let payload = try persistedParsePayload(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
 		if retains 'aLaterCompileMayAsk'
-			project.db.pendingSharedParses.upsert(contentHash, value: held.cloned())
+			project.db.pendingSharedParses.upsert(contentHash, value: freeze held.clone())
 		end 'aLaterCompileMayAsk'
 
 		return artifact
 	end 'notPersistable'
 
 	if retains 'aLaterCompileMayAsk'
-		project.db.pendingSharedParses.upsert(contentHash, value: canonical)
+		let stored = freeze try decodedParseSection(payload, start: 0, endIndex: payload.count(), variant: held.variantOf(), key: held.keyOf()) otherwise (damage) 'undecodableForTheStore'
+			panic("stashShareableParse: the section just encoded for {contentHash} does not decode: {damage.displayReason()}")
+		end 'undecodableForTheStore'
+
+		let working = stored.artifact.clone()
+		project.db.pendingSharedParses.upsert(contentHash, value: stored)
+
+		return working
 	end 'aLaterCompileMayAsk'
 
-	return canonical.workingArtifact(not retains)
+	let canonical = try decodedParseSection(payload, start: 0, endIndex: payload.count(), variant: held.variantOf(), key: held.keyOf()) otherwise (damage) 'undecodableForTheCompile'
+		panic("stashShareableParse: the section just encoded for {contentHash} does not decode: {damage.displayReason()}")
+	end 'undecodableForTheCompile'
+
+	return canonical.artifact
 end 'stashShareableParse'
 
-// The compile goes on with the decoded copy, not the parse it built, so a compile that writes the
-// cache and one that reads it work from the same canonical objects and emit the same bytes
-// (`tests/cli/library-cache-warm-build-is-byte-identical`). `LibraryBaseline.persistedBaseline`
-// does the same for the baseline.
-function persistedCanonicalParse(project Project, held SharedLibraryParse, contentHash HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws LibraryEntryMiss
+function persistedParsePayload(project Project, held SharedLibraryParse, contentHash HashDigest, libraryHash HashDigest) returns immutable ByteArray throws LibraryEntryMiss
 	let library = project.session.fileMemos.library
 
 	if not library.persistsFor(project) 'noDiskTier'
@@ -651,10 +688,8 @@ function persistedCanonicalParse(project Project, held SharedLibraryParse, conte
 	pack.add(contentHash, second: held.variantOf(), third: held.keyOf(), payload: payload)
 	project.db.stashedParsePacks.upsert(libraryHash, value: pack)
 
-	return try decodedParseSection(LibraryCacheReader.over(payload, start: 0, endIndex: payload.count()), variant: held.variantOf(), key: held.keyOf()) otherwise (damage) 'undecodable'
-		panic("persistedCanonicalParse: the section just encoded for {contentHash} does not decode: {damage.displayReason()}")
-	end 'undecodable'
-end 'persistedCanonicalParse'
+	return payload
+end 'persistedParsePayload'
 
 export function publishStandingParses(project Project)
 	let pending = project.db.pendingSharedParses
@@ -664,7 +699,7 @@ export function publishStandingParses(project Project)
 	project.db.pendingSharedParses = PendingSharedParseMap.create()
 
 	for (contentHash, standing) in pending 'eachPending'
-		publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: freeze standing.clone(), entryClass: entryClass))
+		publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: standing, entryClass: entryClass))
 		published = published + 1
 	end 'eachPending'
 

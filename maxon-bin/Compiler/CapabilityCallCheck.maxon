@@ -741,7 +741,11 @@ function tiedPromiseUseIsHarmless(op MaxonOp) returns bool
 end 'tiedPromiseUseIsHarmless'
 
 function checkNoOwnedValueIsDropped(project Project, module MaxonModule, func IrFunction, owners TiedCarrierMap)
-	for dropped in func.capabilityNotes.droppedOwned 'eachDrop'
+	if not func.capabilityNotes.hasSparseNotes() 'nothingDropped'
+		return
+	end 'nothingDropped'
+
+	for dropped in func.capabilityNotes.sparseNotes().droppedOwned 'eachDrop'
 		let range = project.opRanges.get(dropped.op)
 		let filePath = authoredFileOf(project, func: func, opIndex: dropped.op)
 		let name = displayParamName(dropped.name)
@@ -774,7 +778,11 @@ function droppedLinearMessage(name String) returns String
 end 'droppedLinearMessage'
 
 function checkNoLinearIsLiveAcrossAWait(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
-	let notes = func.capabilityNotes
+	if not func.capabilityNotes.hasSparseNotes() 'nothingLive'
+		return
+	end 'nothingLive'
+
+	let notes = func.capabilityNotes.sparseNotes()
 
 	for position in 0 upto notes.liveLinearCallOps.count() 'eachCandidate'
 		let opIdx = try notes.liveLinearCallOps.get(position) otherwise panic("checkNoLinearIsLiveAcrossAWait: liveLinearCallOps.get OOB at {position}")
@@ -1228,7 +1236,7 @@ function awaitSiteDescription(project Project, module MaxonModule, func IrFuncti
 end 'awaitSiteDescription'
 
 function waitSiteReason(project Project, module MaxonModule, func IrFunction) returns String
-	match func.firstWaitSite 'site'
+	match func.capabilityNotes.firstWaitSite() 'site'
 		none then panic("waitSiteReason: '{String.from(func.name)}' is a wait seed whose body is readable, yet it recorded no wait site")
 		replyAwait(opIdx) then return awaitSiteDescription(project, module: module, func: func, opIdx: opIdx)
 		unknownOriginAwait(opIdx) then return "awaits a promise whose coroutine it cannot see, at line {project.opRanges.get(opIdx).line}"
@@ -1298,7 +1306,7 @@ function serviceHolderNounOf(signatures ProgramSignatures, func IrFunction) retu
 end 'serviceHolderNounOf'
 
 function waitCureOf(leaf IrFunction) returns String
-	return match leaf.firstWaitSite 'site'
+	return match leaf.capabilityNotes.firstWaitSite() 'site'
 		replyAwait gives "; send the request with this service's handle and handle the reply in another message"
 		timedSend gives "; send with `sendTimeout: 0`, which fails `mailboxFull` instead of waiting"
 		runtimePark gives "; call it from `main`, which holds no service"
@@ -1471,7 +1479,11 @@ function checkNoWaitInsideWindows(project Project, module MaxonModule, funcNames
 end 'checkNoWaitInsideWindows'
 
 function checkWindowReceiversKeepNothing(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
-	let notes = func.capabilityNotes
+	if not func.capabilityNotes.hasSparseNotes() 'nothingMoved'
+		return
+	end 'nothingMoved'
+
+	let notes = func.capabilityNotes.sparseNotes()
 
 	for site in 0 upto notes.windowReceiverOps.count() 'eachWindowReceiver'
 		let opIdx = try notes.windowReceiverOps.get(site) otherwise panic("checkWindowReceiversKeepNothing: windowReceiverOps.get OOB at {site} below its own count")

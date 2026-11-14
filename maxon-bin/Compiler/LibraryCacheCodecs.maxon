@@ -84,6 +84,15 @@ module function decodedManifest(reader LibraryCacheReader, key HashDigest) retur
 	return LibraryManifest.create(deferred, streamed: streamed, templates: templates)
 end 'decodedManifest'
 
+module function decodedHeldBaseline(image immutable ByteArray, start ElementIndex, endIndex ElementIndex, key HashDigest, kind LibraryEntryKind, entryClass LibraryEntryClass) returns HeldBaseline throws LibraryCacheDamage
+	let reader = LibraryCacheReader.over(image, start: start, endIndex: endIndex)
+	let manifest = try decodedManifest(reader, key: key)
+	let signatures = try decodedSignatures(reader)
+	signatures.releaseTypeNameViews()
+
+	return HeldBaseline.create(key, kind: kind, entryClass: entryClass, declarations: LibraryDeclarations.create(signatures, manifest: manifest))
+end 'decodedHeldBaseline'
+
 module function decodedSignatures(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
 	let signatures = try ProgramSignatures.cacheRead(reader)
 	try reader.finished()
@@ -103,7 +112,8 @@ module function encodedParseSection(held SharedLibraryParse) returns immutable B
 	return writer.payload()
 end 'encodedParseSection'
 
-module function decodedParseSection(reader LibraryCacheReader, variant HashDigest, key HashDigest) returns SharedLibraryParse throws LibraryCacheDamage
+module function decodedParseSection(image immutable ByteArray, start ElementIndex, endIndex ElementIndex, variant HashDigest, key HashDigest) returns SharedLibraryParse throws LibraryCacheDamage
+	let reader = LibraryCacheReader.over(image, start: start, endIndex: endIndex)
 	let held = try cacheReadSharedLibraryParse(reader, variant: variant, key: key)
 	try reader.finished()
 
