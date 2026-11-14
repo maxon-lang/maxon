@@ -447,7 +447,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:16:3: 'clear' needs a writable receiver at line 316; 'pending' is read-only while 'drain' is open
+error E3207: <fragment>:16:3: 'clear' needs a writable receiver at line 306; 'pending' is read-only while 'drain' is open
 ```
 
 <!-- test: a-mutable-isolated-parameter-aliased-by-a-let-is-refused -->

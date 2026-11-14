@@ -275,7 +275,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "%NUMBER_OF_PROCESSORS%")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let one = "1"

@@ -1228,3 +1228,81 @@ empty=false
 path='/'
 empty=false
 ```
+
+<!-- test: filepath-starts-with-follows-the-hosts-case-rule -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let path = FilePath from "C:\\Work\\Proj\\main.maxon"
+		let sameCase = FilePath from "C:\\Work"
+		let driveOnly = FilePath from "c:\\Work"
+		let lowerRoot = FilePath from "c:\\work"
+		let upperDirectory = FilePath from "C:\\WORK\\PROJ"
+		let partialComponent = FilePath from "c:\\wor"
+	#else
+		let path = FilePath from "/Work/Proj/main.maxon"
+		let sameCase = FilePath from "/Work"
+		let driveOnly = FilePath from "/work"
+		let lowerRoot = FilePath from "/work"
+		let upperDirectory = FilePath from "/WORK/PROJ"
+		let partialComponent = FilePath from "/wor"
+	#endif
+
+	print("{path.startsWith(sameCase)}\n")
+	print("{path.startsWith(driveOnly)}\n")
+	print("{path.startsWith(lowerRoot)}\n")
+	print("{path.startsWith(upperDirectory)}\n")
+	print("{path.startsWith(partialComponent)}\n")
+	print("{path.startsWith(path)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+true
+true
+true
+true
+false
+true
+```
+```stdout
+true
+false
+false
+false
+false
+true
+```
+
+<!-- test: filepath-relative-to-follows-the-hosts-case-rule -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let path = FilePath from "C:\\Work\\Proj\\Sub\\main.maxon"
+		let base = FilePath from "c:\\work\\proj\\"
+	#else
+		let path = FilePath from "/Work/Proj/Sub/main.maxon"
+		let base = FilePath from "/work/proj/"
+	#endif
+
+	let relative = try path.relativeTo(base) otherwise 'outside'
+		print("outside\n")
+		return 0
+	end 'outside'
+
+	print("[{relative}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[Sub\main.maxon]
+```
+```stdout
+outside
+```

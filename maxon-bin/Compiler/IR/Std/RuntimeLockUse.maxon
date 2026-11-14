@@ -62,11 +62,6 @@ function widenLockSet(sets LockSetArray, position ElementIndex, by LockSet) retu
 	return true
 end 'widenLockSet'
 
-function blockAtIndex(module StdModule, func IrFunction, index ElementIndex) returns IrBlock
-	let ref = try func.blockRefs.get(index) otherwise panic("blockAtIndex: blockRefs.get OOB at {index}")
-	return module.getBlock(ref)
-end 'blockAtIndex'
-
 function valueLabelsOf(module StdModule, ops OpIndexArray) returns ValueLabelMap
 	let labels = ValueLabelMap.create()
 
@@ -344,7 +339,7 @@ type HeldLockCheck
 		let positionById = BlockPositionById.create()
 
 		for index in 0 upto blockCount 'eachBlock'
-			positionById.upsert(blockAtIndex(module, func: func, index: index).id, value: index)
+			positionById.upsert(module.blockAtPosition(func, position: index).id, value: index)
 		end 'eachBlock'
 
 		let contract = try self.requires.get(position) otherwise panic("HeldLockCheck.walk: requires.get OOB at {position}")
@@ -365,7 +360,7 @@ type HeldLockCheck
 
 		while work.count() > 0 'eachPending'
 			let at = try work.pop() otherwise panic("HeldLockCheck.walk: pop from a non-empty worklist")
-			let block = blockAtIndex(module, func: func, index: at)
+			let block = module.blockAtPosition(func, position: at)
 			let enteringMay = try mayAtEntry.get(at) otherwise panic("HeldLockCheck.walk: mayAtEntry.get OOB at {at}")
 			let enteringMust = try mustAtEntry.get(at) otherwise panic("HeldLockCheck.walk: mustAtEntry.get OOB at {at}")
 

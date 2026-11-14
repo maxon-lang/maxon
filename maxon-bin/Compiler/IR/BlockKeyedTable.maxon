@@ -111,8 +111,9 @@ export type BlockKeyedTable uses Value
 
 	// Record `value` for block `id`.
 	//
-	// ⚠ Re-placing an id OVERWRITES rather than refusing, and NO CALLER DEPENDS ON THAT — every one of
-	// the seventeen `place` sites writes each id exactly once. The encoders walk `func.blockRefs`,
+	// ⚠ Re-placing an id OVERWRITES rather than refusing, and `Parser.blockById` depends on that: a ternary
+	// moves its arms' blocks past the condition's, and the body's index re-places each moved id. Every
+	// other caller writes each id exactly once. The encoders walk `func.blockRefs`,
 	// whose ids are unique because `IrModule.addBlock` mints them from a per-function counter; the
 	// hand-assembled runtime chunks mint each label from `X64RuntimeAsm.newLabel` into a table created
 	// fresh per chunk, so a label CONSTANT like `ShimDoneLabel` is reused ACROSS chunks and never twice
@@ -120,7 +121,7 @@ export type BlockKeyedTable uses Value
 	// branch to the first block at the second, exactly the failure
 	// `TargetLiveness.buildFuncTopology` asserts against at length. That assertion runs only on the
 	// NATIVE path: wasm and the front end reach this table without it. Refusing a re-place here would
-	// close that gap for all three users, and is a contract change rather than a comment.
+	// break the parser's index, so closing that gap is a contract change rather than a comment.
 	export function place(id BlockId, value Value)
 		let needed = id + 1
 		self.present.growFilled(needed as ElementIndex, value: false)

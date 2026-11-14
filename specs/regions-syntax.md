@@ -449,6 +449,34 @@ end 'main'
 error E2010: <fragment>:18:2: Expected newline but got 'eat'
 ```
 
+<!-- test: as-isolated-inside-a-call-argument-of-an-initializer-refused -->
+`as isolated` ends a `let` or `var` initializer; inside the call argument of one, with a `let` around it, it is refused as it is in a call statement.
+
+```maxon
+typealias Tally = int(0 to 9)
+
+type Payload
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+function take(p isolated Payload) returns Tally
+	return p.n
+end 'take'
+
+function main() returns ExitCode
+	let k = take(Payload.create(1) as isolated Payload)
+	print("{k}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:17:52: Expected newline but got ')'
+```
+
 <!-- test: mutable-tuple-item-refused -->
 A tuple item is `immutable` or unmarked.
 

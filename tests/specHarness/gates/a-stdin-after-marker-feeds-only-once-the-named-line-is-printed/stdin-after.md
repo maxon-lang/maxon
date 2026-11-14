@@ -28,13 +28,12 @@ type Reader
 	end 'create'
 
 	export function read() returns Integer
-		let heard = try Console.stdin().readLine() otherwise LineRead.ended
+		let heard = try Console.stdin().readLine() otherwise LineOrEnd.ended
 		print("fed\n")
 
 		return match heard 'measured'
 			line(text) gives text.count()
-			ended or
-				pastTheCap gives 0
+			ended gives 0
 		end 'measured'
 	end 'read'
 end 'Reader'

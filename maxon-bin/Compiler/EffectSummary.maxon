@@ -160,7 +160,7 @@ module function noteMergeEdges(module MaxonModule, func IrFunction, into MergeEd
 	let positions = OptionalElementIndexColumn.absent(func.nextBlockId)
 
 	for position in 0 upto func.blockRefs.count() 'indexBlocks'
-		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("noteMergeEdges: blockRefs.get OOB at {position}")) otherwise panic("noteMergeEdges: blockRef at {position} not in module.blocks")
+		let block = module.blockAtPosition(func, position: position)
 		positions.set(block.id, value: position)
 	end 'indexBlocks'
 
@@ -169,7 +169,7 @@ module function noteMergeEdges(module MaxonModule, func IrFunction, into MergeEd
 
 		for edge in block.branchEdges 'eachEdge'
 			let targetPosition = try positions.get(edge.targetBlockId) otherwise panic("noteMergeEdges: branch edge names block {edge.targetBlockId}, which '{String.from(func.name)}' does not hold")
-			let target = try module.blocks.get(try func.blockRefs.get(targetPosition) otherwise panic("noteMergeEdges: blockRefs.get OOB at {targetPosition}")) otherwise panic("noteMergeEdges: blockRef at {targetPosition} not in module.blocks")
+			let target = module.blockAtPosition(func, position: targetPosition)
 
 			for index in 0 upto edge.argIds.count() 'eachBlockArg'
 				let phi = (try target.blockArgs.get(index) otherwise panic("noteMergeEdges: block {target.id} takes fewer arguments than the edge passes")).valueId

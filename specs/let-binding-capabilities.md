@@ -2323,7 +2323,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let holder = Holder.create(Attrs.create(5) as isolated Attrs)
+	let fresh = Attrs.create(5) as isolated Attrs
+	let holder = Holder.create(fresh)
 	return holder.read() as ExitCode
 end 'main'
 ```

@@ -126,6 +126,16 @@ union GdbStubEnding
 	forced
 end 'GdbStubEnding'
 
+union GdbDetachProbe
+	held
+	ended
+	unanswered
+end 'GdbDetachProbe'
+
+enum GdbThreadError implements Error
+	notHex
+end 'GdbThreadError'
+
 union GdbExpedited
 	none
 	from(stop GdbStopReport)
@@ -493,12 +503,12 @@ export type GdbRemoteBackend
 	end 'listThreads'
 
 	export function stoppedThread() returns BackendThreadId
-		return self.threadIdOf(self.reporter)
+		return try self.threadIdOf(self.reporter) otherwise panic("GdbRemoteBackend.stoppedThread: the reporter is set only from a stop reply, and gdbStopReportOf refuses a reply whose thread is not hex, so a thread that stopped has a hex name")
 	end 'stoppedThread'
 
-	function threadIdOf(spelled String) returns BackendThreadId
+	function threadIdOf(spelled String) returns BackendThreadId throws GdbThreadError
 		match gdbHexValueOf(spelled) 'read'
-			notHex then return 0
+			notHex then throw GdbThreadError.notHex
 			value(id) then return id as BackendThreadId
 		end 'read'
 	end 'threadIdOf'
@@ -625,7 +635,7 @@ export type GdbRemoteBackend
 	function queuedFromStopInfoText(text String)
 		let doc = try Json.parse(text) otherwise return
 		let count = try doc.arrayLength(doc.root) otherwise return
-		let reportingThread = self.threadIdOf(self.reporter)
+		let reportingThread = self.stoppedThread()
 
 		for index in 0 upto count 'eachStoppedThread'
 			let entry = try doc.arrayAt(doc.root, index: index as ElementIndex) otherwise continue
@@ -660,7 +670,9 @@ export type GdbRemoteBackend
 
 	function reportedProgramCounterOf(thread BackendThreadId) returns GdbThreadCounter
 		for (iter, spelled) in self.lastStop.threads.withIterator() 'eachThread'
-			if self.threadIdOf(spelled) != thread 'anotherThread'
+			let named = try self.threadIdOf(spelled) otherwise continue
+
+			if named != thread 'anotherThread'
 				continue
 			end 'anotherThread'
 
@@ -726,7 +738,7 @@ export type GdbRemoteBackend
 			return
 		end 'notATrapOfItsOwn'
 
-		let thread = self.threadIdOf(spelled)
+		let thread = try self.threadIdOf(spelled) otherwise panic("GdbRemoteBackend.queuedFromStopReport: {spelled} equals the thread of a stop report, and gdbStopReportOf refuses a report whose thread is not hex")
 
 		if self.withheldQueueHolds(thread) 'itIsAlreadyQueued'
 			return
@@ -805,7 +817,13 @@ export type GdbRemoteBackend
 		let kept = StringArray.create(self.threads.count(), zeroed: false)
 
 		for known in self.threads 'eachKnown'
-			if self.threadIdOf(known) != departed 'anotherThread'
+			let named = try self.threadIdOf(known) otherwise 'unnumbered'
+				kept.push(known)
+
+				continue
+			end 'unnumbered'
+
+			if named != departed 'anotherThread'
 				kept.push(known)
 			end 'anotherThread'
 		end 'eachKnown'
@@ -1048,10 +1066,17 @@ export type GdbRemoteBackend
 	end 'retireStopRequest'
 
 	export function beginDetach() returns BackendDetach
+		// Probed before `D`: debugserver resumes the program before PT_DETACH, so a pending SIGKILL
+		// can kill it first, leaving a zombie launchd never reaps and its exit status lost.
+		match self.probedForAnEnd() 'probe'
+			held then break
+			unanswered then return BackendDetach.refused
+			ended then return self.acknowledgedForAnEndedProgram()
+		end 'probe'
+
 		self.stopOutstanding = false
 		self.stopRequested = false
-		self.stepping.clear()
-		self.dropTheWithheldQueue()
+		self.forgetStopsOwed()
 
 		// A detach retried after the stub already answered one: a second `D` can hang debugserver.
 		if self.stubLetGo 'alreadyAcknowledged'
@@ -1066,6 +1091,86 @@ export type GdbRemoteBackend
 
 		return BackendDetach.awaiting
 	end 'beginDetach'
+
+	function probedForAnEnd() returns GdbDetachProbe
+		if self.stubLetGo 'alreadyLetGo'
+			return GdbDetachProbe.held
+		end 'alreadyLetGo'
+
+		if self.standingStopNeedsNoProbe() 'theStandingStopNeedsNoProbe'
+			return GdbDetachProbe.held
+		end 'theStandingStopNeedsNoProbe'
+
+		if not self.stopOutstanding 'noStopIsStanding'
+			if self.stepping.outstanding().count() == 0 'noStepIsInFlight'
+				return GdbDetachProbe.held
+			end 'noStepIsInFlight'
+
+			return self.drainedAnUnansweredStep()
+		end 'noStopIsStanding'
+
+		self.forgetStopsOwed()
+
+		if not self.stepThread(self.stoppedThread(), others: BackendOtherThreads.hold) 'theStubRefused'
+			return GdbDetachProbe.unanswered
+		end 'theStubRefused'
+
+		match self.probeAnswer() 'answer'
+			unanswered then return self.drainedAnUnansweredStep()
+			held then return GdbDetachProbe.held
+			ended then return GdbDetachProbe.ended
+		end 'answer'
+	end 'probedForAnEnd'
+
+	function standingStopNeedsNoProbe() returns bool
+		// The stub's own SIGSTOP halt takes debugserver's no-resume detach; a probe moves it onto
+		// the resume-and-SIGSTOP path, which can lose its exception-thread cancel and hang `D`.
+		return self.stopOutstanding and (gdbHaltedByTheStub(self.lastStop.signal) or not self.knowsThread(self.reporter))
+	end 'standingStopNeedsNoProbe'
+
+	function forgetStopsOwed()
+		self.stepping.clear()
+		self.dropTheWithheldQueue()
+		self.stopHeld = false
+	end 'forgetStopsOwed'
+
+	function probeAnswer() returns GdbDetachProbe
+		return match self.waitForStop(GdbReplyBudgetMs as BackendWaitBudgetMs) 'seen'
+			stopped or
+			threadExited gives GdbDetachProbe.held
+			exited or
+			signalled gives GdbDetachProbe.ended
+			timedOut gives GdbDetachProbe.unanswered
+			threadStarted panic("GdbRemoteBackend.probeAnswer: this backend never reports a thread start, so no wait can answer one")
+		end 'seen'
+	end 'probeAnswer'
+
+	function drainedAnUnansweredStep() returns GdbDetachProbe
+		if not self.stopHeld and not self.requestStop() 'theInterruptWasRefused'
+			return GdbDetachProbe.unanswered
+		end 'theInterruptWasRefused'
+
+		let answer = self.probeAnswer()
+
+		match answer 'drained'
+			unanswered then return GdbDetachProbe.unanswered
+			held or
+			ended then break
+		end 'drained'
+
+		self.stepping.clear()
+		self.stopRequested = false
+
+		return answer
+	end 'drainedAnUnansweredStep'
+
+	function acknowledgedForAnEndedProgram() returns BackendDetach
+		self.stopOutstanding = false
+		self.stopRequested = false
+		self.stubLetGo = true
+
+		return BackendDetach.acknowledged
+	end 'acknowledgedForAnEndedProgram'
 
 	export function awaitDetach(sliceMs BackendWaitBudgetMs) returns BackendDetach
 		let connection = try self.link.connection() otherwise return BackendDetach.refused
@@ -1900,9 +2005,10 @@ function gdbStopReportOf(payload String) returns GdbStopRead
 		gdbReadStopField(stop, field: field)
 	end 'eachField'
 
-	if stop.thread.isEmpty() 'noThreadNamed'
-		return GdbStopRead.malformed
-	end 'noThreadNamed'
+	match gdbHexValueOf(stop.thread) 'threadRead'
+		notHex then return GdbStopRead.malformed
+		value then break
+	end 'threadRead'
 
 	return GdbStopRead.report(stop)
 end 'gdbStopReportOf'

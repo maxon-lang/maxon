@@ -1003,12 +1003,12 @@ end 'main'
 
 ### `appendMemory` — the same append, entered through the MEMORY instead of the array
 
-`stdlib/Array.maxon:326` declares `appendMemory(source ElementMemory)`, and `:320` builds
+`stdlib/Array.maxon:234` declares `appendMemory(source ElementMemory)`, and `:223` builds
 `append(other Self)` out of it — `append`'s whole body is `appendMemory(other.managed)`, because the
 array half of `other` was never read. Since the envelope collapse an `Array` IS its
 `__ManagedMemory`, so a caller who already HOLDS the memory would otherwise have to wrap it in an
 `Array` record just to hand it over: `StringBuilder.appendBytes` paid one allocation PER APPEND
-(`stdlib/String.maxon:865`, this member's one corpus caller).
+(`stdlib/String.maxon:871`, this member's one corpus caller).
 
 ⇒ The two spellings are ONE operation, ONE argument rule and ONE emission. What is NOT folded is the
 SENTENCE: `append` declares its parameter `other` and `appendMemory` declares it `source`, so a
@@ -1132,6 +1132,189 @@ end 'main'
 2
 ```
 
+<!-- test: append-gives-the-receiver-its-own-copy-of-each-record -->
+### `append` copies a record element: a write through the receiver's element does not reach the source's
+A collection's copy clones each element it holds, so no record of the copy is a record of the original.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Array with Cell
+
+function main() returns ExitCode
+	let src = Cells.create(0)
+	src.push(Cell.create(1))
+	src.push(Cell.create(2))
+
+	let dest = Cells.create(0)
+	dest.push(Cell.create(0))
+	dest.append(src)
+
+	let moved = try dest.get(1) otherwise Cell.create(-1)
+	moved.value = 99
+
+	let seen = try src.get(0) otherwise Cell.create(-1)
+	print("dest {moved.value} src {seen.value}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dest 99 src 1
+```
+
+<!-- test: appendMemory-gives-the-receiver-its-own-copy-of-each-record -->
+<!-- tier: stdlib -->
+### `appendMemory` is the same copy, so the same independence
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Array with Cell
+
+function main() returns ExitCode
+	let src = Cells.create(0)
+	src.push(Cell.create(1))
+	src.push(Cell.create(2))
+
+	let dest = Cells.create(0)
+	dest.push(Cell.create(0))
+	dest.appendMemory(src.managed)
+
+	let moved = try dest.get(1) otherwise Cell.create(-1)
+	moved.value = 99
+
+	let seen = try src.get(0) otherwise Cell.create(-1)
+	print("dest {moved.value} src {seen.value}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dest 99 src 1
+```
+
+<!-- test: append-of-a-string-array-leaves-both-arrays-whole-and-leaks-nothing -->
+### Appending a `String` array and dropping both arrays is leak-free
+```maxon
+typealias Names = Array with String
+
+function main() returns ExitCode
+	let src = Names.create(0)
+	src.push("the first long string that lives on the heap {40 + 2}")
+	src.push("the second long string that lives on the heap {41 + 2}")
+
+	let dest = Names.create(0)
+	dest.push("a destination string that lives on the heap {1 + 2}")
+	dest.append(src)
+
+	for name in dest 'each'
+		print("{name}\n")
+	end 'each'
+
+	print("{dest.count()} {src.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a destination string that lives on the heap 3
+the first long string that lives on the heap 42
+the second long string that lives on the heap 43
+3 2
+```
+
+<!-- test: appendMemory-of-a-string-array-leaves-both-arrays-whole-and-leaks-nothing -->
+<!-- tier: stdlib -->
+### The `appendMemory` spelling of the same, over a `String` array
+```maxon
+typealias Names = Array with String
+
+function main() returns ExitCode
+	let src = Names.create(0)
+	src.push("the first long string that lives on the heap {40 + 2}")
+	src.push("the second long string that lives on the heap {41 + 2}")
+
+	let dest = Names.create(0)
+	dest.push("a destination string that lives on the heap {1 + 2}")
+	dest.appendMemory(src.managed)
+
+	for name in dest 'each'
+		print("{name}\n")
+	end 'each'
+
+	print("{dest.count()} {src.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a destination string that lives on the heap 3
+the first long string that lives on the heap 42
+the second long string that lives on the heap 43
+3 2
+```
+
+<!-- test: append-of-an-array-of-unique-records -->
+### Appending an array of `unique` records
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Token is unique
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias Tokens = Array with Token
+
+function main() returns ExitCode
+	let src = Tokens.create(0)
+	src.push(Token.create(1))
+
+	let dest = Tokens.create(0)
+	dest.append(src)
+
+	print("{dest.count()} {src.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
+```
+
 <!-- test: error.appendMemory-is-not-a-value -->
 <!-- tier: stdlib -->
 ### It is VOID, like every other `Array` mutator
@@ -1160,7 +1343,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:4:2: 'insert' writes its receiver (line 275: `self.resize(len + 1)`); 'arr' is immutable
+error E3207: <fragment>:4:2: 'insert' writes its receiver (line 265: `self.resize(len + 1)`); 'arr' is immutable
 ```
 
 <!-- test: insert-keeps-an-element-read-before-it -->
@@ -1234,7 +1417,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:4:2: 'reserve' writes its receiver (line 328: `try managed.grow(minCapacity)`); 'arr' is immutable
+error E3207: <fragment>:4:2: 'reserve' writes its receiver (line 318: `try managed.grow(minCapacity)`); 'arr' is immutable
 ```
 
 <!-- test: reserve-keeps-an-element-read-before-it -->
@@ -1273,7 +1456,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:4:2: 'clear' writes its receiver (line 316: `managed.clear()`); 'arr' is immutable
+error E3207: <fragment>:4:2: 'clear' writes its receiver (line 306: `managed.clear()`); 'arr' is immutable
 ```
 
 <!-- test: clear-keeps-an-element-read-before-it -->
@@ -3564,7 +3747,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold
+panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold
 Stack trace:
   in Array.reserve
   in main
@@ -3584,7 +3767,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold
+panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold
 Stack trace:
   in Array.reserve
   in main
@@ -3604,7 +3787,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold
+panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold
 Stack trace:
   in Array.reserve
   in main

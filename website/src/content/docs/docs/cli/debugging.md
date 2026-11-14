@@ -142,10 +142,18 @@ refused: the session has detached, the program runs on by itself out of the debu
 only `quit` remains. An ending the program reached in the meantime is reported first.
 `quit` leaves a detached program running.
 
-A kernel that refuses to let the program go refuses the `detach` `detach-refused`. After it, every
+A kernel that refuses to let the program go, or a debug stub that answers neither the `detach`'s probe
+nor the interrupt that follows it, refuses the `detach` `detach-refused`. After it, every
 command except `help` and `quit` is refused: the detach failed, the program's state is unknown (it may
 be running), and only `quit` remains. `quit` then ends the program, as it does in a session still
 attached to it.
+
+On `arm64-macos` a `detach` first probes the held program: the stub single-steps the stopped thread
+once, every other thread held, so a kill already pending on the program lands while the stub still holds
+it. A program that ends on the probe is reaped by the stub and reported ended (a `SIGKILL` as exit code
+137), and the `detach` ends there. A step that lands, or a thread that ends under it, leaves the program held, and the
+detach request follows. A probe the stub leaves unanswered is drained with an interrupt before anything
+else is sent. A `pause` stop, and a stop whose thread has since ended, is detached without a probe.
 
 On `arm64-macos` a `detach` the stub has answered waits up to a second for the program to become the
 session's own child again, and only then ends the stub. A program the stub still holds after that is
@@ -182,8 +190,8 @@ lives: every word that names one re-lists the roster first, and an id whose thre
 - `paused-in-no-program-code` — for a step from a `pause` stop that stands in no code of the program's
   own.
 - `unwritable` — for a byte the debugger could not write into the program's code.
-- `detach-refused` — for a `detach` the kernel refused to carry out; the program's state is unknown and
-  only `quit` remains.
+- `detach-refused` — for a `detach` the kernel refused to carry out, or whose probe the debug stub never
+  answered; the program's state is unknown and only `quit` remains.
 - `the-stub-still-holds-the-program` — for a `detach` on `arm64-macos` whose stub had not handed the
   program back within a second; the program stays with the stub and only `quit` remains.
 - `inside-runtime-symbol` — for a `break` at code that is the runtime's own: the runtime tier, and
@@ -631,7 +639,7 @@ maxon coverage <run|report> <exe> [--json] [--data=<file>] [--timeout=<seconds>]
 |--------|-------------|
 | `--json` | Emit the report as JSON instead of an annotated source listing |
 | `--data=F` | Read counters from `F` instead of `<exe>.mxcov`. For `report` only; `run` refuses it. |
-| `--timeout=S` | Kill the program after `S` seconds (default 600) and report nothing. For `run` only. |
+| `--timeout=S` | Kill the program after `S` seconds (default 600) and report nothing. A fraction is honoured to the millisecond; a value outside 0.001 to 922337203685 is refused, naming the option. For `run` only. |
 
 ```text
 $ maxon build cov.maxon --coverage

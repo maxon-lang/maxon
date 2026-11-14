@@ -1935,10 +1935,9 @@ type MaxonToStdLowering
 			let closureParamCount = srcFunc.paramCount
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
-				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS THREE FACTS AND NOT HELD ACROSS THE OP LOOP** — the
-				// staleness `IrModule.getBlockByIdIn` warns about, one container over: *"use this instead of
-				// holding an IrBlock struct alias across other block-creating / block-mutating calls"*. The
-				// per-op ref is re-read through `maxonBlockOpRefAt`, which is two indexed loads.
+				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS FACTS AND NOT HELD ACROSS THE OP LOOP** — an IrBlock
+				// alias held across block-creating or block-mutating calls goes stale. The per-op ref is
+				// re-read through `maxonBlockOpRefAt`, which is two indexed loads.
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
 				let srcBlockId = srcBlock.id
 				let srcBlockRole = srcBlock.role

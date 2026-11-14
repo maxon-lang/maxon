@@ -1,7 +1,7 @@
 ---
 feature: streaming-subprocess-nonblocking
 status: experimental
-keywords: [subprocess, streaming, StreamingSubprocess, pollExit, ExitPoll, streamHasEnded, takeStdout, takeStderr, ChildOutputReader, LineRead, service, spawn, awaitAny, async, non-blocking, poll, stdio, pipe]
+keywords: [subprocess, streaming, StreamingSubprocess, pollExit, ExitPoll, streamHasEnded, takeStdout, takeStderr, ChildOutputReader, LineOrEnd, service, spawn, awaitAny, async, non-blocking, poll, stdio, pipe]
 category: system
 ---
 
@@ -21,7 +21,7 @@ child still runs, and deciding for itself when to give up — gets its answers t
   `awaitAny`s over `async` calls that await the service's next read, beside a timer coroutine, while it runs on.
 
 ⛔ **A BLANK LINE IS A LINE.** `echo.` writes a line whose text is `""`, and the read answers
-`LineRead.line("")`; the end of the stream is `LineRead.ended`. A caller that keyed off emptiness would drop
+`LineOrEnd.line("")`; the end of the stream is `LineOrEnd.ended`. A caller that keyed off emptiness would drop
 every blank line the child writes. `a-blank-line-is-a-line-and-not-the-end` is the case that separates the
 two.
 
@@ -174,11 +174,10 @@ and the runner reports the case TIMED OUT.
 typealias ArrivalPromise = Promise with String
 typealias Arrivals = Array with ArrivalPromise
 
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -270,11 +269,10 @@ and a different exit code, rather than a near miss.
 typealias ArrivalPromise = Promise with String
 typealias Arrivals = Array with ArrivalPromise
 
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -364,11 +362,10 @@ read one pipe twice would still be reporting seven bytes and only the TEXT betra
 name, and a second stdout read answers `ended`, so no stderr text ever landed in the stdout reader. The exit
 code packs both lengths (`7*10 + 7`), so a stream that answered nothing shows up as 7 or 70.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -422,11 +419,10 @@ function describeExit(poll ExitPoll) returns String
 	end 'seen'
 end 'describeExit'
 
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -471,7 +467,7 @@ line=hello code=0 afterPoll=running afterOut=closed afterErr=closed
 
 <!-- test: streaming-subprocess-nonblocking.a-blank-line-is-a-line-and-not-the-end -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⭐ **THE CASE `LineRead` EXISTS FOR.** The child writes `first`, then a BLANK line (`echo.`), then `last`,
+⭐ **THE CASE `LineOrEnd` EXISTS FOR.** The child writes `first`, then a BLANK line (`echo.`), then `last`,
 and the four reads must answer `line[first]`, `line[]`, `line[last]` and `ended` in that order. The middle one
 is a line whose text is the empty string; the end of the stream is a different answer, so the blank line is
 reported rather than taken for the end.
@@ -483,11 +479,10 @@ an instrument quietly editing the output it exists to relay.
 The exit code sums the three lines' descriptions (`11 + 6 + 10`), so a blank line that came back `ended`
 (5 bytes) is **26** rather than 27 as well as a different stdout line.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives "line[{text}]"
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -562,7 +557,6 @@ function drained(reader ChildOutputReader, marker String) returns String
 		match read 'read'
 			line(text) then seen.append("{marker}{text}|")
 			ended then return seen
-			pastTheCap then return "{seen}pastTheCap|"
 		end 'read'
 	end 'reading'
 
@@ -620,7 +614,6 @@ function drained(reader ChildOutputReader, marker String) returns String
 		match read 'read'
 			line(text) then seen.append("{marker}{text}|")
 			ended then return seen
-			pastTheCap then return "{seen}pastTheCap|"
 		end 'read'
 	end 'reading'
 

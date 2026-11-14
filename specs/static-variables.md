@@ -608,7 +608,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:7:14: 'pop' writes its receiver (line 256: `return try managed.remove(len - 1)`); 'Cache.xs' is immutable
+error E3207: <fragment>:7:14: 'pop' writes its receiver (line 246: `return try managed.remove(len - 1)`); 'Cache.xs' is immutable
 ```
 
 <!-- test: top-level-let-enum-initializer-cross-file -->

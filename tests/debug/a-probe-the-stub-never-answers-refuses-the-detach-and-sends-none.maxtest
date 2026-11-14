@@ -1,0 +1,35 @@
+let SilentProbeCaseLabel = "a-probe-the-stub-never-answers-refuses-the-detach-and-sends-none"
+
+let SilentProbeAnchorName = "hot"
+let SilentProbeRefusalDeadlineMs = 90000
+let SilentProbeQuitDeadlineMs = 30000
+let SilentProbeTraceName = "proxy-trace.txt"
+let SilentProbeRefusalWording = "refused to detach"
+
+test 'a detach whose probe the stub never answers is refused, and no detach request is sent while the probe is in flight'
+	#if os(Macos)
+		let staged = builtFixture(SilentProbeCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(SilentProbeCaseLabel)
+		let trace = staged.join(SilentProbeTraceName)
+		let session = sessionHeldAt(staged, anchor: SilentProbeAnchorName, environment: probeSwallowedProxyEnvironment(proxies, trace: trace))
+
+		session.say(DetachCommand)
+
+		let refused = session.sayUntilThe(SilentProbeRefusalWording, deadlineMs: SilentProbeRefusalDeadlineMs)
+
+		session.say(QuitCommand)
+
+		let ended = session.finish(SilentProbeQuitDeadlineMs)
+		let spoken = session.said()
+		let traced = try File.readText(trace) otherwise ""
+
+		Expect.contains(traced, needle: "{ProxySwallowedMarker}{ProxyResumeRequest}", message: "the stub proxy never swallowed the probe step, so the case measured nothing. Its trace: {traced}")
+		Expect.contains(traced, needle: "{ProxySawMarker}{ProxyInterruptWording}", message: "an unanswered probe step is drained with an interrupt, and the proxy saw none. Its trace: {traced}")
+		Expect.isTrue(refused, message: "⭐ A STUB THAT NEVER ANSWERS THE PROBE IS A STUB THE PROGRAM CANNOT BE LET GO THROUGH. The detach was not refused. The session said: {spoken}")
+		Expect.isFalse(traced.contains("{ProxySawMarker}{ProxyDetachRequest}"), message: "⭐ A DETACH REQUEST MUST NEVER FOLLOW A STEP THE STUB HAS NOT ANSWERED: the step is still in flight, and the stop that answers it would land in the detach's reply. The proxy saw a `D`. Its trace: {traced}")
+		Expect.isTrue(ended, message: "the session did not end once it was told to quit. {spoken} {session.evidence()}")
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
+	#endif
+end 'a detach whose probe the stub never answers is refused, and no detach request is sent while the probe is in flight'

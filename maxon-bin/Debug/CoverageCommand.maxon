@@ -35,16 +35,7 @@ let FirstOptionArgument = 1
 
 // How long a `run` waits before killing the program and refusing. Long, because the caller may be
 // something with no observer — CI, or an MCP host — and `TimeoutFlag` raises it.
-let DefaultRunTimeoutSeconds = 600.0 as CoverageSeconds
-
-// The half-sentence the deadline's refusal is built around, so the flag and its refusal describe one
-// rule alike.
-let PositiveSecondsRequirement = "needs a positive number of seconds"
-
-// A deadline in seconds. Fractions are accepted so a gate can drive a sub-second deadline
-// deterministically; ZERO is excluded at the door below rather than by this range, which has no
-// exclusive-lower spelling.
-typealias CoverageSeconds = float(0.0 to f64.max)
+let DefaultRunTimeoutSeconds = 600.0 as TargetSeconds
 
 // What one `coverage` command line asked for. A record rather than a local per flag, for
 // `MaxonArgs.parse`'s reason: an accumulating chain carries one value across its joins instead of one
@@ -98,7 +89,7 @@ export function runCoverage(args MaxonArgs) returns ExitCode
 			let raw = optionValueOf(arg)
 
 			if not recordDeadline(request, raw: raw) 'notADeadline'
-				return refuseCoverage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
+				return refuseCoverage(targetSecondsMisreadRefusal("'{TimeoutFlag}'", asked: "'{raw}'"))
 			end 'notADeadline'
 		end 'timeoutFlag' else if not request.executable.isStated() and not arg.startsWith(OptionPrefix) 'theExecutable'
 			request.executable = StatedText.stated(arg)
@@ -177,7 +168,7 @@ function launchTarget(request CoverageRequest, dataPath String) returns Coverage
 	// Rooted, because a spawn resolves a bare program name against PATH rather than against the
 	// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this file
 	// found it.
-	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: WorkingDirectory.inherit, timeoutMs: deadlineMs(request.deadline.seconds())) otherwise (e) 'didNotFinish'
+	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: WorkingDirectory.inherit, timeoutMs: stopTimeoutMsOf(request.deadline.seconds()) as WaitDeadlineMs) otherwise (e) 'didNotFinish'
 		return CoverageLaunch.refused(launchFailureText(request, error: e))
 	end 'didNotFinish'
 
@@ -199,45 +190,26 @@ function launchFailureText(request CoverageRequest, error SubprocessError) retur
 	return "could not run {request.exePath()}: {error.displayReason()}"
 end 'launchFailureText'
 
-// Floored at one millisecond: a sub-millisecond deadline the caller asked for must still bound the
-// run, and a `WaitDeadlineMs` is at least one.
-function deadlineMs(seconds CoverageSeconds) returns WaitDeadlineMs
-	let millis = trunc(seconds * MillisecondsPerSecond)
-
-	return (millis if millis > 0 else 1) as WaitDeadlineMs
-end 'deadlineMs'
-
 // Where counters are read from: what `DataFlag` named, or the file the binary writes beside itself.
 function dataPathFor(request CoverageRequest) returns String
 	return try request.data.text() otherwise "{request.exePath()}{MxcovDataExtension}"
 end 'dataPathFor'
 
-// Record a caller-spelled decimal number of seconds, held to the one rule: finite and strictly positive.
-// A non-number, a zero, a negative and an infinity all fail it, and a failure records NOTHING — the flag
-// is REFUSED rather than clamped, because a deadline that rounds away to zero expires before the program
-// could possibly finish and would then be reported as a setting the caller asked for.
-//
-// A door onto the request rather than a returned value: The compiler cannot lower a union carrying a float
-// payload (E2015), and a struct whose second field means nothing without its first is the sentinel that
-// shape exists to avoid.
+// A reading `parsePositiveSeconds` refuses records NOTHING: the flag is refused rather than clamped, because
+// a deadline that rounds away to zero expires before the program could possibly finish.
 function recordDeadline(request CoverageRequest, raw String) returns bool
-	let seconds = try float.fromString(raw) otherwise 'notANumber'
-		return false
-	end 'notANumber'
-
-	if not (seconds > 0.0 and seconds <= (MaxTargetSeconds as FullRangeFloat)) 'notAPositiveFiniteDuration'
-		return false
-	end 'notAPositiveFiniteDuration'
-
-	request.deadline = CoverageDeadline.stated(StatedCoverageSeconds.of(seconds as CoverageSeconds))
+	match parsePositiveSeconds(raw) 'read'
+		refused then return false
+		reading(value) then request.deadline = CoverageDeadline.stated(StatedCoverageSeconds.of(value.seconds))
+	end 'read'
 
 	return true
 end 'recordDeadline'
 
 type StatedCoverageSeconds
-	export let seconds as CoverageSeconds
+	export let seconds as TargetSeconds
 
-	static function of(seconds CoverageSeconds) returns StatedCoverageSeconds
+	static function of(seconds TargetSeconds) returns StatedCoverageSeconds
 		return Self{seconds: seconds}
 	end 'of'
 end 'StatedCoverageSeconds'
@@ -246,7 +218,7 @@ union CoverageDeadline
 	defaulted
 	stated(given StatedCoverageSeconds)
 
-	function seconds() returns CoverageSeconds
+	function seconds() returns TargetSeconds
 		return match self 'deadline'
 			defaulted gives DefaultRunTimeoutSeconds
 			stated(given) gives given.seconds

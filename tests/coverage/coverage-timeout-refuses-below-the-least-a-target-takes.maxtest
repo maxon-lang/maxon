@@ -1,0 +1,18 @@
+let RefusedCommandName = "coverage"
+let RefusedVerbName = "run"
+let RefusedExecutableName = "never-launched.exe"
+let SubMillisecondTimeoutFlag = "--timeout=0.0005"
+let RefusalNamesTheSharedRange = "from 0.001 to 922337203685"
+
+test 'a coverage deadline shorter than a millisecond is refused with the range every target deadline shares'
+	let arguments = StringArray.create(0)
+	arguments.push(RefusedCommandName)
+	arguments.push(RefusedVerbName)
+	arguments.push(RefusedExecutableName)
+	arguments.push(SubMillisecondTimeoutFlag)
+
+	let run = spawnCompiler(arguments, what: "`{TestedCompilerStem} {RefusedCommandName} {RefusedVerbName} {SubMillisecondTimeoutFlag}`")
+
+	Expect.notEqual(run.exitCode(), expected: 0, message: "a deadline of half a millisecond was accepted")
+	Expect.contains(run.stderr, needle: RefusalNamesTheSharedRange, message: "the refusal did not state the range every target deadline shares: {run.stderr}")
+end 'a coverage deadline shorter than a millisecond is refused with the range every target deadline shares'

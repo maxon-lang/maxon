@@ -49,7 +49,7 @@ end 'arm64EmitPrintConstant'
 //
 // The write loops: a short write resumes at the first unwritten byte, and an interrupted one is re-issued.
 // The cursor and the remaining length live in slots because the call clobbers x0..x2.
-function buildArm64WriteStderrChunk(os Os) returns FunctionCodeChunk
+function buildArm64WriteStderrChunk() returns FunctionCodeChunk
 	let SlotBuf = 0
 	let SlotLen = 1
 	let asm = Arm64RuntimeAsm.beginFunction(2)
@@ -81,8 +81,8 @@ function buildArm64WriteStderrChunk(os Os) returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: StderrFd)
-	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.write, syscallNumber: Arm64LinuxSyscallWrite)
-	arm64EmitBranchIfInterrupted(asm, route: arm64OsCallKind(os), whenInterrupted: writeLap)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostWriteStreamName)
+	arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: writeLap)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: done)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
@@ -508,7 +508,7 @@ export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	chunks.push(buildArm64PrintFrameChunk(globalData))
 	chunks.push(buildArm64PrintInlineFramesChunk(globalData))
 	chunks.push(buildArm64SymtabIndexChunk())
-	chunks.push(buildArm64WriteStderrChunk(target.os))
+	chunks.push(buildArm64WriteStderrChunk())
 end 'appendArm64PanicRuntimeChunks'
 
 // `x0 = <a NUL-terminated constant>; bl mrt_panic` — a runtime abort naming its own reason. The message

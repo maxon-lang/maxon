@@ -620,7 +620,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3181: <fragment>:21:3: type parameter 'T' of 'pass' cannot be 'type parameter': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum
+error E3181: <fragment>:21:3: type parameter 'T' of 'pass' cannot be 'type parameter': a generic function's type parameter is inferred as a number (a ranged typealias included), `String`, `bool`, `Character`, a `type` declaration or an enum; a generic instance, whichever typealias names it, is none of these
 ```
 
 <!-- test: a-method-of-a-primitive-cannot-assign-its-receiver -->

@@ -13,6 +13,8 @@ let AnswerMode = "answer"
 let LateHaltMode = "late-halt"
 let SmallBufferMode = "small-buffer"
 let SilentMode = "silent"
+let ProbeAnswerMode = "probe-answer"
+let ProbeSwallowMode = "probe-swallow"
 let AdvertiseYes = "yes"
 
 let SupportedQuery = "qSupported"
@@ -30,6 +32,13 @@ let AnsweredMarker = "answered "
 let RefusedMarker = "refused "
 let WithheldMarker = "diverted "
 let ContinuePayload = "c"
+let ResumeRequest = "vCont"
+let LiftRequest = "z"
+let DetachRequest = "D"
+let KillRequest = "k"
+let SawMarker = "saw "
+let SwallowedMarker = "swallowed "
+let InterruptWording = "interrupt"
 
 let ReverseConnectOption = "-R"
 let Loopback = "127.0.0.1"
@@ -50,11 +59,17 @@ union Pulled
 	closed
 end 'Pulled'
 
+union ProbeFate
+	answered(payload String)
+	swallowed
+end 'ProbeFate'
+
 union Scenario
 	answers(after String, payload String)
 	lateHalt
 	silent(after String)
 	smallBuffer(limit PacketBytes, advertised bool)
+	probes(fate ProbeFate)
 end 'Scenario'
 
 type Endpoint
@@ -73,11 +88,12 @@ type Relay
 	let trace as FilePath
 	var done as bool
 	var awaitingHalt as bool
+	var lifted as bool
 	var held as String
 	var log as String
 
 	static function create(driver TcpClient, stub TcpClient, scenario Scenario, trace FilePath) returns Relay
-		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, held: "", log: ""}
+		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, lifted: false, held: "", log: ""}
 	end 'create'
 
 	function step() returns bool
@@ -104,7 +120,8 @@ type Relay
 
 			answers or
 			lateHalt or
-			smallBuffer gives false
+			smallBuffer or
+			probes gives false
 		end 'which'
 	end 'stubIsMuted'
 
@@ -124,8 +141,50 @@ type Relay
 			lateHalt gives self.forwardedMindingTheHalt(piece)
 			silent(after) gives self.continuedInPlaceOf(piece, after: after)
 			smallBuffer(limit, advertised) gives self.forwardedWithinTheBuffer(piece, limit: limit, advertised: advertised)
+			probes(fate) gives self.forwardedMindingTheProbe(piece, fate: fate)
 		end 'which'
 	end 'routed'
+
+	function forwardedMindingTheProbe(piece String, fate ProbeFate) returns bool
+		if containsInterrupt(piece) 'anInterrupt'
+			self.noted("{SawMarker}{InterruptWording}")
+
+			return self.done or sent(self.stub, text: piece)
+		end 'anInterrupt'
+
+		let request = requestIn(piece)
+
+		if request.startsWith(LiftRequest) 'aTrapIsLifted'
+			self.lifted = true
+		end 'aTrapIsLifted'
+
+		if request.startsWith(ResumeRequest) or request == DetachRequest or request == KillRequest 'worthNoting'
+			self.noted("{SawMarker}{request}")
+		end 'worthNoting'
+
+		if self.done or not self.lifted or not request.startsWith(ResumeRequest) 'notTheProbe'
+			return sent(self.stub, text: piece)
+		end 'notTheProbe'
+
+		self.done = true
+
+		return match fate 'which'
+			answered(payload) gives self.probeAnswered(payload)
+			swallowed gives self.probeSwallowed()
+		end 'which'
+	end 'forwardedMindingTheProbe'
+
+	function probeAnswered(payload String) returns bool
+		self.noted("{AnsweredMarker}{payload}")
+
+		return sent(self.driver, text: framed(payload))
+	end 'probeAnswered'
+
+	function probeSwallowed() returns bool
+		self.noted("{SwallowedMarker}{ResumeRequest}")
+
+		return true
+	end 'probeSwallowed'
 
 	function forwardedWithinTheBuffer(piece String, limit PacketBytes, advertised bool) returns bool
 		let request = requestIn(piece)
@@ -294,7 +353,15 @@ function scenarioFromEnvironment() returns Scenario
 		return Scenario.smallBuffer(packetBytesFromEnvironment(), advertised: setting(AdvertiseVariable) == AdvertiseYes)
 	end 'small'
 
-	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode}, {SilentMode} and {SmallBufferMode}")
+	if mode == ProbeAnswerMode 'probeAnswered'
+		return Scenario.probes(ProbeFate.answered(setting(InjectPayloadVariable)))
+	end 'probeAnswered'
+
+	if mode == ProbeSwallowMode 'probeSwallowed'
+		return Scenario.probes(ProbeFate.swallowed)
+	end 'probeSwallowed'
+
+	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode}, {SilentMode}, {SmallBufferMode}, {ProbeAnswerMode} and {ProbeSwallowMode}")
 end 'scenarioFromEnvironment'
 
 function packetBytesFromEnvironment() returns PacketBytes

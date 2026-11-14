@@ -35,6 +35,11 @@
 export let HostLastErrorName = b"mrt_host_last_error"
 export let HostReadFileName = b"mrt_host_read_file"
 export let HostWriteFileName = b"mrt_host_write_file"
+export let HostWriteStreamName = b"mrt_host_write_stream"
+// A handler and not SIG_IGN: `execve` resets a handled signal to its default but keeps an ignored one,
+// so an ignore would start every child the program runs with SIGPIPE ignored.
+export let SigpipeHandlerName = b"mrt_sigpipe_handler"
+export let SigpipeDieName = b"mrt_die_of_sigpipe"
 export let HostFileOpenName = b"mrt_host_file_open"
 export let HostFileSizeName = b"mrt_host_file_size"
 export let HostFileDeleteName = b"mrt_host_file_delete"
@@ -407,7 +412,11 @@ export enum PosixErrno
 	badDescriptor = 9
 	badAddress = 14
 	invalidArgument = 22
+	brokenPipe = 32
 end 'PosixErrno'
+
+export let PosixSignalPipe = 13
+export let PosixSignalExitBase = 128
 
 // The catch-all an errno with no Win32 twin becomes — `ERROR_GEN_FAILURE`. It deliberately is not one of the
 // three the Std classifier tests, so every unmapped failure takes that classification's per-operation

@@ -226,8 +226,7 @@ function acceptedPort(reader ChildOutputReader) returns NetworkPort throws Inter
 
 		match read 'read'
 			line(text) then heard = text
-			ended or
-			pastTheCap then throw InteropError.noPort
+			ended then throw InteropError.noPort
 		end 'read'
 
 		if heard.startsWith("ACCEPT ") 'listening'
@@ -276,8 +275,7 @@ function drainLines(lines StringArray, reader ChildOutputReader)
 
 		match read 'read'
 			line(text) then lines.push(text)
-			ended or
-			pastTheCap then return
+			ended then return
 		end 'read'
 	end 'reading'
 end 'drainLines'
@@ -608,8 +606,7 @@ function acceptedPort(reader ChildOutputReader) returns NetworkPort throws Inter
 
 		match read 'read'
 			line(text) then heard = text
-			ended or
-			pastTheCap then throw InteropError.noPort
+			ended then throw InteropError.noPort
 		end 'read'
 
 		if heard.startsWith("ACCEPT ") 'listening'
@@ -658,8 +655,7 @@ function drainLines(lines StringArray, reader ChildOutputReader)
 
 		match read 'read'
 			line(text) then lines.push(text)
-			ended or
-			pastTheCap then return
+			ended then return
 		end 'read'
 	end 'reading'
 end 'drainLines'
@@ -1010,8 +1006,7 @@ function acceptedPort(reader ChildOutputReader) returns NetworkPort throws Inter
 
 		match read 'read'
 			line(text) then heard = text
-			ended or
-			pastTheCap then throw InteropError.noPort
+			ended then throw InteropError.noPort
 		end 'read'
 
 		if heard.startsWith("ACCEPT ") 'listening'
@@ -1060,8 +1055,7 @@ function drainLines(lines StringArray, reader ChildOutputReader)
 
 		match read 'read'
 			line(text) then lines.push(text)
-			ended or
-			pastTheCap then return
+			ended then return
 		end 'read'
 	end 'reading'
 end 'drainLines'
@@ -1392,8 +1386,7 @@ function acceptedPort(reader ChildOutputReader) returns NetworkPort throws Inter
 
 		match read 'read'
 			line(text) then heard = text
-			ended or
-			pastTheCap then throw InteropError.noPort
+			ended then throw InteropError.noPort
 		end 'read'
 
 		if heard.startsWith("ACCEPT ") 'listening'
@@ -1442,8 +1435,7 @@ function drainLines(lines StringArray, reader ChildOutputReader)
 
 		match read 'read'
 			line(text) then lines.push(text)
-			ended or
-			pastTheCap then return
+			ended then return
 		end 'read'
 	end 'reading'
 end 'drainLines'
@@ -2778,8 +2770,7 @@ function acceptedPort(reader ChildOutputReader) returns NetworkPort throws Inter
 
 		match read 'read'
 			line(text) then heard = text
-			ended or
-			pastTheCap then throw InteropError.noPort
+			ended then throw InteropError.noPort
 		end 'read'
 
 		if heard.startsWith("ACCEPT ") 'listening'
@@ -2828,8 +2819,7 @@ function drainLines(lines StringArray, reader ChildOutputReader)
 
 		match read 'read'
 			line(text) then lines.push(text)
-			ended or
-			pastTheCap then return
+			ended then return
 		end 'read'
 	end 'reading'
 end 'drainLines'

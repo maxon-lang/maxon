@@ -1,0 +1,131 @@
+let BlockedDetachCaseLabel = "a-detach-from-a-program-blocked-in-a-system-call-lets-it-run-on"
+let BlockedDetachFixtureName = "blockedthenexit"
+let BlockedDetachModeOptionPrefix = "--target-env=BLOCKED_THEN_EXIT_MODE="
+let BlockedDetachModes = ["sleep", "child", "pipe"]
+let BlockedDetachSleepMode = "sleep"
+let BlockedDetachPidFileName = "blocked-pid.txt"
+let BlockedDetachPipeFileName = "blocked.fifo"
+let BlockedDetachReleaseFileName = "blocked.release"
+let BlockedDetachReleaseText = "released\n"
+let BlockedDetachFeedScript = "echo released > "
+let BlockedDetachShell = "sh"
+let BlockedDetachShellFlag = "-c"
+let BlockedDetachRunTimeoutSeconds = "0.3"
+let BlockedDetachTimedOutWording = "timed out"
+let BlockedDetachPausedWording = "stopped (pause)"
+let BlockedDetachExitWording = "the program exited with code 7"
+let BlockedDetachLookMs = 2
+let BlockedDetachDeadlineMs = 60000
+let BlockedDetachLaneTriple = "arm64-macos"
+let BlockedDetachTraceStem = "proxy-trace-"
+
+function blockedProgramId(staged FilePath) returns Pid
+	let started = Clock.nowMs()
+	let pidFile = staged.join(BlockedDetachPidFileName)
+
+	while Clock.elapsedMs(started) < BlockedDetachDeadlineMs 'untilItIsRecorded'
+		if File.exists(pidFile) 'written'
+			let text = try File.readText(pidFile) otherwise ""
+
+			if text.endsWith(LineFeed) 'whole'
+				let id = try int.fromString(text.trim()) otherwise panic("the gate could not run — {BlockedDetachPidFileName} holds `{text}`, not a process id")
+
+				return id as Pid
+			end 'whole'
+		end 'written'
+
+		sleep(BlockedDetachLookMs)
+	end 'untilItIsRecorded'
+
+	panic("the gate could not run — the blocked program recorded no process id in {BlockedDetachPidFileName}")
+end 'blockedProgramId'
+
+function placeOnceLetGo(program Pid) returns ProcessPlace
+	let started = Clock.nowMs()
+	var place = placeOf(program)
+
+	while place.isHeldByAStub() and Clock.elapsedMs(started) < BlockedDetachDeadlineMs 'untilTheStubLeaves'
+		sleep(BlockedDetachLookMs)
+
+		place = placeOf(program)
+	end 'untilTheStubLeaves'
+
+	return place
+end 'placeOnceLetGo'
+
+function releasedThePipe(staged FilePath)
+	let feed = "{BlockedDetachFeedScript}{staged.join(BlockedDetachPipeFileName).toString()}"
+
+	_ = try Subprocess.run(Executable.name(BlockedDetachShell), arguments: [BlockedDetachShellFlag, feed], deadline: WaitDeadline.within(BlockedDetachDeadlineMs)) otherwise (e) 'notFed'
+		panic("the gate could not run — feeding the blocked program's pipe failed ({e.displayReason()}).")
+	end 'notFed'
+end 'releasedThePipe'
+
+function releasedTheProgram(staged FilePath, mode String)
+	if mode == BlockedDetachSleepMode 'sleeps'
+		try File.writeText(staged.join(BlockedDetachReleaseFileName), content: BlockedDetachReleaseText) otherwise panic("the gate could not run — {BlockedDetachReleaseFileName} could not be written.")
+
+		return
+	end 'sleeps'
+
+	releasedThePipe(staged)
+end 'releasedTheProgram'
+
+function removedIfThere(file FilePath)
+	if File.exists(file) 'leftOver'
+		try File.delete(file) otherwise panic("the gate could not run — {file.toString()} could not be removed.")
+	end 'leftOver'
+end 'removedIfThere'
+
+test 'a program paused while it is blocked in a system call is detached from with no probe before the detach request and runs on to its own exit'
+	#if os(Macos)
+		let staged = builtFixture(BlockedDetachCaseLabel, fixture: BlockedDetachFixtureName)
+		let proxies = stubProxyDirectory(BlockedDetachCaseLabel)
+
+		for mode in BlockedDetachModes 'eachMode'
+			let trace = staged.join("{BlockedDetachTraceStem}{mode}.txt")
+			removedIfThere(staged.join(BlockedDetachPidFileName))
+			removedIfThere(staged.join(BlockedDetachPipeFileName))
+			removedIfThere(staged.join(BlockedDetachReleaseFileName))
+
+			let options = ["{DebugStopTimeoutOptionPrefix}{BlockedDetachRunTimeoutSeconds}", "{BlockedDetachModeOptionPrefix}{mode}"]
+			let session = ReplSession.open(builtExecutable(staged), staged: staged, environment: probeSwallowedProxyEnvironment(proxies, trace: trace), extraOptions: options)
+
+			session.say(RunCommand)
+
+			let program = blockedProgramId(staged)
+
+			Expect.isTrue(session.sayUntilThe(BlockedDetachTimedOutWording, deadlineMs: BlockedDetachDeadlineMs), message: "mode {mode}: the `{RunCommand}` over a program that blocks must time out, or it was not blocked when it was paused. The session said: {session.said()}")
+
+			session.say(PauseCommand)
+
+			Expect.isTrue(session.sayUntilThe(BlockedDetachPausedWording, deadlineMs: BlockedDetachDeadlineMs), message: "mode {mode}: the `{PauseCommand}` must stop the blocked program. The session said: {session.said()}")
+
+			session.say(DetachCommand)
+
+			let place = placeOnceLetGo(program)
+
+			Expect.isTrue(place.isALiveChildOf(session.processId()), message: "mode {mode}: once the stub is gone the program is alive and the session's own child, running on by itself. {place.displayReason()}. The session said: {session.said()}")
+
+			releasedTheProgram(staged, mode: mode)
+
+			Expect.isTrue(session.sayUntilThe(BlockedDetachExitWording, deadlineMs: BlockedDetachDeadlineMs), message: "mode {mode}: the released program runs on to its own exit code. The session said: {session.said()}")
+
+			session.say(QuitCommand)
+
+			Expect.isTrue(session.finish(BlockedDetachDeadlineMs), message: "mode {mode}: the session ends once it is told to quit. {session.said()} {session.evidence()}")
+
+			let traced = try File.readText(trace) otherwise ""
+			let afterThePause = traceAfterTheInterrupt(traced)
+
+			Expect.isFalse(afterThePause.isEmpty(), message: "mode {mode}: the proxy never saw the pause's interrupt, so the case measured nothing. Its trace: {traced}")
+			Expect.contains(afterThePause, needle: "{ProxySawMarker}{ProxyDetachRequest}", message: "mode {mode}: the proxy never saw the detach request. Its trace: {traced}")
+			Expect.isFalse(afterThePause.contains(ProxyResumeRequest), message: "mode {mode}: ⭐ A DETACH FROM A PROGRAM BLOCKED IN A SYSTEM CALL DOES NOT STEP IT: the stub halted it, so the detach request goes first and the call is never waited for. The proxy saw a resume after the pause. Its trace: {traced}")
+		end 'eachMode'
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
+	#else
+		Expect.isFalse(hostTargetTriple() == BlockedDetachLaneTriple, message: "only the arm64-macos lane drives a program through a stub, and runs the case above.")
+	#endif
+end 'a program paused while it is blocked in a system call is detached from with no probe before the detach request and runs on to its own exit'

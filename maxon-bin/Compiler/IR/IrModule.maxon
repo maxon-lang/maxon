@@ -416,8 +416,7 @@ export type IrModule uses Op
 
 		for _ in 0 upto func.nextBlockId 'eachMove'
 			let position = try byId.get(at) otherwise return at
-			let blockRef = try func.blockRefs.get(position) otherwise panic("blockHoldingTheExitOf: blockRefs.get OOB at {position}")
-			let block = try self.blocks.get(blockRef) otherwise panic("blockHoldingTheExitOf: blockRef {blockRef} from func.blockRefs not in blocks")
+			let block = self.blockAtPosition(func, position: position)
 
 			if not block.exitMoved 'holdsItsOwnExit'
 				return at
@@ -456,8 +455,8 @@ export type IrModule uses Op
 	// Refill `scratch` for a splice of `func`'s rebuilt body: its live op slots, and its `BlockId ->
 	// block ref` map as a dense column over its id space, with `absent` — a ref no block has —
 	// standing for an id the function does not own, so such an id reads as absent rather than as block
-	// 0. One pass over the block list rather than `getBlockByIdIn` per lookup, which is a scan and
-	// would make a per-block splice quadratic in a function's block count. The id space is dense per
+	// 0. One pass over the block list rather than a scan of it per lookup, which would make a
+	// per-block splice quadratic in a function's block count. The id space is dense per
 	// function but not gap-free, so the holes are real.
 	module function prepareSplice(func IrFunction, scratch SpliceScratch)
 		self.collectLiveOpIndices(func, into: scratch.slots.recycled)
@@ -723,22 +722,11 @@ export type IrModule uses Op
 		return block
 	end 'createAndRegisterBlock'
 
-	// Re-fetch a block alias by its (function-local) id, scanning the
-	// function's block set. Use this instead of holding an IrBlock struct
-	// alias across other block-creating / block-mutating calls: those calls
-	// can leave a previously-captured alias stale. Mirrors how the if/else
-	// finalizer threads BlockIds rather than struct aliases.
-	export function getBlockByIdIn(func IrFunction, id BlockId) returns IrBlock throws BlockRefLookupError
-		for blockRef in func.blockRefs 'each'
-			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
+	export function getBlockByIdThrough(func IrFunction, byId BlockIndexById, id BlockId) returns IrBlock throws BlockRefLookupError
+		let position = try byId.get(id) otherwise throw BlockRefLookupError.notInFunction
 
-			if candidate.id == id 'match'
-				return candidate
-			end 'match'
-		end 'each'
-
-		throw BlockRefLookupError.notInFunction
-	end 'getBlockByIdIn'
+		return self.blockAtPosition(func, position: position)
+	end 'getBlockByIdThrough'
 
 	// Enforce the invariant that every block in the module has committed to a
 	// terminator (real op, dead, or fallthrough). Parser ops emit ops into

@@ -31,7 +31,7 @@ export let MainFunctionName = b"main"
 module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
 	try requireStillWanted(project)
 	beginEditorFunctionFacts(project)
-	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module, target: project.target)
+	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(project, module: module)
 	let summaryIndex = CallSummaryIndex.create(project, module: module, signatures: signatures, funcIndexByName: funcNames.byName, funcCount: funcNames.functions.count())
 	settleBrandAdoption(project, module: module, signatures: signatures, calls: summaryIndex)
 	bindIndirectCallPlaces(project, module: module, signatures: signatures)
@@ -2176,9 +2176,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 
 		visited.insert(blockId)
 
-		let position = try blockIndex.get(blockId) otherwise panic("reachableReawait: successor BlockId {blockId} is not a block of this function")
-		let blockRef = try func.blockRefs.get(position) otherwise panic("reachableReawait: blockIndexById placed block {blockId} at position {position}, which is past func.blockRefs")
-		let block = try module.blocks.get(blockRef) otherwise panic("reachableReawait: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.getBlockByIdThrough(func, byId: blockIndex, id: blockId) otherwise panic("reachableReawait: successor BlockId {blockId} is not a block of this function")
 
 		// ⭐⭐ **A BLOCK ARG IS RE-DEFINED ON EVERY ENTRY TO ITS BLOCK, AND THAT IS A RE-ARM THE OP SCAN
 		// STRUCTURALLY CANNOT SEE.** `maxonOpDefinedValue` answers for ops, and a phi is defined by NO op
@@ -4789,8 +4787,9 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex E
 		return
 	end 'compilerOwnedEntry'
 
-	if let entry = try project.libraryFacts.substrateEntries.get(callee) 'stdlibCrossing'
-		reportSubstrateCrossing(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), noun: noun, entry: entry)
+	if project.libraryFacts.substrateEntries.contains(callee) 'stdlibCrossing'
+		let claim = try project.libraryFacts.claimAtOp(project, opIndex: opIndex, callee: callee) otherwise panic("requireTargetSupportsCallee: '{String.from(callee)}' is refused and so holds a claim at op {opIndex}")
+		reportSubstrateCrossing(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), noun: noun, entry: claim.entry)
 	end 'stdlibCrossing'
 end 'requireTargetSupportsCallee'
 
@@ -4810,16 +4809,16 @@ function requireTargetSupportsLiveWitnesses(project Project, module MaxonModule,
 		let crossings = project.libraryFacts.witnessCrossingsOf(project, module: module, func: func)
 
 		match crossings.atFunction 'functionSite'
-			reaches(entry) then reportSubstrateCrossing(project, site: BlameSite.ofFunctionName(func), noun: signatures.diagnosticCalleeSpelling(func.name), entry: entry)
+			reaches(claim) then reportSubstrateCrossing(project, site: BlameSite.ofFunctionName(func), noun: signatures.diagnosticCalleeSpelling(func.name), entry: claim.entry)
 			reachesNone then break
 			unasked then panic("requireTargetSupportsLiveWitnesses: the crossings of '{String.from(func.name)}' left their function site unasked")
 		end 'functionSite'
 
 		for opIndex in crossings.opSites 'eachOpSite'
-			let entry = try crossings.entryAtOp(opIndex) otherwise panic("requireTargetSupportsLiveWitnesses: op {opIndex} is listed as a crossing site yet holds no entry")
 			let op = try module.ops.get(opIndex) otherwise panic("requireTargetSupportsLiveWitnesses: ops.get OOB at {opIndex} for a crossing site of '{String.from(func.name)}'")
 			let edge = try callEdgeOf(op) otherwise panic("requireTargetSupportsLiveWitnesses: op {opIndex} is a crossing site and names no callee")
-			reportSubstrateCrossing(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), noun: callDiagnosticNoun(signatures.declaredNameOf(edge.0), mint: maxonOpCalleeMint(op)), entry: entry)
+			let claim = try project.libraryFacts.claimAtOp(project, opIndex: opIndex, callee: edge.0) otherwise panic("requireTargetSupportsLiveWitnesses: op {opIndex} is listed as a crossing site yet holds no claim")
+			reportSubstrateCrossing(project, site: BlameSite.ofOp(project, func: func, opIndex: opIndex), noun: callDiagnosticNoun(signatures.declaredNameOf(edge.0), mint: maxonOpCalleeMint(op)), entry: claim.entry)
 		end 'eachOpSite'
 	end 'eachFunc'
 end 'requireTargetSupportsLiveWitnesses'
@@ -4989,49 +4988,15 @@ end 'requireFunctionValueTargetTakesNoWitness'
 // landing, which is what arm64-macOS is. `Testing/SpecTestRunner.maxon`'s cross-target skip reads the
 // diagnostic itself, so an E3104 emitted wrongly here deletes coverage there while the suite reads green.
 
-// ⭐⭐ **WHICH OF TWO SUBSTRATE ENTRIES A STDLIB BODY REACHES IS THE ONE ITS CROSSING IS REPORTED FOR — AND
-// THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**
-//
-// `StdlibSource.SubstrateFixpoint` records ONE entry per stdlib function, and `requireTargetSupportsCallee`
-// reads it to CHOOSE THE DIAGNOSTIC — a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist
-// here*, with a `#if` to write) and every other answers E3104 (*this target has no lowering for the entry
-// yet*). Those are different claims with different advice, so a body reaching both must not have its code
-// decided by which seed the worklist drained first.
-//
-// The permanent claim outranks the provisional one: E3074 is a fact about WASI that no compiler
-// change can alter, while E3104 is a statement about this compiler's progress. Telling a user "not
-// yet" about a call that can never work anywhere is the strictly worse of the two answers.
-//
-// ⭐ **AND A `__Raw` ROW RANKS BELOW A NAMED ENTRY, FOR THE SAME KIND OF REASON READ THE OTHER WAY.** A row
-// is the floor under a runtime entry rather than a peer of one, so a body that reaches both is better
-// described by the entry: that sentence names a SYMBOL the reader can look up, where the row's names an
-// instruction, and a raw seed can only ever take a node no named entry reached.
-function substrateEntryOutranks(candidate ByteArray, incumbent ByteArray) returns bool
-	return substrateEntryRank(candidate) > substrateEntryRank(incumbent)
-end 'substrateEntryOutranks'
-
-export function substrateEntryIsPreferred(candidate ByteArray, incumbent ByteArray) returns bool
-	if substrateEntryOutranks(candidate, incumbent: incumbent) 'aHigherClaim'
-		return true
-	end 'aHigherClaim'
-
-	if substrateEntryOutranks(incumbent, incumbent: candidate) 'aLowerClaim'
-		return false
-	end 'aLowerClaim'
-
-	return compareBytesOrdinally(candidate, right: incumbent) == Ordering.lessThan
-end 'substrateEntryIsPreferred'
-
-// The three claims a substrate entry can make, ordered by which sentence serves the reader of a crossing
-// best. Named rather than compared inline so the order is one statement instead of a chain of tests whose
-// meaning is in their sequence.
-typealias SubstrateEntryRank = int(0 to 2)
+// The rank picks the diagnostic, not only the name quoted: a subprocess entry on WASI is E3074 (it can never
+// exist there) and outranks E3104 (no lowering yet); a `__Raw` row ranks below the entry it underlies.
+export typealias SubstrateEntryRank = int(0 to 2)
 
 let RawMachineOperationRank = 0
 let RuntimeEntryRank = 1
-let ProcessSpawnRank = 2
+export let ProcessSpawnRank = 2
 
-function substrateEntryRank(entry ByteArray) returns SubstrateEntryRank
+export function substrateEntryRank(entry ByteArray) returns SubstrateEntryRank
 	if isSubprocessRuntimeCallee(entry) 'processSpawn'
 		return ProcessSpawnRank
 	end 'processSpawn'

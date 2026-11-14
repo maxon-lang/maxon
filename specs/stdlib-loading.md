@@ -454,6 +454,269 @@ end 'main'
 error E3104: <fragment>:3:32: 'HttpClient.get' lowers to the runtime entry '__ms_tcp_connect', which has no wasm32-wasi implementation
 ```
 
+<!-- test: stdlib-loading.a-body-reaching-two-refused-entries-blames-the-first-call-in-its-source -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+A library body whose two calls each reach an entry wasm32-wasi lacks is blamed for the entry its earlier call
+reaches, in the order its source writes them. The calls cross a function boundary, so neither entry is named in
+the body itself, and the entry the earlier call reaches (`__thread_cpu_ticks`) sorts after the later one's
+(`__proc_pid`), so the answer is not the least name.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public function ticksArePositive() returns bool
+	return Clock.threadCpuTicks() > 0
+end 'ticksArePositive'
+
+public function pidIsPositive() returns bool
+	return Process.id() > 0
+end 'pidIsPositive'
+
+public function bothArePositive() returns bool
+	let ticks = ticksArePositive()
+	let pid = pidIsPositive()
+	return ticks and pid
+end 'bothArePositive'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	if bothArePositive() 'both'
+		return 4
+	end 'both'
+
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:19:5: 'bothArePositive' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-loading.swapping-the-two-calls-swaps-the-blamed-entry -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The same body with its two call lines swapped: the entry the now-earlier call reaches is the one blamed.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public function ticksArePositive() returns bool
+	return Clock.threadCpuTicks() > 0
+end 'ticksArePositive'
+
+public function pidIsPositive() returns bool
+	return Process.id() > 0
+end 'pidIsPositive'
+
+public function bothArePositive() returns bool
+	let pid = pidIsPositive()
+	let ticks = ticksArePositive()
+	return ticks and pid
+end 'bothArePositive'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	if bothArePositive() 'both'
+		return 4
+	end 'both'
+
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:19:5: 'bothArePositive' lowers to the runtime entry '__proc_pid', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-loading.a-user-crossing-and-a-library-caller-of-one-credit-name-the-same-entry -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The witness credits of `Source` and `Kind` reach two implementations whose claims are equal and whose
+distances differ: `Kind.nearest` calls the refused entry's reader directly, and `Kind.farthest` reaches
+`Process.id` three calls down. A library caller of those credits (`driveKind`) and the program's own
+functions that hold them (`userSide`, `main`) are blamed for the same entry, the nearer implementation's
+`__thread_cpu_ticks`. The farther one's `__proc_pid` sorts before it by name, so a choice that fell to the
+name would split the two answers.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public interface Source
+	function nearest() returns bool
+	function farthest() returns bool
+end 'Source'
+
+public enum Kind implements Source
+	only
+
+	public function nearest() returns bool
+		return Clock.threadCpuTicks() > 0
+	end 'nearest'
+
+	public function farthest() returns bool
+		return pidMiddle()
+	end 'farthest'
+end 'Kind'
+
+function pidFloor() returns bool
+	return Process.id() > 0
+end 'pidFloor'
+
+function pidMiddle() returns bool
+	return pidFloor()
+end 'pidMiddle'
+
+function readFrom(item Source) returns bool
+	return item.nearest()
+end 'readFrom'
+
+public function driveKind() returns bool
+	return readFrom(Kind.only)
+end 'driveKind'
+
+// --- file: main.maxon
+function userSide(item Source) returns bool
+	return item.farthest()
+end 'userSide'
+
+function main() returns ExitCode
+	if userSide(Kind.only) and driveKind() 'both'
+		return 4
+	end 'both'
+
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:37:10: 'stdlib.__spec_tier__.userSide' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:41:10: 'stdlib.__spec_tier__.main' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:42:29: 'driveKind' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-loading.a-shallow-witness-claim-outranks-a-deep-named-claim-of-equal-rank-at-a-witness-edge -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+`Kind.deepest` names a refused entry three calls down (`Process.id`), a NAMED claim. `Kind.shallowest`,
+declared by the same enum and so credited to every function of it, reaches another refused entry
+(`Clock.threadCpuTicks`) one call down, so `Kind.deepest` also holds a WITNESS claim of the same rank, nearer
+than its named one. A caller that reaches `Kind.deepest` through a witness edge inherits both as one claim
+strength, and the nearer one decides: `__thread_cpu_ticks`, though `__proc_pid` sorts first by name. The
+library caller (`driveKind`) and the program's own functions (`userSide`, `main`) agree.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public interface Deep
+	function deepest() returns bool
+end 'Deep'
+
+public interface Shallow
+	function shallowest() returns bool
+end 'Shallow'
+
+public enum Kind implements Deep, Shallow
+	only
+
+	public function deepest() returns bool
+		return pidMiddle()
+	end 'deepest'
+
+	public function shallowest() returns bool
+		return Clock.threadCpuTicks() > 0
+	end 'shallowest'
+end 'Kind'
+
+function pidFloor() returns bool
+	return Process.id() > 0
+end 'pidFloor'
+
+function pidMiddle() returns bool
+	return pidFloor()
+end 'pidMiddle'
+
+function readFrom(item Deep) returns bool
+	return item.deepest()
+end 'readFrom'
+
+public function driveKind() returns bool
+	return readFrom(Kind.only)
+end 'driveKind'
+
+// --- file: main.maxon
+function userSide(item Deep) returns bool
+	return item.deepest()
+end 'userSide'
+
+function main() returns ExitCode
+	if userSide(Kind.only) and driveKind() 'both'
+		return 4
+	end 'both'
+
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:40:10: 'stdlib.__spec_tier__.userSide' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:44:10: 'stdlib.__spec_tier__.main' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:45:29: 'driveKind' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-loading.a-call-that-is-also-blamed-for-a-witness-credit-names-the-nearer-claim -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The call to `fetch` is refused through its callee and is also blamed for the witness credit of the `Dear`
+value it returns. Both claims have the same strength. Counted from the call, the callee's entry
+(`__proc_pid`, two calls below `fetch`) is three edges away and the credit's (`__thread_cpu_ticks`, through
+`Dear.probe`) is two, so the credit's decides. The library caller `driveDear`, which holds the same credit
+in its own body, and the program's call agree on `__thread_cpu_ticks`, and the call is reported once.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+public interface Probe
+	function probe() returns bool
+end 'Probe'
+
+public enum Cheap implements Probe
+	only
+
+	public function probe() returns bool
+		return __Builtins.currentProcessId() > 0
+	end 'probe'
+end 'Cheap'
+
+public enum Dear implements Probe
+	only
+
+	public function probe() returns bool
+		return Clock.threadCpuTicks() > 0
+	end 'probe'
+end 'Dear'
+
+function use(item Probe) returns bool
+	return item.probe()
+end 'use'
+
+function cheapSide() returns bool
+	return use(Cheap.only)
+end 'cheapSide'
+
+public function fetch() returns Dear
+	if cheapSide() 'cheap'
+		return Dear.only
+	end 'cheap'
+
+	return Dear.only
+end 'fetch'
+
+public function driveDear() returns bool
+	return fetch() == Dear.only
+end 'driveDear'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	if fetch() == Dear.only and driveDear() 'both'
+		return 4
+	end 'both'
+
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:44:10: 'stdlib.__spec_tier__.main' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:45:5: 'fetch' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+error E3104: <fragment>:45:30: 'driveDear' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
 <!-- test: stdlib-loading.unreached-user-helper-is-still-refused -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The other side of the reachability asymmetry: `reader` is the program's own function, so the call to

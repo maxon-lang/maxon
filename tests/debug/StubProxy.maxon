@@ -12,11 +12,18 @@ let AdvertiseVariable = "MAXON_PROXY_ADVERTISE"
 let AnswerMode = "answer"
 let LateHaltMode = "late-halt"
 let SilentMode = "silent"
+let ProbeAnswerMode = "probe-answer"
+let ProbeSwallowMode = "probe-swallow"
 let SmallBufferMode = "small-buffer"
 let AdvertiseYes = "yes"
 let AdvertiseNo = "no"
 export let ProxyRefusedMarker = "refused "
 export let ProxyAnsweredMarker = "answered "
+export let ProxySawMarker = "saw "
+export let ProxySwallowedMarker = "swallowed "
+export let ProxyInterruptWording = "interrupt"
+export let ProxyResumeRequest = "vCont"
+export let ProxyDetachRequest = "D\n"
 let PathVariableName = "PATH"
 let PathEntrySeparator = ":"
 
@@ -63,6 +70,21 @@ export function smallBufferProxyEnvironment(proxyDirectory FilePath, trace FileP
 
 	return Environment.inheritUpdating(overrides)
 end 'smallBufferProxyEnvironment'
+
+export function traceAfterTheInterrupt(traced String) returns String
+	return try traced.split("{ProxySawMarker}{ProxyInterruptWording}\n").get(1) otherwise ""
+end 'traceAfterTheInterrupt'
+
+export function probeAnsweredProxyEnvironment(proxyDirectory FilePath, trace FilePath, answer String) returns Environment
+	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: ProbeAnswerMode)
+	overrides.upsert(InjectPayloadVariable, value: answer)
+
+	return Environment.inheritUpdating(overrides)
+end 'probeAnsweredProxyEnvironment'
+
+export function probeSwallowedProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
+	return Environment.inheritUpdating(proxyOverrides(proxyDirectory, trace: trace, mode: ProbeSwallowMode))
+end 'probeSwallowedProxyEnvironment'
 
 export function lateHaltProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
 	return Environment.inheritUpdating(proxyOverrides(proxyDirectory, trace: trace, mode: LateHaltMode))

@@ -89,15 +89,6 @@ let DarwinScNprocessorsOnln = 58
 // ⭐⭐ **`MSG_NOSIGNAL` — AND THE TWO POSIX LANES DISAGREE ABOUT ITS VALUE, WHICH IS WHY IT IS HERE AND
 // NOT IN `PosixRuntime`.** Darwin's is **0x80000** (`MacOSX.sdk/usr/include/sys/socket.h:594`) and Linux's
 // is 0x4000 (`LinuxMsgNoSignal`); the flag word is a lowering's argument on both, so each names its own.
-//
-// ⛔⛔ **WITHOUT IT A SEND ON A CLOSED PEER KILLS THE PROCESS, AND THAT IS MEASURED ON BOTH LANES.** A
-// `send` to a socket whose peer has gone raises SIGPIPE, whose default disposition is TERMINATE — and this
-// backend installs no signal handlers, so the program dies by signal instead of reporting
-// `__ManagedSocketError.sendFailed`. MEASURED with a `socketpair` whose read end was closed: with the flag
-// the call answers -1/`EPIPE` and the probe exits 0; without it the probe dies with exit 141 on Darwin and
-// on an aarch64 Linux guest alike, and flag 0x4000 on Darwin dies the same way — the value is not shared.
-// Windows needs no counterpart: there is no SIGPIPE to suppress, which is why `SendRecvNoFlags` stands
-// unqualified on that lane.
 let DarwinMsgNoSignal = 0x80000
 
 // The `madvise` advice that DECOMMITS a range on Darwin. Here rather than in `PosixMmap` for exactly
@@ -2591,8 +2582,8 @@ export type StdToArm64Lowering
 	end 'lowerLinuxSocketTransfer'
 
 	// The flag word a transfer is given. ⚠ **`MSG_NOSIGNAL` IS A SEND-ONLY FLAG AND ITS VALUE IS PER-OS**
-	// (`DarwinMsgNoSignal`/`LinuxMsgNoSignal` — see the first for the SIGPIPE measurement), so the receive
-	// direction passes the same `SendRecvNoFlags` zero Windows passes for both directions.
+	// (`DarwinMsgNoSignal`/`LinuxMsgNoSignal`), so the receive direction passes the same `SendRecvNoFlags`
+	// zero Windows passes for both directions.
 	function socketTransferFlags(suppressSigpipe bool) returns MachineWord
 		if not suppressSigpipe 'receiving'
 			return SendRecvNoFlags as MachineWord
@@ -2815,7 +2806,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: posixStreamFd(stream)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
-		self.lowerStatusAnswer(resultId, callee: self.hostCalleeOn(OsImportSlot.write, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallWrite)), darwinFold: HostStatusOrErrnoName, dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostWriteStreamName), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsWriteStream'
 
 	// Lower `atomicCas`/`atomicRmw` — ONE macro-op each, operands left VIRTUAL. Unlike every OS

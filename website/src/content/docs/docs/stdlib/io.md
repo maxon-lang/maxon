@@ -135,7 +135,7 @@ already spelled `\\?\` or `\\.\` is passed as written.
 | `anchoredAt(base FilePath)` | `FilePath` | A relative path joined onto `base`, or an absolute path kept. Only what cannot change the file named is folded — `.` components, repeated separators and a trailing one — and every `..` is left for the filesystem, so through a symbolic link it names the file the spelling names. On Windows a drive-relative path (`C:foo`) is joined onto a `base` rooted on the same drive; against any other `base` it stays drive-relative, because it names that drive's current directory. |
 | `resolve(base FilePath)` | `FilePath` | `anchoredAt(base)`, then folded as `normalize()` folds it — lexically, so a `..` after a symbolic link cancels the link's name. |
 | `resolvedPhysically()` | `FilePath` | The path's one physical spelling, which the filesystem answers: every symbolic link along it is followed, every `..` is taken against the directory the walk has reached, and a relative path is taken against the working directory. Two spellings of one file answer the same path, so it is the path to key a cache or a lock by; the lexical `normalize()` gives each spelling a key of its own. On Windows the `\\?\` prefix is dropped and a network path comes back as `\\server\share\…`; a volume reachable only as `\\?\Volume{…}\` throws `failed`. Throws `PathResolveError.notFound` when the path names nothing, `accessDenied` when the process may not look it up, and `failed` for any other refusal, which on Linux includes an unmounted `/proc`. Refused on `wasm32-wasi` with E3104 ([Target support](/docs/stdlib/#target-support)). |
-| `relativeTo(base FilePath)` | `FilePath` | The part after `base`. Throws `FilePathError.noParent` when the path is not inside `base`. |
+| `relativeTo(base FilePath)` | `FilePath` | The part after `base`, matched by `comparisonSpelling()`. Throws `FilePathError.noParent` when the path is not inside `base`. |
 | `normalize()` | `FilePath` | The path folded lexically, without asking the filesystem: `.` components removed, each `..` cancelling the component before it, repeated separators collapsed and a trailing one dropped. A `..` above an absolute path's root is dropped; a leading one in a relative path is kept. A relative path that folds away entirely is `.`. |
 | `toString()` | `String` | The path text. |
 
@@ -147,9 +147,9 @@ already spelled `\\?\` or `\\.\` is passed as written.
 | `isAbsolute()` | `bool` | On Windows a drive path (`C:\`), a UNC path (`\\server`) or a rooted path (`\dir`); a leading `/` elsewhere. |
 | `isRelative()` | `bool` | Not absolute. |
 | `isInside(dir FilePath)` | `bool` | The path equals `dir` or lies beneath it, compared by whole components (`/foo/bar` is not inside `/foo/ba`). |
-| `startsWith(prefix FilePath)` | `bool` | Component-wise prefix test. |
+| `startsWith(prefix FilePath)` | `bool` | Component-wise prefix test of `comparisonSpelling()`. |
 | `equals(other FilePath)`, `hash()` | | Host filesystem semantics: they compare `comparisonSpelling()`. |
-| `comparisonSpelling()` | `String` | The path as the host compares paths: lower-cased on Windows, as written on macOS and Linux. `equals`, `hash` and `isInside` compare this spelling, so it is the one to key a map or a digest by. |
+| `comparisonSpelling()` | `String` | The path as the host compares paths: lower-cased on Windows, as written on macOS and Linux. `equals`, `hash`, `isInside`, `startsWith` and `relativeTo` compare this spelling, so it is the one to key a map or a digest by. |
 
 ```maxon
 enum FilePathError implements Error
@@ -254,7 +254,7 @@ the life of the program: a new reader does not see input an earlier one already 
 | `Console.stdin()` | `StdinReader` | — | A reader over standard input with nothing buffered. Its source is a `StdinSource`, whose `readSome(most ReadCapacity)` reads up to `most` bytes of standard input, an empty array at its end. |
 | `Console.stdoutWantsColor()` | `bool` | — | True when standard output is a terminal, `NO_COLOR` is unset and `TERM` is other than `dumb` (compared case-insensitively): output may then carry ANSI escapes. `NO_COLOR` set to any value turns colour off; Windows reads an empty value as unset. `false` on `wasm32-wasi`. |
 
-`readLine()` answers `LineRead.line(text)` without the `\n` or a `\r` before it, a last line with no
+`readLine()` answers `LineOrEnd.line(text)` without the `\n` or a `\r` before it, a last line with no
 terminator included, and `ended` once input has ended; `readBytes(n)` answers up to `n` bytes, unchanged, from
 the same buffer.
 
@@ -264,8 +264,7 @@ function echoLine(stdin StdinReader) returns bool
 
 	match read 'read'
 		line(text) then print("[{text}]\n")
-		ended or
-		pastTheCap then return false
+		ended then return false
 	end 'read'
 
 	return true
@@ -307,16 +306,22 @@ arrives, and an empty array only at the end of the stream.
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `StreamReader.over(source Source)` | `StreamReader` | — | A reader over `source` with nothing buffered. |
-| `readLine(cap LineCap = DefaultLineCap)` | `LineRead` | `StreamError` | `line(text)` without its LF or a CR before it, a last line with no LF included; `ended` at the end of the stream; `pastTheCap` when no LF arrives within `cap` bytes. |
-| `readUntil(delimiter String, cap LineCap)` | `LineRead` | `StreamError` | The text up to `delimiter`, nothing stripped; the delimiter is consumed. `ended` when the stream ends before a delimiter, and `pastTheCap` as `readLine`. |
+| `readLine()` | `LineOrEnd` | `StreamError` | `line(text)` without its LF or a CR before it, however long, a last line with no LF included; `ended` at the end of the stream. |
+| `readLineWithin(cap LineCap)` | `LineRead` | `StreamError` | `line(text)` and `ended` as `readLine`; `pastTheCap` when no LF arrives within `cap` bytes. |
+| `readUntil(delimiter String, cap LineCap)` | `LineRead` | `StreamError` | The text up to `delimiter`, nothing stripped; the delimiter is consumed. `ended` when the stream ends before a delimiter, and `pastTheCap` as `readLineWithin`. |
 | `readBytes(count BytePos)` | `isolated ByteArray` | `StreamError` | Exactly `count` bytes, fewer only at the end of the stream. |
 | `readToEnd()` | `isolated ByteArray` | `StreamError` | Every byte left. |
 | `unreadBytes()` | `BytePos` | — | The bytes read from the source and not yet handed out. |
 
-`pastTheCap` consumes nothing: the bytes stay buffered and the next read sees them. `DefaultLineCap` is 1 MiB;
-`StreamMessageCap`, 64 MiB, is the cap for a line that carries a whole protocol message.
+`pastTheCap` consumes nothing: the bytes stay buffered and the next read sees them. `StreamMessageCap`, 64 MiB,
+is the cap for a line that carries a whole protocol message.
 
 ```maxon
+union LineOrEnd
+	line(text String)
+	ended
+end 'LineOrEnd'
+
 union LineRead
 	line(text String)
 	ended
@@ -364,8 +369,7 @@ function main() returns ExitCode
 
 	let line = match first 'first'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'first'
 
 	print("{line} {String.from(rest)}")
@@ -832,7 +836,7 @@ override's spelling, and a map that names one variable in two spellings makes th
 |-------------|-------------------|
 | `none` | Closed; reads see end of input immediately |
 | `inherit` | This process's stdin |
-| `bytes(data)` | `data` whole, NUL bytes included, then end of input |
+| `bytes(data)` | `data` whole, NUL bytes included, then end of input. A child that exits or closes its stdin before reading all of it ends the feed, and the run reports the child's own exit status |
 | `file(path)` | The file's contents |
 | `hold` | A pipe that stays open and silent until the child exits, so a read blocks |
 
@@ -977,7 +981,7 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory WorkingDirectory, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory and an environment. |
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory WorkingDirectory, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
-| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws `ioFailed` when the write fails, a broken pipe included. |
+| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws `ioFailed` when the write fails, including a write to a child that has exited or closed its stdin. |
 | `writeStdin(text String)` | — | `SubprocessError` | Write `text` exactly as given, NUL bytes included, for a framed protocol. Throws as `writeStdinLine`. |
 | `takeStdout()` | `isolated ChildOutputReader` | `SubprocessError` | Take the child's stdout out as a [`StreamReader`](#stream), once: a second take throws `ioFailed`, and so does a take once the handle is released. The reader shares no data with the child, so a coroutine or a service can read it beside the child's owner. |
 | `takeStderr()` | `isolated ChildOutputReader` | `SubprocessError` | As `takeStdout()`, for the child's stderr. Reading stderr beside stdout keeps a child that writes a lot of it from blocking on a full pipe. |
@@ -1039,8 +1043,7 @@ function main() returns ExitCode
 
 	let line = match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 
 	let code = try child.wait() otherwise (e) 'wait'

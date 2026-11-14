@@ -1,0 +1,18 @@
+let AcceptedCommandName = "coverage"
+let AcceptedVerbName = "run"
+let AcceptedExecutableName = "never-launched.exe"
+let LeastTimeoutFlag = "--timeout=0.001"
+let OutOfRangeWording = "from 0.001 to 922337203685"
+
+test 'a coverage deadline of exactly the least a target takes passes the flag and fails only at the missing program'
+	let arguments = StringArray.create(0)
+	arguments.push(AcceptedCommandName)
+	arguments.push(AcceptedVerbName)
+	arguments.push(AcceptedExecutableName)
+	arguments.push(LeastTimeoutFlag)
+
+	let run = spawnCompiler(arguments, what: "`{TestedCompilerStem} {AcceptedCommandName} {AcceptedVerbName} {LeastTimeoutFlag}`")
+
+	Expect.notEqual(run.exitCode(), expected: 0, message: "a run of a program that does not exist succeeded")
+	Expect.isFalse(run.stderr.contains(OutOfRangeWording), message: "the least deadline was refused as out of range: {run.stderr}")
+end 'a coverage deadline of exactly the least a target takes passes the flag and fails only at the missing program'

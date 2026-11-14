@@ -838,6 +838,7 @@ end 'heldValueOf'
 function promiseCarriersOf(module MaxonModule, func IrFunction, promise ValueId) returns ValueIdArray
 	let carriers = ValueIdArray.create(0)
 	carriers.push(promise)
+	let byId = module.blockIndexById(func)
 	var grew = true
 
 	while grew 'untilNoMoreCarriers'
@@ -847,16 +848,16 @@ function promiseCarriersOf(module MaxonModule, func IrFunction, promise ValueId)
 			let block = module.getBlock(blockRef)
 
 			for edge in block.branchEdges 'eachEdge'
-				let target = try module.getBlockByIdIn(func, id: edge.targetBlockId) otherwise continue
+				let target = try module.getBlockByIdThrough(func, byId: byId, id: edge.targetBlockId) otherwise panic("promiseCarriersOf: an edge names block {edge.targetBlockId}, which is not in the function")
 
 				for position in 0 upto edge.argIds.count() 'eachArgument'
-					let argument = try edge.argIds.get(position) otherwise continue
+					let argument = try edge.argIds.get(position) otherwise panic("promiseCarriersOf: argIds.get OOB at {position} despite the upto bound")
 
 					if not carriers.contains(argument) 'notThePromise'
 						continue
 					end 'notThePromise'
 
-					let phi = (try target.blockArgs.get(position) otherwise continue).valueId
+					let phi = (try target.blockArgs.get(position) otherwise panic("promiseCarriersOf: an edge passes argument {position} to block {edge.targetBlockId}, which has {target.blockArgs.count()} block argument(s)")).valueId
 
 					if not carriers.contains(phi) 'aNewCarrier'
 						carriers.push(phi)

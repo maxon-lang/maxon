@@ -783,7 +783,7 @@ A generic function's arguments give one type parameter two types with no common 
 
 ### E3181 — `genericArgumentKindUnsupported`
 
-A generic function's type parameter would be inferred from an argument of a kind it cannot take. A type parameter binds a number, `String`, `bool`, `Character`, a typealias, a record or an enum; a function value, an `Array` or other generic instance, an interface value or a `cstring` is none of those. Reported at the call.
+A generic function's type parameter would be inferred from an argument of a kind it cannot take. A type parameter binds a number (a ranged typealias included), `String`, `bool`, `Character`, a `type` declaration or an enum; a function value, an `Array` or other generic instance (whichever typealias names it), an interface value or a `cstring` is none of those. Reported at the call.
 
 ### E3182 — `namespaceDirectoryNotNameable`
 

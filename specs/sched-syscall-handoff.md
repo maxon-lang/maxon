@@ -352,11 +352,10 @@ sentinel directly while the read is still in the kernel.
 green threads, and a machine inside a kernel call is a running machine to the deadlock check, so the drain
 waits on it rather than calling it stuck.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 end 'textOf'
 
@@ -372,7 +371,7 @@ type Reader
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
 		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
 		print("R: read returned\n")
 
 		let n = line.count()
@@ -437,11 +436,10 @@ third.
 ⚠ **It pins an ORDER, not a count.** `MAXON_MAX_PROCS` is taken exactly, so the runtime has four
 processors on every host, a one-core machine included.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 end 'textOf'
 
@@ -457,7 +455,7 @@ type Reader
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
 		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
 		print("R: read returned\n")
 
 		let n = line.count()
@@ -520,11 +518,10 @@ ring while the reader holds it inside the kernel. The line therefore appears onl
 processor from the blocked machine, and `retaken=no` beside it would mean the order was bought some other
 way.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 end 'textOf'
 
@@ -540,7 +537,7 @@ type Reader
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
 		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
 		print("R: read returned\n")
 
 		let n = line.count()
@@ -781,11 +778,10 @@ for `sched-processor.md`'s reason: a sleep would start a machine of its own.
 ⚠ **ONLY A HANDOFF FOLLOWED BY A STRANDED PROBE IS THE FAULT THIS CASE GATES.** On a single-processor host there
 is no spare processor to start and the case passes without having asked the question.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 end 'textOf'
 
@@ -802,7 +798,7 @@ type Reader
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
 		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
+		let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
 		print("R: read returned\n")
 
 		let n = line.count()
@@ -916,11 +912,10 @@ the read is still in the kernel. `main` prints its ready line, sends the ping, a
 print before the read returns, which the harness's feed on the sentinel's line makes true by construction. A
 processor that `main`'s read kept would leave the sentinel unrun and the runner would report the case TIMED OUT.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 end 'textOf'
 
@@ -944,7 +939,7 @@ function main() returns ExitCode
 	let sentinel = spawn Sentinel.create()
 	print("M: reading\n")
 	let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-	let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
+	let line = textOf(try Console.stdin().readLine() otherwise LineOrEnd.ended)
 	print("M: read returned\n")
 
 	let tail = await tailReply

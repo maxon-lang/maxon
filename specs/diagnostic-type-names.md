@@ -566,7 +566,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3181: <fragment>:12:10: type parameter 'T' of 'ident' cannot be 'Counts': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum
+error E3181: <fragment>:12:10: type parameter 'T' of 'ident' cannot be 'Counts': a generic function's type parameter is inferred as a number (a ranged typealias included), `String`, `bool`, `Character`, a `type` declaration or an enum; a generic instance, whichever typealias names it, is none of these
 ```
 
 <!-- test: error.a-union-and-an-int-on-an-operator-names-the-union -->
@@ -1749,4 +1749,22 @@ end 'main'
 ```
 ```stdout
 3 -2 4 2 -3 false true true false
+```
+
+<!-- test: error.a-generic-function-argument-of-a-typealiased-reader-names-the-alias -->
+`StdinReader` is a typealias of a generic instance, so it is none of the kinds a type parameter binds.
+
+```maxon
+function same(value Item) uses Item returns Item
+	return value
+end 'same'
+
+function main() returns ExitCode
+	let reader = Console.stdin()
+	let again = same(reader)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3181: <fragment>:8:14: type parameter 'Item' of 'same' cannot be 'StdinReader': a generic function's type parameter is inferred as a number (a ranged typealias included), `String`, `bool`, `Character`, a `type` declaration or an enum; a generic instance, whichever typealias names it, is none of these
 ```

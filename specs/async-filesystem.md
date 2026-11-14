@@ -260,11 +260,12 @@ FileAFileB
 <!-- test: async-filesystem.async-read-through-a-handle-holding-struct -->
 <!-- tier: stdlib -->
 ### A struct holding a `__ManagedFile`, spawned as an `async` argument
-⭐ **AN `async` ARGUMENT MOVES, NEVER DEEP-COPIED, AND A HANDLE BOX IS WHY THAT DISTINCTION IS
-LOAD-BEARING.** Duplicating an OS handle would hand two owners a handle whose `__mf_destruct` closes it
-once. `holder` is a local, so it moves into the coroutine: the reference transfers, the box keeps one
-owner, and the coroutine's release closes the handle once. The deep-copy road is refused for exactly the
-types `typeSupportsDeepClone` refuses.
+⭐ **AN `async` ARGUMENT THAT HOLDS A HANDLE IS LENT, NEVER DEEP-COPIED, AND A HANDLE BOX IS WHY THAT
+DISTINCTION IS LOAD-BEARING.** Duplicating an OS handle would hand two owners a handle whose
+`__mf_destruct` closes it once. `holder` is a unique local, so `async readOn(holder)` lends it to the
+coroutine until `p` is awaited: the box keeps one owner, a read of `holder` before the await is **E3102**,
+and after the await `holder` is the caller's again and its scope end closes the handle once. The
+deep-copy road is refused for exactly the types `typeSupportsDeepClone` refuses.
 ```maxon
 enum HolderError implements Error
 	openFailed

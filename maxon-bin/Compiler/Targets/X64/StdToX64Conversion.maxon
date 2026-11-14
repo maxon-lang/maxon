@@ -2838,45 +2838,18 @@ export type StdToX64Lowering
 	// loops rather than one `WriteFile` — `mrt_write_stream` (X64Runtime) holds all of it, and its own
 	// frame carries every outgoing word those calls need. `callDirect` declares the caller-saved set, so
 	// `buf`/`len` are spilled or forced callee-saved by the allocator with no hand-holding.
-	// ⭐ ON LINUX THE PRIMITIVE IS A SINGLE `write(fd, buf, len)` syscall — no handle call, no chunk, no
-	// bytes-written out-param, no stack argument. The three arguments move into rdi/rsi/rdx (the Linux
-	// syscall's first three), where Win64 uses rcx/rdx/r8; `buf`/`len` move forward soundly because each
-	// physical arg-register def liveness forbids to a value live across it.
 	function lowerOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsWriteStreamWin64(resultId, bufId: bufId, lenId: lenId, stream: stream, dstBlock: dstBlock)
-			syscall then self.lowerOsWriteStreamLinux(resultId, bufId: bufId, lenId: lenId, stream: stream, dstBlock: dstBlock)
+		let selector = match x64OsCallKind(self.target.os) 'route'
+			importCall gives win64StdHandleSelector(stream)
+			syscall gives posixStreamFd(stream)
 		end 'route'
-	end 'lowerOsWriteStream'
 
-	// Win64: `mrt_write_stream(rcx = selector, rdx = buf, r8 = len)`, one hand-assembled chunk, answering the
-	// accepted byte count in RAX.
-	//
-	// ⭐⭐ **THE CONVERSION EXISTS ONCE BECAUSE THE CHUNK DOES.** A console consumes UTF-16 and a pipe
-	// consumes bytes, so the write path has to probe the stream and widen for one of them; open-coding that
-	// here would put a second copy beside the hand-assembled `mrt_write_cstr_stderr` the panic path calls,
-	// free to drift on exactly the buffer arithmetic that is hardest to get right. See `X64Runtime`.
-	//
-	// The selector is an immediate rather than an operand for `win64StdHandleSelector`'s reason: the STREAM
-	// is a compile-time fact here, and the chunk maps the selector back to its own per-stream cache cell.
-	function lowerOsWriteStreamWin64(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: win64StdHandleSelector(stream)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: selector))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(WriteStreamName))
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
-	end 'lowerOsWriteStreamWin64'
-
-	// Linux: a single `write(fd, buf, len)` syscall, args rdi/rsi/rdx — no handle, no out-param, no stack.
-	// The syscall answers the byte count (or a negative errno) in RAX, exactly as `lowerOsAllocPages`'s
-	// `mmap` answers its base there.
-	function lowerOsWriteStreamLinux(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: posixStreamFd(stream)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(bufId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallWrite))
-		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
-	end 'lowerOsWriteStreamLinux'
+	end 'lowerOsWriteStream'
 
 	// Lower `osReadClock(ticksPtr, freqPtr)` to the x64-windows monotonic clock reads:
 	// `QueryPerformanceFrequency(&freq)` then `QueryPerformanceCounter(&ticks)`, both through the IAT.
@@ -3817,11 +3790,6 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsSocketTransfer'
 
-	// ⛔⛔ **`MSG_NOSIGNAL` IS NOT OPTIONAL ON THE SEND SIDE.** A `sendto` on a stream socket whose peer has
-	// gone raises SIGPIPE, whose default disposition is TERMINATE, and this lane installs no handler for it —
-	// so without the flag the program dies by signal instead of reporting `sendFailed` (MEASURED: exit 141
-	// with a flag word of 0, `-EPIPE` and a clean exit with `LinuxMsgNoSignal`). It is a SEND-only flag, so
-	// the receive direction passes the same `SendRecvNoFlags` zero Windows passes for both.
 	function emitLinuxSocketTransfer(syscallNumber MachineWord, resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, suppressSigpipe bool, dstBlock IrBlock)
 		let flags = LinuxMsgNoSignal if suppressSigpipe else SendRecvNoFlags as MachineWord
 

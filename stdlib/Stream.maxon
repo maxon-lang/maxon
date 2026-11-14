@@ -2,7 +2,7 @@ public typealias ReadCapacity = int(1 to i64.max)
 
 public typealias LineCap = int(0 to u64.max) implements BytePos
 
-public let DefaultLineCap = 1048576 as LineCap
+let UnboundedLineCap = u64.max as LineCap
 
 public let StreamMessageCap = 64 * 1024 * 1024 as LineCap
 
@@ -38,6 +38,11 @@ public union LineRead
 	pastTheCap
 end 'LineRead'
 
+public union LineOrEnd
+	line(text String)
+	ended
+end 'LineOrEnd'
+
 union UntilRead
 	text(length BytePos)
 	ended
@@ -64,9 +69,20 @@ public type StreamReader uses Source where Source is ByteSource
 		return self.backlog.unread()
 	end 'unreadBytes'
 
-	/// The next line without its LF or a CR before it. `pastTheCap` when no LF arrives within `cap`
-	/// bytes, which stay buffered.
-	public function readLine(cap LineCap = DefaultLineCap) returns LineRead throws StreamError
+	/// The next line without its LF or a CR before it, however long it is.
+	public function readLine() returns LineOrEnd throws StreamError
+		let read = try self.readLineWithin(UnboundedLineCap)
+
+		match read 'read'
+			line(text) then return LineOrEnd.line(text)
+			ended then return LineOrEnd.ended
+			pastTheCap then panic("StreamReader.readLine: a read with no cap never passes one")
+		end 'read'
+	end 'readLine'
+
+	/// The next line as `readLine` reads it, or `pastTheCap` when no LF arrives within `cap` bytes, which
+	/// stay buffered.
+	public function readLineWithin(cap LineCap) returns LineRead throws StreamError
 		let read = try self.seekDelimiter(LineFeed, cap: cap)
 
 		match read 'read'
@@ -74,9 +90,9 @@ public type StreamReader uses Source where Source is ByteSource
 			ended then return try self.finalLine()
 			pastTheCap then return LineRead.pastTheCap
 		end 'read'
-	end 'readLine'
+	end 'readLineWithin'
 
-	/// The text up to `delimiter`, which is consumed and not returned; `pastTheCap` as `readLine`.
+	/// The text up to `delimiter`, which is consumed and not returned; `pastTheCap` as `readLineWithin`.
 	public function readUntil(delimiter String, cap LineCap) returns LineRead throws StreamError
 		let read = try self.seekDelimiter(delimiter, cap: cap)
 

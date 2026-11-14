@@ -561,6 +561,8 @@ function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns Fu
 		arm64EmitDarwinSigactionInstall(asm, handlerName: PreemptHandlerName, signal: DarwinSignalUrg, actSlot: SlotSigaction)
 	end 'itCanStopAThread'
 
+	arm64EmitDarwinSigactionInstall(asm, handlerName: SigpipeHandlerName, signal: PosixSignalPipe as Imm32, actSlot: SlotSigaction)
+
 	arm64EmitSigactionDefault(asm, actSlot: SlotSigaction, handlerOffset: DarwinSigactionOffHandler)
 	arm64EmitDarwinSigactionCall(asm, signal: DarwinSignalChld, actSlot: SlotSigaction)
 
@@ -634,6 +636,8 @@ function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, targ
 		arm64EmitLinuxSigactionInstall(asm, handlerName: PreemptHandlerName, signal: LinuxSignalUrg, actSlot: SlotSigaction)
 	end 'itCanStopAThread'
 
+	arm64EmitLinuxSigactionInstall(asm, handlerName: SigpipeHandlerName, signal: PosixSignalPipe as MachineWord, actSlot: SlotSigaction)
+
 	arm64EmitSigactionDefault(asm, actSlot: SlotSigaction, handlerOffset: LinuxSigactionOffHandler as MachineWord)
 	arm64EmitLinuxSigactionCall(asm, signal: LinuxSignalChld, actSlot: SlotSigaction)
 
@@ -657,6 +661,69 @@ function arm64EmitLinuxSigactionCall(asm Arm64RuntimeAsm, signal MachineWord, ac
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSigsetBytes)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRtSigaction)
 end 'arm64EmitLinuxSigactionCall'
+
+function buildArm64SigpipeHandlerChunk() returns FunctionCodeChunk
+	let asm = Arm64RuntimeAsm.beginFunction(0)
+
+	return asm.finishFunction(SigpipeHandlerName)
+end 'buildArm64SigpipeHandlerChunk'
+
+function buildArm64SigpipeDieChunk(os Os) returns FunctionCodeChunk
+	let SlotSigaction = 0
+	let SlotProcess = LinuxSigactionSlots
+	let asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots + 1)
+
+	arm64EmitZeroSlots(asm, firstSlot: SlotSigaction, slotCount: LinuxSigactionSlots)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixSignalPipe as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotSigaction)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixDeclinePrevious)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSigsetBytes as MachineWord)
+	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.sigaction, syscallNumber: Arm64LinuxSyscallRtSigaction)
+
+	match arm64OsCallKind(os) 'raise'
+		importCall then emitArm64DarwinRaiseSigpipe(asm)
+		syscall then emitArm64LinuxRaiseSigpipe(asm, processSlot: SlotProcess)
+	end 'raise'
+
+	arm64EmitProcessExit(asm, os: os, exitCode: (PosixSignalExitBase + PosixSignalPipe) as MachineWord)
+
+	return asm.finishFunction(SigpipeDieName)
+end 'buildArm64SigpipeDieChunk'
+
+function emitArm64DarwinRaiseSigpipe(asm Arm64RuntimeAsm)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.pthreadSelf)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSignalPipe as MachineWord)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadKill)
+end 'emitArm64DarwinRaiseSigpipe'
+
+function emitArm64LinuxRaiseSigpipe(asm Arm64RuntimeAsm, processSlot StackSize)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetPid)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: processSlot)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGettid)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: processSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSignalPipe as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallTgkill)
+end 'emitArm64LinuxRaiseSigpipe'
+
+function buildArm64WriteStreamChunk(os Os) returns FunctionCodeChunk
+	let asm = Arm64RuntimeAsm.beginFunction(0)
+	let answered = asm.newLabel()
+
+	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.write, syscallNumber: Arm64LinuxSyscallWrite)
+
+	match arm64OsCallKind(os) 'fold'
+		importCall then arm64DarwinEmitStatusOrErrno(asm)
+		syscall then break
+	end 'fold'
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.brokenPipe.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SigpipeDieName)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostWriteStreamName)
+end 'buildArm64WriteStreamChunk'
 
 // ==========================================================================
 // Assembly
@@ -689,6 +756,9 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 		chunks.push(buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures))
 	end 'sizedFromTheAuxiliaryVector'
 
+	chunks.push(buildArm64SigpipeHandlerChunk())
+	chunks.push(buildArm64SigpipeDieChunk(target.os))
+	chunks.push(buildArm64WriteStreamChunk(target.os))
 	chunks.push(buildArm64FaultHandlerChunk(globalData, os: target.os, usesGt: usesGt))
 	chunks.push(buildArm64FaultBacktraceChunk(globalData))
 	chunks.push(buildArm64WriteHexChunk())

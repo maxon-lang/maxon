@@ -1457,11 +1457,11 @@ type RangeCheckEmitter
 	// split point each time. Tracking one without the other measures the (k+1)-th offset against a block
 	// it is no longer in.
 	//
-	// ⚠ **THIS RESOLVES THROUGH AN INDEX, NOT `IrModule.getBlockByIdIn`, AND THE DIFFERENCE IS A GROWTH
-	// CURVE.** `getBlockByIdIn` is a LINEAR SCAN of `func.blockRefs`; called once per guard site it made
-	// this pass **O(sites × blocks)** — and worse than the plain product, because every guard this pass
-	// emits APPENDS TWO BLOCKS to the very set the next site's scan walks (`__rc_ok`, `__rc_panic`), so the
-	// k-th site scanned a set the previous k-1 had grown. `buildBlockIdIndex`/`blockById` are the cure that
+	// ⚠ **THIS RESOLVES THROUGH AN INDEX, NOT A SCAN OF `func.blockRefs`, AND THE DIFFERENCE IS A GROWTH
+	// CURVE.** A LINEAR SCAN called once per guard site would make this pass **O(sites × blocks)** — and
+	// worse than the plain product, because every guard this pass emits APPENDS TWO BLOCKS to the very set
+	// the next site's scan walks (`__rc_ok`, `__rc_panic`), so the k-th site would scan a set the previous
+	// k-1 had grown. `buildBlockIdIndex`/`blockById` are the cure that
 	// already existed for exactly this shape one pass over: `pruneDeadBlockArgs` introduced them because
 	// resolving an edge per call "would be O(edges × blocks), the shape the allocator's data-representation
 	// contract exists to forbid", and `elimTrivialBlockArgs` shares them rather than keeping a second copy.

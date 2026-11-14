@@ -110,8 +110,7 @@ function main() returns ExitCode
 
 	let printed = match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 
 	let pid = try int.fromString(printed.trim()) otherwise return 5

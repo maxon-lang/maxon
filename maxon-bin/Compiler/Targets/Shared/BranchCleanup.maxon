@@ -306,7 +306,7 @@ function returnTailsOf(module TargetModule, func IrFunction) returns ReturnTails
 	let tails = ReturnTailsByBlock.create()
 
 	for position in 1 upto func.blockRefs.count() 'eachBlockButTheEntry'
-		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("returnTailsOf: blockRefs.get OOB at {position}")) otherwise panic("returnTailsOf: a block ref of '{String.from(func.name)}' is not in module.blocks")
+		let block = module.blockAtPosition(func, position: position)
 
 		if block.bodyOpCount() > ReturnTailMaxBodyOps or block.hasCondBranchOp() or not terminatorReturns(module, block: block) 'notASmallReturn'
 			continue
@@ -476,7 +476,7 @@ function sinkColdBlocks(module TargetModule, func IrFunction)
 	var unitIsCold = true
 
 	for i in 0 upto blockCount 'eachBlock'
-		let block = try module.blocks.get(try func.blockRefs.get(i) otherwise panic("sinkColdBlocks: blockRefs.get OOB at {i}")) otherwise panic("sinkColdBlocks: blockRef at {i} not in module.blocks")
+		let block = module.blockAtPosition(func, position: i)
 		unitIsCold = unitIsCold and block.heat == BlockHeat.cold
 
 		if block.hasTerminatorOp() or i + 1 == blockCount 'unitEnds'

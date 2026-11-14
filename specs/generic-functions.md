@@ -32,8 +32,9 @@ A call never names `T`: it is inferred from the arguments whose parameters are d
   `int`. A float literal is a `float`.
 - Every type parameter must be the declared type of at least one parameter (**E3179**).
 - An inferred type that does not conform to a `where` interface is **E3017**.
-- A type parameter binds a number, `String`, `bool`, `Character`, a typealias, a record or an enum; an
-  argument of any other kind is **E3181**.
+- A type parameter binds a number (a ranged typealias included), `String`, `bool`, `Character`, a `type`
+  declaration or an enum; an argument of any other kind, a generic instance whichever typealias names it
+  among them, is **E3181**.
 
 Each distinct inferred type compiles its own copy of the function, in the declaring file, so the body is
 checked against the concrete type: `a > b` is an integer comparison for `int`, and `"{a}"` interpolates

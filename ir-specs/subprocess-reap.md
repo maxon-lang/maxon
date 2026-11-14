@@ -1235,7 +1235,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   ifcont#33:
-    x64.leaRegRdata rax, [rip + __str_rec_203]  ; "panic at Subprocess.maxon:1270: "
+    x64.leaRegRdata rax, [rip + __str_rec_203]  ; "panic at Subprocess.maxon:1250: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot17, rcx
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -1445,7 +1445,7 @@ func @main {
     x64.jmp __im_cont
   __rc_panic#238:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_258]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_258]  ; "panic at Array.maxon:494: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1458,7 +1458,7 @@ func @main {
     x64.retIndirect
   __rc_panic#166:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_334]  ; "panic at Subprocess.maxon:744: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_334]  ; "panic at Subprocess.maxon:740: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1510,7 +1510,7 @@ func @main {
     x64.retIndirect
   tryerr#116:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_182]  ; "panic at Subprocess.maxon:712: buildArgvBlob: args.get(i) out of bounds\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_182]  ; "panic at Subprocess.maxon:708: buildArgvBlob: args.get(i) out of bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1523,7 +1523,7 @@ func @main {
     x64.retIndirect
   __rc_panic#108:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_333]  ; "panic at Subprocess.maxon:243: Range check failed: value outside typealias 'Count'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_333]  ; "panic at Subprocess.maxon:242: Range check failed: value outside typealias 'Count'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1536,7 +1536,7 @@ func @main {
     x64.retIndirect
   tryerr#76:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_201]  ; "panic at Subprocess.maxon:988: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_201]  ; "panic at Subprocess.maxon:968: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1549,7 +1549,7 @@ func @main {
     x64.retIndirect
   __rc_panic#72:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_336]  ; "panic at Subprocess.maxon:1164: Range check failed: value outside typealias 'StreamingHandle'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_336]  ; "panic at Subprocess.maxon:1144: Range check failed: value outside typealias 'StreamingHandle'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -1562,7 +1562,7 @@ func @main {
     x64.retIndirect
   __rc_panic#35:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_337]  ; "panic at Subprocess.maxon:1251: Range check failed: value outside typealias 'ExitInt'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_337]  ; "panic at Subprocess.maxon:1231: Range check failed: value outside typealias 'ExitInt'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 360
@@ -2834,7 +2834,7 @@ func @main {
     arm64.epilogue 272
     arm64.retIndirect
   ifcont#33:
-    arm64.leaRdata x0, __str_rec_203  ; "panic at Subprocess.maxon:1270: "
+    arm64.leaRdata x0, __str_rec_203  ; "panic at Subprocess.maxon:1250: "
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot16, x1
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
@@ -3032,7 +3032,7 @@ func @main {
     arm64.b __im_cont
   __rc_panic#365:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_258  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_258  ; "panic at Array.maxon:494: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3049,7 +3049,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#166:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_334  ; "panic at Subprocess.maxon:744: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_334  ; "panic at Subprocess.maxon:740: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3117,7 +3117,7 @@ func @main {
     arm64.retIndirect
   tryerr#116:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_182  ; "panic at Subprocess.maxon:712: buildArgvBlob: args.get(i) out of bounds\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at Subprocess.maxon:708: buildArgvBlob: args.get(i) out of bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3134,7 +3134,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#108:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_333  ; "panic at Subprocess.maxon:243: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_333  ; "panic at Subprocess.maxon:242: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3151,7 +3151,7 @@ func @main {
     arm64.retIndirect
   tryerr#76:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_201  ; "panic at Subprocess.maxon:988: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
+    arm64.leaRdata x0, __str_blob_201  ; "panic at Subprocess.maxon:968: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3168,7 +3168,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#72:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_336  ; "panic at Subprocess.maxon:1164: Range check failed: value outside typealias 'StreamingHandle'\x0a"
+    arm64.leaRdata x0, __str_blob_336  ; "panic at Subprocess.maxon:1144: Range check failed: value outside typealias 'StreamingHandle'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -3185,7 +3185,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#35:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_337  ; "panic at Subprocess.maxon:1251: Range check failed: value outside typealias 'ExitInt'\x0a"
+    arm64.leaRdata x0, __str_blob_337  ; "panic at Subprocess.maxon:1231: Range check failed: value outside typealias 'ExitInt'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4451,7 +4451,7 @@ func @main {
     arm64.epilogue 272
     arm64.retIndirect
   ifcont#33:
-    arm64.leaRdata x0, __str_rec_203  ; "panic at Subprocess.maxon:1270: "
+    arm64.leaRdata x0, __str_rec_203  ; "panic at Subprocess.maxon:1250: "
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot16, x1
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
@@ -4649,7 +4649,7 @@ func @main {
     arm64.b __im_cont
   __rc_panic#365:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_258  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_258  ; "panic at Array.maxon:494: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4666,7 +4666,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#166:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_334  ; "panic at Subprocess.maxon:744: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_334  ; "panic at Subprocess.maxon:740: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4734,7 +4734,7 @@ func @main {
     arm64.retIndirect
   tryerr#116:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_182  ; "panic at Subprocess.maxon:712: buildArgvBlob: args.get(i) out of bounds\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at Subprocess.maxon:708: buildArgvBlob: args.get(i) out of bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4751,7 +4751,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#108:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_333  ; "panic at Subprocess.maxon:243: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_333  ; "panic at Subprocess.maxon:242: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4768,7 +4768,7 @@ func @main {
     arm64.retIndirect
   tryerr#76:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_201  ; "panic at Subprocess.maxon:988: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
+    arm64.leaRdata x0, __str_blob_201  ; "panic at Subprocess.maxon:968: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4785,7 +4785,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#72:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_336  ; "panic at Subprocess.maxon:1164: Range check failed: value outside typealias 'StreamingHandle'\x0a"
+    arm64.leaRdata x0, __str_blob_336  ; "panic at Subprocess.maxon:1144: Range check failed: value outside typealias 'StreamingHandle'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22
@@ -4802,7 +4802,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#35:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_337  ; "panic at Subprocess.maxon:1251: Range check failed: value outside typealias 'ExitInt'\x0a"
+    arm64.leaRdata x0, __str_blob_337  ; "panic at Subprocess.maxon:1231: Range check failed: value outside typealias 'ExitInt'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot22

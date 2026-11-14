@@ -56,7 +56,6 @@ function main() returns ExitCode
 	let echoed = match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 
 	let code = try child.wait() otherwise return 6

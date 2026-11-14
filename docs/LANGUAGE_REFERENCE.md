@@ -27,6 +27,11 @@ on `/dev/null`: reads see end of input, writes are discarded, and a child that i
 same. When the stream cannot be opened there, the program writes `fatal error: cannot open standard fds` to
 standard error and exits with code 2 before `main` runs.
 
+On Linux and macOS a write to standard output or standard error whose reader has gone ends the program by
+`SIGPIPE`, which a shell reports as status 141. A write to any other closed pipe, such as a child's stdin,
+fails with an error the program can handle, and a `SIGPIPE` sent to the program from outside is ignored. A
+child the program starts begins with the default `SIGPIPE` action.
+
 ### Files and Projects
 
 - A program is one `.maxon` file or a directory of them, compiled together. There are no `import`
@@ -215,7 +220,7 @@ else:
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](#regions-and-capabilities)) |
 | `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](#modify-blocks)) |
 | `freeze`, `swap`, `merge` | before an operand: a name, `self`, `Self`, `try`, or a parenthesis set apart by a space; `swap path with value` (see [Regions and Capabilities](#regions-and-capabilities)) |
-| `unique` | after `is` in a `type` or `interface` header (see [Unique Types](#unique-types)) |
+| `unique` | after `is` in a `type` header (see [Unique Types](#unique-types)) |
 | `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](#region-bounds)) |
 | `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)) |
 
@@ -3930,7 +3935,8 @@ one arm or statement per line, as anywhere else. The condition of a `#if` is wri
 
 ### Expression Statements
 
-A call on its own line is a statement. Its result must be used or explicitly discarded (see
+A call on its own line is a statement, a method call on a parenthesized receiver (`(b).bump()`) included.
+Its result must be used or explicitly discarded (see
 [Function Purity and Discarded Results](#function-purity-and-discarded-results)):
 
 ```maxon
@@ -6421,7 +6427,7 @@ operator over a parenthesized operand (`specs/regions-syntax.md`).
 | `immutable T` | frozen data; the same positions, and a type argument (`Array with immutable Box`) |
 | `mutable T` | on a parameter or function-type parameter, write access to what the caller passed (see [Parameter Passing](#parameter-passing)) |
 | `function f(immutable self)`, `function f(mutable self)` | the receiver's capability, written as the first parameter |
-| `let x = e as isolated T` | a local that is a region of its own |
+| `let x = e as isolated T` | a local that is a region of its own; `as isolated T` is the whole initializer |
 | `type T is unique` | values that move and are never copied or aliased (see [Unique Types](#unique-types)) |
 | `where T is isolated`, `where T is sendable` | bounds on a generic type's parameter (see [Region Bounds](#region-bounds)) |
 | `modify x 'label' … end 'label'` | opens an `isolated` value for several statements |
@@ -6633,7 +6639,8 @@ a generic method are judged as if they build a record from each unmarked argumen
 
 ### Separate Regions: `isolated`
 
-A field, parameter, result or local is declared `isolated`. A local takes the word after its initializer:
+A field, parameter, result or local is declared `isolated`. A local takes the word after its whole initializer
+(written inside a call argument, `as isolated T` is a syntax error):
 
 ```maxon
 let builder = IndexBuilder.create() as isolated IndexBuilder
@@ -6706,7 +6713,10 @@ Inside a block:
 
 A call that passes an `isolated` value in an unmarked position, as receiver or argument, opens it for that
 call. A statement that reads or writes through an un-opened `isolated` value (`lines.count()`,
-`job.number = 4`, `holder.page.lines.push("a")`) opens it for that statement. The same rules apply as in a
+`job.number = 4`, `holder.page.lines.push("a")`) opens it for that statement. A number read straight out of an
+`isolated` parameter (`self.total = self.total + point.x`) opens nothing, so the statement may write other
+data; a read through a record field of one (`point.inner.n`) opens the parameter and leaves the statement's
+other data read-only (**E3197**). The same rules apply as in a
 block: one `isolated` root per statement, every other operand a value, `immutable` data or a moved `isolated`
 value, and only values, `immutable` data and fresh `isolated` data leave. Two roots in one statement are
 **E3201** (``one statement reaches through two isolated values, 'left' and 'right'; a statement opens one

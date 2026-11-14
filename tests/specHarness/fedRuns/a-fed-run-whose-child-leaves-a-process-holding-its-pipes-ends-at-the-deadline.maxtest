@@ -1,0 +1,15 @@
+let FedRunHolderScenario = "holder"
+let FedRunChattyScenario = "chatty"
+let FedRunCleanScenario = "clean"
+let FedRunHolderVerdict = "deadline error after the deadline true, before the survivor's life ends true, survivor ended true"
+let FedRunCleanVerdict = "exit 0, stdout anchor|done|tail|, prompt true"
+
+test 'a fed run whose child leaves a process holding its pipes stops at its deadline and ends that process'
+	let broken = StringArray.create(0)
+
+	collectUnlessSaid(FedRunCleanScenario, verdict: FedRunCleanVerdict, broken: broken)
+	collectUnlessSaid(FedRunHolderScenario, verdict: FedRunHolderVerdict, broken: broken)
+	collectUnlessSaid(FedRunChattyScenario, verdict: FedRunHolderVerdict, broken: broken)
+
+	requireNothingBroken(broken, headline: "a fed run whose child leaves a process holding its pipes stops at its deadline and ends that process")
+end 'a fed run whose child leaves a process holding its pipes stops at its deadline and ends that process'

@@ -32,7 +32,8 @@ one arm or statement per line, as anywhere else. The condition of a `#if` is wri
 
 ## Expression Statements
 
-A call on its own line is a statement. Its result must be used or explicitly discarded (see
+A call on its own line is a statement, a method call on a parenthesized receiver (`(b).bump()`) included.
+Its result must be used or explicitly discarded (see
 [Function Purity and Discarded Results](/docs/language/functions/#function-purity-and-discarded-results)):
 
 ```maxon

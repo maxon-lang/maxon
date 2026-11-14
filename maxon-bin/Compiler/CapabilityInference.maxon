@@ -14,17 +14,18 @@ typealias PhiArmMap = Map with (ValueId, ValueIdArray)
 
 function phiArmsOfFunction(module MaxonModule, func IrFunction) returns PhiArmMap
 	let arms = PhiArmMap.create()
+	let byId = module.blockIndexById(func)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
 
 		for edge in block.branchEdges 'eachEdge'
-			let target = try module.getBlockByIdIn(func, id: edge.targetBlockId) otherwise continue
+			let target = try module.getBlockByIdThrough(func, byId: byId, id: edge.targetBlockId) otherwise panic("phiArmsOfFunction: an edge names block {edge.targetBlockId}, which is not in the function")
 
 			for position in 0 upto edge.argIds.count() 'eachArgument'
-				let phi = (try target.blockArgs.get(position) otherwise continue).valueId
+				let phi = (try target.blockArgs.get(position) otherwise panic("phiArmsOfFunction: an edge passes argument {position} to block {edge.targetBlockId}, which has {target.blockArgs.count()} block argument(s)")).valueId
 				let known = try arms.get(phi) otherwise ValueIdArray.create(0)
-				known.push(try edge.argIds.get(position) otherwise continue)
+				known.push(try edge.argIds.get(position) otherwise panic("phiArmsOfFunction: argIds.get OOB at {position} despite the upto bound"))
 				arms.upsert(phi, value: known)
 			end 'eachArgument'
 		end 'eachEdge'

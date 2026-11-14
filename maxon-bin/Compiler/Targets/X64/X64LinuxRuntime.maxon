@@ -501,6 +501,16 @@ function x64LinuxEmitBranchIfEintr(asm X64RuntimeAsm, whenInterrupted BlockId)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: whenInterrupted)
 end 'x64LinuxEmitBranchIfEintr'
 
+module function x64LinuxEmitDieIfBrokenPipe(asm X64RuntimeAsm)
+	let alive = asm.newLabel()
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.brokenPipe.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: alive)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SigpipeDieName)
+
+	asm.placeLabel(alive)
+end 'x64LinuxEmitDieIfBrokenPipe'
+
 // Re-issuing needs no reload: `syscall` preserves every argument register and clobbers only rax, rcx and r11.
 module function x64LinuxEmitSyscallRestartingOnEintr(asm X64RuntimeAsm, number MachineWord)
 	let issue = asm.newLabel()
@@ -628,6 +638,7 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
 	let tooManyOpen = asm.newLabel()
+	let brokenPipe = asm.newLabel()
 	let answered = asm.newLabel()
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -654,7 +665,13 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooManyOpen)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.fileTableOverflow.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooManyOpen)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.brokenPipe.rawValue as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: brokenPipe)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorGenericFailure as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(brokenPipe)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorBrokenPipe as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(notFound)

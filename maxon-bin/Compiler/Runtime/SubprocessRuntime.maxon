@@ -997,7 +997,7 @@ function emitSubpCwdOrNull(module StdModule, func IrFunction, ids ValueMinter, c
 end 'emitSubpCwdOrNull'
 
 // ⭐ `__gt_subp_attached_spawn(argv, argc, cwd, env, envInherit, stdinKind, stdinData, outKind, outData,
-// outLimit, errKind, errData, errLimit, flags) -> handle | pid | -1` — the FOURTEEN-argument contract, which
+// outLimit, errKind, errData, errLimit, flags, stdinLength) -> handle | pid | -1` — the attached contract, which
 // `__Builtins.subprocessSpawn` and `__Builtins.subprocessDetach` both lower to. The two differ only in the
 // detach bit their caller has already put in `flags`.
 //
@@ -1006,7 +1006,7 @@ end 'emitSubpCwdOrNull'
 // is NULL, and a caller-built environment is whatever `SpawnEnvironmentShape` says this lane's spawn
 // primitive takes for one.
 function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
-	let func = IrFunction.createFromStd(SubpAttachedSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: SubprocessSpawnParamCount, paramTypes: fourteenI64Params())
+	let func = IrFunction.createFromStd(SubpAttachedSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: SubprocessSpawnParamCount, paramTypes: fifteenI64Params())
 	let ids = ValueMinter.create(SubprocessSpawnParamCount)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1027,10 +1027,12 @@ function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
 	let errData = 11
 	let errLimit = 12
 	let surfaceFlags = 13
+	let stdinLength = 14
 
 	let req = emitSubpArgvRequest(module, func: func, ids: ids, entry: entry, build: build, argv: argv, argc: argc, env: env, envInherit: envInherit, shape: shape)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinKind)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinData, value: stdinData)
+	emitStoreField(module, block: build, record: req, offset: SubpReqStdinLength, value: stdinLength)
 	emitStoreField(module, block: build, record: req, offset: SubpReqOutKind, value: outKind)
 	emitStoreField(module, block: build, record: req, offset: SubpReqOutData, value: outData)
 	emitStoreField(module, block: build, record: req, offset: SubpReqOutLimit, value: outLimit)
@@ -1287,7 +1289,7 @@ function buildSubpQueueStdin(module StdModule, target Target)
 	emitSubpStoreStdinQueue(module, block: copy, slot: slot, cursor: owned, remaining: length)
 	module.setTerminator(copy, op: StdOp.branch(arm.id))
 
-	emitSubpArmStdinEnd(module, func: func, ids: ids, cur: arm, target: target, stdinEnd: stdinWrite, cont: armed)
+	emitSubpArmStdinEnd(module, func: func, ids: ids, cur: arm, shape: netpollShape(target), stdinEnd: stdinWrite, cont: armed)
 
 	emitConstReturn(module, block: armed, value: SubpStdinAcceptedAnswer, ids: ids)
 
@@ -1316,9 +1318,9 @@ function buildSubpQueueDrop(module StdModule)
 	module.functions.push(func)
 end 'buildSubpQueueDrop'
 
-function emitSubpArmStdinEnd(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, target Target, stdinEnd ValueId, cont IrBlock)
+export function emitSubpArmStdinEnd(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, shape NetpollShape, stdinEnd ValueId, cont IrBlock)
 	let nonBlocking = emitNetpoll(module, block: cur, verb: NetpollVerb.armPipeSource, operands: argsOf(stdinEnd), ids: ids)
-	emitNetpollRequire(module, func: func, cur: cur, shape: netpollShape(target), verb: NetpollVerb.armPipeSource, subject: stdinEnd, answer: nonBlocking, cont: cont, ids: ids)
+	emitNetpollRequire(module, func: func, cur: cur, shape: shape, verb: NetpollVerb.armPipeSource, subject: stdinEnd, answer: nonBlocking, cont: cont, ids: ids)
 end 'emitSubpArmStdinEnd'
 
 function emitSubpEnsureStdinRegistered(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, target Target, slot ValueId, stdinEnd ValueId, cont IrBlock)

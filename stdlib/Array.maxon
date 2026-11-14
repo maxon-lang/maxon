@@ -232,17 +232,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// its elements copied out pays a record per call for nothing — `StringBuilder.appendBytes` one
 	/// PER APPEND.
 	public function appendMemory(source ElementMemory)
-		// Element by element rather than a byte copy, so each copied element takes its own reference.
-		let sourceLen = source.length()
-		let base = managed.length()
-		self.resize(base + sourceLen)
-
-		for i in 0 upto sourceLen 'copy'
-			let value = try source.get(i) otherwise panic("Array.appendMemory: get({i}) OOB — i < source.length")
-			try managed.set(base + i, value) otherwise 'setErr'
-				panic("Array.appendMemory: set OOB — resize published [base, base + sourceLen)")
-			end 'setErr'
-		end 'copy'
+		managed.append(source)
 	end 'appendMemory'
 
 	/// Remove and return last element, throws if empty

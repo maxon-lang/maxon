@@ -37,8 +37,7 @@
 #   so it exercises neither `splitChainEnd` nor `materializeChainTails`. Two doors, two paths.
 #
 # ⚠ **AND THE COST THIS LADDER IS AIMED AT IS ON THE EMISSION PATH ONLY.** `blockEndGuardSite` (now
-# `guardSiteAt`) re-fetched the site's block with `IrModule.getBlockByIdIn`, which was a LINEAR SCAN over
-# `func.blockRefs`; and each guard it then emits APPENDS TWO BLOCKS to that same function (`__rc_ok`,
+# `guardSiteAt`) re-fetched the site's block with a LINEAR SCAN over `func.blockRefs`; and each guard it then emits APPENDS TWO BLOCKS to that same function (`__rc_ok`,
 # `__rc_panic`), so the scan the k-th guard paid was over a block set the previous k-1 guards had grown.
 # THAT TERM IS GONE — the site's block now resolves through `buildBlockIdIndex`/`blockById` — and this
 # ladder is kept because it can show it has NOT come back with ONE knob moving instead of all of them.

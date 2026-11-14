@@ -1988,7 +1988,7 @@ export let StartupInfoHStdErrorOffset = 0x60
 // read that could not be served yet IS an operation still in flight, and translating it to anything else would
 // send the caller down the classification road instead of the park.
 export let ErrorIoPending = 997
-let ErrorBrokenPipe = 109
+export let ErrorBrokenPipe = 109
 
 // ⭐ **THE NTSTATUS VALUES THE READERS OF A COMPLETION PACKET TELL APART** (`GtOffIoStatus`). A packet carries
 // an NTSTATUS rather than a Win32 error, so every fold is written in that vocabulary. The parked pipe read's
@@ -9226,7 +9226,7 @@ let SubpSlotGeneration = 128
 // ⭐ **THE FIVE FIELDS THE ATTACHED SPAWN ADDED.** The streaming half needed none of them: it never reports a
 // pid, never queues a payload for the child's stdin and never caps what it collects, because its caller does
 // all three by hand. `subprocessGetPid`, `StdinKind.bytes` and `OutputDestination.collect(limit)` are three
-// promises of the fourteen-argument contract, and each is a fact about the HANDLE rather than about a call.
+// promises of the attached spawn contract, and each is a fact about the HANDLE rather than about a call.
 //
 // `SubpSlotStdinPend` is a POINTER into the queued payload and `SubpSlotStdinRemaining` the count
 // of its bytes still to push; the drain loop advances the one and shrinks the other until the count
@@ -10158,23 +10158,19 @@ end 'emitSubpSecurityAttributes'
 
 // ⭐⭐ **THE SPAWN REQUEST RECORD — ONE `CreateProcessW` PATH, THREE CALLERS.** `__gt_subp_spawn_core` reads
 // exactly this and nothing else, so the three spellings a program can spawn a child with — the bare-name
-// `subpSpawn(cmd)` probe, `__Builtins.subprocessSpawnStreaming` and the fourteen-argument
+// `subpSpawn(cmd)` probe, `__Builtins.subprocessSpawnStreaming` and the attached
 // `__Builtins.subprocessSpawn`/`subprocessDetach` — differ ONLY in how they FILL it. The pipe-inheritance
 // rules, the slot claim, the generation bump and the failure unwind are written once.
 //
-// It is a slab record built by the caller rather than a parameter list because the fourteen-argument
-// contract would otherwise arrive as fourteen live values across a spawn that immediately spills them all.
+// It is a slab record built by the caller rather than a parameter list because the attached contract
+// would otherwise arrive as one live value per argument across a spawn that immediately spills them all.
 // Its fields are i64 because every one of them is a machine word: a buffer address, a `cstring`, a Win32
 // flag word or a kind discriminator.
 export let SubpReqCmdline = 0 as ByteOffset  // NUL-terminated; a wide host spawns from `SubpReqWideCmdline`
 export let SubpReqCwd = 8 as ByteOffset  // cstring, or 0 to inherit the parent's working directory
 export let SubpReqFlags = 16 as ByteOffset  // Win32 dwCreationFlags, already translated from the surface bitfield
 export let SubpReqStdinKind = 24 as ByteOffset
-
-// A `bytes` payload here is queued only up to its first NUL;
-// `__Builtins.subprocessQueueStdin` queues one whole, which is how `stdlib/Subprocess.maxon`
-// delivers it.
-export let SubpReqStdinData = 32 as ByteOffset  // cstring: a path for `file`, the payload for `bytes`
+export let SubpReqStdinData = 32 as ByteOffset  // cstring: a path for `file`; for `bytes`, `SubpReqStdinLength` bytes
 export let SubpReqOutKind = 40 as ByteOffset
 export let SubpReqOutData = 48 as ByteOffset
 export let SubpReqOutLimit = 56 as ByteOffset
@@ -10196,7 +10192,8 @@ export let SubpReqEnv = 96 as ByteOffset
 let SubpReqWideCmdline = 104
 let SubpReqWideCwd = 112
 let SubpReqWideEnv = 120
-let SubpReqBytes = 128
+export let SubpReqStdinLength = 128 as ByteOffset
+let SubpReqBytes = 136
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
 // (`none`/`inherit`/`bytes`/`file`) and `OutputKind` (`discard`/`inherit`/`collect`/`file`) are declared there
@@ -10264,7 +10261,7 @@ let SubpPosixNullDeviceName = b"/dev/null"
 // ⚠ It is also why the command line is a field of the REQUEST rather than a String this function copies: the
 // copy loop would carry four values across itself here, so each caller builds the buffer before any handle
 // exists.
-function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShape, streamState EnumLayout)
+function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShape, streamState EnumLayout, pipeShape NetpollShape)
 	let func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	let ids = ValueMinter.create(1)
 
@@ -10345,7 +10342,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let spawnFail = module.addBlock(func, label: b"spawnfail", heat: BlockHeat.normal)
 	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
 
-	let afterStdin = emitSubpStdinSetup(module, func: func, ids: ids, cur: gotSlot, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, whenFailed: streamFail)
+	let afterStdin = emitSubpStdinSetup(module, func: func, ids: ids, cur: gotSlot, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, pipeShape: pipeShape, whenFailed: streamFail)
 	let afterStdout = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdin, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqOutKind, dataOffset: SubpReqOutData, limitOffset: SubpReqOutLimit, streamBase: SubpStdoutBase, slotLimitOffset: SubpSlotOutLimit, childOffset: SubpChildStdoutWriteOff, ownedOffset: SubpOwnedStdoutOff, stdSelector: StdOutputHandleSelector, whenFailed: streamFail)
 	var afterStderr = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdout, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqErrKind, dataOffset: SubpReqErrData, limitOffset: SubpReqErrLimit, streamBase: SubpStderrBase, slotLimitOffset: SubpSlotErrLimit, childOffset: SubpChildStderrWriteOff, ownedOffset: SubpOwnedStderrOff, stdSelector: StdErrorHandleSelector, whenFailed: streamFail)
 
@@ -10597,19 +10594,22 @@ end 'emitSubpNonPipeChildHandle'
 // Wire the child's STANDARD INPUT as the request asks, and return the block execution continues in.
 //
 // The two PIPE kinds — `bytes` and `hold` — both need the parent's WRITE end of a synchronous outbound pipe,
-// and differ only in what the drain loop is then told to do with it: push a payload now (`bytes`) or push
-// nothing ever (`hold`, which is also what `StreamingSubprocess` asks for, writing by hand). Everything else is
-// `emitSubpNonPipeChildHandle`'s.
+// and differ in what the drain loop is then told to do with it: push a payload now (`bytes`, whose write end
+// is armed non-blocking here) or push nothing ever (`hold`, which is also what `StreamingSubprocess` asks for,
+// writing by hand). Everything else is `emitSubpNonPipeChildHandle`'s.
 //
 // ⛔⛔ **THE MEMBERSHIP TEST IS A SET AND NOT A CHAIN OF EQUALITIES.** Per-kind `==` tests routing to the
 // pipe and sending **everything else** down the non-pipe arm send a newly declared kind to `none`'s NUL open,
 // which gives the child instant EOF. A kind the language can spell and this file cannot see is a WRONG
 // ANSWER with no diagnostic anywhere; `emitSubpStdinKindWantsPipe` is that set stated once.
-function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, whenFailed IrBlock) returns IrBlock
+function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, pipeShape NetpollShape, whenFailed IrBlock) returns IrBlock
 	let queueTest = module.addBlock(func, label: b"sinqtest", heat: BlockHeat.normal)
 	let queueArm = module.addBlock(func, label: b"sinqueue", heat: BlockHeat.normal)
 	let pipeArm = module.addBlock(func, label: b"sinpipe", heat: BlockHeat.normal)
 	var pipeMake = module.addBlock(func, label: b"sinpmake", heat: BlockHeat.normal)
+	let unarmed = module.addBlock(func, label: b"sinunarmed", heat: BlockHeat.normal)
+	let arming = module.addBlock(func, label: b"sinarming", heat: BlockHeat.normal)
+	let armed = module.addBlock(func, label: b"sinarmed", heat: BlockHeat.normal)
 	let nonPipe = module.addBlock(func, label: b"sinother", heat: BlockHeat.normal)
 	let join = module.addBlock(func, label: b"sinjoin", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"sindone", heat: BlockHeat.normal)
@@ -10632,11 +10632,10 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let queuesPayload = emitSubpKindIs(module, block: queueTest, kind: kind, value: SubpStdinBytes, ids: ids)
 	emitBranchOnCompare(module, block: queueTest, value: queuesPayload, pred: StdCmpPred.eq, against: 0, whenTrue: pipeArm, whenFalse: queueArm, ids: ids)
 
-	let payloadLength = ids.mint()
-	let measured = emitCStringLength(module, func: func, cur: queueArm, cstr: data, length: payloadLength, ids: ids)
-	let slotB = emitSubpSlotAddr(module, block: measured, ids: ids, table: table, slotIdx: slotIdx)
-	emitSubpStoreStdinQueue(module, block: measured, slot: slotB, cursor: data, remaining: payloadLength)
-	module.setTerminator(measured, op: StdOp.branch(pipeArm.id))
+	let payloadLength = emitLoadField(module, block: queueArm, record: req, offset: SubpReqStdinLength, ids: ids)
+	let slotB = emitSubpSlotAddr(module, block: queueArm, ids: ids, table: table, slotIdx: slotIdx)
+	emitSubpStoreStdinQueue(module, block: queueArm, slot: slotB, cursor: data, remaining: payloadLength)
+	module.setTerminator(queueArm, op: StdOp.branch(pipeArm.id))
 
 	let name = emitSubpAllocPipeName(module, block: pipeArm, ids: ids)
 	buildPipeName(module, func: func, ids: ids, startBlock: pipeArm, bufPtr: name, cont: pipeMake)
@@ -10658,7 +10657,14 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	emitStoreField(module, block: pipeMake, record: slotP, offset: SubpSlotStdinWrite, value: parentWrite)
 	let childRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
 	emitSubpFreePipeScratch(module, block: pipeMake, name: name, scratch: scratch, ids: ids)
-	emitBranchCarrying(module, from: pipeMake, to: join, values: twoArgs(childRead, second: childRead))
+
+	let queuedKind = emitLoadField(module, block: pipeMake, record: req, offset: SubpReqStdinKind, ids: ids)
+	let queued = emitSubpKindIs(module, block: pipeMake, kind: queuedKind, value: SubpStdinBytes, ids: ids)
+	emitBranchOnCompare(module, block: pipeMake, value: queued, pred: StdCmpPred.eq, against: 0, whenTrue: unarmed, whenFalse: arming, ids: ids)
+
+	emitBranchCarrying(module, from: unarmed, to: join, values: twoArgs(childRead, second: childRead))
+	emitSubpArmStdinEnd(module, func: func, ids: ids, cur: arming, shape: pipeShape, stdinEnd: parentWrite, cont: armed)
+	emitBranchCarrying(module, from: armed, to: join, values: twoArgs(childRead, second: childRead))
 
 	emitSubpNonPipeChildHandle(module, func: func, ids: ids, cur: nonPipe, kind: kind, data: data, nulName: nulName, childScratch: childScratch, stdSelector: StdInputHandleSelector, forWrite: false, join: join, whenFailed: whenFailed)
 
@@ -11528,7 +11534,7 @@ function installSubpRuntime(module StdModule, target Target, streamState EnumLay
 		buildSubpWideRequestStep(module, step: SubpWideRequestStep.release)
 	end 'wideRequest'
 
-	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState)
+	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState, pipeShape: netpollShape(target))
 	buildSubpSpawn(module, commandShape: subprocessCommandShape(target))
 	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase, streamState: streamState)
 	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase, streamState: streamState)

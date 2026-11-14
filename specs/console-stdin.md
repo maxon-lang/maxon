@@ -1,7 +1,7 @@
 ---
 feature: console-stdin
 status: stable
-keywords: [console, stdin, StdinReader, StdinSource, readLine, readBytes, LineRead, eof, __Builtins, readStdin, intrinsics]
+keywords: [console, stdin, StdinReader, StdinSource, readLine, readBytes, LineOrEnd, eof, __Builtins, readStdin, intrinsics]
 category: stdlib
 ---
 
@@ -11,7 +11,7 @@ category: stdlib
 
 `Console.stdin()` answers a `StdinReader`, the `StreamReader` over a `StdinSource` (`stream-reader.md`), so
 standard input reads through the same reader as every other byte source: `readLine()` answers
-`LineRead.line(text)` with the terminator stripped (`\r\n` and `\n` both) and `LineRead.ended` at EOF;
+`LineOrEnd.line(text)` with the terminator stripped (`\r\n` and `\n` both) and `LineOrEnd.ended` at EOF;
 `readBytes(n)` answers exactly `n` bytes as a `ByteArray`, fewer only at EOF, and an empty array at EOF. A
 read failure throws `StreamError`.
 
@@ -68,7 +68,7 @@ arithmetic that produces one.
 ## Tests
 
 <!-- test: console-stdin.read-line-at-eof-answers-ended -->
-The first `readLine()` on a closed stdin answers `LineRead.ended`. If it instead answered a line — the
+The first `readLine()` on a closed stdin answers `LineOrEnd.ended`. If it instead answered a line — the
 empty line a NUL-scanned length would produce — the program returns 1, and a read that threw returns 2.
 ```maxon
 function main() returns ExitCode
@@ -77,8 +77,7 @@ function main() returns ExitCode
 
 	return match read 'read'
 		ended gives 9
-		line or
-		pastTheCap gives 1
+		line gives 1
 	end 'read'
 end 'main'
 ```
@@ -114,8 +113,7 @@ function atEnd(reader StdinReader) returns bool
 
 	return match read 'read'
 		ended gives true
-		line or
-		pastTheCap gives false
+		line gives false
 	end 'read'
 end 'atEnd'
 
@@ -154,8 +152,7 @@ function main() returns ExitCode
 
 		match read 'read'
 			ended then endings = endings + 1
-			line or
-			pastTheCap then return 1
+			line then return 1
 		end 'read'
 
 		i = i + 1
@@ -274,11 +271,10 @@ error E3104: <fragment>:3:22: 'Console.stdin' lowers to the runtime entry '__con
 <!-- stdin: after "ready" -->
 `Console.stdin()` answers a `StdinReader`, so standard input reads through the same line reader as every other source: the harness feeds one line once the program prints `ready` and closes the pipe, and the reader answers that line without its terminator, then `ended`.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -321,7 +317,6 @@ function main() returns ExitCode
 	match read 'read'
 		line(text) then print("{text}\n")
 		ended then print("ended\n")
-		pastTheCap then print("pastTheCap\n")
 	end 'read'
 
 	return 0
@@ -400,7 +395,6 @@ function main() returns ExitCode
 	match read 'read'
 		line(text) then print("{text}\n")
 		ended then print("ended\n")
-		pastTheCap then print("pastTheCap\n")
 	end 'read'
 
 	return 0
@@ -494,7 +488,6 @@ function main() returns ExitCode
 	match read 'read'
 		line(text) then print("{text}\n")
 		ended then print("ended\n")
-		pastTheCap then print("pastTheCap\n")
 	end 'read'
 
 	return 0
@@ -534,7 +527,6 @@ function main() returns ExitCode
 	match read 'read'
 		line(text) then print("{text}\n")
 		ended then print("ended\n")
-		pastTheCap then print("pastTheCap\n")
 	end 'read'
 
 	return 0

@@ -147,7 +147,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, forstep#44
   tryerr#66:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -489,7 +489,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq forstep#44
   tryerr#66:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
@@ -826,7 +826,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, forstep#44
   tryerr#66:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -1171,7 +1171,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq forstep#44
   tryerr#66:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Array.maxon:319: Array.reserve: the requested capacity exceeds what the buffer can hold\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3

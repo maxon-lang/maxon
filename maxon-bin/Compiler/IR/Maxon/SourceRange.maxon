@@ -354,14 +354,14 @@ export type SourceRangeTable
 	// together by `record`, so once the index is in range all four hold it — their
 	// `otherwise` arms are unreachable-by-construction, not error handling.
 	export function get(opIndex ElementIndex) returns SourceRange
-		let (line, column) = self.positionOf(opIndex, reader: "get")
+		let (line, column) = self.positionOf(opIndex)
 		let startByte = try self.startBytes.get(opIndex) otherwise panic("SourceRangeTable.get: startBytes column out of step at op {opIndex}")
 		let endByte = try self.endBytes.get(opIndex) otherwise panic("SourceRangeTable.get: endBytes column out of step at op {opIndex}")
 		return SourceRange.create(startByte, endByte: endByte, line: line, column: column)
 	end 'get'
 
 	export function placementOf(opIndex ElementIndex) returns OpPlacement
-		let (line, column) = self.positionOf(opIndex, reader: "placementOf")
+		let (line, column) = self.positionOf(opIndex)
 
 		if not namesASourcePosition(line, column: column) 'positionless'
 			return OpPlacement.unplaced
@@ -370,14 +370,19 @@ export type SourceRangeTable
 		return OpPlacement.at(line, column: column)
 	end 'placementOf'
 
-	function positionOf(opIndex ElementIndex, reader String) returns (LineNumber, ColumnNumber)
+	export function positionKeyOf(opIndex ElementIndex) returns PositionKey
 		if opIndex >= self.count() 'noSpan'
-			panic("SourceRangeTable.{reader}: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
+			panic("SourceRangeTable.positionKeyOf: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
 		end 'noSpan'
 
-		let line = try self.lines.get(opIndex) otherwise panic("SourceRangeTable.{reader}: lines column out of step at op {opIndex}")
-		let column = try self.columns.get(opIndex) otherwise panic("SourceRangeTable.{reader}: columns column out of step at op {opIndex}")
-		return (line, column)
+		let line = try self.lines.get(opIndex) otherwise panic("SourceRangeTable.positionKeyOf: lines column out of step at op {opIndex}")
+		let column = try self.columns.get(opIndex) otherwise panic("SourceRangeTable.positionKeyOf: columns column out of step at op {opIndex}")
+		return positionKey(line, column: column)
+	end 'positionKeyOf'
+
+	function positionOf(opIndex ElementIndex) returns (LineNumber, ColumnNumber)
+		let key = self.positionKeyOf(opIndex)
+		return (positionKeyLine(key), positionKeyColumn(key))
 	end 'positionOf'
 
 	// Fold another table's spans onto the end of this one, preserving order.

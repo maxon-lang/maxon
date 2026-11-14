@@ -98,7 +98,6 @@ end 'threadConstantBranchesSummary'
 // answers in.
 module type ThreadCandidate
 	export var position as ElementIndex
-	export let blockRef as ElementIndex
 	export let blockId as BlockId
 	export let compareOpIdx as ElementIndex
 
@@ -121,8 +120,8 @@ module type ThreadCandidate
 	export var keptPosition = 0 as ElementIndex
 	export var droppedTarget = 0 as BlockId
 
-	static function create(position ElementIndex, blockRef ElementIndex, blockId BlockId, compareOpIdx ElementIndex, condId ValueId, testedArg ValueId, testedSlot ElementIndex, imm Imm32, pred StdCmpPred, operandType StdType, thenBlockId BlockId, elseBlockId BlockId) returns ThreadCandidate
-		return Self{position: position, blockRef: blockRef, blockId: blockId, compareOpIdx: compareOpIdx, condId: condId, testedArg: testedArg, testedSlot: testedSlot, imm: imm, pred: pred, operandType: operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId}
+	static function create(position ElementIndex, blockId BlockId, compareOpIdx ElementIndex, condId ValueId, testedArg ValueId, testedSlot ElementIndex, imm Imm32, pred StdCmpPred, operandType StdType, thenBlockId BlockId, elseBlockId BlockId) returns ThreadCandidate
+		return Self{position: position, blockId: blockId, compareOpIdx: compareOpIdx, condId: condId, testedArg: testedArg, testedSlot: testedSlot, imm: imm, pred: pred, operandType: operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId}
 	end 'create'
 end 'ThreadCandidate'
 
@@ -151,7 +150,7 @@ module function threadConstantBranchesInFunc(module StdModule, func IrFunction, 
 		if admit(module, func: func, analysis: analysis, candidate: candidate) 'admitted'
 			candidate.admitted = true
 			admittedCount = admittedCount + 1
-			recordBlockArgOwner(module, candidate: candidate, index: index, argOwner: argOwner, argSlot: argSlot)
+			recordBlockArgOwner(module, func: func, candidate: candidate, index: index, argOwner: argOwner, argSlot: argSlot)
 		end 'admitted'
 	end 'eachCandidate'
 
@@ -171,8 +170,7 @@ function collectThreadCandidates(module StdModule, func IrFunction, scratch Thre
 	scratch.candidates.clear()
 
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
-		let blockRef = try func.blockRefs.get(position) otherwise panic("threadConstantBranches: blockRefs.get OOB at {position}")
-		let block = module.getBlock(blockRef)
+		let block = module.blockAtPosition(func, position: position)
 
 		if block.blockArgs.count() == 0 or block.bodyOpCount() != 1 or not block.hasTerminatorOp() 'notTheShape'
 			continue
@@ -191,14 +189,14 @@ function collectThreadCandidates(module StdModule, func IrFunction, scratch Thre
 			continue
 		end 'notACondBranch'
 
-		pushIfBranchOnTheCompare(scratch.candidates, block: block, position: position, blockRef: blockRef, compareOpIdx: compareOpIdx, operands: scratch.arith, condId: scratch.branch.condId, thenBlockId: scratch.branch.thenBlockId, elseBlockId: scratch.branch.elseBlockId)
+		pushIfBranchOnTheCompare(scratch.candidates, block: block, position: position, compareOpIdx: compareOpIdx, operands: scratch.arith, condId: scratch.branch.condId, thenBlockId: scratch.branch.thenBlockId, elseBlockId: scratch.branch.elseBlockId)
 	end 'eachBlock'
 end 'collectThreadCandidates'
 
 // The last two shape questions, asked once the terminator is known to be a `condBranch`: it must test
 // THIS compare, the compare must read one of the block's own args, and the two arms must differ (one
 // arm named twice has two edges to tell apart — the case `foldConstants.foldCondBranch` refuses too).
-function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock, position ElementIndex, blockRef ElementIndex, compareOpIdx ElementIndex, operands StdArithOperands, condId ValueId, thenBlockId BlockId, elseBlockId BlockId)
+function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock, position ElementIndex, compareOpIdx ElementIndex, operands StdArithOperands, condId ValueId, thenBlockId BlockId, elseBlockId BlockId)
 	if condId != operands.resultId or thenBlockId == elseBlockId 'notTheShape'
 		return
 	end 'notTheShape'
@@ -207,7 +205,7 @@ function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock
 		let arg = try block.blockArgs.get(slot) otherwise panic("threadConstantBranches: blockArgs.get OOB at {slot}")
 
 		if arg.valueId == operands.lhs 'testsThisArg'
-			candidates.push(ThreadCandidate.create(position, blockRef: blockRef, blockId: block.id, compareOpIdx: compareOpIdx, condId: condId, testedArg: operands.lhs, testedSlot: slot, imm: operands.imm, pred: operands.pred, operandType: operands.operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId))
+			candidates.push(ThreadCandidate.create(position, blockId: block.id, compareOpIdx: compareOpIdx, condId: condId, testedArg: operands.lhs, testedSlot: slot, imm: operands.imm, pred: operands.pred, operandType: operands.operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId))
 			return
 		end 'testsThisArg'
 	end 'eachArg'
@@ -284,7 +282,7 @@ end 'refuseThreading'
 // answers whether at least one constant predecessor decided.
 function decideTargetFromPredecessors(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate) returns bool
 	var decided = false
-	let join = module.getBlock(candidate.blockRef)
+	let join = module.blockAtPosition(func, position: candidate.position)
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
 		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k)
@@ -348,8 +346,8 @@ end 'soleEdge'
 // Index C's block args by value id: which admitted candidate owns each (its index plus one, so the
 // zero-filled column carries its own "no candidate" answer, as `buildBlockIdIndex` does) and at which
 // slot. Both are what the read walk and the edge substitution look up per value, in O(1).
-function recordBlockArgOwner(module StdModule, candidate ThreadCandidate, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray)
-	let block = module.getBlock(candidate.blockRef)
+function recordBlockArgOwner(module StdModule, func IrFunction, candidate ThreadCandidate, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray)
+	let block = module.blockAtPosition(func, position: candidate.position)
 
 	for slot in 0 upto block.blockArgs.count() 'eachArg'
 		let arg = try block.blockArgs.get(slot) otherwise panic("threadConstantBranches: blockArgs.get OOB at {slot}")
@@ -494,7 +492,7 @@ end 'applyAdmitted'
 // earlier rewrites in the same function and is still exact — see the header for why no rewrite
 // changes an admitted candidate's predecessors.
 function threadOne(module StdModule, func IrFunction, origins DerivedOrigins, analysis FunctionAnalysis, candidate ThreadCandidate, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray, minter ValueMinter)
-	let join = module.getBlock(candidate.blockRef)
+	let join = module.blockAtPosition(func, position: candidate.position)
 	let dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
 	let droppedTakesArgs = dropped.blockArgs.count() != 0
 	let argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)

@@ -38,7 +38,7 @@ User code should use the `Subprocess` stdlib type rather than calling these buil
 - `__Builtins.processNamespace()` returns __ManagedMemory - The pid space the current process belongs to: the `/proc/self/ns/pid` link target on Linux, the boot-session UUID on macOS, the machine's `MachineGuid` on Windows; empty buffer when unavailable. Refused (E3104) on wasm32-wasi
 - `__Builtins.fillRandom(managed)` returns int - Fills the buffer's live length with bytes from the operating system's random source; 0 when every byte was filled, non-zero when the source refused. Refused (E3104) on wasm32-wasi
 - `__Builtins.subprocessResolveOnPath(nameManaged)` returns __ManagedMemory - Resolve a bare executable name via PATH lookup; empty buffer on miss
-- `__Builtins.subprocessSpawn(argv, argc, cwd, envBlock, envInherit, stdinKind, stdinData, stdoutKind, stdoutData, stdoutLimit, stderrKind, stderrData, stderrLimit, flags)` returns int - Spawn a child process; returns a handle, -1 on failure
+- `__Builtins.subprocessSpawn(argv, argc, cwd, envBlock, envInherit, stdinKind, stdinData, stdoutKind, stdoutData, stdoutLimit, stderrKind, stderrData, stderrLimit, flags, stdinLength)` returns int - Spawn a child process; returns a handle, -1 on failure
 - `__Builtins.subprocessDetach(... same args as spawn ...)` returns int - Like spawn but with the detach flag; returns pid, -1 on failure
 - `__Builtins.subprocessLastErrorMessage()` returns __ManagedMemory - Last spawn/wait error message from this thread
 - `__Builtins.subprocessGetPid(handle)` returns int - Pid of a spawned child

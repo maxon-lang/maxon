@@ -1,0 +1,35 @@
+let MalformedThreadCaseLabel = "a-stop-reply-naming-a-thread-that-is-not-hex-is-malformed-and-never-thread-zero"
+
+let MalformedThreadAnchorName = "hot"
+let MalformedThreadReply = "T05thread:zz;"
+let MalformedThreadRefusalDeadlineMs = 90000
+let MalformedThreadQuitDeadlineMs = 30000
+let MalformedThreadTraceName = "proxy-trace.txt"
+let MalformedThreadRefusalWording = "refused to detach"
+
+test 'a stop reply whose thread is not hex is dropped as malformed, so the probe it would have answered stays unanswered and the detach is refused'
+	#if os(Macos)
+		let staged = builtFixture(MalformedThreadCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(MalformedThreadCaseLabel)
+		let trace = staged.join(MalformedThreadTraceName)
+		let session = sessionHeldAt(staged, anchor: MalformedThreadAnchorName, environment: probeAnsweredProxyEnvironment(proxies, trace: trace, answer: MalformedThreadReply))
+
+		session.say(DetachCommand)
+
+		let refused = session.sayUntilThe(MalformedThreadRefusalWording, deadlineMs: MalformedThreadRefusalDeadlineMs)
+
+		session.say(QuitCommand)
+
+		let ended = session.finish(MalformedThreadQuitDeadlineMs)
+		let spoken = session.said()
+		let traced = try File.readText(trace) otherwise ""
+
+		Expect.contains(traced, needle: "{ProxyAnsweredMarker}{MalformedThreadReply}", message: "the stub proxy never answered the probe with the malformed reply, so the case measured nothing. Its trace: {traced}")
+		Expect.isTrue(refused, message: "⭐ A STOP REPLY WHOSE THREAD IS NOT HEX IS MALFORMED, NEVER THREAD 0. The detach was not refused, so the reply was taken for the stop that answers the probe. The session said: {spoken}")
+		Expect.isFalse(traced.contains("{ProxySawMarker}{ProxyDetachRequest}"), message: "a detach request followed a stop reply that named no thread. Its trace: {traced}")
+		Expect.isTrue(ended, message: "the session did not end once it was told to quit. {spoken} {session.evidence()}")
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
+	#endif
+end 'a stop reply whose thread is not hex is dropped as malformed, so the probe it would have answered stays unanswered and the detach is refused'

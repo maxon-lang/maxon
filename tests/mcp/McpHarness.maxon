@@ -179,7 +179,7 @@ export type StreamingMcpSession
 	end 'sendLine'
 
 	export function readResponseDoc() returns JsonDoc throws StreamError
-		let read = try self.responses.readLine(cap: ResponseLineByteCap)
+		let read = try self.responses.readLineWithin(ResponseLineByteCap)
 
 		match read 'read'
 			line(text) then return try Json.parse(text) otherwise panic("StreamingMcpSession: invalid JSON response: {text}")
@@ -190,7 +190,7 @@ export type StreamingMcpSession
 
 	export function close() returns ExitInt throws SubprocessError
 		self.server.closeStdin()
-		let code = try self.server.wait(WaitDeadline.within(10000)) otherwise (e) 'waitErr'
+		let code = try self.server.wait(WaitDeadline.within(SessionCloseDeadlineMs)) otherwise (e) 'waitErr'
 			self.server.release()
 			throw e
 		end 'waitErr'
@@ -415,6 +415,7 @@ let HeaderEnd = "\r\n\r\n"
 let StatusLineFieldSeparator = " "
 let HeaderNameSeparator = ": "
 let ServerExitDeadlineMs = 5000
+let SessionCloseDeadlineMs = 10000 as WaitDeadlineMs
 let NoContentStatus = 204
 let NotModifiedStatus = 304
 

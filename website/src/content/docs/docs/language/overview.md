@@ -32,6 +32,11 @@ on `/dev/null`: reads see end of input, writes are discarded, and a child that i
 same. When the stream cannot be opened there, the program writes `fatal error: cannot open standard fds` to
 standard error and exits with code 2 before `main` runs.
 
+On Linux and macOS a write to standard output or standard error whose reader has gone ends the program by
+`SIGPIPE`, which a shell reports as status 141. A write to any other closed pipe, such as a child's stdin,
+fails with an error the program can handle, and a `SIGPIPE` sent to the program from outside is ignored. A
+child the program starts begins with the default `SIGPIPE` action.
+
 ### Files and Projects
 
 - A program is one `.maxon` file or a directory of them, compiled together. There are no `import`
@@ -218,7 +223,7 @@ else:
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](/docs/language/regions/)) |
 | `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](/docs/language/regions/#modify-blocks)) |
 | `freeze`, `swap`, `merge` | before an operand: a name, `self`, `Self`, `try`, or a parenthesis set apart by a space; `swap path with value` (see [Regions and Capabilities](/docs/language/regions/)) |
-| `unique` | after `is` in a `type` or `interface` header (see [Unique Types](/docs/language/regions/#unique-types)) |
+| `unique` | after `is` in a `type` header (see [Unique Types](/docs/language/regions/#unique-types)) |
 | `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](/docs/language/regions/#region-bounds)) |
 | `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)) |
 

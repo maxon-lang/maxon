@@ -1,7 +1,7 @@
 ---
 feature: stream-reader
 status: experimental
-keywords: [stream, StreamReader, ByteSource, readLine, readUntil, readBytes, readToEnd, LineRead, StreamError, subprocess, tcp, tls, file, stdin]
+keywords: [stream, StreamReader, ByteSource, readLine, readUntil, readBytes, readToEnd, LineOrEnd, StreamError, subprocess, tcp, tls, file, stdin]
 category: stdlib
 ---
 
@@ -16,8 +16,9 @@ which holds one source in its public field `source` and the bytes read from it b
 | Method | Answers |
 |---|---|
 | `StreamReader.over(source)` | a reader with nothing buffered |
-| `readLine(cap LineCap = DefaultLineCap)` | `LineRead.line(text)` without its LF or a CR before it, `ended` at the end of the stream, `pastTheCap` when no LF arrives within `cap` bytes |
-| `readUntil(delimiter String, cap LineCap)` | the same union, the text up to the delimiter, nothing stripped |
+| `readLine()` | `LineOrEnd.line(text)` without its LF or a CR before it, however long the line, a last line with no LF as `line` and then `ended` at the end of the stream |
+| `readLineWithin(cap LineCap)` | `LineRead`: `line(text)` and `ended` as `readLine` answers them, and `pastTheCap` when no LF arrives within `cap` bytes |
+| `readUntil(delimiter String, cap LineCap)` | `LineRead`, the text up to the delimiter, nothing stripped |
 | `readBytes(count BytePos)` | exactly `count` bytes, fewer only at the end of the stream |
 | `readToEnd()` | every byte left |
 
@@ -44,11 +45,10 @@ stream reads through.
 <!-- unsupported-targets: wasm32-wasi -->
 A taken stdout reader answers each line without its terminator: a blank line is empty text, a CRLF terminator loses its CR too, and the read after the last line answers `ended` rather than throwing.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -130,6 +130,13 @@ function shown(read LineRead) returns String
 	end 'read'
 end 'shown'
 
+function shownLine(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+	end 'read'
+end 'shownLine'
+
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'childMode'
 		print("xxxxxxxxxxxxxxxxxxxx\nshort\n")
@@ -143,10 +150,10 @@ function main() returns ExitCode
 	child.closeStdin()
 	let reader = try child.takeStdout() otherwise return 4
 
-	let refused = shown(try reader.readLine(cap: 8) otherwise return 5)
+	let refused = shown(try reader.readLineWithin(8) otherwise return 5)
 	let taken = try reader.readBytes(21) otherwise return 6
-	let short = shown(try reader.readLine() otherwise return 7)
-	let ended = shown(try reader.readLine() otherwise return 8)
+	let short = shownLine(try reader.readLine() otherwise return 7)
+	let ended = shownLine(try reader.readLine() otherwise return 8)
 
 	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
@@ -161,6 +168,129 @@ pastTheCap|21|short|ended
 0
 ```
 
+<!-- test: a-line-read-without-a-cap-returns-a-line-longer-than-any-cap-whole -->
+`readLine()` takes no cap: a line of 1,100,000 bytes, longer than a mebibyte, comes back whole, the line after it reads whole too, and the read after the last line answers `ended`.
+```maxon
+function shown(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives "{text.byteLength()}"
+		ended gives "ended"
+	end 'read'
+end 'shown'
+
+function main() returns ExitCode
+	let path = FilePath from "stream-reader-a-line-read-without-a-cap.txt"
+	let chunk = "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+	var content = ""
+
+	for _ in 0 upto 11000 'eachChunk'
+		content.append(chunk)
+	end 'eachChunk'
+
+	content.append("\nshort\n")
+
+	try File.writeText(path, content: content) otherwise return 1
+	let reader = try File.openRead(path) otherwise return 2
+
+	let long = shown(try reader.readLine() otherwise return 3)
+	let short = shown(try reader.readLine() otherwise return 4)
+	let ended = shown(try reader.readLine() otherwise return 5)
+
+	try File.delete(path) otherwise return 6
+	print("{long}|{short}|{ended}\n")
+	return 0
+end 'main'
+```
+```stdout
+1100000|5|ended
+```
+```exitcode
+0
+```
+
+<!-- test: a-line-read-within-a-cap-answers-pastTheCap-past-it-and-the-line-within-it -->
+`readLineWithin(cap)` answers `pastTheCap` for a line of twelve bytes under a cap of eight and consumes nothing, answers that same line under a cap of twelve, reads the short line after it under the cap of eight, and answers `ended` after the last line.
+```maxon
+function shown(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shown'
+
+function main() returns ExitCode
+	let path = FilePath from "stream-reader-a-line-read-within-a-cap.txt"
+
+	try File.writeText(path, content: "twelve chars\nshort\n") otherwise return 1
+	let reader = try File.openRead(path) otherwise return 2
+
+	let refused = shown(try reader.readLineWithin(8) otherwise return 3)
+	let exact = shown(try reader.readLineWithin(12) otherwise return 4)
+	let short = shown(try reader.readLineWithin(8) otherwise return 5)
+	let ended = shown(try reader.readLineWithin(8) otherwise return 6)
+
+	try File.delete(path) otherwise return 7
+	print("{refused}|{exact}|{short}|{ended}\n")
+	return 0
+end 'main'
+```
+```stdout
+pastTheCap|twelve chars|short|ended
+```
+```exitcode
+0
+```
+
+<!-- test: a-final-line-with-no-newline-is-a-line-and-then-the-stream-has-ended -->
+A stream whose last line has no LF answers that text as a `line` and every read after it `ended`, from `readLine()` and from `readLineWithin(cap)` alike, as Go's `bufio.Reader.ReadString` answers the partial text beside its end-of-file.
+```maxon
+function shownWithin(read LineRead) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+		pastTheCap gives "pastTheCap"
+	end 'read'
+end 'shownWithin'
+
+function shown(read LineOrEnd) returns String
+	return match read 'read'
+		line(text) gives text
+		ended gives "ended"
+	end 'read'
+end 'shown'
+
+function main() returns ExitCode
+	let path = FilePath from "stream-reader-a-final-line-with-no-newline.txt"
+
+	try File.writeText(path, content: "one\ntail") otherwise return 1
+
+	let unbounded = try File.openRead(path) otherwise return 2
+	let first = shown(try unbounded.readLine() otherwise return 3)
+	let second = shown(try unbounded.readLine() otherwise return 4)
+	let third = shown(try unbounded.readLine() otherwise return 5)
+	let fourth = shown(try unbounded.readLine() otherwise return 6)
+
+	let bounded = try File.openRead(path) otherwise return 7
+	let boundedFirst = shownWithin(try bounded.readLineWithin(16) otherwise return 8)
+	let boundedSecond = shownWithin(try bounded.readLineWithin(16) otherwise return 9)
+	let boundedThird = shownWithin(try bounded.readLineWithin(16) otherwise return 10)
+	let boundedFourth = shownWithin(try bounded.readLineWithin(16) otherwise return 11)
+
+	try File.delete(path) otherwise return 12
+	print("{first}|{second}|{third}|{fourth}\n")
+	print("{boundedFirst}|{boundedSecond}|{boundedThird}|{boundedFourth}\n")
+	return 0
+end 'main'
+```
+```stdout
+one|tail|ended|ended
+one|tail|ended|ended
+```
+```exitcode
+0
+```
+
 <!-- test: a-child-stdout-is-read-by-line-and-by-count-from-one-buffer -->
 <!-- unsupported-targets: wasm32-wasi -->
 Line reads and exact-count reads of one child stream share the reader's one buffer. The line read pulls more
@@ -168,11 +298,10 @@ than its line off the pipe, and the four-byte read after it answers the four byt
 rather than waiting on a pipe that has nothing left to deliver; the next line read answers the rest of the
 line.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -221,7 +350,6 @@ function afterRelease(reader ChildOutputReader) returns String
 	return match read 'read'
 		line(text) gives "line {text}"
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'afterRelease'
 
@@ -491,11 +619,10 @@ first.
 typealias ArrivalPromise = Promise with String
 typealias Arrivals = Array with ArrivalPromise
 
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -635,11 +762,10 @@ end 'main'
 <!-- procs: 1 -->
 A reader over a `TcpClient` reads a header by line, the body it declares by count and the rest by line again, with no byte lost between them, and answers `ended` once the peer closes. The client sends its request through `reader.source`, so the source still sends while the reader buffers its reads, and the peer reads that request through a reader of its own.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -831,7 +957,6 @@ function readsLines(options TlsClientOptions, port NetworkPort) returns String
 		match read 'read'
 			line(text) then heard.append("{text};")
 			ended then return "heard [{heard}] then ended"
-			pastTheCap then return "heard [{heard}] then pastTheCap"
 		end 'read'
 	end 'reading'
 
@@ -882,7 +1007,6 @@ function linesOf(path FilePath) returns String
 		match read 'read'
 			line(text) then last = text
 			ended then break 'reading'
-			pastTheCap then return "pastTheCap after {lines}"
 		end 'read'
 
 		lines = lines + 1
@@ -947,11 +1071,10 @@ end 'zReader'
 // --- file: main.maxon
 typealias ZReaders = Array with (StreamReader with ZBytes)
 
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 

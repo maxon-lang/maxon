@@ -1,0 +1,37 @@
+let ThreadEndCaseLabel = "a-probe-answered-with-a-thread-end-still-lets-the-detach-go-ahead"
+
+let ThreadEndAnchorName = "hot"
+let ThreadEndReply = "N"
+let ThreadEndDeadlineMs = 60000
+let ThreadEndTraceName = "proxy-trace.txt"
+let ThreadEndExitedWording = "the program exited with code "
+let ThreadEndRefusalWording = "refused to detach"
+let ThreadEndAnsweredWording = "N\n"
+
+test 'a stub that answers the detach probe with a thread ending leaves the program held, so the detach is sent and lets it run to its own exit'
+	#if os(Macos)
+		let staged = builtFixture(ThreadEndCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(ThreadEndCaseLabel)
+		let expectedEnd = "{ThreadEndExitedWording}{runBuiltProgram(staged).exitCode()}"
+		let trace = staged.join(ThreadEndTraceName)
+		let session = sessionHeldAt(staged, anchor: ThreadEndAnchorName, environment: probeAnsweredProxyEnvironment(proxies, trace: trace, answer: ThreadEndReply))
+
+		session.say(DetachCommand)
+		session.say(QuitCommand)
+
+		let ended = session.finish(ThreadEndDeadlineMs)
+		let spoken = session.said()
+		let traced = try File.readText(trace) otherwise ""
+		let afterTheAnswer = try traced.split("{ProxyAnsweredMarker}{ThreadEndAnsweredWording}").get(1) otherwise ""
+
+		Expect.isTrue(ended, message: "the session did not end once it was told to quit. {spoken} {session.evidence()}")
+		Expect.contains(traced, needle: "{ProxySawMarker}{ProxyResumeRequest}", message: "the detach never stepped the stopped thread to look for an ending, so the case measured nothing. Its trace: {traced}")
+		Expect.isFalse(afterTheAnswer.isEmpty(), message: "the stub proxy never answered the probe with the thread ending, so the case measured nothing. Its trace: {traced}")
+		Expect.contains(afterTheAnswer, needle: "{ProxySawMarker}{ProxyDetachRequest}", message: "⭐ A THREAD ENDING UNDER THE PROBE LEAVES THE PROGRAM HELD, SO THE DETACH IS SENT. The debugger did not send `D` after the proxy reported the thread gone. Its trace: {traced}")
+		Expect.isFalse(spoken.contains(ThreadEndRefusalWording), message: "a thread that ended under the probe does not refuse the detach. The session said: {spoken}")
+		Expect.isTrue(spoken.contains(expectedEnd), message: "the detached program runs on to its own end, '{expectedEnd}'. The session said: {spoken}")
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
+	#endif
+end 'a stub that answers the detach probe with a thread ending leaves the program held, so the detach is sent and lets it run to its own exit'

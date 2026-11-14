@@ -1,0 +1,80 @@
+let ModeVariable = "BLOCKED_THEN_EXIT_MODE"
+let ChildMode = "child"
+let PipeMode = "pipe"
+let PidFileName = "blocked-pid.txt"
+let PipeFileName = "blocked.fifo"
+let ReleaseFileName = "blocked.release"
+let SleepSliceMs = 50
+
+function madePipe() returns ExitCode
+	let made = try Subprocess.run(Executable.name("mkfifo"), arguments: [PipeFileName]) otherwise return 5
+
+	if not made.succeeded() 'noPipe'
+		return 6
+	end 'noPipe'
+
+	return 0
+end 'madePipe'
+
+function recordedProcessId() returns ExitCode
+	let pidFile = try FilePath.from(PidFileName) otherwise return 8
+	try File.writeText(pidFile, content: "{Process.id()}\n") otherwise return 9
+
+	return 0
+end 'recordedProcessId'
+
+function waitsForAChild() returns ExitCode
+	let ran = try Subprocess.run(Executable.name("cat"), arguments: [PipeFileName]) otherwise return 3
+
+	if not ran.succeeded() 'childFailed'
+		return 4
+	end 'childFailed'
+
+	return 7
+end 'waitsForAChild'
+
+function readsAPipe() returns ExitCode
+	let pipe = try FilePath.from(PipeFileName) otherwise return 8
+	_ = try File.readText(pipe) otherwise return 10
+
+	return 7
+end 'readsAPipe'
+
+function sleepsUntilReleased() returns ExitCode
+	let release = try FilePath.from(ReleaseFileName) otherwise return 8
+
+	while not File.exists(release) 'untilReleased'
+		sleep(SleepSliceMs)
+	end 'untilReleased'
+
+	return 7
+end 'sleepsUntilReleased'
+
+function main() returns ExitCode
+	let mode = try Process.environmentVariable(ModeVariable) otherwise return 2
+	let blocksOnAPipe = mode == PipeMode or mode == ChildMode
+
+	if blocksOnAPipe 'makesThePipe'
+		let made = madePipe()
+
+		if made != 0 'pipeFailed'
+			return made
+		end 'pipeFailed'
+	end 'makesThePipe'
+
+	let recorded = recordedProcessId()
+
+	if recorded != 0 'recordFailed'
+		return recorded
+	end 'recordFailed'
+
+	if mode == PipeMode 'readsFromAPipe'
+		return readsAPipe()
+	end 'readsFromAPipe'
+
+	if mode == ChildMode 'waitsForAChild'
+		return waitsForAChild()
+	end 'waitsForAChild'
+
+	return sleepsUntilReleased()
+end 'main'

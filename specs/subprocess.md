@@ -32,8 +32,8 @@ draw.
 ### Reading a streaming child line by line
 
 `StreamingSubprocess.takeStdout()` / `takeStderr()` hand out each stream once, as a `ChildOutputReader`
-(`stream-reader.md`): `readLine()` answers `LineRead.line(text)` without the terminator, so a blank line is
-`line("")`, and `LineRead.ended` at the end of the stream. A second take of the same stream throws
+(`stream-reader.md`): `readLine()` answers `LineOrEnd.line(text)` without the terminator, so a blank line is
+`line("")`, and `LineOrEnd.ended` at the end of the stream. A second take of the same stream throws
 `SubprocessError.ioFailed`, and a reader read after `release()` throws `StreamError.closed`.
 `SubprocessError` answers `timedOut()` for `timeout`.
 
@@ -215,11 +215,10 @@ child sees EOF and exits, drain the three echoed lines, then
 `release()` the handle (the API's `close()`-equivalent) to free the
 OS process slot.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -282,15 +281,14 @@ gamma
 <!-- test: subprocess-streaming-a-blank-line-is-not-the-end-of-the-stream -->
 <!-- unsupported-targets: wasm32-wasi -->
 A child's own BLANK line and the end of its stream are different answers, and `readLine` gives
-them differently: the blank line is `LineRead.line("")`, and the end of the stream is `LineRead.ended`.
+them differently: the blank line is `LineOrEnd.line("")`, and the end of the stream is `LineOrEnd.ended`.
 The line-echo child of the case above is handed `alpha`, an empty line and `gamma`; the three come back as
 three lines, and the read past them is the end.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives "[{text}]"
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -490,11 +488,10 @@ main thread.
 ```maxon
 typealias StepCode = int(0 to 9)
 
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -668,11 +665,10 @@ function grandchildIdFrom(line String) returns Pid throws ParseError
 	return parsed
 end 'grandchildIdFrom'
 
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -846,8 +842,7 @@ function main() returns ExitCode
 
 	let announced = match read 'read'
 		line(text) gives text
-		ended or
-		pastTheCap gives ""
+		ended gives ""
 	end 'read'
 
 	let pid = try grandchildIdFrom(announced) otherwise panic("the child prints the grandchild's id")
@@ -1157,7 +1152,6 @@ function main() returns ExitCode
 	let ready = match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 
 	_ = try shell.wait() otherwise return 7
@@ -2583,11 +2577,10 @@ function describe(label String, text String) returns String
 	return "{line}]"
 end 'describe'
 
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -2939,7 +2932,6 @@ function main() returns ExitCode
 	let streamedLine = match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 
 	_ = try streamed.wait() otherwise return 7
@@ -3059,7 +3051,6 @@ function main() returns ExitCode
 	let announced = match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 
 	print("holder ready: {announced.startsWith("ready")}\n")
@@ -3358,11 +3349,10 @@ pings=30 collects=30 answered=30 slow=0 running=0
 <!-- unsupported-targets: wasm32-wasi -->
 `takeStdout` hands the child's stdout side to a `ChildOutputReader` that reads while the child keeps its stdin and its lifetime. The side is handed out once: a second `takeStdout` throws `SubprocessError.ioFailed`, and the reader taken first goes on reading.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -3435,7 +3425,6 @@ function drainOf(reader isolated ChildOutputReader) returns Lines throws StreamE
 		match try reader.readLine() 'read'
 			line then count = count + 1
 			ended then return count
-			pastTheCap then throw StreamError.failed("a line passed the cap")
 		end 'read'
 	end 'lineLoop'
 
@@ -3495,7 +3484,6 @@ function drainOf(reader isolated ChildOutputReader) returns Lines throws StreamE
 		match try reader.readLine() 'read'
 			line then count = count + 1
 			ended then return count
-			pastTheCap then throw StreamError.failed("a line passed the cap")
 		end 'read'
 	end 'lineLoop'
 
@@ -3615,11 +3603,10 @@ whole=abcd remainder=ef atEnd=0 none=0
 <!-- unsupported-targets: wasm32-wasi -->
 `readLine` and `readBytes` read one stream in order: a header read by line, the body read by count, and the line that follows the body read by line again, with no byte lost or repeated between them.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -3699,11 +3686,10 @@ abcdefghij closed
 <!-- unsupported-targets: wasm32-wasi -->
 `takeStderr` hands the child's stderr side to a `ChildOutputReader` that reads while the child keeps its stdin and its lifetime. The side is handed out once: a second `takeStderr` throws `SubprocessError.ioFailed`, and the reader taken first goes on reading the next line.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -3748,13 +3734,12 @@ beta
 
 <!-- test: subprocess-stderr-reader-read-line-yields-each-line-then-ends-the-stream -->
 <!-- unsupported-targets: wasm32-wasi -->
-A stderr reader's `readLine` answers each line the child wrote to stderr without its terminator: a blank line is an empty line, a CRLF terminator loses its CR too, and a read after the last line answers `LineRead.ended` rather than an empty line.
+A stderr reader's `readLine` answers each line the child wrote to stderr without its terminator: a blank line is an empty line, a CRLF terminator loses its CR too, and a read after the last line answers `LineOrEnd.ended` rather than an empty line.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -3793,11 +3778,10 @@ one|0|three|5|ended
 <!-- unsupported-targets: wasm32-wasi -->
 A stderr reader kept past `release` names a child that no longer exists, so once its buffered line is spent `readLine` throws `StreamError.closed` rather than reading a closed handle. The child writes one line, so the read after the release has nothing buffered and must ask the stream.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -3840,11 +3824,10 @@ alpha closed
 <!-- unsupported-targets: wasm32-wasi -->
 Both readers can be out at once, each reading its own stream: a second take of either stream throws `SubprocessError.ioFailed` while both readers go on reading, and neither stream's lines reach the other's reader.
 ```maxon
-function textOf(read LineRead) returns String
+function textOf(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "<ended>"
-		pastTheCap gives "<pastTheCap>"
 	end 'read'
 end 'textOf'
 
@@ -3913,7 +3896,6 @@ function drainOf(reader isolated ChildOutputReader) returns Lines throws StreamE
 		match try reader.readLine() 'read'
 			line then count = count + 1
 			ended then return count
-			pastTheCap then throw StreamError.failed("a line passed the cap")
 		end 'read'
 	end 'lineLoop'
 
@@ -3968,7 +3950,6 @@ function drainOf(reader isolated ChildOutputReader) returns Lines throws StreamE
 		match try reader.readLine() 'read'
 			line then count = count + 1
 			ended then return count
-			pastTheCap then throw StreamError.failed("a line passed the cap")
 		end 'read'
 	end 'lineLoop'
 
@@ -4026,11 +4007,10 @@ type Carried
 	end 'create'
 end 'Carried'
 
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -4195,6 +4175,574 @@ end 'main'
 ```
 ```stdout
 refused ioFailed
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-megabyte-fed-to-a-child-that-exits-unread-ends-in-the-childs-own-exit -->
+<!-- unsupported-targets: wasm32-wasi -->
+A collected run feeds a payload larger than a pipe holds to a child that exits at once without reading a byte. On
+a POSIX host a write to a pipe whose read end is closed raises SIGPIPE, whose default action ends the writer, so
+the parent must not die of it: the feed ends, the child's own exit status is the answer, and the program goes on.
+```maxon
+let payloadBlocks = 16
+let deadlineMs = 20000
+
+function block() returns String
+	var text = ""
+	for _ in 0 upto 65536 'byte'
+		text.append("a")
+	end 'byte'
+	return text
+end 'block'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 7"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 7"]
+	#endif
+
+	let chunk = block()
+	var payload = ""
+	for _ in 0 upto payloadBlocks 'fill'
+		payload.append(chunk)
+	end 'fill'
+
+	let config = Configuration.create(exe)
+	config.arguments = argv
+	config.standardInput = InputSource.bytes(payload)
+	config.deadline = WaitDeadline.within(deadlineMs)
+
+	if let result = try config.run() 'ran'
+		print("child exit {result.exitCode()}\n")
+	end 'ran' else (e) 'refused'
+		print("refused {e.displayReason()}\n")
+	end 'refused'
+
+	print("parent continues\n")
+	return 0
+end 'main'
+```
+```stdout
+child exit 7
+parent continues
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-megabyte-fed-to-a-child-that-closes-its-stdin-after-a-pause-ends-in-the-childs-own-exit -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+The first part of the payload fills the pipe and the push waits for room; the child then closes its standard input
+without having read it. The wait ends with the pipe broken, the push stops, and the run reports the child's exit
+status instead of ending the parent with SIGPIPE.
+```maxon
+let payloadBlocks = 16
+let deadlineMs = 20000
+
+function block() returns String
+	var text = ""
+	for _ in 0 upto 65536 'byte'
+		text.append("a")
+	end 'byte'
+	return text
+end 'block'
+
+function main() returns ExitCode
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exec 0<&-; sleep 0.3; exit 3"]
+
+	let chunk = block()
+	var payload = ""
+	for _ in 0 upto payloadBlocks 'fill'
+		payload.append(chunk)
+	end 'fill'
+
+	let config = Configuration.create(exe)
+	config.arguments = argv
+	config.standardInput = InputSource.bytes(payload)
+	config.deadline = WaitDeadline.within(deadlineMs)
+
+	if let result = try config.run() 'ran'
+		print("child exit {result.exitCode()}\n")
+	end 'ran' else (e) 'refused'
+		print("refused {e.displayReason()}\n")
+	end 'refused'
+
+	print("parent continues\n")
+	return 0
+end 'main'
+```
+```stdout
+child exit 3
+parent continues
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-short-payload-fed-to-a-child-that-exits-unread-ends-in-the-childs-own-exit -->
+<!-- unsupported-targets: wasm32-wasi -->
+A payload that fits in the pipe may be accepted or refused depending on whether the child has already gone, and
+the run answers the same either way: the child's exit status.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 5"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 5"]
+	#endif
+
+	let config = Configuration.create(exe)
+	config.arguments = argv
+	config.standardInput = InputSource.bytes("hello\n")
+
+	if let result = try config.run() 'ran'
+		print("child exit {result.exitCode()}\n")
+	end 'ran' else (e) 'refused'
+		print("refused {e.displayReason()}\n")
+	end 'refused'
+
+	print("parent continues\n")
+	return 0
+end 'main'
+```
+```stdout
+child exit 5
+parent continues
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-run-keeps-the-output-of-a-child-that-exits-without-reading-its-fed-payload -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+The output a child wrote before it exited without reading its input is collected whole when the feed of a payload
+larger than a pipe is cut short.
+```maxon
+let payloadBlocks = 16
+let deadlineMs = 20000
+
+function block() returns String
+	var text = ""
+	for _ in 0 upto 65536 'byte'
+		text.append("a")
+	end 'byte'
+	return text
+end 'block'
+
+function main() returns ExitCode
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "echo bye; exit 4"]
+
+	let chunk = block()
+	var payload = ""
+	for _ in 0 upto payloadBlocks 'fill'
+		payload.append(chunk)
+	end 'fill'
+
+	let config = Configuration.create(exe)
+	config.arguments = argv
+	config.standardInput = InputSource.bytes(payload)
+	config.deadline = WaitDeadline.within(deadlineMs)
+
+	if let result = try config.run() 'ran'
+		print("child exit {result.exitCode()} stdout {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("refused {e.displayReason()}\n")
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```stdout
+child exit 4 stdout bye
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-a-write-to-a-child-that-has-exited-is-refused-as-ioFailed -->
+<!-- unsupported-targets: wasm32-wasi -->
+A write to the stdin of a child that has exited, whose pipe has no reader left, is refused as `ioFailed`. The
+parent is not ended by SIGPIPE, and the child's exit status is still there to be read.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 7"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 7"]
+	#endif
+
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let code = try child.wait() otherwise return 4
+
+	try child.writeStdin("late\n") otherwise (e) 'refused'
+		print("refused {e.name}\n")
+	end 'refused'
+
+	print("child exit {code}\n")
+	child.release()
+
+	return 0
+end 'main'
+```
+```stdout
+refused ioFailed
+child exit 7
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-a-megabyte-written-to-a-child-that-has-exited-is-refused-as-ioFailed -->
+<!-- unsupported-targets: wasm32-wasi -->
+The same refusal for a write of more than a pipe holds: the first chunk meets the broken pipe, the write stops there,
+and the parent is not ended.
+```maxon
+let payloadBlocks = 16
+
+function block() returns String
+	var text = ""
+	for _ in 0 upto 65536 'byte'
+		text.append("a")
+	end 'byte'
+	return text
+end 'block'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 7"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 7"]
+	#endif
+
+	let chunk = block()
+	var payload = ""
+	for _ in 0 upto payloadBlocks 'fill'
+		payload.append(chunk)
+	end 'fill'
+
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let code = try child.wait() otherwise return 4
+
+	try child.writeStdin(payload) otherwise (e) 'refused'
+		print("refused {e.name}\n")
+	end 'refused'
+
+	print("child exit {code}\n")
+	child.release()
+
+	return 0
+end 'main'
+```
+```stdout
+refused ioFailed
+child exit 7
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-every-write-to-a-child-that-has-exited-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+A broken pipe is not used up by the write that finds it: a second line written to the same child is refused the same
+way, and neither write ends the parent.
+```maxon
+function refusalOf(child StreamingSubprocess, line String) returns String
+	try child.writeStdinLine(line) otherwise (e) 'refused'
+		return e.name
+	end 'refused'
+
+	return "accepted"
+end 'refusalOf'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 7"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 7"]
+	#endif
+
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let code = try child.wait() otherwise return 4
+
+	let first = refusalOf(child, line: "one")
+	let second = refusalOf(child, line: "two")
+
+	print("first {first} second {second} child exit {code}\n")
+	child.release()
+
+	return 0
+end 'main'
+```
+```stdout
+first ioFailed second ioFailed child exit 7
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-a-write-to-a-child-that-closed-its-stdin-and-went-on-running-is-refused -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A child may close its standard input and keep running. Once it has said so, the pipe has no reader and a write is
+refused as `ioFailed`; the child is still alive and ends on its own.
+```maxon
+function main() returns ExitCode
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exec 0<&-; echo closed; sleep 0.3; exit 6"]
+
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let out = try child.takeStdout() otherwise return 4
+	let read = try out.readLine() otherwise return 5
+	let announced = match read 'announced'
+		line(text) gives text
+		ended gives "ended"
+	end 'announced'
+
+	try child.writeStdin("late\n") otherwise (e) 'refused'
+		print("{announced} refused {e.name}\n")
+	end 'refused'
+
+	let code = try child.wait() otherwise return 6
+	print("child exit {code}\n")
+	child.release()
+
+	return 0
+end 'main'
+```
+```stdout
+closed refused ioFailed
+child exit 6
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-a-stdin-feed-to-a-child-that-has-exited-settles -->
+<!-- unsupported-targets: wasm32-wasi -->
+A `StdinFeed` queues its line once its anchor has been seen and pushes it into the child's stdin pipe. The child has
+exited, so the pipe has no reader: the push meets the broken pipe, the feed is spent, and the program goes on.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 7"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 7"]
+	#endif
+
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let pump = try ChildPump.of(child) otherwise return 4
+	let feed = StdinFeed.afterLine("anchor", line: "late")
+
+	let code = try child.wait() otherwise return 5
+	feed.offer(PumpEvent.said(StdioStream.stdout, text: "anchor"), child: child, pump: pump)
+
+	pump.stop()
+	child.release()
+
+	print("feed settled, child exit {code}\n")
+	return 0
+end 'main'
+```
+```stdout
+feed settled, child exit 7
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-streaming-a-megabyte-stdin-feed-to-a-child-that-has-exited-settles -->
+<!-- unsupported-targets: wasm32-wasi -->
+The same feed with a line larger than a pipe holds: the first push meets the broken pipe and the feed is spent.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	let argv = StringArray from ["/c", "exit 7"]
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	let argv = StringArray from ["-c", "exit 7"]
+	#endif
+
+	let builder = StringBuilder.create()
+	var filled = 0 as Count
+
+	while filled < 1048576 'fill'
+		builder.append("x")
+		filled = filled + 1
+	end 'fill'
+
+	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let pump = try ChildPump.of(child) otherwise return 4
+	let feed = StdinFeed.afterLine("anchor", line: builder.build())
+
+	let code = try child.wait() otherwise return 5
+	feed.offer(PumpEvent.said(StdioStream.stdout, text: "anchor"), child: child, pump: pump)
+
+	pump.stop()
+	child.release()
+
+	print("feed settled, child exit {code}\n")
+	return 0
+end 'main'
+```
+```stdout
+feed settled, child exit 7
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-fed-child-run-that-exits-before-reading-ends-with-the-output-it-wrote -->
+<!-- unsupported-targets: wasm32-wasi -->
+`runChildFedAfterLine` queues its feed when the anchor line arrives. The child here prints the anchor and exits at
+once without reading, so the feed meets a pipe with no reader (or fills the pipe and finds it broken) and the run
+ends with the output the child wrote.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("ready\n")
+		return 7
+	end 'childMode'
+
+	let argv = StringArray.create(0)
+	argv.push("exits")
+
+	let builder = StringBuilder.create()
+	var filled = 0 as Count
+
+	while filled < 1048576 'fill'
+		builder.append("x")
+		filled = filled + 1
+	end 'fill'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	let outcome = try runChildFedAfterLine(exe, argv: argv, workingDirectory: WorkingDirectory.inherit, environment: Environment.inherit, deadlineMs: 20000, endsWhen: RunEndsWhen.outputEnds, tailSilenceMs: 200, tailCapMs: 1000, anchor: "ready", feed: builder.build()) otherwise return 3
+
+	match outcome 'outcome'
+		ran(report) then print(report.stdout)
+		outputBroken(_, reason, _) then print("output broke: {reason}\n")
+	end 'outcome'
+
+	print("parent continues\n")
+	return 0
+end 'main'
+```
+```stdout
+ready
+parent continues
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-program-whose-stdout-is-a-closed-pipe-still-ends-of-sigpipe -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A write to standard output or standard error whose pipe has no reader still ends the program the way SIGPIPE
+does, whatever the runtime does with SIGPIPE on any other descriptor. The child here is this case's own executable
+writing standard output until `head` has read its first line and gone; the shell reports how the child ended:
+128 + 13, SIGPIPE.
+```maxon
+function main() returns ExitCode
+	let args = CommandLine.args()
+
+	if args.count() > 1 'childMode'
+		for _ in 0 upto 100000 'write'
+			print("x\n")
+		end 'write'
+
+		printError("survived\n")
+		return 0
+	end 'childMode'
+
+	let me = try Process.executablePath() otherwise return 2
+	let argv = StringArray.create(0)
+	argv.push("-c")
+	argv.push("( \"$0\" child; echo \"child=$?\" >&2 ) | head -n 1 >/dev/null")
+	argv.push(me.path)
+
+	let result = try Subprocess.run(Executable.path(try FilePath.from("/bin/sh") otherwise return 3), arguments: argv) otherwise return 4
+	print(result.stderr)
+	return 0
+end 'main'
+```
+```stdout
+child=141
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-program-whose-stderr-is-a-closed-pipe-still-ends-of-sigpipe -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+The same for standard error: the child's standard error is a pipe whose reader has gone, and its next write ends it
+with SIGPIPE.
+```maxon
+function main() returns ExitCode
+	let args = CommandLine.args()
+
+	if args.count() > 1 'childMode'
+		for _ in 0 upto 100000 'write'
+			printError("x\n")
+		end 'write'
+
+		print("survived\n")
+		return 0
+	end 'childMode'
+
+	let me = try Process.executablePath() otherwise return 2
+	let argv = StringArray.create(0)
+	argv.push("-c")
+	argv.push("\{ ( \"$0\" child 2>&1 >/dev/null; echo \"child=$?\" >&3 ) | head -n 1 >/dev/null; \} 3>&2")
+	argv.push(me.path)
+
+	let result = try Subprocess.run(Executable.path(try FilePath.from("/bin/sh") otherwise return 3), arguments: argv) otherwise return 4
+	print(result.stderr)
+	return 0
+end 'main'
+```
+```stdout
+child=141
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-child-the-program-starts-keeps-the-default-sigpipe-action -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A program whose own SIGPIPE is handled leaves the children it starts with the default action: a signal that is
+ignored when a process starts stays ignored for everything that process starts, so a runtime that ignored SIGPIPE
+would hand every child a SIGPIPE it cannot die of. The child here is a shell that sends itself SIGPIPE; a shell
+that was handed the default is ended by it and its parent shell reports 128 + 13, while one that was handed an
+ignored SIGPIPE survives and says so.
+```maxon
+function main() returns ExitCode
+	let argv = StringArray.create(0)
+	argv.push("-c")
+	argv.push("sh -c 'kill -PIPE $$; echo survived'; echo status=$?")
+
+	let result = try Subprocess.run(Executable.path(try FilePath.from("/bin/sh") otherwise return 2), arguments: argv) otherwise return 3
+	print(result.stdout)
+	return 0
+end 'main'
+```
+```stdout
+status=141
 ```
 ```exitcode
 0

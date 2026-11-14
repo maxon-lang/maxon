@@ -506,3 +506,106 @@ end 'main'
 ```maxoncstderr
 error E3055: specs/try-postfix-target/error.chained-non-throwing-after-throwing.maxon:16:10: try requires a throwing function: this builtin call cannot fail
 ```
+
+<!-- test: a-parenthesized-receiver-calls-a-method-as-a-statement -->
+A statement may begin with a parenthesized expression when a postfix chain through it ends in a call.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		print("bumped to {self.n}\n")
+	end 'bump'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	(b).bump()
+	(b).bump()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bumped to 2
+bumped to 3
+```
+
+<!-- test: a-parenthesized-try-receiver-reaches-a-method-through-a-field-as-a-statement -->
+`(try boxes.get(i) otherwise fallback).inner.note()` takes the element `try` yields, reads a field of it and calls a method of that, all as one statement.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
+
+type Inner
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function note()
+		self.n = self.n + 1
+		print("noted {self.n}\n")
+	end 'note'
+end 'Inner'
+
+type Box
+	export var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let fallback = Box.create()
+	let boxes = Boxes.create(0)
+	boxes.push(Box.create())
+	(try boxes.get(0) otherwise fallback).inner.note()
+	(try boxes.get(5) otherwise fallback).inner.note()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+noted 1
+noted 1
+```
+
+<!-- test: error.a-parenthesized-field-read-is-not-a-statement -->
+A parenthesized chain that does not end in a call is no statement, and fails as any stray token does.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	(b).n
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:14:2: unexpected token: '('
+```

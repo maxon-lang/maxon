@@ -77,8 +77,7 @@ end 'expiredAfterMs'
 // Stdin discriminator passed across the builtin boundary. Raw values match
 // the runtime contract (see X86/ARM64 emitters and the parent plan).
 //
-// ⭐ `hold` IS A STDIN PIPE WITH NO PAYLOAD QUEUED. `InputSource.bytes` spawns with it too and queues its
-// payload afterwards (`queueStdinPayload`). The number is 4 because that is the value the compiler's
+// ⭐ `hold` IS A STDIN PIPE WITH NO PAYLOAD QUEUED. The number is 4 because that is the value the compiler's
 // runtime decodes; its constant is `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), and
 // a value the language can spell must not answer to a second name inside one compiler.
 //
@@ -274,9 +273,8 @@ end 'SpawnOperands'
 /// not a property any caller controls. A caller that needs a child to be stuck
 /// in a real blocking syscall has this and no other way to ask for it.
 ///
-/// `file` routes its path through the `subprocessSpawn` stdio triple; `bytes`
-/// queues its payload once the spawn answers
-/// (`__Builtins.subprocessQueueStdin`), so it reaches the child whole.
+/// `file` routes its path through the `subprocessSpawn` stdio triple, and
+/// `bytes` its payload with the payload's length, so it reaches the child whole.
 public union InputSource
 	none
 	inherit
@@ -545,13 +543,11 @@ public type Subprocess
 		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags, stdinTriple.data.byteLength())
 
 		if handle == SpawnFailedAnswer 'spawnFailed'
 			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
-
-		queueStdinPayload(handle as StreamingHandle, source: config.standardInput)
 
 		let pid = __Builtins.subprocessGetPid(handle)
 		let result = __Builtins.subprocessWaitCollect(handle, runtimeWaitMs(config.deadline))
@@ -580,7 +576,7 @@ public type Subprocess
 		return CollectedOutput.create(status, stdout: stdout, stderr: stderr, pid: pid as Pid, durationMs: durationMs)
 	end 'runConfiguration'
 
-	/// Spawn detached. Uses the same 14-arg layout as `subprocessSpawn` with
+	/// Spawn detached. Uses the same 15-arg layout as `subprocessSpawn` with
 	/// the detach flag bit set; the runtime returns the OS pid instead of an
 	/// attached handle, -1 for a failed spawn, or -2 for a detach the job this
 	/// program runs in refuses. stdin/stdout/stderr are forced to discard so the
@@ -590,7 +586,7 @@ public type Subprocess
 		let emptyCStr = subprocessEmptyCString()
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, UncollectedStreamLimit, OutputKind.discard.rawValue, emptyCStr, UncollectedStreamLimit, flags)
+		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, UncollectedStreamLimit, OutputKind.discard.rawValue, emptyCStr, UncollectedStreamLimit, flags, 0)
 
 		if pid == SpawnFailedAnswer 'spawnFailed'
 			throw spawnFailure(operands.executablePath)
@@ -628,9 +624,9 @@ typealias SpawnFlagsValue = int(0 to 15)
 /// type-checked at the source language level; the conversion to `cstring`
 /// happens at the spawn call site via `.cstr()`. For kinds whose contract
 /// has no payload (e.g. inherit/discard), pass the empty string and the
-/// runtime treats the leading-NUL cstring as "no payload". `bytes` passes it
-/// empty too: a `cstring` ends at its first NUL, so its payload is queued
-/// after the spawn (`queueStdinPayload`).
+/// runtime treats the leading-NUL cstring as "no payload". `bytes` passes its
+/// payload, and the spawn passes the payload's byte length beside it, so a NUL
+/// inside it is delivered.
 public type StdioRuntimeTriple
 	public var kind as StdioKindValue
 	public var data as String
@@ -917,27 +913,11 @@ function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 	return match src 's'
 		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: UncollectedStreamLimit)
 		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: UncollectedStreamLimit)
-		bytes gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: UncollectedStreamLimit)
+		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: data, limit: UncollectedStreamLimit)
 		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: UncollectedStreamLimit)
 		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: UncollectedStreamLimit)
 	end 's'
 end 'stdinTripleFromSource'
-
-function queueStdinPayload(handle StreamingHandle, source InputSource)
-	match source 's'
-		bytes(data) then queuePayload(handle, data: data)
-		none or
-		inherit or
-		file or
-		hold then return
-	end 's'
-end 'queueStdinPayload'
-
-function queuePayload(handle StreamingHandle, data String)
-	if __Builtins.subprocessQueueStdin(handle, data.cstr(), data.byteLength()) != StdinAcceptedAnswer 'refused'
-		panic("Subprocess: the runtime refused the stdin payload of handle {handle}, whose spawn has just answered it with a pipe")
-	end 'refused'
-end 'queuePayload'
 
 function outputTripleFromDestination(dst OutputDestination) returns StdioRuntimeTriple
 	return match dst 'o'

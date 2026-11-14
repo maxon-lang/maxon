@@ -425,7 +425,7 @@ function scanLoopEffects(module StdModule, func IrFunction, scratch LicmScratch)
 	scratch.effects.reset()
 
 	for position in scratch.members.blocks 'eachBlock'
-		let block = blockAtPosition(module, func: func, position: position)
+		let block = module.blockAtPosition(func, position: position)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			scratch.effects.note(try module.ops.get(opIdx) otherwise panic("scanLoopEffects: op index {opIdx} from block.bodyOps() not in module.ops"))
@@ -454,7 +454,7 @@ function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorT
 
 	for i in 0 upto scratch.walkOrder.count() 'eachBlock'
 		let position = try scratch.walkOrder.get(i) otherwise panic("analyzeLoopBlocks: walkOrder.get OOB at {i} inside its own count")
-		analyzeLoopBlock(module, block: blockAtPosition(module, func: func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)
+		analyzeLoopBlock(module, block: module.blockAtPosition(func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)
 	end 'eachBlock'
 end 'analyzeLoopBlocks'
 
@@ -600,18 +600,12 @@ end 'admitsInvariantLoad'
 // its reader's, and a preorder visits an ancestor first. The def-before-use order the ops had inside the
 // loop is the order they arrive in.
 function appendToPreheader(module StdModule, func IrFunction, preheader ElementIndex, ops OpIndexArray)
-	let block = blockAtPosition(module, func: func, position: preheader)
+	let block = module.blockAtPosition(func, position: preheader)
 
 	for opIdx in ops 'eachHoisted'
 		block.pushBodyOp(opIdx)
 	end 'eachHoisted'
 end 'appendToPreheader'
-
-// The block at one position in `func.blockRefs` — the descent every walk above makes, written once.
-function blockAtPosition(module StdModule, func IrFunction, position ElementIndex) returns IrBlock
-	let blockRef = try func.blockRefs.get(position) otherwise panic("hoistLoopInvariants: blockRefs.get OOB at {position}")
-	return try module.blocks.get(blockRef) otherwise panic("hoistLoopInvariants: blockRef from func.blockRefs not in module.blocks")
-end 'blockAtPosition'
 
 // ══════════════════════════════════════════════════════════════════════════
 // Scratch

@@ -3075,7 +3075,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create()
-	var shelf = Shelf.holding(Payload.create(0) as isolated Payload)
+	let empty = Payload.create(0) as isolated Payload
+	var shelf = Shelf.holding(empty)
 
 	let accepted = Payload.create(1) as isolated Payload
 

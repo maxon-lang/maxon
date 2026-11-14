@@ -1907,6 +1907,7 @@ function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(writeLap)
 	x64LinuxEmitSyscallRestartingOnEintr(asm, number: X64LinuxSyscallWrite)
+	x64LinuxEmitDieIfBrokenPipe(asm)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: done)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
@@ -1916,6 +1917,44 @@ function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	asm.placeLabel(done)
 	return asm.finishFunction(WriteStderrName)
 end 'buildLinuxWriteStderrChunk'
+
+function buildLinuxWriteStreamChunk() returns FunctionCodeChunk
+	let asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallWrite)
+	x64LinuxEmitDieIfBrokenPipe(asm)
+
+	return asm.finishFunction(WriteStreamName)
+end 'buildLinuxWriteStreamChunk'
+
+function buildLinuxSigpipeHandlerChunk() returns FunctionCodeChunk
+	let asm = X64RuntimeAsm.beginFunction(0)
+
+	return asm.finishFunction(SigpipeHandlerName)
+end 'buildLinuxSigpipeHandlerChunk'
+
+function buildLinuxSigpipeDieChunk() returns FunctionCodeChunk
+	let SlotSigaction = 0
+	let asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
+
+	x64LinuxEmitZeroSlots(asm, firstSlot: SlotSigaction, slotCount: LinuxSigactionSlots)
+	emitLinuxSigactionCall(asm, signal: PosixSignalPipe as MachineWord, actFirstSlot: SlotSigaction)
+
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetPid)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGettid)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.r8, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixSignalPipe as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallTgkill)
+
+	encodeLinuxProcessExit(asm.code, exitCode: (PosixSignalExitBase + PosixSignalPipe) as MachineWord)
+
+	return asm.finishFunction(SigpipeDieName)
+end 'buildLinuxSigpipeDieChunk'
 
 // mrt_fault_handler (LINUX) — the SIGFPE, SIGSEGV and SIGBUS handler. Kernel SA_SIGINFO entry ABI:
 // rdi=signum, rsi=siginfo*, rdx=ucontext*. The Linux twin of `buildFaultThunkChunk`: reads the faulting
@@ -2113,6 +2152,8 @@ function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, probesCpu
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
 		emitX64LinuxSigactionInstall(asm, actFirstSlot: SlotSigaction, handlerName: PreemptHandlerName, signal: LinuxSignalUrg)
 	end 'itCanStopAThread'
+
+	emitX64LinuxSigactionInstall(asm, actFirstSlot: SlotSigaction, handlerName: SigpipeHandlerName, signal: PosixSignalPipe as MachineWord)
 
 	emitX64LinuxSigactionDefault(asm, actFirstSlot: SlotSigaction)
 	emitLinuxSigactionCall(asm, signal: LinuxSignalChld, actFirstSlot: SlotSigaction)
@@ -3001,5 +3042,8 @@ function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X6
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
 	chunks.push(buildLinuxFaultHandlerChunk(usesGt))
 	chunks.push(buildLinuxWriteStderrChunk())
+	chunks.push(buildLinuxWriteStreamChunk())
+	chunks.push(buildLinuxSigpipeHandlerChunk())
+	chunks.push(buildLinuxSigpipeDieChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 end 'appendX64LinuxRuntimeChunks'

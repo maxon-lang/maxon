@@ -8889,7 +8889,7 @@ end 'isCompilerQualifierCallee'
 // a backend panic hides in; they arrive with the stdlib method that needs them, not before.
 //
 // THE THREE FAMILIES, which is why the emits below are a handful of shared functions rather than one per name:
-//   • the ATTACHED run — `subprocessSpawn` / `subprocessDetach` (the fourteen-argument contract),
+//   • the ATTACHED run — `subprocessSpawn` / `subprocessDetach` (the fifteen-argument contract),
 //     `subprocessGetPid`, `subprocessQueueStdin`, `subprocessWaitCollect`, the five
 //     `subprocessResult*` readers of the struct it answers, `subprocessResultRelease` and
 //     `subprocessReleaseHandle`;
@@ -9016,12 +9016,12 @@ let BuiltinsPinDepthName = b"__Builtins.pinDepth"
 
 // The two positions the POSITIONAL shapes below name. Their own constants rather than the spawn contract's
 // `SubprocessSpawnArgvSlot`, which is also 0 but says something else: these mean "the first/second argument
-// of whatever contract this is", and that one means where a fourteen-wide contract puts its argv blob.
+// of whatever contract this is", and that one means where a fifteen-wide contract puts its argv blob.
 let IntrinsicFirstSlot = 0
 let IntrinsicSecondSlot = 1
 
 // ⭐ **WHAT EACH POSITION OF AN INTRINSIC'S ARGUMENT LIST CARRIES.** A closed shape rather than a list of
-// indices passed around, because the map is a property of the CONTRACT and not of a call: the fourteen-
+// indices passed around, because the map is a property of the CONTRACT and not of a call: the fifteen-
 // argument spawn takes buffers at 0 and 3 and a `cstring` at four more positions, the streaming spawn takes
 // buffers at 0 and 4 and one `cstring`, and most of the band takes machine words only. A `ParamCountArray`
 // would express the same thing while allocating an array per parsed call to say "none". Count the cases off
@@ -9054,7 +9054,7 @@ enum IntrinsicArgShape
 	// step with an arity that has already moved once.
 	cstringLast
 
-	// The fourteen-argument spawn contract: the argv blob and the environment block, plus the working
+	// The fifteen-argument spawn contract: the argv blob and the environment block, plus the working
 	// directory and the three stdio payloads.
 	spawn
 
@@ -9093,7 +9093,7 @@ function intrinsicSlotClass(shape IntrinsicArgShape, index ParamCount, arity Par
 	end 's'
 end 'intrinsicSlotClass'
 
-// The fourteen-argument contract's slot map. Its own function because it is the only shape with more than
+// The fifteen-argument contract's slot map. Its own function because it is the only shape with more than
 // one named position of each class, and six comparisons written into a `gives` arm read as a wall.
 function spawnSlotClass(index ParamCount) returns IntrinsicSlotClass
 	if index == SubprocessSpawnArgvSlot or index == SubprocessSpawnEnvSlot 'aBuffer'
@@ -9181,18 +9181,18 @@ let StreamWriteArity = 1
 // reason — an intrinsic has no signature for SemanticCheck's ordinary arity check to read, because no file
 // declares it — and stated as SHAPES rather than one constant per name because a shape is what a caller can
 // get wrong: the handle ops take one, the timed ops two, the counted stdin ops three, the
-// last-error read none, a spawn fourteen and a streaming spawn six. A further constant equal to an
+// last-error read none, a spawn fifteen and a streaming spawn six. A further constant equal to an
 // existing one would be a second name for one fact.
 let SubprocessOneArgArity = 1
 let SubprocessTwoArgArity = 2
 let SubprocessThreeArgArity = 3
 let SubprocessNoArgArity = 0
 
-// The fourteen-argument spawn contract, in order: `argv_mm, argc, cwd_cstr, env_mm, envInherit,
+// The fifteen-argument spawn contract, in order: `argv_mm, argc, cwd_cstr, env_mm, envInherit,
 // stdinKind, stdinData_cstr, stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr,
-// stderrLimit, flags`. `subprocessDetach` takes the identical fourteen and differs only in what it
-// answers (a pid rather than a handle); the runtime gates the detached path on `flags` bit 2.
-let SubprocessSpawnArity = 14
+// stderrLimit, flags, stdinLength`. `subprocessDetach` takes the identical fifteen and differs only in what
+// it answers (a pid rather than a handle); the runtime gates the detached path on `flags` bit 2.
+let SubprocessSpawnArity = 15
 
 // `subprocessSpawnStreaming(argv_mm, argc, cwd_cstr, flags, env_mm, envInherit)` — the streaming spawn
 // takes no stdio triples because all three of its streams are pipes by definition, and it takes the
@@ -9202,7 +9202,7 @@ let SubprocessStreamingSpawnArity = 6
 
 // The two POSITIONS in the spawn contract that carry a `__ManagedMemory` rather than a scalar — the argv
 // blob and the environment block. Named because `spawnSlotClass` reads them as indices, and an index into a
-// fourteen-wide contract is exactly the sort of bare number that goes wrong silently.
+// fifteen-wide contract is exactly the sort of bare number that goes wrong silently.
 let SubprocessSpawnArgvSlot = 0
 let SubprocessSpawnEnvSlot = 3
 
@@ -9215,7 +9215,7 @@ let SubprocessStreamingSpawnEnvSlot = 4
 // attached and streaming lists agree on `argv, argc, cwd` and diverge only past it.
 let SubprocessSpawnCwdSlot = 2
 
-// The `data` half of each of the fourteen-argument contract's three (kind, data, limit) stdio triples. A
+// The `data` half of each of the fifteen-argument contract's three (kind, data, limit) stdio triples. A
 // `cstring` at every one of them even for a kind that carries no payload: `stdlib/Subprocess.maxon` passes
 // an EMPTY one there rather than a null, and the runtime reads the leading NUL as "no payload".
 let SubprocessSpawnStdinDataSlot = 6
@@ -9286,7 +9286,7 @@ end 'isBuiltinsIntrinsicCallee'
 // complaint standing in front of it.
 //
 // ⚠⚠ **THAT `__Builtins` HALF WAS A LIVE DEFECT THAT LEFT NO LEGAL SPELLING, AND IT WAS MEASURED.**
-// `stdlib/Subprocess.maxon:387` calls `__Builtins.subprocessSpawn` with fourteen positional arguments;
+// `stdlib/Subprocess.maxon` calls `__Builtins.subprocessSpawn` with fifteen positional arguments;
 // The compiler answered E2053 (*"the second and later arguments must be named"*) — while the BOOTSTRAP, which
 // reads the identical file, has no labelled spelling of an intrinsic call AT ALL: measured on
 // `__Builtins.subprocessWaitCollect(-1, timeoutMs: 0)` it answers
@@ -9309,7 +9309,7 @@ end 'isBuiltinsIntrinsicCallee'
 //     E2052, whose sentence blames a default on a parameter `__Builtins.readStdin(n: 8)` does not
 //     have. E2067 says the true thing, which is the same wrong-noun correction
 //     `calleeTakesPositionalArgsOnly`'s header records for the arity-1 math intrinsics.
-//   • **UNRECOGNIZED** ones can carry any arity — `stdlib/Subprocess.maxon:387`'s fourteen is the case
+//   • **UNRECOGNIZED** ones can carry any arity — `stdlib/Subprocess.maxon`'s fifteen is the case
 //     that opened this — and they were never a working program either: the labelled spelling parsed
 //     under the declared-callee rule and died at E3004 one pass later. What moves is WHICH refusal
 //     speaks first. MEASURED both ways on `__Builtins.subprocessWaitCollect(1, timeoutMs: 0)`:
@@ -15469,6 +15469,7 @@ function statementFormRole(form StatementForm) returns StatementRole
 		qualifiedStaticCallStmt or
 		namespaceQualifiedCallStmt or
 		valueHeadedCallStmt or
+		parenthesizedCallStmt or
 		spawnStmt or
 		callStmt or
 		memberExprStmt gives StatementRole.plain
@@ -15523,6 +15524,7 @@ enum StatementForm
 	qualifiedStaticCallStmt
 	namespaceQualifiedCallStmt
 	valueHeadedCallStmt
+	parenthesizedCallStmt
 	spawnStmt
 	callStmt
 	memberExprStmt
@@ -18709,6 +18711,12 @@ type FunctionBodyState
 	// the safe direction: a withheld proof costs a guard, an unsound one costs the answer.
 	export var aliasUnprovenMarks as BoolArray
 
+	// Indexes `func.blockRefs` below `blockPositionsCovered`: whatever reorders blocks under that mark must
+	// rewind it, as the ternary does, or `blockById` reads a block from its old position.
+	export var blockPositions as BlockIndexById
+
+	export var blockPositionsCovered as ElementIndex
+
 	// ⭐ **THE PER-VALUE WITNESS PAIRING** — for a value tagged `interfaceRef`,
 	// the ValueId of the fat pointer's witness half; 0 for every other value. See
 	// `IrFunction.valueWitnessIds`, which this column is handed to by reference.
@@ -18749,6 +18757,7 @@ type FunctionBodyState
 	export var regionFacts as RegionFacts
 	export var operandOrder as OperandOrder
 	export var pendingLocalCapability as ParamCapability
+	export var pendingLocalCapabilityEnd as ElementIndex
 	export var seededExitPhis as ValueIdArray
 	export var declaredReturnCapability as ResultCapability
 	export var statementStart as ElementIndex
@@ -19374,6 +19383,8 @@ type FunctionBodyState
 			promiseSlotIsAField: BoolArray.create(0),
 			promiseSlotCarriers: ValueIdArray.create(0),
 			aliasUnprovenMarks: BoolArray.create(0),
+			blockPositions: BlockIndexById.create(),
+			blockPositionsCovered: 0,
 			valueWitnessIds: ValueIdArray.create(0),
 			inMatchArmBody: false,
 			valueBrandIds: TypeNameIdArray.create(0),
@@ -19381,6 +19392,7 @@ type FunctionBodyState
 			regionFacts: noRegionFacts,
 			operandOrder: OperandOrder.create(),
 			pendingLocalCapability: ParamCapability.unmarked,
+			pendingLocalCapabilityEnd: 0,
 			seededExitPhis: ValueIdArray.create(0),
 			declaredReturnCapability: ResultCapability.unmarked,
 			statementStart: 0,
@@ -37984,7 +37996,14 @@ export type Parser
 			let operandStart = self.bodyState.operandOrder.eventCount()
 			let valueResult = try self.parsePostfix(func, operandStart: operandStart, value: try self.parseVariableReference(), resultUsed: false)
 			try self.finishCallStatement(func, result: valueResult, opFloor: valueOpFloor, tempFloor: valueTempFloor, anchor: valueAnchor)
-		end 'valueHeadedCallStmt' else if form == StatementForm.spawnStmt 'spawnStmt'
+		end 'valueHeadedCallStmt' else if form == StatementForm.parenthesizedCallStmt 'parenthesizedCallStmt'
+			let groupAnchor = self.current()
+			let groupTempFloor = self.bodyState.pendingTempDrops.count()
+			let groupOpFloor = self.artifact.module.ops.count()
+			let operandStart = self.bodyState.operandOrder.eventCount()
+			let groupResult = try self.parsePostfix(func, operandStart: operandStart, value: try self.parseParenthesizedExpression(func), resultUsed: false)
+			try self.finishCallStatement(func, result: groupResult, opFloor: groupOpFloor, tempFloor: groupTempFloor, anchor: groupAnchor)
+		end 'parenthesizedCallStmt' else if form == StatementForm.spawnStmt 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
 			// `callStmt` lookahead below is `identifier (`, which `spawn Calc` fails, so without this the
@@ -38103,6 +38122,26 @@ export type Parser
 		return self.bodyState.currentBlock
 	end 'parseStatementBody'
 
+	function parenthesizedCallStatementAt(open ElementIndex) returns bool
+		if self.kindAt(open) != TokenKind.leftParen 'notAGroup'
+			return false
+		end 'notAGroup'
+
+		var at = self.parenGroups.closeOf(self.tokens, open: open) + 1
+		var endsInACall = false
+
+		while self.kindAt(at) == TokenKind.dot 'eachHop'
+			at = at + TokensPerQualifierSegment
+			endsInACall = self.kindAt(at) == TokenKind.leftParen
+
+			if endsInACall 'aCallHop'
+				at = self.parenGroups.closeOf(self.tokens, open: at) + 1
+			end 'aCallHop'
+		end 'eachHop'
+
+		return endsInACall
+	end 'parenthesizedCallStatementAt'
+
 	// Tested in `parseStatement`'s arm order, and the comments on those arms argue that order: a
 	// form tested earlier claims every statement a later one would also match.
 	function statementFormAt(chain ChainResolution) returns StatementForm
@@ -38173,6 +38212,10 @@ export type Parser
 		if tupleAssignEqualsIn(self.tokens, open: self.pos) != self.pos 'tupleAssign'
 			return StatementForm.tupleAssign
 		end 'tupleAssign'
+
+		if self.parenthesizedCallStatementAt(self.pos) 'parenthesizedCallStmt'
+			return StatementForm.parenthesizedCallStmt
+		end 'parenthesizedCallStmt'
 
 		if self.assignsAt(self.pos) 'assign'
 			return StatementForm.assign
@@ -38975,8 +39018,12 @@ export type Parser
 		return self.signatures.valueHoldsAUnique(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames)
 	end 'valueHoldsAUniqueRecord'
 
+	function valueIsAUniqueStorageRead(value ValueId) returns bool
+		return (self.valueIsAStorageRead(value) or self.valueIsASlotRead(value)) and self.valueHoldsAUniqueRecord(value)
+	end 'valueIsAUniqueStorageRead'
+
 	function valueIsAUniqueAlias(value ValueId) returns bool
-		return ((self.valueIsAStorageRead(value) or self.valueIsASlotRead(value)) and self.valueHoldsAUniqueRecord(value)) or self.regionFactsForRead().lentUniques.contains(value)
+		return self.valueIsAUniqueStorageRead(value) or self.regionFactsForRead().lentUniques.contains(value)
 	end 'valueIsAUniqueAlias'
 
 	function requireNoUniqueAlias(value ValueId, action String, anchor Token) throws SourceParseError
@@ -44707,7 +44754,7 @@ export type Parser
 	end 'joinHeldSentLeg'
 
 	function blockOfThisBody(id BlockId) returns IrBlock
-		return try self.artifact.module.getBlockByIdIn(self.bodyFunction(), id: id) otherwise panic("blockOfThisBody: block {id} is not in the function being parsed — a held send leg names only blocks this body created")
+		return try self.blockById(self.bodyFunction(), id: id) otherwise panic("blockOfThisBody: block {id} is not in the function being parsed — a held send leg names only blocks this body created")
 	end 'blockOfThisBody'
 
 	function requireSentReplyPropagates(target TryTarget, tryTok Token) throws SourceParseError
@@ -46341,7 +46388,7 @@ export type Parser
 		// this whole handler parse for exactly that reason). It is fetched by id because the id is what the
 		// CONTEXT carries: `errBlockId` is the only handle the router had, so reading the block back through
 		// it is what proves the block the handler is written into is the one every routed edge branched to.
-		self.bodyState.currentBlock = try self.artifact.module.getBlockByIdIn(func, id: ctx.errBlockId) otherwise panic("parseTryBlockStatement: the error block {ctx.errBlockId} of '{String.from(labelTok.value)}' is not in its own function")
+		self.bodyState.currentBlock = try self.blockById(func, id: ctx.errBlockId) otherwise panic("parseTryBlockStatement: the error block {ctx.errBlockId} of '{String.from(labelTok.value)}' is not in its own function")
 
 		// ⭐⭐ **THE HANDLER IS PARSED AGAINST THE OWNERSHIP STATE THE THROW EDGE CARRIES, NOT THE BODY'S END
 		// STATE** — `if`/`else`'s `restoreMoveMark(entryMoveMark)` before the else branch, one construct over.
@@ -47068,6 +47115,24 @@ export type Parser
 		return try self.artifact.module.functions.get(self.artifact.currentFuncIndex) otherwise panic("bodyFunction: the function whose body is being parsed ({self.artifact.currentFuncIndex}) is not in this file's module — every body door pushes its function before it stamps the index")
 	end 'bodyFunction'
 
+	function blockById(func IrFunction, id BlockId) returns IrBlock throws BlockRefLookupError
+		let blockCount = func.blockRefs.count()
+
+		for position in self.bodyState.blockPositionsCovered upto blockCount 'indexNewBlocks'
+			self.bodyState.blockPositions.place(self.artifact.module.blockAtPosition(func, position: position).id, value: position)
+		end 'indexNewBlocks'
+
+		self.bodyState.blockPositionsCovered = blockCount
+
+		let block = try self.artifact.module.getBlockByIdThrough(func, byId: self.bodyState.blockPositions, id: id)
+
+		if block.id != id 'staleIndex'
+			panic("blockById: the body's block index put block {id} at a position holding block {block.id} of '{String.from(func.name)}'")
+		end 'staleIndex'
+
+		return block
+	end 'blockById'
+
 	// Membership, not `valueIsOwnedHeap`, decides whether a routed or `try`ed result owes a drop: a
 	// promise result is pending without the owned-heap bit, and a routed runtime-call result is
 	// enrolled by its caller only after the door returns. Every edge that re-homes the result carries
@@ -47221,7 +47286,7 @@ export type Parser
 	end 'routeStraightToHandler'
 
 	function routedThrowShape(ctx TryBlockContext, errArgs ValueIdArray) returns ExitShape
-		let errBlock = try self.artifact.module.getBlockByIdIn(self.bodyFunction(), id: ctx.errBlockId) otherwise panic("routedThrowShape: the error block {ctx.errBlockId} of '{String.from(ctx.label)}' is not in its own function")
+		let errBlock = try self.blockById(self.bodyFunction(), id: ctx.errBlockId) otherwise panic("routedThrowShape: the error block {ctx.errBlockId} of '{String.from(ctx.label)}' is not in its own function")
 
 		if errBlock.blockArgs.count() != errArgs.count() 'argsAndPhisDisagree'
 			panic("routedThrowShape: a routed edge carries {errArgs.count()} values but the error block of '{String.from(ctx.label)}' holds {errBlock.blockArgs.count()} phis — the two are positional")
@@ -47803,7 +47868,7 @@ export type Parser
 	end 'joinExitCapability'
 
 	function exitChainPhi(entry BlockId) returns ValueId
-		let block = try self.artifact.module.getBlockByIdIn(self.bodyFunction(), id: entry) otherwise panic("exitChainPhi: the exit chain entry {entry} is not in the function")
+		let block = try self.blockById(self.bodyFunction(), id: entry) otherwise panic("exitChainPhi: the exit chain entry {entry} is not in the function")
 		let phiArg = try block.blockArgs.get(0) otherwise panic("exitChainPhi: the exit chain entry {entry} of a value exit has no carried phi")
 
 		return phiArg.valueId
@@ -56613,7 +56678,7 @@ export type Parser
 		// ⭐ `prevTestBlockId` is an ID, not a second NAME for `currentTestBlock`: the advance below is
 		// `prevTestBlockId = currentTestBlock.id`, and copying the BINDING there would move the block out
 		// of `currentTestBlock` (single ownership — E3102 on the next arm's read of it). The one reader
-		// re-fetches, which `IrModule.getBlockByIdIn` asks for anyway across block-minting calls.
+		// re-fetches by id, as any block read across block-minting calls must.
 		var currentTestBlock = self.bodyState.currentBlock
 		var prevTestBlockId = self.bodyState.currentBlock.id
 		var hasRealArm = false
@@ -56772,8 +56837,8 @@ export type Parser
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
 
 		// ⭐ **THE ENTRY BLOCK IS HELD BY ITS `BlockId`, NOT AS A SECOND NAME FOR `currentTestBlock`** —
-		// `IrModule.getBlockByIdIn`'s own rule (*"use this instead of holding an IrBlock struct alias across
-		// other block-creating / block-mutating calls"*), and the arm loop below is exactly such a span: it
+		// an IrBlock alias held across block-creating or block-mutating calls goes stale, and the arm loop
+		// below is exactly such a span: it
 		// mints a block per arm. Aliasing it here would also be a second mutable name for one owned value,
 		// which single ownership refuses (E3102 on the next read of `currentTestBlock`) — the block is
 		// re-fetched at the one place the dispatch is emitted.
@@ -56843,7 +56908,7 @@ export type Parser
 					defaultBodyId = self.artifact.module.addBlock(func, label: b"matchdefault", heat: BlockHeat.normal).id
 				end 'planDefaultBlock'
 
-				var defaultBody = try self.artifact.module.getBlockByIdIn(func, id: defaultBodyId) otherwise panic("parseMatchCommon: the default body block {defaultBodyId} is not in its own function")
+				var defaultBody = try self.blockById(func, id: defaultBodyId) otherwise panic("parseMatchCommon: the default body block {defaultBodyId} is not in its own function")
 
 				if prevFallthrough 'defaultIsFtTarget'
 					var matchEdgeArgs = self.setupFallthroughTargetPhis(defaultBody, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
@@ -56859,7 +56924,7 @@ export type Parser
 					end 'defaultFailEdgeDrops' else if hasRealArm 'defaultFailEdge'
 						// The fail edge into the default body — the last real arm's `condBranch` else, already
 						// emitted; only its phi args are recorded now.
-						let prevTestBlock = try self.artifact.module.getBlockByIdIn(func, id: prevTestBlockId) otherwise panic("parseMatchCommon: the previous test block {prevTestBlockId} is not in its own function")
+						let prevTestBlock = try self.blockById(func, id: prevTestBlockId) otherwise panic("parseMatchCommon: the previous test block {prevTestBlockId} is not in its own function")
 						self.recordBranchEdge(prevTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
 					end 'defaultFailEdge'
 				end 'defaultIsFtTarget' else 'defaultFresh'
@@ -56877,7 +56942,7 @@ export type Parser
 					let entry = self.enterErrorUnionArm(func, members: info.members, fused: info.fusedOrdinal, fallenInto: prevFallthrough, body: defaultBody, edgeArgs: planMissArgs, flag: scrut, anchor: defTok)
 					planMissBlockId = entry.targetId
 					planMissArgs = entry.args.clone()
-					defaultBody = try self.artifact.module.getBlockByIdIn(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the default body block {entry.bodyId} is not in its own function")
+					defaultBody = try self.blockById(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the default body block {entry.bodyId} is not in its own function")
 				end 'errorUnionDefaultEntry' else if usePlan 'planMissTarget'
 					planMissBlockId = defaultBody.id
 				end 'planMissTarget'
@@ -57046,7 +57111,7 @@ export type Parser
 							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: entry.targetId, args: entry.args)
 						end 'unionArmDispatchedDirectly'
 
-						bodyBlock = try self.artifact.module.getBlockByIdIn(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the arm body block {entry.bodyId} is not in its own function")
+						bodyBlock = try self.blockById(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the arm body block {entry.bodyId} is not in its own function")
 					end 'errorUnionArmEntry' else 'dispatchIntoBody'
 						if armDropsOnItsDispatchEdge 'armDropsOnItsDispatchEdge'
 							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok)
@@ -57160,7 +57225,7 @@ export type Parser
 				hasRealArm = true
 
 				if not usePlan 'chainAdvance'
-					currentTestBlock = try self.artifact.module.getBlockByIdIn(func, id: nextTestId) otherwise panic("parseMatchCommon: the chain's next test block {nextTestId} is not in its own function")
+					currentTestBlock = try self.blockById(func, id: nextTestId) otherwise panic("parseMatchCommon: the chain's next test block {nextTestId} is not in its own function")
 				end 'chainAdvance'
 			end 'patternArm'
 
@@ -60479,7 +60544,7 @@ export type Parser
 	// nodes compare `subject < pivot` and leaves test their interval, all with the same `compare`/
 	// `condBranch` the chain used, so the backend and every later pass are untouched.
 	function emitMatchDispatch(func IrFunction, entryId BlockId, subject ValueId, intervals DispatchIntervalArray, miss DispatchMiss, opTok Token) throws SourceParseError
-		let entry = try self.artifact.module.getBlockByIdIn(func, id: entryId) otherwise panic("emitMatchDispatch: the dispatch entry block {entryId} is not in its own function")
+		let entry = try self.blockById(func, id: entryId) otherwise panic("emitMatchDispatch: the dispatch entry block {entryId} is not in its own function")
 		try self.emitDispatchRange(func, from: 0, to: intervals.count(), block: entry, subject: subject, intervals: intervals, miss: miss, opTok: opTok)
 	end 'emitMatchDispatch'
 
@@ -60706,7 +60771,7 @@ export type Parser
 			self.recordBranchEdge(current, targetId: interval.targetBlockId, argIds: interval.edgeArgs)
 			self.recordBranchEdge(current, targetId: elseTarget, argIds: elseArgs)
 			self.emitCondBranch(current, cond: cond, thenId: interval.targetBlockId, elseId: elseTarget, ifTok: opTok)
-			current = try self.artifact.module.getBlockByIdIn(func, id: nextId) otherwise panic("emitDispatchChain: the chain's next test block {nextId} is not in its own function")
+			current = try self.blockById(func, id: nextId) otherwise panic("emitDispatchChain: the chain's next test block {nextId} is not in its own function")
 		end 'each'
 	end 'emitDispatchChain'
 
@@ -61969,6 +62034,10 @@ export type Parser
 			_ = try func.blockRefs.pop() otherwise panic("parseTernaryExpression: func.blockRefs.pop above the mark {markBlockRefCount} failed")
 		end 'truncBlocks'
 
+		if self.bodyState.blockPositionsCovered > markBlockRefCount 'rewindBlockIndex'
+			self.bodyState.blockPositionsCovered = markBlockRefCount
+		end 'rewindBlockIndex'
+
 		// ⭐ **THE CONDITION IS THE ONE THING THAT IS UNCONDITIONAL** — it lands where the true arm was and
 		// runs before the branch. It may short-circuit and move `currentBlock`, so the two-way branch belongs
 		// at the end of whichever block it left (`condExit`), exactly as `parseIfStatement` re-reads its entry
@@ -62022,8 +62091,7 @@ export type Parser
 
 		// Held by ID: a second owning NAME for `trueBranch` would move the block out of it (single
 		// ownership), and the branch is still read below for the condition's `then` target. The one
-		// consumer re-fetches, which is what `IrModule.getBlockByIdIn` asks for across block-minting calls
-		// anyway — and the false arm's `parseExpression` between here and there mints plenty.
+		// consumer re-fetches by id, as any block read across block-minting calls must — and the false arm's `parseExpression` between here and there mints plenty.
 		var trueExitId = trueBranch.id
 
 		if armExitId != startBlock.id 'multiBlockArm'
@@ -62068,7 +62136,7 @@ export type Parser
 		// `condExit` is still open when the merge's per-arm reconciliation runs.
 		let carried = VarInfoArray.create(0)
 		let reachingArms = MatchArmExitArray.create(2, zeroed: false)
-		let trueExit = try self.artifact.module.getBlockByIdIn(func, id: trueExitId) otherwise panic("parseTernaryExpression: the true arm's exit block {trueExitId} is not in its own function")
+		let trueExit = try self.blockById(func, id: trueExitId) otherwise panic("parseTernaryExpression: the true arm's exit block {trueExitId} is not in its own function")
 		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(0), give: settledTrue, moveMark: trueMoveMark, blame: trueBlame))
 		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(0), give: settledFalse, moveMark: falseMoveMark, blame: falseBlame))
 		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.ternary)
@@ -63977,8 +64045,12 @@ export type Parser
 		throw AbsentError.absent
 	end 'nextOpenedPosition'
 
+	function positionIsTheReceiver(position ElementIndex, receiver ReceiverArg) returns bool
+		return self.receiverIsPassed(receiver) and position == 0
+	end 'positionIsTheReceiver'
+
 	function openedPositionSpan(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns TokenSpan
-		if self.receiverIsPassed(receiver) and position == 0 'theReceiver'
+		if self.positionIsTheReceiver(position, receiver: receiver) 'theReceiver'
 			return self.receiverSpanOf(receiver)
 		end 'theReceiver'
 
@@ -64235,7 +64307,7 @@ export type Parser
 				continue
 			end 'cannotBeMoved'
 
-			let passesTheReceiver = self.receiverIsPassed(receiver) and position == 0
+			let passesTheReceiver = self.positionIsTheReceiver(position, receiver: receiver)
 
 			if not passesTheReceiver 'aWrittenArgument'
 				let anchorIndex = try argAnchors.get(position) otherwise panic("noteKeptArgumentSites: argAnchors.get OOB at {position} below its own count")
@@ -64279,7 +64351,7 @@ export type Parser
 			return UniqueOrigin.lentByTuple
 		end 'aDestructuredElement'
 
-		if not namesABinding and (self.valueIsAStorageRead(value) or self.valueIsASlotRead(value)) and self.valueHoldsAUniqueRecord(value) 'aSlotRead'
+		if not namesABinding and self.valueIsAUniqueStorageRead(value) 'aSlotRead'
 			return UniqueOrigin.readFromSlot
 		end 'aSlotRead'
 
@@ -64302,7 +64374,7 @@ export type Parser
 	end 'fileLentKeptArgument'
 
 	function keptArgumentTokenAt(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg, anchor Token) returns Token throws AbsentError
-		if self.receiverIsPassed(receiver) and position == 0 'theReceiver'
+		if self.positionIsTheReceiver(position, receiver: receiver) 'theReceiver'
 			return self.receiverTokenOf(receiver, fallback: anchor)
 		end 'theReceiver'
 
@@ -65326,6 +65398,10 @@ export type Parser
 		if windowOpensValue(windows, value: box) 'alreadyOpenValue'
 			return
 		end 'alreadyOpenValue'
+
+		if self.valueIsAValueType(floor) and valueIsAParameter(box, paramCount: self.bodyFunction().paramCount) 'aNumberReadFromAnIsolatedParameter'
+			return
+		end 'aNumberReadFromAnIsolatedParameter'
 
 		windows.push(OpenWindow.create(IsolatedValueLabel, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.oneStatement, floor: floor, openedValue: box, holderValue: 0, holderField: 0, opensAField: false, ownerStatement: self.bodyState.statementStart))
 	end 'openStatementWindowThrough'
@@ -72171,7 +72247,7 @@ export type Parser
 	// body op, plus the fall-through edge to the next block in layout order — the three ways a block in this
 	// tier names a successor.
 	function nascentBranchesTo(func IrFunction, fromOrdinal ElementIndex, target BlockId) returns bool
-		let block = try self.artifact.module.blocks.get(try func.blockRefs.get(fromOrdinal) otherwise panic("nascentBranchesTo: blockRefs.get OOB at {fromOrdinal}")) otherwise panic("nascentBranchesTo: blockRef not in module.blocks")
+		let block = self.artifact.module.blockAtPosition(func, position: fromOrdinal)
 
 		if block.hasTerminatorOp() and nascentOpBranchesTo(try self.artifact.module.ops.get(block.terminatorIndex()) otherwise panic("nascentBranchesTo: terminator op not in module.ops"), target: target) 'viaTerminator'
 			return true
@@ -72190,7 +72266,7 @@ export type Parser
 	end 'nascentBranchesTo'
 
 	function nascentBlockIdAt(func IrFunction, ordinal ElementIndex) returns BlockId
-		return (try self.artifact.module.blocks.get(try func.blockRefs.get(ordinal) otherwise panic("nascentBlockIdAt: blockRefs.get OOB at {ordinal}")) otherwise panic("nascentBlockIdAt: blockRef not in module.blocks")).id
+		return self.artifact.module.blockAtPosition(func, position: ordinal).id
 	end 'nascentBlockIdAt'
 
 	// Was `field` written in block `blockOrdinal` at or before `position`? `NascentWholeBlock` asks about the
@@ -78124,6 +78200,13 @@ export type Parser
 	// mutator is in, and the refusal takes the same voice for the same reason
 	// (`SlotMismatchVoice.containerElementArgument`).
 	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName immutable ByteArray, request EnumLayout, caseIndex CaseIndex, route MessageRoute, resultUsed bool) returns ValueId throws SourceParseError
+		if self.messageHasAnUnreadParameter(request.payloadsAt(caseIndex)) 'theDeclarationIsRefused'
+			self.advance()
+			try self.parseDeferredMemberArguments(func)
+
+			return self.deferredValueOfChain(DeferredChainCalls.lastLinkIsACall)
+		end 'theDeclarationIsRefused'
+
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
 		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, callee: callee, memberTok: memberTok)
 		let instance = self.serviceInstanceOfHandle(base.box, typeName: typeName)
@@ -78281,6 +78364,16 @@ export type Parser
 			slotAnchors.push(anchor)
 		end 'eachSlot'
 	end 'seedMessageSlots'
+
+	function messageHasAnUnreadParameter(payloads PayloadFieldArray) returns bool
+		for field in payloads 'eachPayload'
+			if tagIsUnresolved(maxonTypeTag(field.declaredType)) 'anUnreadType'
+				return true
+			end 'anUnreadType'
+		end 'eachPayload'
+
+		return false
+	end 'messageHasAnUnreadParameter'
 
 	// ⚠ The request sits in this thread's one staging buffer until the op copies it out, so nothing
 	// between `emitEnumBox`'s fill and the op may send: a nested send would overwrite it.
@@ -91890,6 +91983,12 @@ export type Parser
 	function settleBindingCapability(value ValueId, rhsStart ElementIndex, nameTok Token) throws SourceParseError
 		let pending = self.bodyState.pendingLocalCapability
 		self.bodyState.pendingLocalCapability = ParamCapability.unmarked
+
+		if pending != ParamCapability.unmarked and self.pos != self.bodyState.pendingLocalCapabilityEnd 'notTheWholeInitializer'
+			let stray = self.tokenAt(self.bodyState.pendingLocalCapabilityEnd)
+			throw SourceParseError.unexpectedToken(TokenKind.newline.rawValue, got: tokenDisplayText(stray), line: stray.line, column: stray.column)
+		end 'notTheWholeInitializer'
+
 		try self.requireNotAnAcquiredState(value, verb: "moved", anchor: self.tokenAt(rhsStart))
 		try self.requireBindingMayLeaveItsStatementWindow(value, rhsStart: rhsStart)
 
@@ -92048,6 +92147,7 @@ export type Parser
 		end 'aValue'
 
 		self.bodyState.pendingLocalCapability = capability
+		self.bodyState.pendingLocalCapabilityEnd = self.pos
 		return operand
 	end 'parseCapabilityAnnotation'
 
@@ -97679,9 +97779,9 @@ export type Parser
 			// families and for why `subprocessKill`/`subprocessSendSignal` are not among them.
 			//
 			// ⚠⚠ **`subprocessSpawn` AND `subprocessDetach` LOWER TO THE SAME ENTRY, AND THAT IS THE
-			// CONTRACT RATHER THAN A SHORTCUT.** Detach uses the same 14-argument contract as spawn and the
+			// CONTRACT RATHER THAN A SHORTCUT.** Detach uses the same 15-argument contract as spawn and the
 			// runtime gates the detached-vs-attached path on flags bit 2, which
-			// `stdlib/Subprocess.maxon:429` sets itself before calling. Two the compiler entry points would be two
+			// `stdlib/Subprocess.maxon` sets itself before calling. Two the compiler entry points would be two
 			// copies of one spawn differing in one branch the caller has already taken.
 			if callee.equals(BuiltinsSubprocessSpawnName) or callee.equals(BuiltinsSubprocessDetachName) 'subprocessSpawn'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpAttachedSpawnName, arity: SubprocessSpawnArity, shape: IntrinsicArgShape.spawn, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)

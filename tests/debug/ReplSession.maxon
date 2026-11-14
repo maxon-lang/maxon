@@ -9,8 +9,16 @@ export type ReplSession implements ChildLineSink
 	var hungEvidence as String
 	var staged as FilePath
 
-	export static function open(executable FilePath, staged FilePath, environment Environment = Environment.inherit) returns ReplSession
-		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: [DebugSubcommandName, executable.toString()], workingDirectory: WorkingDirectory.at(staged), environment: environment) otherwise (e) 'spawnFailed'
+	export static function open(executable FilePath, staged FilePath, environment Environment = Environment.inherit, extraOptions StringArray = StringArray.create(0)) returns ReplSession
+		let arguments = StringArray.create(0)
+		arguments.push(DebugSubcommandName)
+		arguments.push(executable.toString())
+
+		for option in extraOptions 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
+
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: arguments, workingDirectory: WorkingDirectory.at(staged), environment: environment) otherwise (e) 'spawnFailed'
 			panic("the gate could not run — the debug REPL could not be spawned ({e.displayReason()}).")
 		end 'spawnFailed'
 

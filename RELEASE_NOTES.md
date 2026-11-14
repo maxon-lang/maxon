@@ -606,7 +606,7 @@ release's version as its heading when the release is cut.
   `readStdoutLineCapped`, `readStdoutBytes`, `readStderrLine`, `readStderrLineCapped`, `tryReadStdoutLine` and
   `tryReadStderrLine` are removed, with `LinePoll`, `SubprocessError.endOfStream` and `endedTheStream()`.
   `takeStdout()` and `takeStderr()` each hand out the stream once, as an `isolated ChildOutputReader`, whose
-  `readLine()` answers a `LineRead` (`line(text)`, `ended`, `pastTheCap`) and throws `StreamError`, and whose
+  `readLine()` answers a `LineOrEnd` (`line(text)`, `ended`) and throws `StreamError`, and whose
   `readBytes(n)` answers a `ByteArray`.
   Fix: take the reader once (`let out = try child.takeStdout()`) and read from it: match `out.readLine()` for
   `line(text)`, and treat `ended` where `endOfStream` was caught; `String.from(try out.readBytes(n))` for the
@@ -812,7 +812,7 @@ release's version as its heading when the release is cut.
   Fix: add a `reapedElsewhere` arm, or ask `pollExit().childIsKnownGone()` where the question is only whether
   the child has exited.
 - `Console.stdin()` returns a `StdinReader`, a `StreamReader` over standard input: `readLine()` answers a
-  `LineRead` and throws `StreamError`, and `readBytes(n)` throws `StreamError`. `Stdin`, `Stdin.create()` and
+  `LineOrEnd` and throws `StreamError`, and `readBytes(n)` throws `StreamError`. `Stdin`, `Stdin.create()` and
   `ConsoleError` are removed.
   Fix: match `try stdin.readLine()` for `line(text)` and stop at `ended` where `ConsoleError.endOfFile` was
   caught; write `StdinReader` for `Stdin`.
@@ -828,6 +828,14 @@ release's version as its heading when the release is cut.
   descriptor its caller passes. When the instance's methods reach the enclosing type again, so that composing the
   table at a concrete instantiation would build an ever-deeper chain of instances, the widening is E2015.
   Fix: give the type argument a concrete type, or pass the value it wraps as a type parameter of its own.
+- `StreamReader.readLine()` takes no cap and reads a line however long it is: it answers a `LineOrEnd`
+  (`line(text)`, `ended`). A capped read is `readLineWithin(cap)`, which answers a `LineRead` with
+  `pastTheCap`. `DefaultLineCap` is removed.
+  Fix: delete the `pastTheCap` arm from every `match` over a `readLine()` result and write `LineOrEnd` where
+  `LineRead` names its type; replace `readLine(cap: n)` and `readLine(n)` with `readLineWithin(n)`.
+- `as isolated T` is the whole initializer of a `let` or `var`; written inside a call argument it is a syntax
+  error (E2010).
+  Fix: bind the region to a local first (`let fresh = Payload.create(1) as isolated Payload`) and pass the local.
 
 ## 0.5.0 — 2026-10-08
 

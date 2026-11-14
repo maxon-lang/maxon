@@ -18,17 +18,17 @@ that drive the public surface compile as an ordinary program.
 
 | Family | Intrinsics |
 |---|---|
-| the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fourteen arguments), `subprocessGetPid`, `subprocessQueueStdin`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
+| the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fifteen arguments), `subprocessGetPid`, `subprocessQueueStdin`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
 | the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll` / `subprocessWriteStdinBytes`, `subprocessReadAvailable`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit`, and `subprocessPollExit`, which asks rather than commits |
 | the helpers | `subprocessResolveOnPath`, `subprocessLastErrorMessage`, and `managedIsNull` (a `__ManagedMemory` predicate whose only corpus caller is the executable lookup) |
 
 `subprocessKill` and `subprocessSendSignal` are deliberately NOT surfaced, because no corpus file calls
 either.
 
-### The fourteen-argument spawn contract
+### The fifteen-argument spawn contract
 
 `subprocessSpawn(argv_mm, argc, cwd_cstr, env_mm, envInherit, stdinKind, stdinData_cstr,
-stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLimit, flags)`.
+stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLimit, flags, stdinLength)`.
 
 - **argv** is a NUL-SEPARATED BLOB of `argc` tokens — the shape `stdlib/Subprocess.maxon`'s
   `buildArgvBlob` packs — joined into a Windows command line by the runtime. A token is quoted iff
@@ -43,12 +43,13 @@ stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLim
   from this process's own entries with the caller's overrides applied, so `Environment.custom` and
   `inheritUpdating` are both servable.
 - **stdinKind** is `StdinKind`'s raw value: `0` none (the NUL device), `1` inherit, `2` bytes (the
-  payload is pushed into a pipe while the child runs), `3` file.
+  `stdinLength` bytes at `stdinData`, NUL bytes included, are pushed into a pipe while the child runs
+  and the caller's memory is borrowed, not copied), `3` file.
 - **stdoutKind** / **stderrKind** are `OutputKind`'s: `0` discard (NUL), `1` inherit, `2` collect
   (a pipe the runtime drains), `3` file. A `collect` limit of 0 means uncapped.
 - **flags** is `SpawnFlag`'s bitfield: bit 0 hide window, bit 1 new process group, bit 2 detach.
 
-`subprocessDetach` takes the identical fourteen and differs only in the detach bit its caller has
+`subprocessDetach` takes the identical fifteen and differs only in the detach bit its caller has
 already set; the runtime answers the child's PID instead of a handle and releases the slot.
 
 ### Collecting BOTH streams is the whole difficulty
@@ -145,7 +146,7 @@ be. The pairs deliberately do not agree on their numbers — `/bin/echo` ends a 
 where `cmd /c echo` writes CRLF, so a six is the same answer as the sibling's seven.
 
 ⚠ **AND THE TWO LANES DIVIDE ON ONE PROPERTY OF THIS SURFACE, NOT MERELY ON SPELLING.** The
-fourteen-argument spawn takes an argv BLOB, and this lane's primitive takes an argv VECTOR — so the
+fifteen-argument spawn takes an argv BLOB, and this lane's primitive takes an argv VECTOR — so the
 Win32 quoting rule at the top of this section has NOTHING to do on arm64-macOS, where nothing is
 ever re-split and therefore nothing needs escaping. `argv-quoting` asserts that a token holding a
 space becomes ONE quoted argument; `posix-argv-reaches-the-child-verbatim` asserts the same subject
@@ -184,7 +185,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "hello")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let err = String.init(__Builtins.subprocessResultStderr(r))
@@ -234,7 +235,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "hello")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let err = String.init(__Builtins.subprocessResultStderr(r))
@@ -303,7 +304,7 @@ function collectOne() returns bool
 	#endif
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let exitedZero = __Builtins.subprocessResultStatusKind(r) == 0 and __Builtins.subprocessResultStatusCode(r) == 0
@@ -370,7 +371,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "a*b")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 7, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 7, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let expected = "[$HOME][a b][a*b]"
@@ -505,7 +506,7 @@ function main() returns ExitCode
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let missing = "Z:/no/such/dir/nope.txt"
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 3, missing.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 3, missing.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let reason = String.init(__Builtins.subprocessLastErrorMessage())
 	let expected = "os error 3"
 	print("spawn={h} reason={reason == expected}\n")
@@ -548,7 +549,7 @@ function main() returns ExitCode
 	let empty = ""
 	let payload = "fed-in\r\n"
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 2, payload.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 2, payload.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, payload.byteLength())
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let err = String.init(__Builtins.subprocessResultStderr(r))
@@ -595,7 +596,7 @@ function main() returns ExitCode
 	let empty = ""
 	let payload = "fed-in\n"
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 2, payload.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 2, payload.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, payload.byteLength())
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let echoed = out == payload
@@ -610,6 +611,75 @@ end 'main'
 ```
 ```stdout
 kind=0 code=0 echoed=true outLen=7
+
+```
+
+<!-- test: subprocess-builtins.stdin-bytes-holding-a-nul-are-delivered-whole -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: wasm32-wasi -->
+`StdinKind.bytes` takes the payload's length from `stdinLength`, so a zero byte is one of its bytes and
+not the end of it: the child, this case's own executable, reads its stdin to the end and prints the count
+and the value of every byte it received. A runtime that measured the payload as a `cstring` would deliver
+the one byte before the NUL.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push((try bytes.get(i) otherwise panic("appendToken: get is in range")) as Byte)
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function readAllStdin() returns String
+	let read = try Console.stdin().readToEnd() otherwise (e) 'unread'
+		return "read threw {e.name}"
+	end 'unread'
+
+	let received = merge read
+	var line = "{received.count()} bytes ["
+
+	for (iter, value) in received.withIterator() 'each'
+		if iter.index() > 0 'separator'
+			line = "{line} "
+		end 'separator'
+
+		line = "{line}{value}"
+	end 'each'
+
+	return "{line}]"
+end 'readAllStdin'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print(readAllStdin())
+		return 0
+	end 'childMode'
+
+	let exe = try Process.executablePath() otherwise return 2
+	let argv = ByteArray.create(0)
+	appendToken(argv, token: exe.path)
+	appendToken(argv, token: "child")
+	let empty = ""
+	let payload = "a\0b"
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 2, payload.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, payload.byteLength())
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} out={out}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kind=0 code=0 out=3 bytes [97 0 98]
 
 ```
 
@@ -641,7 +711,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "printf sout; printf err 1>&2")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let err = String.init(__Builtins.subprocessResultStderr(r))
@@ -689,7 +759,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "exit 7")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	let code = __Builtins.subprocessResultStatusCode(r)
@@ -735,7 +805,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "ping -n 20 127.0.0.1 > nul")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	print("kind={kind}")
@@ -781,7 +851,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "5")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	let durationMs = __Builtins.subprocessResultDurationMs(r)
@@ -842,7 +912,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "ping -n 4 127.0.0.1 > nul & echo x > {markerName}")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 5, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 5, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	__Builtins.subprocessResultRelease(r)
@@ -897,7 +967,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "/bin/sh -c 'sleep 3; echo x > {markerName}'")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	__Builtins.subprocessResultRelease(r)
@@ -947,7 +1017,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "start /b ping -n 5 127.0.0.1 & exit 3")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	_ = __Builtins.subprocessWaitExit(h, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
@@ -1024,7 +1094,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "sleep 30 & echo $!; exit 3")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	_ = __Builtins.subprocessWaitExit(h, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
@@ -1122,7 +1192,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "sleep 30 & echo $!; exit 3")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	awaitZombie(__Builtins.subprocessGetPid(h) as Pid)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
@@ -1226,7 +1296,7 @@ function main() returns ExitCode
 	#endif
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 
 	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
 	let collecting = async collector(h, parkedFrom: parkedFrom.clone())
@@ -1323,7 +1393,7 @@ function main() returns ExitCode
 	#endif
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 
 	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
 	let first = async collector(h, parkedFrom: parkedFrom.clone())
@@ -1401,7 +1471,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "exit")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+	let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4, 0)
 	print("positive={pid > 0}")
 	let pids = PidArray.create(0)
 
@@ -1479,7 +1549,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "/usr/bin/true")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+	let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4, 0)
 	print("positive={pid > 0}")
 	let pids = PidArray.create(0)
 
@@ -1563,7 +1633,7 @@ function main() returns ExitCode
 	var firstFailure = -1 as FullRangeInt
 	let pids = PidArray.create(0)
 	for i in 0 upto 65 'detachLoop'
-		let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+		let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4, 0)
 		if pid > 0 'counted'
 			spawned = spawned + 1
 			pids.push(pid as Pid)
@@ -1645,7 +1715,7 @@ function main() returns ExitCode
 	var firstFailure = -1 as FullRangeInt
 	let pids = PidArray.create(0)
 	for i in 0 upto 65 'detachLoop'
-		let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+		let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4, 0)
 		if pid > 0 'counted'
 			spawned = spawned + 1
 			pids.push(pid as Pid)
@@ -1742,7 +1812,7 @@ function main() returns ExitCode
 	appendToken(cleanup, token: "/bin/sh")
 	appendToken(cleanup, token: "-c")
 	appendToken(cleanup, token: "rm -f posix-detach-session-probe.txt")
-	let cleanupHandle = __Builtins.subprocessSpawn(cleanup, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let cleanupHandle = __Builtins.subprocessSpawn(cleanup, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let cleanupResult = __Builtins.subprocessWaitCollect(cleanupHandle, 0)
 	__Builtins.subprocessResultRelease(cleanupResult)
 	__Builtins.subprocessReleaseHandle(cleanupHandle)
@@ -1751,13 +1821,13 @@ function main() returns ExitCode
 	appendToken(probe, token: "/bin/sh")
 	appendToken(probe, token: "-c")
 	appendToken(probe, token: "mine=$(python3 -c 'import os;print(os.getsid(0))'); theirs=$(python3 -c 'import os,sys;print(os.getsid(int(sys.argv[1])))' $PPID); if [ x$mine != x ] && [ x$mine != x$theirs ]; then echo differs; else echo same; fi > posix-detach-session-probe.txt")
-	let pid = __Builtins.subprocessDetach(probe, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+	let pid = __Builtins.subprocessDetach(probe, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4, 0)
 
 	let reader = ByteArray.create(0)
 	appendToken(reader, token: "/bin/sh")
 	appendToken(reader, token: "-c")
 	appendToken(reader, token: "i=0; while [ $i -lt 100 ]; do if [ -s posix-detach-session-probe.txt ]; then cat posix-detach-session-probe.txt; rm -f posix-detach-session-probe.txt; exit 0; fi; sleep 0.1; i=$((i+1)); done; echo timeout")
-	let readerHandle = __Builtins.subprocessSpawn(reader, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let readerHandle = __Builtins.subprocessSpawn(reader, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let readerResult = __Builtins.subprocessWaitCollect(readerHandle, 0)
 	let verdict = String.init(__Builtins.subprocessResultStdout(readerResult))
 	let newSession = verdict.startsWith("differs")
@@ -1817,7 +1887,7 @@ function runEcho(word String, outKind Integer) returns Integer
 	appendToken(argv, token: word)
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), outKind, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), outKind, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let collected = String.init(__Builtins.subprocessResultStdout(r)).byteLength()
 	__Builtins.subprocessResultRelease(r)
@@ -1876,7 +1946,7 @@ function runEcho(word String, outKind Integer) returns Integer
 	appendToken(argv, token: word)
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), outKind, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), outKind, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let collected = String.init(__Builtins.subprocessResultStdout(r)).byteLength()
 	__Builtins.subprocessResultRelease(r)
@@ -1930,7 +2000,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "a b")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let quoted = "\"a b\""
@@ -1976,7 +2046,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} outLen={out.byteLength()}")
@@ -2028,7 +2098,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "i=0; while [ $i -lt 1200 ]; do echo 0123456789012345678901234567890123456789012345678; echo 0123456789012345678901234567890123456789012345678 1>&2; i=$((i+1)); done")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	let err = String.init(__Builtins.subprocessResultStderr(r))
@@ -2071,7 +2141,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 64, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 64, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} capped={out.byteLength() <= 64}")
@@ -2599,7 +2669,7 @@ wrote=0 before=open errBefore=open outLen=7 after=atEof errLen=0 errAfter=atEof 
 <!-- test: subprocess-builtins.streaming-read-after-release-throws -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 The stdlib half of the case above. A `ChildOutputReader` tells the end of the stream from a refusal: a short
-`readBytes` at the end returns what remained, a `readLine` at the end answers `LineRead.ended`, and nothing
+`readBytes` at the end returns what remained, a `readLine` at the end answers `LineOrEnd.ended`, and nothing
 else ends a read. After `release()` the reader `takeStderr()` handed out before it throws `StreamError.closed`,
 because the stream's state is `noSuchChild`, and a take, `writeStdinLine` and `wait` throw
 `SubprocessError.ioFailed`, which the stdlib refuses itself before the runtime is asked (the handle is a raw
@@ -2607,11 +2677,10 @@ pointer, so the runtime could not refuse it safely). `closeStdin` and `release` 
 they are idempotent, and a released child already satisfies their postcondition, so they answer as no-ops
 rather than throwing — and neither reaches the freed handle.
 ```maxon
-function shown(read LineRead) returns String
+function shown(read LineOrEnd) returns String
 	return match read 'read'
 		line(text) gives text
 		ended gives "ended"
-		pastTheCap gives "pastTheCap"
 	end 'read'
 end 'shown'
 
@@ -2736,7 +2805,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "definitely-not-a-real-executable-xyz.exe")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let failed = String.init(__Builtins.subprocessLastErrorMessage())
 	let expected = "os error 2"
 	print("cleanLen={clean.byteLength()} spawn={h} message={failed == expected}")
@@ -2794,7 +2863,7 @@ function main() returns ExitCode
 	env.push(0)
 
 	let empty = ""
-	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 0, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 0, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	print("spawned={h >= 0} echoed={out.startsWith("seen")} len={out.byteLength()}")
@@ -2853,7 +2922,7 @@ function main() returns ExitCode
 	env.push(0)
 
 	let empty = ""
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 0, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 0, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 0)
 	let out = String.init(__Builtins.subprocessResultStdout(r))
 	print("spawned={h >= 0} echoed={out.startsWith("probe=seen home=")} len={out.byteLength()}")
@@ -2890,7 +2959,7 @@ function main() returns ExitCode
 	let argv = ByteArray.create(0)
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 0, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let h = __Builtins.subprocessSpawn(argv, 0, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0, 0)
 	return h as ExitCode
 end 'main'
 ```
@@ -2918,7 +2987,7 @@ marker and the text are the pair the runner checks against each other; a name is
 verifies.
 
 ⚠ **IT IS NOT A DUPLICATE OF `subprocess-builtins.rejected-on-wasm`, AND THE ENTRY NAME SEPARATES THEM.**
-That case calls the raw fourteen-argument `__Builtins.subprocessSpawn` and names
+That case calls the raw fifteen-argument `__Builtins.subprocessSpawn` and names
 `__gt_subp_attached_spawn`; this one calls the BARE-NAME `subpSpawn` and names `__gt_subp_spawn`. Two
 doors, two entries, two gates — compiled for `wasm32-wasi`, this program emits exactly the
 diagnostic below.
@@ -3030,7 +3099,7 @@ type FifoReader
 		appendToken(argv, token: "/bin/cat")
 		let empty = ""
 		let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-		let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 3, fifo.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+		let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 3, fifo.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 		let r = __Builtins.subprocessWaitCollect(h, 0)
 		let out = String.init(__Builtins.subprocessResultStdout(r))
 		self.summary = "kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} out={out}"
@@ -3050,7 +3119,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let first = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let first = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let made = __Builtins.subprocessWaitCollect(first, 0)
 	let dir = String.init(__Builtins.subprocessResultStdout(made))
 	__Builtins.subprocessResultRelease(made)
@@ -3114,7 +3183,7 @@ type FifoReader
 		appendToken(argv, token: "head -c {payloadBytes} >/dev/null; t=$(readlink /proc/$$/fd/0); n=0; for f in /proc/$$/fd/*; do if [ \"$(readlink \"$f\")\" = \"$t\" ]; then n=$((n+1)); fi; done; echo $n")
 		let empty = ""
 		let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-		let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 3, fifo.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+		let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 3, fifo.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 		let r = __Builtins.subprocessWaitCollect(h, 0)
 		let out = String.init(__Builtins.subprocessResultStdout(r))
 		self.summary = "kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} fds={out.trim()}"
@@ -3134,7 +3203,7 @@ function main() returns ExitCode
 	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let first = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let first = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0, 0)
 	let made = __Builtins.subprocessWaitCollect(first, 0)
 	let dir = String.init(__Builtins.subprocessResultStdout(made))
 	__Builtins.subprocessResultRelease(made)

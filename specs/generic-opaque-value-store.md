@@ -3342,7 +3342,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3181: <fragment>:23:9: type parameter 'T' of 'wrapped' cannot be 'Named': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum
+error E3181: <fragment>:23:9: type parameter 'T' of 'wrapped' cannot be 'Named': a generic function's type parameter is inferred as a number (a ranged typealias included), `String`, `bool`, `Character`, a `type` declaration or an enum; a generic instance, whichever typealias names it, is none of these
 ```
 
 <!-- test: error.a-generic-alias-over-itself-is-reported-as-a-cycle-and-its-parameter-defers-nothing -->

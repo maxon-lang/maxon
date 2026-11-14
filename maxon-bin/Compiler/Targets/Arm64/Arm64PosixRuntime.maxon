@@ -215,6 +215,7 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock FullRangeI
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
 	let tooManyOpen = asm.newLabel()
+	let brokenPipe = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noMoreFiles)
@@ -240,7 +241,13 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock FullRangeI
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooManyOpen)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.fileTableOverflow.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooManyOpen)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.brokenPipe.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: brokenPipe)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorGenericFailure as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(brokenPipe)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorBrokenPipe as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(notFound)
@@ -911,7 +918,7 @@ function arm64PosixEmitBranchIfCallInterrupted(asm Arm64RuntimeAsm, call PosixHo
 	arm64EmitBranchIfInterrupted(asm, route: route, whenInterrupted: whenInterrupted)
 end 'arm64PosixEmitBranchIfCallInterrupted'
 
-export function arm64EmitBranchIfInterrupted(asm Arm64RuntimeAsm, route Arm64OsCallKind, whenInterrupted BlockId)
+function arm64EmitBranchIfInterrupted(asm Arm64RuntimeAsm, route Arm64OsCallKind, whenInterrupted BlockId)
 	match route 'route'
 		importCall then arm64PosixEmitDarwinFailureBranchIfEintr(asm, whenInterrupted: whenInterrupted)
 		syscall then arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: whenInterrupted)

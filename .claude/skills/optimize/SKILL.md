@@ -137,7 +137,7 @@ backwards makes you optimize the instrument instead of the compiler.
 ✅ **The CPU column exists because a cost that ALLOCATES NOTHING was invisible**, and this project keeps
 measuring them — the op-insertion quadratic inside `regalloc:splitting` (68% of the whole compile at
 N=1024, allocation-free), `requireInterfaceForParse` (allocates identically to the digit across a
-+24.15 ms parse delta), `getBlockByIdIn`'s per-guard-site scan, the cascade fixpoint duals.
++24.15 ms parse delta), `InsertRangeChecks`' per-guard-site block scan, the cascade fixpoint duals.
 
 ⚠ **That cures ONE blind spot. The other is the CORPUS**, and a Δ0 from a ladder that cannot express the
 feature is the instrument's blind spot, not the cost — in **every** column, CPU included. *(Clearest

@@ -4394,6 +4394,7 @@ function collectRunqTaintIn(module StdModule, func IrFunction, taint RunqRingTai
 	taint.beginFunction()
 	module.collectLiveOpIndices(func, into: opIndices)
 
+	let byId = module.blockIndexById(func)
 	var localGrew = true
 
 	while localGrew 'toALocalFixedPoint'
@@ -4403,18 +4404,18 @@ function collectRunqTaintIn(module StdModule, func IrFunction, taint RunqRingTai
 			localGrew = recordRunqTaintOfOp(func, op: liveRuntimeOpAt(module, opIdx: opIdx, reader: RunQueueCheckName), taint: taint) or localGrew
 		end 'eachOp'
 
-		localGrew = recordRunqTaintAcrossEdges(module, func: func, taint: taint) or localGrew
+		localGrew = recordRunqTaintAcrossEdges(module, func: func, taint: taint, byId: byId) or localGrew
 	end 'toALocalFixedPoint'
 end 'collectRunqTaintIn'
 
-function recordRunqTaintAcrossEdges(module StdModule, func IrFunction, taint RunqRingTaint) returns bool
+function recordRunqTaintAcrossEdges(module StdModule, func IrFunction, taint RunqRingTaint, byId BlockIndexById) returns bool
 	var grew = false
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
 
 		for edge in block.branchEdges 'eachEdge'
-			let target = try module.getBlockByIdIn(func, id: edge.targetBlockId) otherwise panic("assertRunQueueObservationIsOrdered: block {block.id} branches to {edge.targetBlockId}, which is not a block of '{String.from(func.name)}'")
+			let target = try module.getBlockByIdThrough(func, byId: byId, id: edge.targetBlockId) otherwise panic("assertRunQueueObservationIsOrdered: block {block.id} branches to {edge.targetBlockId}, which is not a block of '{String.from(func.name)}'")
 
 			for k in 0 upto edge.argIds.count() 'eachArg'
 				let passed = try edge.argIds.get(k) otherwise panic("assertRunQueueObservationIsOrdered: argIds.get OOB at {k}, inside a loop bounded by its own count")

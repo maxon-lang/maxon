@@ -266,7 +266,7 @@ end 'main'
 <!-- test: a-set-fed-from-another-container-stores-a-live-record -->
 <!-- tier: stdlib -->
 ### A write of ONE storage fed from ANOTHER
-This is the shape `stdlib/Array.maxon:283`'s `appendMemory` is.
+This is the shape `stdlib/Array.maxon:234`'s `appendMemory` is.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -404,7 +404,7 @@ alpha 42 value long enough for a heap record beta 42 value long enough for a hea
 <!-- tier: stdlib -->
 ### … and so is appending an element the container already holds
 `push` adds a slot and destroys nothing, so the array simply gains a second reference to what it
-already owned. `stdlib/Array.maxon:284`'s `appendMemory` is this write.
+already owned. `stdlib/Array.maxon:235`'s `appendMemory` is this write.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element

@@ -1124,3 +1124,126 @@ end 'main'
 ```exitcode
 3
 ```
+
+<!-- test: error.an-inline-range-message-parameter-is-refused-at-its-declaration -->
+A message parameter spells its number type with a typealias. The refused declaration is reported once, at the parameter, and a send of that message adds nothing.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function drain(count int(0 to 100))
+		self.seen = self.seen + count
+	end 'drain'
+end 'Store'
+
+function main() returns ExitCode
+	let store = spawn Store.create()
+	try store.drain(3) otherwise panic("main: a fresh store takes drain")
+	store.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:30: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+```
+
+<!-- test: an-isolated-parameters-number-is-read-in-the-statement-that-writes-self -->
+A number read out of an `isolated` parameter leaves the open freely, so one statement reads it and writes the service's own field.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+type Plotter
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function plot(point isolated Point) returns Integer
+		self.total = self.total + point.x + point.y
+
+		return self.total
+	end 'plot'
+end 'Plotter'
+
+function main() returns ExitCode
+	let plotter = spawn Plotter.create()
+	let shape = Point.create(3, y: 4) as isolated Point
+	let total = try await plotter.plot(shape) otherwise panic("main: a fresh plotter answers plot")
+	plotter.shutdown()
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.a-record-read-from-an-isolated-parameter-keeps-self-read-only-in-its-statement -->
+A record read out of an `isolated` parameter is data its region still holds, so the statement that reads through it may not write the service's own field.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Point
+	export var inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Point'
+
+type Plotter
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function plot(point isolated Point) returns Integer
+		self.total = self.total + point.inner.n
+
+		return self.total
+	end 'plot'
+end 'Plotter'
+
+function main() returns ExitCode
+	let plotter = spawn Plotter.create()
+	let shape = Point.create(3) as isolated Point
+	let total = try await plotter.plot(shape) otherwise panic("main: a fresh plotter answers plot")
+	plotter.shutdown()
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:28:3: cannot write 'total' through 'self', which is read-only while 'the isolated value' is open
+```

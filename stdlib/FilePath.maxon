@@ -227,7 +227,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'canonicalForCompare'
 
 	/// This path as the host compares paths: lower-cased on Windows, as written on POSIX.
-	/// `equals`, `hash` and `isInside` compare this spelling.
+	/// `equals`, `hash`, `isInside`, `startsWith` and `relativeTo` compare this spelling.
 	public function comparisonSpelling() returns String
 		return canonicalForCompare(path)
 	end 'comparisonSpelling'
@@ -817,10 +817,11 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	end 'relativeTo'
 
 	/// Check whether this path starts with the given directory prefix.
-	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".
+	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo", and compares
+	/// them as `equals` does: case-insensitively on Windows.
 	public function startsWith(prefix FilePath) returns bool
-		let selfStr = path
-		let prefixStr = prefix.path
+		let selfStr = comparisonSpelling()
+		let prefixStr = prefix.comparisonSpelling()
 
 		if not selfStr.startsWith(prefixStr) 'noMatch'
 			return false

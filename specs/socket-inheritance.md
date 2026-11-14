@@ -30,8 +30,7 @@ function waitingChild() returns ExitCode
 
 	return match read 'read'
 		ended gives 0
-		line or
-		pastTheCap gives 1
+		line gives 1
 	end 'read'
 end 'waitingChild'
 
@@ -99,8 +98,7 @@ function waitingChild() returns ExitCode
 
 	return match read 'read'
 		ended gives 0
-		line or
-		pastTheCap gives 1
+		line gives 1
 	end 'read'
 end 'waitingChild'
 

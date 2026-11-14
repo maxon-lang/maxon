@@ -208,7 +208,7 @@ export typealias FunctionNameSet = Set with ByteArray
 // A stdlib function name -> the host entry this compile's target lacks that its body reaches, directly
 // or through other stdlib functions. Membership IS "this function cannot be lowered for the target", so
 // the map is its own mark column and there is no second set to keep in step with it.
-export typealias StdlibSubstrateEntryMap = Map with (ByteArray, immutable ByteArray)
+export typealias StdlibSubstrateEntryMap = Map with (ByteArray, SubstrateClaim)
 
 // Stdlib function name -> its DENSE node index in the substrate fixpoint's call graph. A distinct alias
 // from `FuncIndexByName`, whose values are merged-MODULE function indices: these index the far
@@ -401,6 +401,13 @@ end 'WitnessCredit'
 union WitnessBlame
 	functionName
 	op(opIndex ElementIndex)
+
+	function siteIn(project Project, func IrFunction) returns ClaimSite
+		return match self 'blame'
+			functionName gives ClaimSite.wholeFunction
+			op(opIndex) gives siteOfBlamedOp(opIndex, project: project, func: func)
+		end 'blame'
+	end 'siteIn'
 end 'WitnessBlame'
 
 type WitnessCreditEvent
@@ -412,54 +419,155 @@ type WitnessCreditEvent
 	end 'create'
 end 'WitnessCreditEvent'
 
-module union SubstrateEntryMemo
+union ClaimSite
+	sited(position PositionKey, opIndex ElementIndex)
+	wholeFunction
+
+	function compareTo(other ClaimSite) returns Ordering
+		return match other 'theirs'
+			sited(position, opIndex) gives self.comparedToSited(position, opIndex: opIndex)
+			wholeFunction gives self.comparedToWholeFunction()
+		end 'theirs'
+	end 'compareTo'
+
+	function comparedToSited(position PositionKey, opIndex ElementIndex) returns Ordering
+		return match self 'mine'
+			sited(heldPosition, heldOp) gives compareSitedKeys(heldPosition, opIndex: heldOp, against: position, againstOp: opIndex)
+			wholeFunction gives Ordering.greaterThan
+		end 'mine'
+	end 'comparedToSited'
+
+	function comparedToWholeFunction() returns Ordering
+		return match self 'mine'
+			sited gives Ordering.lessThan
+			wholeFunction gives Ordering.equalTo
+		end 'mine'
+	end 'comparedToWholeFunction'
+end 'ClaimSite'
+
+function compareSitedKeys(position PositionKey, opIndex ElementIndex, against PositionKey, againstOp ElementIndex) returns Ordering
+	let held = sitePositionOrder(position)
+	let rival = sitePositionOrder(against)
+
+	if held != rival 'differentPositions'
+		return held.compare(rival)
+	end 'differentPositions'
+
+	return opIndex.compare(againstOp)
+end 'compareSitedKeys'
+
+function siteOfBlamedOp(opIndex ElementIndex, project Project, func IrFunction) returns ClaimSite
+	if opIsTheCompilersOwn(project, func: func, opIndex: opIndex) 'aCallTheCompilerMinted'
+		return ClaimSite.wholeFunction
+	end 'aCallTheCompilerMinted'
+
+	return siteOfOp(opIndex, ranges: project.opRanges)
+end 'siteOfBlamedOp'
+
+function siteOfOp(opIndex ElementIndex, ranges SourceRangeTable) returns ClaimSite
+	return ClaimSite.sited(ranges.positionKeyOf(opIndex), opIndex: opIndex)
+end 'siteOfOp'
+
+// `precedes` is the one order every E3104/E3074 refusal names its entry by, in the fixpoint and at each
+// crossing alike; a second comparison anywhere lets the two name different entries for one call.
+export type SubstrateClaim
+	export let entry as immutable ByteArray
+	let score as CsrIndex
+	let depth as CsrIndex
+	let site as ClaimSite
+
+	static function create(entry immutable ByteArray, score CsrIndex, depth CsrIndex, site ClaimSite) returns Self
+		return Self{entry: entry, score: score, depth: depth, site: site}
+	end 'create'
+
+	static function named(entry immutable ByteArray, site ClaimSite) returns Self
+		return Self.create(entry, score: reachScoreOf(entry), depth: 0, site: site)
+	end 'named'
+
+	function at(placement ClaimSite) returns Self
+		return Self.create(self.entry, score: self.score, depth: self.depth, site: placement)
+	end 'at'
+
+	function throughCall(placement ClaimSite) returns Self
+		return Self.create(self.entry, score: self.score, depth: self.depth + 1, site: placement)
+	end 'throughCall'
+
+	function throughWitness(placement ClaimSite) returns Self
+		return Self.create(self.entry, score: witnessedScoreOf(self.score), depth: self.depth + 1, site: placement)
+	end 'throughWitness'
+
+	function precedes(incumbent SubstrateClaim) returns bool
+		if self.score != incumbent.score 'byScore'
+			return self.score > incumbent.score
+		end 'byScore'
+
+		if self.depth != incumbent.depth 'byDistance'
+			return self.depth < incumbent.depth
+		end 'byDistance'
+
+		return match self.site.compareTo(incumbent.site) 'bySite'
+			lessThan gives true
+			greaterThan gives false
+			equalTo gives compareBytesOrdinally(self.entry, right: incumbent.entry) == Ordering.lessThan
+		end 'bySite'
+	end 'precedes'
+end 'SubstrateClaim'
+
+module union SubstrateClaimMemo
 	unasked
 	reachesNone
-	reaches(entry immutable ByteArray)
+	reaches(claim SubstrateClaim)
 
-	function prefers(candidate ByteArray) returns bool
+	function keeping(candidate SubstrateClaim) returns SubstrateClaimMemo
 		match self 'memo'
-			unasked then panic("SubstrateEntryMemo.prefers: asked of a memo nothing has settled")
-			reachesNone then return true
-			reaches(incumbent) then return substrateEntryIsPreferred(candidate, incumbent: incumbent)
+			unasked then panic("SubstrateClaimMemo.keeping: asked of a memo nothing has settled")
+			reachesNone then return SubstrateClaimMemo.reaches(candidate)
+			reaches(incumbent) then return SubstrateClaimMemo.reaches(candidate) if candidate.precedes(incumbent) else self
 		end 'memo'
-	end 'prefers'
-end 'SubstrateEntryMemo'
+	end 'keeping'
+
+	function settled() returns SubstrateClaim throws AbsentError
+		match self 'memo'
+			unasked then panic("SubstrateClaimMemo.settled: asked of a memo nothing has settled")
+			reachesNone then throw AbsentError.absent
+			reaches(claim) then return claim
+		end 'memo'
+	end 'settled'
+end 'SubstrateClaimMemo'
 
 typealias WitnessCreditArray = Array with WitnessCredit
 typealias WitnessEventArray = Array with WitnessCreditEvent
 typealias EventsByFunction = Map with (ByteArray, WitnessEventArray)
-typealias EntryByOp = Map with (ElementIndex, immutable ByteArray)
+typealias EventsByOp = Map with (ElementIndex, WitnessEventArray)
+typealias CrossingOpSet = Set with ElementIndex
+typealias ClaimSiteArray = Array with ClaimSite
+typealias SubstrateClaimArray = Array with SubstrateClaim
 
 type CreditedImpls
 	export let names as NameRoster
-	var substrateEntry as SubstrateEntryMemo
+	var substrateClaim as SubstrateClaimMemo
 
 	static function over(names NameRoster) returns Self
-		return Self{names: names, substrateEntry: SubstrateEntryMemo.unasked}
+		return Self{names: names, substrateClaim: SubstrateClaimMemo.unasked}
 	end 'over'
 
-	function settleEntry(entries StdlibSubstrateEntryMap)
-		var settled = SubstrateEntryMemo.reachesNone
+	function settleClaim(state SubstrateFixpoint, nodeOf StdlibNodeByName)
+		var settled = SubstrateClaimMemo.reachesNone
 
 		for impl in self.names 'eachImpl'
-			let entry = try entries.get(impl) otherwise continue
-
-			if settled.prefers(entry) 'aPreferredEntry'
-				settled = SubstrateEntryMemo.reaches(entry)
-			end 'aPreferredEntry'
+			let node = try nodeOf.get(impl) otherwise continue
+			let candidate = try state.witnessedClaimOf(node) otherwise continue
+			settled = settled.keeping(candidate)
 		end 'eachImpl'
 
-		self.substrateEntry = settled
-	end 'settleEntry'
+		self.substrateClaim = settled
+	end 'settleClaim'
 
-	function settledEntry() returns immutable ByteArray throws AbsentError
-		match self.substrateEntry 'memo'
-			unasked then panic("CreditedImpls.settledEntry: asked before the ledger settled its entries")
-			reachesNone then throw AbsentError.absent
-			reaches(entry) then return entry
-		end 'memo'
-	end 'settledEntry'
+	function claimAt(placement ClaimSite) returns SubstrateClaim throws AbsentError
+		let claim = try self.substrateClaim.settled()
+
+		return claim.at(placement)
+	end 'claimAt'
 end 'CreditedImpls'
 
 type FunctionScopedSet
@@ -529,36 +637,26 @@ type LibraryCallResults
 end 'LibraryCallResults'
 
 module type WitnessCrossings
-	module var atFunction as SubstrateEntryMemo
+	module var atFunction as SubstrateClaimMemo
 	module let opSites as OpIndexArray
-	let opEntries as EntryByOp
+	let blamedOps as CrossingOpSet
 
 	static function none() returns Self
-		return Self{atFunction: SubstrateEntryMemo.reachesNone, opSites: OpIndexArray.create(0), opEntries: EntryByOp.create()}
+		return Self{atFunction: SubstrateClaimMemo.reachesNone, opSites: OpIndexArray.create(0), blamedOps: CrossingOpSet.create()}
 	end 'none'
 
-	function noteAtFunction(entry immutable ByteArray)
-		if self.atFunction.prefers(entry) 'aPreferredEntry'
-			self.atFunction = SubstrateEntryMemo.reaches(entry)
-		end 'aPreferredEntry'
+	function noteAtFunction(claim SubstrateClaim)
+		self.atFunction = self.atFunction.keeping(claim)
 	end 'noteAtFunction'
 
-	function noteAtOp(opIndex ElementIndex, entry immutable ByteArray)
-		if let known = try self.opEntries.get(opIndex) 'alreadyBlamed'
-			if substrateEntryIsPreferred(entry, incumbent: known) 'aPreferredEntry'
-				self.opEntries.upsert(opIndex, value: entry)
-			end 'aPreferredEntry'
-
+	function noteAtOp(opIndex ElementIndex)
+		if self.blamedOps.contains(opIndex) 'alreadyListed'
 			return
-		end 'alreadyBlamed'
+		end 'alreadyListed'
 
+		self.blamedOps.insert(opIndex)
 		self.opSites.push(opIndex)
-		self.opEntries.upsert(opIndex, value: entry)
 	end 'noteAtOp'
-
-	module function entryAtOp(opIndex ElementIndex) returns immutable ByteArray throws MapError
-		return try self.opEntries.get(opIndex)
-	end 'entryAtOp'
 end 'WitnessCrossings'
 
 module type WitnessEvidenceLedger
@@ -576,6 +674,7 @@ module type WitnessEvidenceLedger
 	let enumImpls as ImplsByName
 	let interfaceImpls as ImplsByName
 	let eventsByFunction as EventsByFunction
+	let eventsByOp as EventsByOp
 	let mentions as TypeMentions
 	let listedEnums as FunctionScopedSet
 	let listedPositions as FunctionScopedSet
@@ -631,7 +730,7 @@ module type WitnessEvidenceLedger
 	end 'none'
 
 	static function holding(seedConformers NameRoster, declaredConformers DeclaredConformanceMap, constrainedBases ConstrainedOwnerSet, conformerNameById ConformerNameById, interfacesByEnum InterfacesByEnum, enumsByInterface EnumConformersByInterface, mentions TypeMentions) returns Self
-		return Self{pendingImpls: NameRoster.create(0), positions: NameRoster.create(0), functionEvents: WitnessEventArray.create(0), seedConformers: seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, ownerImpls: ImplsByName.create(), instanceImpls: ImplsByInstance.create(), enumImpls: ImplsByName.create(), interfaceImpls: ImplsByName.create(), eventsByFunction: EventsByFunction.create(), mentions: mentions, listedEnums: FunctionScopedSet.create(), listedPositions: FunctionScopedSet.create(), noCallResults: LibraryCallResults.none()}
+		return Self{pendingImpls: NameRoster.create(0), positions: NameRoster.create(0), functionEvents: WitnessEventArray.create(0), seedConformers: seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, ownerImpls: ImplsByName.create(), instanceImpls: ImplsByInstance.create(), enumImpls: ImplsByName.create(), interfaceImpls: ImplsByName.create(), eventsByFunction: EventsByFunction.create(), eventsByOp: EventsByOp.create(), mentions: mentions, listedEnums: FunctionScopedSet.create(), listedPositions: FunctionScopedSet.create(), noCallResults: LibraryCallResults.none()}
 	end 'holding'
 
 	function noteFunction(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet)
@@ -658,7 +757,27 @@ module type WitnessEvidenceLedger
 		let events = WitnessEventArray.create(0)
 		events.append(self.functionEvents)
 		self.eventsByFunction.upsert(func.name, value: events)
+
+		for event in events 'eachEvent'
+			match event.blame 'blamed'
+				functionName then break
+				op(opIndex) then self.fileEventAt(opIndex, event: event)
+			end 'blamed'
+		end 'eachEvent'
 	end 'noteFunction'
+
+	function fileEventAt(opIndex ElementIndex, event WitnessCreditEvent)
+		if let known = try self.eventsByOp.get(opIndex) 'alreadyFiled'
+			known.push(event)
+			self.eventsByOp.upsert(opIndex, value: known)
+
+			return
+		end 'alreadyFiled'
+
+		let filed = WitnessEventArray.create(0)
+		filed.push(event)
+		self.eventsByOp.upsert(opIndex, value: filed)
+	end 'fileEventAt'
 
 	function takeLiveImpls() returns NameRoster
 		let taken = self.pendingImpls
@@ -677,19 +796,23 @@ module type WitnessEvidenceLedger
 		end 'eachNamedInterface'
 	end 'settle'
 
-	function settleEntries(entries StdlibSubstrateEntryMap)
-		settleEntriesIn(self.ownerImpls, entries: entries)
-		settleEntriesIn(self.enumImpls, entries: entries)
-		settleEntriesIn(self.interfaceImpls, entries: entries)
+	function settleClaims(state SubstrateFixpoint, nodeOf StdlibNodeByName)
+		settleClaimsIn(self.ownerImpls, state: state, nodeOf: nodeOf)
+		settleClaimsIn(self.enumImpls, state: state, nodeOf: nodeOf)
+		settleClaimsIn(self.interfaceImpls, state: state, nodeOf: nodeOf)
 
 		for (_, credited) in self.instanceImpls 'eachConstrainedInstance'
-			credited.settleEntry(entries)
+			credited.settleClaim(state, nodeOf: nodeOf)
 		end 'eachConstrainedInstance'
-	end 'settleEntries'
+	end 'settleClaims'
 
 	function creditsOf(funcName immutable ByteArray) returns WitnessEventArray
 		return try self.eventsByFunction.get(funcName) otherwise WitnessEventArray.create(0)
 	end 'creditsOf'
+
+	function eventsAt(opIndex ElementIndex) returns WitnessEventArray
+		return try self.eventsByOp.get(opIndex) otherwise WitnessEventArray.create(0)
+	end 'eventsAt'
 
 	function implsOf(credit WitnessCredit) returns NameRoster
 		let credited = try self.creditedImplsOf(credit) otherwise return NameRoster.create(0)
@@ -706,10 +829,11 @@ module type WitnessEvidenceLedger
 		return impls
 	end 'liveImplsOf'
 
-	function substrateEntryOf(credit WitnessCredit) returns immutable ByteArray throws AbsentError
+	function substrateClaimOf(credit WitnessCredit, placement ClaimSite) returns SubstrateClaim throws AbsentError
 		let credited = try self.creditedImplsOf(credit)
-		return try credited.settledEntry()
-	end 'substrateEntryOf'
+
+		return try credited.claimAt(placement)
+	end 'substrateClaimOf'
 
 	function creditedImplsOf(credit WitnessCredit) returns CreditedImpls throws AbsentError
 		match credit 'route'
@@ -862,11 +986,11 @@ function namesIn(table ImplsByName) returns NameRoster
 	return names
 end 'namesIn'
 
-function settleEntriesIn(table ImplsByName, entries StdlibSubstrateEntryMap)
+function settleClaimsIn(table ImplsByName, state SubstrateFixpoint, nodeOf StdlibNodeByName)
 	for (_, credited) in table 'eachCredited'
-		credited.settleEntry(entries)
+		credited.settleClaim(state, nodeOf: nodeOf)
 	end 'eachCredited'
-end 'settleEntriesIn'
+end 'settleClaimsIn'
 
 // ⭐ THE FACTS ABOUT LIBRARY SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
 // object rather than separate `Project` fields because they are one derivation over one call graph:
@@ -892,8 +1016,8 @@ export type LibraryFacts
 	// under `unreachedRuntimeTier` instead, which answers the narrower question its readers may ask.
 	export let unreachable as FunctionNameSet
 
-	// The REACHABLE stdlib functions that reach a host entry this compile's target lacks, and which
-	// entry each one reaches. Read at a call site that crosses from user code into stdlib, to refuse the program on
+	// The REACHABLE stdlib functions that reach a host entry this compile's target lacks, and the claim
+	// each one is refused for. Read at a call site that crosses from user code into stdlib, to refuse the program on
 	// a target that cannot lower it — at the user's own span.
 	export let substrateEntries as StdlibSubstrateEntryMap
 
@@ -984,9 +1108,8 @@ export type LibraryFacts
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
 	end 'withCompilerCalledTierUnreached'
 
-	export function withSubstrateEntriesOf(module MaxonModule, target Target) returns LibraryFacts
-		let entries = stdlibSubstrateEntries(module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, evidence: self.witnessEvidence, target: target)
-		self.witnessEvidence.settleEntries(entries)
+	export function withSubstrateEntriesOf(project Project, module MaxonModule) returns LibraryFacts
+		let entries = stdlibSubstrateEntries(project, module: module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, evidence: self.witnessEvidence)
 
 		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
 	end 'withSubstrateEntriesOf'
@@ -995,32 +1118,44 @@ export type LibraryFacts
 		let crossings = WitnessCrossings.none()
 
 		for event in self.witnessEvidence.creditsOf(func.name) 'eachCredit'
-			let entry = try self.witnessEvidence.substrateEntryOf(event.credit) otherwise continue
+			let site = event.blame.siteIn(project, func: func)
+			let claim = try self.witnessEvidence.substrateClaimOf(event.credit, placement: site) otherwise continue
 
-			match event.blame 'site'
-				functionName then crossings.noteAtFunction(entry)
-				op(opIndex) then self.noteCrossingAtOp(crossings, opIndex: opIndex, entry: entry, project: project, module: module, func: func)
+			match site 'site'
+				wholeFunction then crossings.noteAtFunction(claim)
+				sited(_, opIndex) then self.noteCrossingAtOp(crossings, opIndex: opIndex, module: module)
 			end 'site'
 		end 'eachCredit'
 
 		return crossings
 	end 'witnessCrossingsOf'
 
-	function noteCrossingAtOp(crossings WitnessCrossings, opIndex ElementIndex, entry immutable ByteArray, project Project, module MaxonModule, func IrFunction)
-		if opIsTheCompilersOwn(project, func: func, opIndex: opIndex) 'aCallTheCompilerMinted'
-			crossings.noteAtFunction(entry)
-			return
-		end 'aCallTheCompilerMinted'
-
+	function noteCrossingAtOp(crossings WitnessCrossings, opIndex ElementIndex, module MaxonModule)
 		let op = try module.ops.get(opIndex) otherwise panic("LibraryFacts.noteCrossingAtOp: ops.get OOB at {opIndex}")
 		let edge = try callEdgeOf(op) otherwise panic("LibraryFacts.noteCrossingAtOp: op {opIndex} was blamed as a call and names no callee")
 
-		if self.substrateEntries.contains(edge.0) 'theCalleeIsRefusedItself'
+		if self.substrateEntries.contains(edge.0) 'theCalleeDecidesIt'
 			return
-		end 'theCalleeIsRefusedItself'
+		end 'theCalleeDecidesIt'
 
-		crossings.noteAtOp(opIndex, entry: entry)
+		crossings.noteAtOp(opIndex)
 	end 'noteCrossingAtOp'
+
+	module function claimAtOp(project Project, opIndex ElementIndex, callee ByteArray) returns SubstrateClaim throws AbsentError
+		let site = siteOfOp(opIndex, ranges: project.opRanges)
+		var chosen = SubstrateClaimMemo.reachesNone
+
+		if let calleeClaim = try self.substrateEntries.get(callee) 'theCalleeIsRefused'
+			chosen = chosen.keeping(calleeClaim.throughCall(site))
+		end 'theCalleeIsRefused'
+
+		for event in self.witnessEvidence.eventsAt(opIndex) 'eachCredit'
+			let claim = try self.witnessEvidence.substrateClaimOf(event.credit, placement: site) otherwise continue
+			chosen = chosen.keeping(claim)
+		end 'eachCredit'
+
+		return try chosen.settled()
+	end 'claimAtOp'
 end 'LibraryFacts'
 
 // ⭐ DERIVE THE REACH FACTS, all but `substrateEntries` (see `withSubstrateEntriesOf`). Runs once
@@ -2239,18 +2374,18 @@ end 'anyCalleeIsIn'
 // ⚠ **IT CARRIES THE ENTRY NAME, NOT A BIT**, which is why it is not `CsrGraph.reverseReachabilityMark`:
 // `Clock` alone reaches TWO entries (`__gt_now_ns` for the monotonic clock, `__clock_now_unix_s` for the
 // calendar), so a bit would leave the diagnostic naming whichever one it guessed — a wrong answer, not a
-// cosmetic one. What PROPAGATES is still a scalar: a node inherits its callee's SEED INDEX, and the names
-// are read off `seedEntries` once at the end.
+// cosmetic one. What PROPAGATES is still a scalar: a (node, score) slot inherits its callee's SEED INDEX,
+// and the names are read off `seedEntries` once at the end.
 //
 // COST: O(stdlib functions + their ops + their intra-stdlib edges), bounded by the stdlib source LOADED
-// and not by the user program, and computed only for a compile that actually calls into stdlib. Each node
-// enters the worklist at most once and each reverse edge is walked once, so it stays linear in the loaded
-// stdlib as that grows from today's one module to all of it.
+// and not by the user program, and computed only for a compile that actually calls into stdlib. Each
+// slot enters the frontier at most once and each reverse edge is walked once per slot, so it stays
+// linear in the loaded stdlib.
 //
 // The UNREACHABLE stdlib functions are left out entirely: they are invisible to this compile, so their
 // substrate is too. That is what keeps a program whose own source never names a host-only reader
 // compiling for wasm.
-function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet, evidence WitnessEvidenceLedger, target Target) returns StdlibSubstrateEntryMap
+function stdlibSubstrateEntries(project Project, module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet, evidence WitnessEvidenceLedger) returns StdlibSubstrateEntryMap
 	let nodeCount = stdlibNames.count()
 	let nodeOf = StdlibNodeByName.create()
 
@@ -2258,7 +2393,7 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i as CsrIndex)
 	end 'index'
 
-	let state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex, target: target)
+	let state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex, target: project.target)
 
 	for func in module.functions 'eachFunc'
 		if unreachable.contains(func.name) 'notInTheProgram'
@@ -2271,160 +2406,353 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 
 				for opIdx in block.bodyOps() 'eachOp'
 					let op = try module.ops.get(opIdx) otherwise panic("stdlibSubstrateEntries: opRef {opIdx} not in module.ops")
-					noteSubstrateEdge(op, callerNode: node, nodeOf: nodeOf, state: state)
+					noteSubstrateEdge(op, opIndex: opIdx, position: project.opRanges.positionKeyOf(opIdx), callerNode: node, nodeOf: nodeOf, state: state)
 				end 'eachOp'
 			end 'eachBlock'
 
-			for impl in evidence.liveImplsOf(func.name) 'eachLiveImpl'
-				noteSubstrateCallee(impl, callerNode: node, nodeOf: nodeOf, state: state)
-			end 'eachLiveImpl'
+			for event in evidence.creditsOf(func.name) 'eachCredit'
+				state.noteWitnessImpls(evidence.implsOf(event.credit), site: event.blame.siteIn(project, func: func), callerNode: node, nodeOf: nodeOf)
+			end 'eachCredit'
 		end 'stdlibFunction'
 	end 'eachFunc'
 
 	state.propagateToCallers()
+	evidence.settleClaims(state, nodeOf: nodeOf)
 
 	let entries = StdlibSubstrateEntryMap.create()
 
 	for i in 0 upto nodeCount 'publish'
-		if state.requiresSubstrate(i as CsrIndex) 'needsIt'
-			entries.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB in publish"), value: state.entryOf(i as CsrIndex))
+		if let claim = try state.bestClaimOf(i as CsrIndex) 'needsIt'
+			entries.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB in publish"), value: claim)
 		end 'needsIt'
 	end 'publish'
 
 	return entries
 end 'stdlibSubstrateEntries'
 
+let SubstrateReachKinds = 2
+let NamedReachOffset = 1
+let ScoreSlotCount = (ProcessSpawnRank + 1) * SubstrateReachKinds
+
 // The mutable state of the substrate fixpoint over the stdlib call graph's DENSE node space. It is one
-// object rather than six threaded columns because the body scan and the propagation write all of it, and a
-// helper that took them apart could be handed five of the six.
+// object rather than threaded columns because the body scan and the propagation write all of it, and a
+// helper that took them apart could be handed all but one.
 //
-// ⭐ THE COLUMNS PROPAGATE SCALARS. A marked node stores an INDEX into `seedEntries`, never the entry name
+// ⭐ THE COLUMNS PROPAGATE SCALARS. A settled slot stores an INDEX into `seedEntries`, never the entry name
 // itself. The names are read once, after the fixpoint has settled.
 type SubstrateFixpoint
-	// Per node: does it (transitively) reach an entry the target lacks? Also the "already queued" test — a node is
-	// marked exactly when it enters the worklist, so it enters at most once.
-	var marked as FixedBoolArray
+	// Per node: its own body names an entry the target lacks, and the index into `seedEntries` of the one
+	// that claims it, with the source site that names it.
+	var ownsASeed as FixedBoolArray
+	var ownSeedOf as FixedCsrColumn
+	let ownSites as ReachSites
 
-	// Per MARKED node: the index into `seedEntries` of the seed it inherits its entry from.
+	// Per (node, score) slot, `ScoreSlotCount` slots to a node: whether the node reaches an entry making
+	// that claim, the index into `seedEntries` of the nearest such entry, how many call edges lie between
+	// the node and the body that names it, and the site in this node's body it is reached from.
+	var settled as FixedBoolArray
 	var seedOf as FixedCsrColumn
+	var depthOf as FixedCsrColumn
+	let chosenSites as ReachSites
 
 	// The runtime entry each seed names, in the order the seeds were found.
 	var seedEntries as NameRoster
 
-	// Nodes whose callers still have to inherit from them. Drained by index, never popped, so a node's
-	// position is stable while the array grows.
-	var worklist as CsrColumn
-
 	// The intra-stdlib call graph, REVERSED as it is collected (callee -> caller), so the propagation
 	// walks from a function that names an entry to the functions that reach it.
-	var edgeCallee as CsrColumn
-	var edgeCaller as CsrColumn
+	let calls as ReachEdges
+
+	// The same, for the witness impls a function's credits name: an impl a dispatch MAY run, never one the
+	// body calls.
+	let witnesses as ReachEdges
 
 	let target as Target
 
 	static function overNodes(nodeCount CsrIndex, target Target) returns SubstrateFixpoint
-		return Self{marked: FixedBoolArray.create(nodeCount), seedOf: FixedCsrColumn.create(nodeCount), seedEntries: NameRoster.create(0), worklist: CsrColumn.create(0), edgeCallee: CsrColumn.create(0), edgeCaller: CsrColumn.create(0), target: target}
+		let slotCount = nodeCount * ScoreSlotCount
+
+		return Self{ownsASeed: FixedBoolArray.create(nodeCount), ownSeedOf: FixedCsrColumn.create(nodeCount), ownSites: ReachSites.overNodes(nodeCount), settled: FixedBoolArray.create(slotCount), seedOf: FixedCsrColumn.create(slotCount), depthOf: FixedCsrColumn.create(slotCount), chosenSites: ReachSites.overNodes(slotCount), seedEntries: NameRoster.create(0), calls: ReachEdges.create(), witnesses: ReachEdges.create(), target: target}
 	end 'overNodes'
 
-	// `node` names `entry` directly — a SEED.
-	//
-	// ⛔⛔ ***"The first entry a body names is the one it is reported for: a body naming two is refused for
-	// either, and both are equally true of it"* IS FALSE.**
-	// The entry decides WHICH DIAGNOSTIC the crossing gets, not merely which name it quotes, so two
-	// entries are two different claims with different advice. `SemanticCheck.substrateEntryIsPreferred` is the
-	// one place that says which wins and why (rank, then the least entry name, so the answer never depends on
-	// the order the walk met them in); here it is only obeyed. A preferred entry REPLACES the incumbent and
-	// re-queues the node, so the callers that already inherited the other one are corrected.
-	//
-	// ⚠ The replacement is MONOTONE — preference is a strict total order over distinct entries, so a node's
-	// entry only ever improves and a node is re-queued at most once per distinct entry; the fixpoint below
-	// stays linear.
+	// `node` names `entry` directly at `site` — a SEED.
 	//
 	// ⚠ An entry the target provides seeds nothing. A node holds one entry, so a body reaching a provided
 	// entry and a lacking one must record the lacking one, or its crossing passes the gate and the
 	// program reaches a backend that cannot lower it. Per-target state is sound because `LibraryFacts`
 	// is rebuilt for every compile and a `Project` has one target for its whole life.
-	function seed(node CsrIndex, entry ByteArray)
+	function seed(node CsrIndex, entry immutable ByteArray, site ClaimSite)
 		if not calleeNeedsFacilityTargetLacks(self.target, callee: entry) 'theTargetProvidesIt'
 			return
 		end 'theTargetProvidesIt'
 
-		let already = try self.marked.get(node) otherwise panic("SubstrateFixpoint.seed: marked.get({node}) outside the node space")
+		let already = try self.ownsASeed.get(node) otherwise panic("SubstrateFixpoint.seed: ownsASeed.get({node}) outside the node space")
 
-		if already and not substrateEntryIsPreferred(entry, incumbent: self.entryOf(node)) 'keepTheIncumbent'
+		if already and not SubstrateClaim.named(entry, site: site).precedes(self.ownClaimOf(node)) 'keepTheIncumbent'
 			return
 		end 'keepTheIncumbent'
 
-		self.mark(node, seedIndex: self.seedEntries.count() as CsrIndex)
+		try self.ownsASeed.set(node, value: true) otherwise panic("SubstrateFixpoint.seed: ownsASeed.set({node}) outside the node space")
+		try self.ownSeedOf.set(node, value: self.seedEntries.count() as CsrIndex) otherwise panic("SubstrateFixpoint.seed: ownSeedOf.set({node}) outside the node space")
+		self.ownSites.place(node, site: site)
 		self.seedEntries.push(entry)
 	end 'seed'
 
-	// A call edge inside stdlib, recorded reversed for the propagation below.
-	function callEdge(calleeNode CsrIndex, callerNode CsrIndex)
-		self.edgeCallee.push(calleeNode)
-		self.edgeCaller.push(callerNode)
-	end 'callEdge'
+	// ⭐ `calleeHostFacility` is asked, never restated: it is the ONE place that knows which runtime entries
+	// need a facility at all, and a second list here would be that fact written down twice. Whether the
+	// target provides it is `seed`'s question.
+	function noteCallee(callee ByteArray, position PositionKey, opIndex ElementIndex, callerNode CsrIndex, nodeOf StdlibNodeByName)
+		if calleeHasHostFacility(callee) 'substrateEntry'
+			self.seed(callerNode, entry: callee, site: ClaimSite.sited(position, opIndex: opIndex))
+			return
+		end 'substrateEntry'
 
-	// Mark `node` as needing the substrate `seedIndex` names, and queue its callers for the same.
-	function mark(node CsrIndex, seedIndex CsrIndex)
-		try self.marked.set(node, value: true) otherwise panic("SubstrateFixpoint.mark: marked.set({node}) outside the node space")
-		try self.seedOf.set(node, value: seedIndex) otherwise panic("SubstrateFixpoint.mark: seedOf.set({node}) outside the node space")
-		self.worklist.push(node)
-	end 'mark'
+		if let calleeNode = try nodeOf.get(callee) 'stdlibSibling'
+			self.calls.push(calleeNode, callerNode: callerNode, site: ClaimSite.sited(position, opIndex: opIndex))
+		end 'stdlibSibling'
+	end 'noteCallee'
 
-	// ⭐ THE FIXPOINT: every stdlib function that REACHES a seed over stdlib's own call edges inherits its
-	// entry. A reverse BFS over the CSR adjacency — each node enters the worklist once (the marking IS the
-	// visited test) and each edge is walked once, for O(nodes + edges).
+	function noteWitnessImpls(impls NameRoster, site ClaimSite, callerNode CsrIndex, nodeOf StdlibNodeByName)
+		for impl in impls 'eachImpl'
+			if let implNode = try nodeOf.get(impl) 'stdlibImpl'
+				self.witnesses.push(implNode, callerNode: callerNode, site: site)
+			end 'stdlibImpl'
+		end 'eachImpl'
+	end 'noteWitnessImpls'
+
 	function propagateToCallers()
-		let callersOf = buildCsr(self.edgeCallee, to: self.edgeCaller, nodeCount: self.marked.count() as CsrIndex)
-		var head = 0 as CsrIndex
+		let nodeCount = self.ownsASeed.count() as CsrIndex
+		let callersOf = self.calls.callersOf(nodeCount)
+		let witnessCallersOf = self.witnesses.callersOf(nodeCount)
 
-		while head < self.worklist.count() as CsrIndex 'drain'
-			let node = try self.worklist.get(head) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
-			head = head + 1
-			let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get({node}) outside the node space")
+		var frontierNodes = CsrColumn.create(0)
+		var frontierScores = CsrColumn.create(0)
 
-			for k in 0 upto callersOf.degree(node) 'eachCaller'
-				let caller = callersOf.neighbour(node, k: k)
+		for node in 0 upto self.ownsASeed.count() 'eachNode'
+			let namesASeed = try self.ownsASeed.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: ownsASeed.get({node}) below its own count()")
 
-				if self.inheritsFrom(caller, seedIndex: seedIndex) 'newlyRequiredOrOutranked'
-					self.mark(caller, seedIndex: seedIndex)
-				end 'newlyRequiredOrOutranked'
-			end 'eachCaller'
-		end 'drain'
+			if namesASeed 'aBodyThatNamesOne'
+				let score = reachScoreOf(self.ownEntryOf(node as CsrIndex))
+				self.settle(node as CsrIndex, score: score, seedIndex: try self.ownSeedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: ownSeedOf.get({node}) below its own count()"), depth: 0, site: self.ownSites.siteOf(node as CsrIndex))
+				frontierNodes.push(node as CsrIndex)
+				frontierScores.push(score)
+			end 'aBodyThatNamesOne'
+		end 'eachNode'
+
+		var depth = 0 as CsrIndex
+
+		while frontierNodes.count() > 0 'eachLayer'
+			let nextNodes = CsrColumn.create(0)
+			let nextScores = CsrColumn.create(0)
+
+			for position in 0 upto frontierNodes.count() 'eachSettledSlot'
+				let reached = try frontierNodes.get(position) otherwise panic("SubstrateFixpoint.propagateToCallers: frontierNodes.get({position}) below its own count()")
+				let score = try frontierScores.get(position) otherwise panic("SubstrateFixpoint.propagateToCallers: frontierScores.get({position}) below its own count()")
+				let seedIndex = try self.seedOf.get(self.slotOf(reached, score: score)) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get outside the slot space")
+
+				for k in 0 upto callersOf.degree(reached) 'eachCaller'
+					self.offer(self.calls, edge: callersOf.neighbour(reached, k: k), score: score, seedIndex: seedIndex, depth: depth + 1, nextNodes: nextNodes, nextScores: nextScores)
+				end 'eachCaller'
+
+				for k in 0 upto witnessCallersOf.degree(reached) 'eachWitnessCaller'
+					self.offer(self.witnesses, edge: witnessCallersOf.neighbour(reached, k: k), score: witnessedScoreOf(score), seedIndex: seedIndex, depth: depth + 1, nextNodes: nextNodes, nextScores: nextScores)
+				end 'eachWitnessCaller'
+			end 'eachSettledSlot'
+
+			frontierNodes = nextNodes
+			frontierScores = nextScores
+			depth = depth + 1
+		end 'eachLayer'
 	end 'propagateToCallers'
 
-	// Should `caller` take `seedIndex` as its own — because it has no entry yet, or because this one
-	// is PREFERRED to the entry it already inherited (`SemanticCheck.substrateEntryIsPreferred`)? An unmarked caller is
-	// the ordinary case and answers before any name is read; the second question is asked only of a node that
-	// is already marked, so the common propagation pays one bool test.
-	//
-	// ⚠ It is a question rather than an inlined `if` because the propagation and `seed` must ask the SAME one:
-	// a seed that upgrades a node while its callers keep the weaker entry would leave the two halves of one
-	// fixpoint disagreeing about which diagnostic a crossing earns.
-	function inheritsFrom(caller CsrIndex, seedIndex CsrIndex) returns bool
-		if not (try self.marked.get(caller) otherwise panic("SubstrateFixpoint.inheritsFrom: marked.get({caller}) outside the node space")) 'noEntryYet'
-			return true
-		end 'noEntryYet'
+	function offer(edges ReachEdges, edge CsrIndex, score CsrIndex, seedIndex CsrIndex, depth CsrIndex, nextNodes CsrColumn, nextScores CsrColumn)
+		let caller = edges.callerOf(edge)
+		let site = edges.siteOf(edge)
 
-		return substrateEntryIsPreferred(try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.inheritsFrom: seed {seedIndex} does not exist"), incumbent: self.entryOf(caller))
-	end 'inheritsFrom'
+		if not self.isSettled(caller, score: score) 'theNearestSoFar'
+			self.settle(caller, score: score, seedIndex: seedIndex, depth: depth, site: site)
+			nextNodes.push(caller)
+			nextScores.push(score)
 
-	function requiresSubstrate(node CsrIndex) returns bool
-		return try self.marked.get(node) otherwise panic("SubstrateFixpoint.requiresSubstrate: marked.get({node}) outside the node space")
-	end 'requiresSubstrate'
+			return
+		end 'theNearestSoFar'
 
-	// The runtime entry `node` reaches. Defined only for a node `requiresSubstrate` accepts — an unmarked
-	// node's `seedOf` slot was never written, and the panics say so rather than returning slot 0's name.
-	function entryOf(node CsrIndex) returns immutable ByteArray
-		if not self.requiresSubstrate(node) 'unmarked'
-			panic("SubstrateFixpoint.entryOf: node {node} needs no substrate")
-		end 'unmarked'
+		let entry = try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.offer: seed {seedIndex} does not exist")
 
-		let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.entryOf: seedOf.get({node}) outside the node space")
-		return try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.entryOf: node {node} names seed {seedIndex}, which does not exist")
-	end 'entryOf'
+		if SubstrateClaim.create(entry, score: score, depth: depth, site: site).precedes(self.claimOf(caller, score: score)) 'aBetterClaim'
+			self.settle(caller, score: score, seedIndex: seedIndex, depth: depth, site: site)
+		end 'aBetterClaim'
+	end 'offer'
+
+	function slotOf(node CsrIndex, score CsrIndex) returns CsrIndex
+		if score >= ScoreSlotCount 'beyondTheSlots'
+			panic("SubstrateFixpoint.slotOf: score {score} has no slot, and a claim's score never exceeds the strongest rank's named reach")
+		end 'beyondTheSlots'
+
+		return node * ScoreSlotCount + score
+	end 'slotOf'
+
+	function settle(node CsrIndex, score CsrIndex, seedIndex CsrIndex, depth CsrIndex, site ClaimSite)
+		let slot = self.slotOf(node, score: score)
+
+		try self.settled.set(slot, value: true) otherwise panic("SubstrateFixpoint.settle: settled.set({slot}) outside the slot space")
+		try self.seedOf.set(slot, value: seedIndex) otherwise panic("SubstrateFixpoint.settle: seedOf.set({slot}) outside the slot space")
+		try self.depthOf.set(slot, value: depth) otherwise panic("SubstrateFixpoint.settle: depthOf.set({slot}) outside the slot space")
+		self.chosenSites.place(slot, site: site)
+	end 'settle'
+
+	function ownEntryOf(node CsrIndex) returns immutable ByteArray
+		let seedIndex = try self.ownSeedOf.get(node) otherwise panic("SubstrateFixpoint.ownEntryOf: ownSeedOf.get({node}) outside the node space")
+		return try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.ownEntryOf: node {node} names seed {seedIndex}, which does not exist")
+	end 'ownEntryOf'
+
+	function isSettled(node CsrIndex, score CsrIndex) returns bool
+		let slot = self.slotOf(node, score: score)
+
+		return try self.settled.get(slot) otherwise panic("SubstrateFixpoint.isSettled: settled.get({slot}) outside the slot space")
+	end 'isSettled'
+
+	function ownClaimOf(node CsrIndex) returns SubstrateClaim
+		return SubstrateClaim.named(self.ownEntryOf(node), site: self.ownSites.siteOf(node))
+	end 'ownClaimOf'
+
+	function claimOf(node CsrIndex, score CsrIndex) returns SubstrateClaim
+		if not self.isSettled(node, score: score) 'unsettled'
+			panic("SubstrateFixpoint.claimOf: node {node} has no settled entry at score {score}")
+		end 'unsettled'
+
+		let slot = self.slotOf(node, score: score)
+		let seedIndex = try self.seedOf.get(slot) otherwise panic("SubstrateFixpoint.claimOf: seedOf.get({slot}) outside the slot space")
+		let entry = try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.claimOf: node {node} names seed {seedIndex}, which does not exist")
+		let depth = try self.depthOf.get(slot) otherwise panic("SubstrateFixpoint.claimOf: depthOf.get({slot}) outside the slot space")
+
+		return SubstrateClaim.create(entry, score: score, depth: depth, site: self.chosenSites.siteOf(slot))
+	end 'claimOf'
+
+	function claimsOf(node CsrIndex) returns SubstrateClaimArray
+		let claims = SubstrateClaimArray.create(0)
+		var score = 0 as CsrIndex
+
+		while score < ScoreSlotCount 'eachSlot'
+			if self.isSettled(node, score: score) 'aClaimAtThisScore'
+				claims.push(self.claimOf(node, score: score))
+			end 'aClaimAtThisScore'
+
+			score = score + 1
+		end 'eachSlot'
+
+		return claims
+	end 'claimsOf'
+
+	function bestClaimOf(node CsrIndex) returns SubstrateClaim throws AbsentError
+		return try strongestOf(self.claimsOf(node))
+	end 'bestClaimOf'
+
+	function witnessedClaimOf(node CsrIndex) returns SubstrateClaim throws AbsentError
+		let witnessed = SubstrateClaimArray.create(0)
+
+		for claim in self.claimsOf(node) 'eachClaim'
+			witnessed.push(claim.throughWitness(ClaimSite.wholeFunction))
+		end 'eachClaim'
+
+		return try strongestOf(witnessed)
+	end 'witnessedClaimOf'
 end 'SubstrateFixpoint'
+
+function strongestOf(claims SubstrateClaimArray) returns SubstrateClaim throws AbsentError
+	var chosen = SubstrateClaimMemo.reachesNone
+
+	for claim in claims 'eachClaim'
+		chosen = chosen.keeping(claim)
+	end 'eachClaim'
+
+	return try chosen.settled()
+end 'strongestOf'
+
+type ReachSites
+	let positions as FixedCsrColumn
+	let ops as FixedCsrColumn
+	let wholeFunctions as FixedBoolArray
+
+	static function overNodes(nodeCount CsrIndex) returns ReachSites
+		return Self{positions: FixedCsrColumn.create(nodeCount), ops: FixedCsrColumn.create(nodeCount), wholeFunctions: FixedBoolArray.create(nodeCount)}
+	end 'overNodes'
+
+	function place(node CsrIndex, site ClaimSite)
+		match site 'placed'
+			sited(position, opIndex) then self.placeSited(node, position: position, opIndex: opIndex)
+			wholeFunction then try self.wholeFunctions.set(node, value: true) otherwise panic("ReachSites.place: wholeFunctions.set({node}) outside the node space")
+		end 'placed'
+	end 'place'
+
+	function placeSited(node CsrIndex, position PositionKey, opIndex ElementIndex)
+		try self.wholeFunctions.set(node, value: false) otherwise panic("ReachSites.placeSited: wholeFunctions.set({node}) outside the node space")
+		try self.positions.set(node, value: position as CsrIndex) otherwise panic("ReachSites.placeSited: positions.set({node}) outside the node space")
+		try self.ops.set(node, value: opIndex as CsrIndex) otherwise panic("ReachSites.placeSited: ops.set({node}) outside the node space")
+	end 'placeSited'
+
+	function siteOf(node CsrIndex) returns ClaimSite
+		let whole = try self.wholeFunctions.get(node) otherwise panic("ReachSites.siteOf: wholeFunctions.get({node}) outside the node space")
+
+		if whole 'wholeFunction'
+			return ClaimSite.wholeFunction
+		end 'wholeFunction'
+
+		let position = (try self.positions.get(node) otherwise panic("ReachSites.siteOf: positions.get({node}) outside the node space")) as PositionKey
+		let opIndex = (try self.ops.get(node) otherwise panic("ReachSites.siteOf: ops.get({node}) outside the node space")) as ElementIndex
+
+		return ClaimSite.sited(position, opIndex: opIndex)
+	end 'siteOf'
+end 'ReachSites'
+
+type ReachEdges
+	let callee as CsrColumn
+	let caller as CsrColumn
+	let sites as ClaimSiteArray
+
+	static function create() returns ReachEdges
+		return Self{callee: CsrColumn.create(0), caller: CsrColumn.create(0), sites: ClaimSiteArray.create(0)}
+	end 'create'
+
+	function push(calleeNode CsrIndex, callerNode CsrIndex, site ClaimSite)
+		self.callee.push(calleeNode)
+		self.caller.push(callerNode)
+		self.sites.push(site)
+	end 'push'
+
+	function callersOf(nodeCount CsrIndex) returns CsrGraph
+		let edgeIds = CsrColumn.create(self.callee.count(), zeroed: false)
+
+		for edge in 0 upto self.callee.count() 'eachEdge'
+			edgeIds.push(edge as CsrIndex)
+		end 'eachEdge'
+
+		return buildCsr(self.callee, to: edgeIds, nodeCount: nodeCount)
+	end 'callersOf'
+
+	function callerOf(edge CsrIndex) returns CsrIndex
+		return try self.caller.get(edge) otherwise panic("ReachEdges.callerOf: caller.get({edge}) outside the edge list")
+	end 'callerOf'
+
+	function siteOf(edge CsrIndex) returns ClaimSite
+		return try self.sites.get(edge) otherwise panic("ReachEdges.siteOf: sites.get({edge}) outside the edge list")
+	end 'siteOf'
+end 'ReachEdges'
+
+function sitePositionOrder(position PositionKey) returns PositionKey
+	if not namesASourcePosition(positionKeyLine(position), column: positionKeyColumn(position)) 'positionless'
+		return u64.max
+	end 'positionless'
+
+	return position
+end 'sitePositionOrder'
+
+function reachScoreOf(entry ByteArray) returns CsrIndex
+	return (substrateEntryRank(entry) as CsrIndex) * SubstrateReachKinds + NamedReachOffset
+end 'reachScoreOf'
+
+function witnessedScoreOf(score CsrIndex) returns CsrIndex
+	return score - score mod SubstrateReachKinds
+end 'witnessedScoreOf'
 
 // One stdlib body op's contribution to the substrate fixpoint: it either NAMES a substrate runtime entry
 // (a seed) or calls another stdlib function (a reverse edge). A callee can never be both — the parser
@@ -2435,9 +2763,9 @@ end 'SubstrateFixpoint'
 // each pays a different cost (this one runs only for a compile that calls into stdlib), which is why they
 // are separate matches; a variant appended past `witnessTryDispatch` fails to compile in all three rather
 // than being silently swallowed by any of them.
-function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
+function noteSubstrateEdge(op MaxonOp, opIndex ElementIndex, position PositionKey, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
 	match op 'op'
-		call(_, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		call(_, callee, _, _, _, _, _) then state.noteCallee(callee, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf)
 		literal or
 		ret or
 		retVoid or
@@ -2450,13 +2778,13 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		loadIndirect or
 		storeIndirect or
 		stringLiteral then break
-		tryCall(_, _, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		tryCall(_, _, callee, _, _, _, _, _) then state.noteCallee(callee, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf)
 		throwError or
 		propagateError or
 		panicAbort then break
-		functionRef(_, funcName, _) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		functionRef(_, funcName, _) then state.noteCallee(funcName, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf)
 		indirectCall then break
-		asyncCall(_, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: GtSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		asyncCall(_, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: GtSpawnName, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		await or
 		tryAwait or
 		sizeofType or
@@ -2473,15 +2801,15 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 
 		// The service and `async` ops are seeds as well as edges: a stdlib body is never blamed for its own
 		// ops, so the entry each lowers to must reach the user's crossing through this fixpoint.
-		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSpawnName, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.
-		serviceSend(_, _, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSendName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceSend(_, _, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSendName, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` beside it is
 		// the edge to that message, and noting it twice would credit one call graph edge to two ops.
-		serviceReplyCell then noteSubstrateCallee(GtCellAllocName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceReplyCell then state.noteCallee(GtCellAllocName, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf)
 		immortalStructRecord or
 		immortalStringTable or
 		covPoint then break
@@ -2490,7 +2818,7 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		// other seed here is a CALL to a runtime entry, which the crossing can meet by name; a raw row has no
 		// symbol between it and the machine, so without this arm a lane missing the facility reached
 		// instruction selection with nothing said.
-		rawIntrinsic(_, intrinsic, _, _) then noteSubstrateRawIntrinsic(intrinsic, callerNode: callerNode, state: state)
+		rawIntrinsic(_, intrinsic, _, _) then noteSubstrateRawIntrinsic(intrinsic, position: position, opIndex: opIndex, callerNode: callerNode, state: state)
 
 		// A witness table's impls are reached through the conformer, never through an edge this op names.
 		existentialWitness or
@@ -2505,32 +2833,14 @@ end 'noteSubstrateEdge'
 // ⚠ A row whose facility is `none` is pure code generation on every supported lane and seeds nothing — a
 // seed would make every crossing into every tier body carry an entry no target can lack, which is a whole
 // fixpoint's worth of work for a refusal that can never fire.
-function noteSubstrateRawIntrinsic(intrinsic RawIntrinsic, callerNode CsrIndex, state SubstrateFixpoint)
+function noteSubstrateRawIntrinsic(intrinsic RawIntrinsic, position PositionKey, opIndex ElementIndex, callerNode CsrIndex, state SubstrateFixpoint)
 	match rawHostFacilityOf(intrinsic) 'facility'
 		none then return
-		required then state.seed(callerNode, entry: rawIntrinsicCalleeName(intrinsic))
+		required then state.seed(callerNode, entry: rawIntrinsicCalleeName(intrinsic), site: ClaimSite.sited(position, opIndex: opIndex))
 	end 'facility'
 end 'noteSubstrateRawIntrinsic'
 
-// Classify ONE callee named by a stdlib body: a runtime entry that needs a HOST FACILITY SEEDS the
-// fixpoint, another stdlib function becomes a reverse edge, and anything else — a user callback, or a
-// target-neutral runtime helper — carries no substrate requirement.
-//
-// ⭐ `calleeHostFacility` is asked, never restated: it is the ONE place that knows which runtime entries
-// need a facility at all, and a second list here would be that fact written down twice. Whether the
-// target provides it is `SubstrateFixpoint.seed`'s question.
-function noteSubstrateCallee(callee ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
-	if calleeHasHostFacility(callee) 'substrateEntry'
-		state.seed(callerNode, entry: callee)
-		return
-	end 'substrateEntry'
-
-	if let calleeNode = try nodeOf.get(callee) 'stdlibSibling'
-		state.callEdge(calleeNode, callerNode: callerNode)
-	end 'stdlibSibling'
-end 'noteSubstrateCallee'
-
-function noteSubstrateCalleeAndEntry(callee ByteArray, entry ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
-	noteSubstrateCallee(entry, callerNode: callerNode, nodeOf: nodeOf, state: state)
-	noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+function noteSubstrateCalleeAndEntry(callee ByteArray, entry ByteArray, position PositionKey, opIndex ElementIndex, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
+	state.noteCallee(entry, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf)
+	state.noteCallee(callee, position: position, opIndex: opIndex, callerNode: callerNode, nodeOf: nodeOf)
 end 'noteSubstrateCalleeAndEntry'

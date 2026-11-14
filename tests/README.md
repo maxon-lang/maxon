@@ -134,7 +134,10 @@ tests/
     refusals/<case>.maxtest      one malformed spec `spec-test` must REFUSE, found through `__file__`
     refusals/<case>/             refusal.md  expected-refusal.txt
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
-    gates/<case>/                the gate's one or two `.md`, or the program it runs as `main.maxon.fixture` (stored name only - see rule 1)
+    gates/<case>/                the gate's one or two `.md`
+    fedRuns/FedRunProbe.maxon    the shared half of the fed-run cases: the staging, the spawn of `maxon execute` over the probe, the verdict check
+    fedRuns/<case>.maxtest       one fed-run scenario of `maxon-bin/Testing/SpecFedRun.maxon`, run through the probe
+    fedRuns/probe/               the one program every fed-run case runs, as `main.maxon.fixture` (stored name only - see rule 1)
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics, `buildRecordedProject` builds it again, and `expectBreakingChangeNotices` checks those diagnostics carry the record's notices
     RelayHarness.maxon           the shared half of the `relay-*` cases: a checkout staged around a fake slot compiler, and the swap, crash, flood and oversize triggers it obeys
@@ -220,10 +223,11 @@ tests/
     ImageHeaders.maxon                      the image-format half: where an ELF, a PE or a Mach-O puts `.text`, read from the file's own headers
     LoggedStub.maxon                        the logging-stub half: `loggedStubEnvironment` puts a `debugserver` wrapper first on `PATH` that logs to the given file and writes its process id beside it (`loggedStubProcessId`), `roundStubLog` names one round's log, `stubLogTail` and `stubReapedTheProgram` read a log, and `requireNothingDefunct` fails a round that left the program or its stub defunct
     ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows of a program's own processes: those that name it, their descendants and process-group members, and a `debugserver` attached to any of them, `stateRowOf` and `GoneStateRow`: a process's leading `ps` columns and each debug stub's, or `GoneStateRow` once the process has ended (`alive` where the host has no `ps`), for a case that watches a program until it ends, `placeOf`: whether a process is listed, its parent, whether it is defunct and whether that parent is a debug stub, `defunctAmong`: the `ps` rows of the given processes that are defunct, and `sampledStack` and `sampledStubs`: `sample` reports of a hung process and of the debug stubs, for a failure message
-    StubProxy.maxon                         the scripted-stub half: `fixtures/stubproxy` built as an executable named `debugserver` (`DebugServerName`, the one spelling of the stub's name the `debug/` helpers use), and the environments that put it first on `PATH` for one session
-    ReplSession.maxon                       `ReplSession`: a `debug` REPL spawned over a program, fed commands one at a time, whose transcript is read until a wording appears; a REPL that outlives its deadline is sampled before it is ended, and `evidence` carries the reports; `processId` names the REPL's own process
+    StubProxy.maxon                         the scripted-stub half: `fixtures/stubproxy` built as an executable named `debugserver` (`DebugServerName`, the one spelling of the stub's name the `debug/` helpers use), and the environments that put it first on `PATH` for one session; `probeAnsweredProxyEnvironment` and `probeSwallowedProxyEnvironment` answer or swallow the first resume after a breakpoint is lifted (the detach's probe), and `traceAfterTheInterrupt` cuts a trace to what the proxy saw after the first interrupt
+    ReplSession.maxon                       `ReplSession`: a `debug` REPL spawned over a program with any extra `debug` options, fed commands one at a time, whose transcript is read until a wording appears; a REPL that outlives its deadline is sampled before it is ended, and `evidence` carries the reports; `processId` names the REPL's own process
     ThreadBurst.maxon                       `fixtures/threadburst` helpers: `burstProcessId` reads the program's recorded process id, `killedOutright` kills it
     fixtures/threadburst/main.maxon.fixture   the thread-burst program: it records its process id, starts busy workers, and writes a marker when it runs to its own end - stored name only, see rule 1
+    fixtures/blockedthenexit/main.maxon.fixture   the blocked program: it records its process id, then blocks reading a pipe, waiting for a child that reads one, or sleeping until a release file appears, as `BLOCKED_THEN_EXIT_MODE` says, and exits 7 once let go - stored name only, see rule 1
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it
     byte-identical-debug-info.maxtest       the sidecar never decides an instruction, so the image is the same with and without it
     byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
@@ -256,6 +260,10 @@ tests/
     a-stub-answer-that-is-not-an-acknowledgement-refuses-the-breakpoint.maxtest      through the stub proxy, a `Z0` answered with another request's reply is refused and never reported set
     a-stub-report-that-the-program-ended-fails-a-waiting-detach-at-once.maxtest      through the stub proxy, a `D` answered with an exit report fails at once rather than after the reply budget
     a-stop-the-stub-reports-late-is-held-and-reported-and-not-taken-for-an-answer.maxtest      through the stub proxy, a halt that follows an abandoned interrupt is held, reported, and not taken for the next request's answer
+    a-detach-from-a-program-blocked-in-a-system-call-lets-it-run-on.maxtest      through the stub proxy, a program paused while blocked in a system call is detached with no probe step before the `D`, and runs on to its own exit as the session's child
+    a-probe-answered-with-a-thread-end-still-lets-the-detach-go-ahead.maxtest      through the stub proxy, a detach probe answered with a thread ending leaves the program held, so the `D` follows and the program runs to its own end
+    a-probe-the-stub-never-answers-refuses-the-detach-and-sends-none.maxtest      through the stub proxy, a detach probe the stub swallows is drained with an interrupt and the detach is refused, with no `D` sent
+    a-stop-reply-naming-a-thread-that-is-not-hex-is-malformed-and-never-thread-zero.maxtest      through the stub proxy, a probe answered with a stop reply whose thread is not hex is dropped as malformed, so the detach is refused and no `D` is sent
     a-memory-read-fits-the-packet-size-the-stub-advertises.maxtest      through the stub proxy, a stub advertising a packet size below a memory window is read in requests and replies its buffer takes, and a String longer than the buffer renders whole
     a-memory-read-fits-the-default-packet-size-of-a-stub-that-advertises-none.maxtest      through the stub proxy, a stub advertising no packet size is spoken to in packets of at most the protocol default
     a-fault-stops-before-it-is-passed-on.maxtest      a fault stops the debugger first and reaches the runtime at the resume
@@ -931,13 +939,18 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
-  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, a fed run
-  whose child leaves a process holding its pipes ending at its deadline with that process ended while a clean
-  child's run returns promptly with its whole output, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
+  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
   and a refused shard naming the live-network cases the whole directory left out, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.
+- **`fedRuns/<case>.maxtest`** runs one scenario of the fed run (`maxon-bin/Testing/SpecFedRun.maxon`),
+  the harness's way of running a child with a stdin payload, through `maxon execute` over the single
+  program in `fedRuns/probe/`. It is not a `spec-test` gate and owns no fixture of its own, so `corpus.maxtest`
+  does not pair it: a fed run whose child leaves a process holding its pipes ends at its deadline with that
+  process ended while a clean child's run returns promptly with its whole output, a run ending at its child's
+  exit sees the exit while a process it started writes without pause, a child that never reads its feed is
+  judged by its own outcome, and a child that sleeps without reading a large feed ends at the deadline.
 - **`corpus.maxtest`** holds the pairing: every fixture directory has its `<case>.maxtest` beside
   it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.
 
