@@ -34,9 +34,10 @@ typealias AcknowledgedReceiverSlot = Slot with CompileReceiver.handle
 type CompilerLogHandler implements LogHandler
 	var unit as TraceUnit
 	let acknowledged as AcknowledgedReceiverSlot
+	let tailStall as StallMilliseconds
 
 	static function create() returns CompilerLogHandler
-		return Self{unit: UnattributedTraceUnit, acknowledged: AcknowledgedReceiverSlot.create("CompilerLogHandler.acknowledged")}
+		return Self{unit: UnattributedTraceUnit, acknowledged: AcknowledgedReceiverSlot.create("CompilerLogHandler.acknowledged"), tailStall: tailStallFromEnvironment()}
 	end 'create'
 
 	export function attribute(traceUnit TraceUnit)
@@ -55,6 +56,8 @@ type CompilerLogHandler implements LogHandler
 		let target = self.acknowledged.held()
 
 		try target.logFlushed(target.clone()) otherwise panic("CompilerLogHandler.flushThen: the run waiting for its log to drain refused the acknowledgement — it holds its handle until the acknowledgement arrives")
+
+		pauseServiceTail(self.tailStall)
 	end 'flushThen'
 
 	export function releaseAcknowledged()

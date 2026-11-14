@@ -262,14 +262,16 @@ end 'FrontEndBaseline'
 //
 // ⚠ **IT IS HANDED `cpu`, `os` AND THE FLAG, NOT THE PROJECT'S `ConditionFacts`**, for `BackendWorker`'s reason:
 // a `spawn`'s factory arguments are MOVED, and the project keeps its `Target` for the rest of the compile.
-export type FrontEndWorker
+export type FrontEndWorker implements Fenceable
 	let tools as FrontEndTools
 	let baselines as FrontEndBaselineSlot
 	let reaches as LiveReachSlot
+	let arrivals as FenceCell
+	let tailStall as StallMilliseconds
 	var slot as isolated FrontEndJob
 
-	static function create(cpu CpuArch, os Os, debugStream bool) returns Self
-		return Self{tools: FrontEndTools.create(cpu, os: os, debugStream: debugStream), baselines: FrontEndBaselineSlot.create(FrontEndWorkerBaselinesSlotName), reaches: LiveReachSlot.create(FrontEndWorkerReachesSlotName), slot: FrontEndJob.awaitingWork()}
+	static function create(cpu CpuArch, os Os, debugStream bool, arrivals FenceCell, tailStall StallMilliseconds) returns Self
+		return Self{tools: FrontEndTools.create(cpu, os: os, debugStream: debugStream), baselines: FrontEndBaselineSlot.create(FrontEndWorkerBaselinesSlotName), reaches: LiveReachSlot.create(FrontEndWorkerReachesSlotName), arrivals: arrivals, tailStall: tailStall, slot: FrontEndJob.awaitingWork()}
 	end 'create'
 
 	export function runThen(job isolated FrontEndJob, generation DrainGeneration, drainJob ElementIndex, receiver CompileReceiver.handle)
@@ -281,7 +283,13 @@ export type FrontEndWorker
 				serviceStopped then return
 			end 'why'
 		end 'refused'
+
+		pauseServiceTail(self.tailStall)
 	end 'runThen'
+
+	export function fence(ticket FenceTicket)
+		self.arrivals.publish(ticket)
+	end 'fence'
 
 	function worked(job isolated FrontEndJob) returns isolated FrontEndJob
 		let idle = swap self.slot with job
@@ -562,8 +570,14 @@ module type FrontEndPool
 	function endRetirement(project Project)
 		let probe = self.retireProbe.take()
 		probe.resume()
-		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
+		self.recordSettled(project, probe: probe)
 	end 'endRetirement'
+
+	// The fence comes before the bracket closes, or the last answers' frees land in the next row.
+	function recordSettled(project Project, probe PhaseProbe)
+		project.retiredWorkers.fence.settle()
+		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
+	end 'recordSettled'
 
 	module function retirementIsFinished() returns bool
 		return self.retiring == 0
@@ -653,7 +667,7 @@ module type FrontEndPool
 			landed.push(LexLanded.of(path, outcome: outcome))
 		end 'landInSourcePathOrder'
 
-		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
+		self.recordSettled(project, probe: probe)
 		self.sampleLevelsAfter(project, kind: FrontEndDrainKind.lexing)
 
 		return landed
@@ -711,7 +725,7 @@ module type FrontEndPool
 		let probe = drain.resumedProbe()
 		let artifacts = landParses(project, queries: queries, outcomes: drain.outcomes, slots: drain.slots)
 
-		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
+		self.recordSettled(project, probe: probe)
 		self.sampleLevelsAfter(project, kind: FrontEndDrainKind.parsing)
 		return artifacts
 	end 'finishParse'
@@ -766,6 +780,7 @@ module type FrontEndPool
 
 		self.spent = PoolPhaseCosts.create(FrontEndStage.allCases.count())
 		project.retiredWorkers.frontEnd.keep(self.workers)
+		project.retiredWorkers.fence.dismiss()
 		self.workers = FrontEndWorkerHandleArray.create(0)
 		self.inProcess.clear()
 		self.baseline.clear()
@@ -780,7 +795,10 @@ module type FrontEndPool
 		let wanted = PoolSizing.forJobs(filesDispatched).workerCount
 
 		while self.workers.count() < wanted 'eachMissingWorker'
-			self.workers.push(spawn FrontEndWorker.create(project.target.cpu, os: project.target.os, debugStream: project.debugStream))
+			let arrivals = newFenceCell()
+			let worker = spawn FrontEndWorker.create(project.target.cpu, os: project.target.os, debugStream: project.debugStream, arrivals: arrivals.clone(), tailStall: project.session.tailStall)
+			project.retiredWorkers.fence.enroll(worker.clone() as Fenceable.handle, arrivals: arrivals)
+			self.workers.push(worker)
 			self.adopted.push(false)
 			self.heldRevisions.push(0)
 		end 'eachMissingWorker'

@@ -120,14 +120,16 @@ end 'VersioningAnswer'
 // ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND THE SCHEDULE AS SCALARS**, for `BackendWorker`'s
 // reason: a `spawn`'s factory arguments are MOVED, and a record or a union box the driver still holds
 // would be a second owner.
-export type StdPassWorker
+export type StdPassWorker implements Fenceable
 	let reducesDivision as bool
 	let budget as HoistPressureBudget
 	let schedule as immutable StdFanOutStepArray
+	let arrivals as FenceCell
+	let tailStall as StallMilliseconds
 	var slot as isolated StdUnit
 
-	static function create(cpu CpuArch, os Os, steps immutable StdFanOutStepArray) returns Self
-		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, slot: StdUnit.empty(0)}
+	static function create(cpu CpuArch, os Os, steps immutable StdFanOutStepArray, arrivals FenceCell, tailStall StallMilliseconds) returns Self
+		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, arrivals: arrivals, tailStall: tailStall, slot: StdUnit.empty(0)}
 	end 'create'
 
 	export function runThen(unit isolated StdUnit, job ElementIndex, receiver CompileReceiver.handle)
@@ -139,7 +141,13 @@ export type StdPassWorker
 				serviceStopped then return
 			end 'why'
 		end 'refused'
+
+		pauseServiceTail(self.tailStall)
 	end 'runThen'
+
+	export function fence(ticket FenceTicket)
+		self.arrivals.publish(ticket)
+	end 'fence'
 
 	function worked(unit isolated StdUnit) returns isolated StdUnit
 		let idle = swap self.slot with unit
@@ -296,7 +304,10 @@ export type StdPassRun
 		let workers = StdPassWorkerHandleArray.create(sizing.workerCount, zeroed: false)
 
 		for _ in 0 upto sizing.workerCount 'eachWorker'
-			workers.push(spawn StdPassWorker.create(self.project.target.cpu, os: self.project.target.os, steps: freeze self.members.clone()))
+			let arrivals = newFenceCell()
+			let worker = spawn StdPassWorker.create(self.project.target.cpu, os: self.project.target.os, steps: freeze self.members.clone(), arrivals: arrivals.clone(), tailStall: self.project.session.tailStall)
+			self.project.retiredWorkers.fence.enroll(worker.clone() as Fenceable.handle, arrivals: arrivals)
+			workers.push(worker)
 		end 'eachWorker'
 
 		let dispatch = PoolDispatch.create(self.sizes, workerCount: sizing.workerCount as PoolSize, assignment: PoolAssignment.staticShare)
@@ -339,6 +350,7 @@ export type StdPassRun
 			end 'debugging'
 
 			self.project.retiredWorkers.stdPass.keep(state.workers)
+			self.project.retiredWorkers.fence.dismiss()
 		end 'aPoolRan'
 
 		for job in 0 upto self.jobs.count() 'foldOriginsInIndexOrder'

@@ -1,0 +1,35 @@
+// Counted bytes follow the length of the environment and the paths a compile reads, so the compared
+// builds get cache names and stall values of equal length.
+let StallWriterCacheDirName = "run-cache-writer"
+let UnstalledColdCacheDirName = "run-cache-a"
+let StalledColdCacheDirName = "run-cache-b"
+
+let TailStallVariableName = "MAXON_TEST_SERVICE_TAIL_STALL_MS"
+let NoStall = "00"
+let StalledTail = "40"
+let NanosColumn = "nanos"
+let LeastStallEffectNanos = 200000000
+
+test 'a compile whose services stall after every answer reports the memory of one whose services do not'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "identical-cold-compiles-report-identical-memory-under-stalled-service-tails", fixture: "uneven-program")
+
+	_ = builtMetricsTable(staged, label: "output writer", runCacheDirName: StallWriterCacheDirName, extraVariables: tailStall(NoStall))
+
+	let unstalled = builtMetricsTable(staged, label: "unstalled cold", runCacheDirName: UnstalledColdCacheDirName, extraVariables: tailStall(NoStall))
+	let stalled = builtMetricsTable(staged, label: "stalled cold", runCacheDirName: StalledColdCacheDirName, extraVariables: tailStall(StalledTail))
+
+	let unstalledNanos = try int.fromString(unstalled.cellOf(TotalRowKind, name: WholeCompileRowName, column: NanosColumn)) otherwise panic("the unstalled build's total row holds no count of nanoseconds")
+	let stalledNanos = try int.fromString(stalled.cellOf(TotalRowKind, name: WholeCompileRowName, column: NanosColumn)) otherwise panic("the stalled build's total row holds no count of nanoseconds")
+	Expect.greaterThan(stalledNanos, than: unstalledNanos + LeastStallEffectNanos, message: "the stalled build took {stalledNanos} ns against the unstalled build's {unstalledNanos} ns, so {TailStallVariableName}={StalledTail} stalled no service: the two builds compared below would agree whether or not a stalled tail moves memory between rows.")
+
+	requireIdenticalMemory(unstalled, second: stalled, kind: "stalled")
+
+	discardStagedDir(staged)
+end 'a compile whose services stall after every answer reports the memory of one whose services do not'
+
+function tailStall(milliseconds String) returns EnvMap
+	let variables = EnvMap.create()
+	variables.upsert(TailStallVariableName, value: milliseconds)
+
+	return variables
+end 'tailStall'

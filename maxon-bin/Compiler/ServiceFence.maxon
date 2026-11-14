@@ -1,0 +1,98 @@
+export typealias FenceTicket = int(0 to u64.max)
+export typealias StallMilliseconds = int(0 to 60000)
+
+let TailStallVariable = "MAXON_TEST_SERVICE_TAIL_STALL_MS"
+
+export typealias FenceCell = SharedValue with FenceTicket
+
+// A `fence` message takes only a scalar and frees nothing after it publishes its arrival: a managed
+// payload dropped after the publish would be the free the fence exists to wait out.
+export interface Fenceable
+	function fence(mutable self, ticket FenceTicket)
+end 'Fenceable'
+
+export function tailStallFromEnvironment() returns StallMilliseconds
+	let text = try Process.environmentVariable(TailStallVariable) otherwise (e) 'unset'
+		match e 'error'
+			variableUnset then return 0
+			environmentUnreadable then return 0
+			pathUnavailable then return 0
+		end 'error'
+	end 'unset'
+
+	let milliseconds = try int.fromString(text) otherwise panic("{TailStallVariable} is '{text}', which is not a count of milliseconds")
+
+	if milliseconds < 0 or milliseconds > 60000 'outOfRange'
+		panic("{TailStallVariable} is {milliseconds}, which is outside 0 to 60000 milliseconds")
+	end 'outOfRange'
+
+	return milliseconds as StallMilliseconds
+end 'tailStallFromEnvironment'
+
+export function pauseServiceTail(stall StallMilliseconds)
+	if stall > 0 'stalling'
+		sleep(stall as Milliseconds)
+	end 'stalling'
+end 'pauseServiceTail'
+
+export function newFenceCell() returns FenceCell
+	return FenceCell.create(0 as FenceTicket)
+end 'newFenceCell'
+
+type FenceMember
+	export let handle as Fenceable.handle
+	export let arrivals as FenceCell
+
+	static function of(handle Fenceable.handle, arrivals FenceCell) returns Self
+		return Self{handle: handle, arrivals: arrivals}
+	end 'of'
+end 'FenceMember'
+
+typealias FenceMemberArray = Array with FenceMember
+
+export type ServiceFence
+	var members as FenceMemberArray
+	var ticket as FenceTicket
+
+	export static function create() returns ServiceFence
+		return Self{members: FenceMemberArray.create(0), ticket: 0}
+	end 'create'
+
+	export function enroll(handle Fenceable.handle, arrivals FenceCell)
+		self.members.push(FenceMember.of(handle, arrivals: arrivals))
+	end 'enroll'
+
+	// A member drops each message's payloads after its handler returns, and runs messages in order, so
+	// an arrived `fence` means no free from an earlier answer is still to come.
+	export function settle()
+		if self.members.count() == 0 'nobodyToWaitFor'
+			return
+		end 'nobodyToWaitFor'
+
+		self.ticket = self.ticket + 1
+
+		for member in self.members 'eachMember'
+			try member.handle.fence(self.ticket) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull then panic("ServiceFence.settle: an enrolled service's mailbox is full, so it cannot take the fence that waits for its last message to finish")
+					serviceStopped then panic("ServiceFence.settle: an enrolled service stopped while the fence still held its handle")
+				end 'why'
+			end 'refused'
+		end 'eachMember'
+
+		for member in self.members 'eachArrival'
+			while member.arrivals.current() < self.ticket 'awaitingTheFence'
+				Scheduler.yield()
+			end 'awaitingTheFence'
+		end 'eachArrival'
+	end 'settle'
+
+	export function dismiss()
+		self.settle()
+		self.members.clear()
+	end 'dismiss'
+
+	export function release()
+		self.members.clear()
+	end 'release'
+end 'ServiceFence'

@@ -478,18 +478,20 @@ end 'lowerAndSplitUnit'
 // REFUSAL is rendered against (`refuseForRegisterPressure`): a pool colouring against one pool
 // while E5001 measured a deficit against another would be a diagnostic about a machine nobody
 // compiled for.
-export type BackendWorker
+export type BackendWorker implements Fenceable
 	var target as Target
 	let abi as immutable CalleeAbiTable
 	var usesGt as bool
 	let pool as RegMask
 	let callerSaved as RegMask
 	let file as RegisterFile
+	let arrivals as FenceCell
+	let tailStall as StallMilliseconds
 	var slot as isolated BackendUnit
 
-	static function create(cpu CpuArch, os Os, abi isolated CalleeAbiTable, usesGt bool) returns Self
+	static function create(cpu CpuArch, os Os, abi isolated CalleeAbiTable, usesGt bool, arrivals FenceCell, tailStall StallMilliseconds) returns Self
 		let target = Target.create(cpu, os: os)
-		return Self{target: target, abi: freeze abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), slot: BackendUnit.awaitingABody(0)}
+		return Self{target: target, abi: freeze abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), arrivals: arrivals, tailStall: tailStall, slot: BackendUnit.awaitingABody(0)}
 	end 'create'
 
 	// The isel is handed a `Target` of its own rather than this worker's: the driver's E5001 re-run builds
@@ -514,7 +516,13 @@ export type BackendWorker
 				serviceStopped then return
 			end 'why'
 		end 'refused'
+
+		pauseServiceTail(self.tailStall)
 	end 'answer'
+
+	export function fence(ticket FenceTicket)
+		self.arrivals.publish(ticket)
+	end 'fence'
 
 	function worked(unit isolated BackendUnit) returns isolated BackendUnit throws RegAllocRefusal
 		let idle = swap self.slot with unit
@@ -682,7 +690,10 @@ export type BackendRun
 		let workers = BackendWorkerHandleArray.create(self.sizing.workerCount, zeroed: false)
 
 		for _ in 0 upto self.sizing.workerCount 'eachWorker'
-			workers.push(spawn BackendWorker.create(self.target.cpu, os: self.target.os, abi: self.abi.clone(), usesGt: self.usesGt))
+			let arrivals = newFenceCell()
+			let worker = spawn BackendWorker.create(self.target.cpu, os: self.target.os, abi: self.abi.clone(), usesGt: self.usesGt, arrivals: arrivals.clone(), tailStall: self.project.session.tailStall)
+			self.project.retiredWorkers.fence.enroll(worker.clone() as Fenceable.handle, arrivals: arrivals)
+			workers.push(worker)
 		end 'eachWorker'
 
 		let dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(self.stdModule.functions, blocks: self.stdModule.blocks), workerCount: self.sizing.workerCount as PoolSize, assignment: PoolAssignment.firstFree)
@@ -736,6 +747,7 @@ export type BackendRun
 		end 'debugging'
 
 		self.project.retiredWorkers.backend.keep(poolState.workers)
+		self.project.retiredWorkers.fence.dismiss()
 
 		if poolState.refused < self.funcCount 'aFunctionDidNotFitTheMachine'
 			try refuseForRegisterPressure(self.project, stdModule: self.stdModule, funcIndex: poolState.refused, target: self.target, abi: self.abi, usesGt: self.usesGt, pool: self.pool, callerSaved: self.callerSaved, file: self.file)

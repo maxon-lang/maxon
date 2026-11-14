@@ -155,14 +155,14 @@ end 'no fixture is stored as a source maxon fmt would rewrite'
 // load commands, so two builds written to two names differ within the first kilobyte for a reason that
 // is not the worker count. The output path is therefore a confound this corpus CONTROLS: a case that
 // compares two builds gives both the same path and keeps the first with `retainedAside`.
-export function spawnPinnedBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
+export function spawnPinnedBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName, extraVariables EnvMap = EnvMap.create()) returns CollectedOutput
 	let source = staged if wholeDirectory else staged.join("{StagedProgramFileName}")
-	let environment = pinnedEnvironment(staged, processors: processors, privateRunCache: privateRunCache, runCacheDirName: runCacheDirName)
+	let environment = pinnedEnvironment(staged, processors: processors, privateRunCache: privateRunCache, runCacheDirName: runCacheDirName, extraVariables: extraVariables)
 
 	return spawnBuild(source, staged: staged, output: executableIn(staged, stem: OutputFileStem), label: label, extraArguments: extraArguments, environment: environment)
 end 'spawnPinnedBuild'
 
-function pinnedEnvironment(staged FilePath, processors ProcessorPin, privateRunCache bool, runCacheDirName String) returns Environment
+function pinnedEnvironment(staged FilePath, processors ProcessorPin, privateRunCache bool, runCacheDirName String, extraVariables EnvMap) returns Environment
 	let overrides = EnvMap.create()
 
 	match processors 'pin'
@@ -173,6 +173,10 @@ function pinnedEnvironment(staged FilePath, processors ProcessorPin, privateRunC
 	if privateRunCache 'isolated'
 		overrides.upsert(CacheRootVariable, value: staged.join(runCacheDirName).toString())
 	end 'isolated'
+
+	for (name, value) in extraVariables 'eachExtra'
+		overrides.upsert(name, value: value)
+	end 'eachExtra'
 
 	return Environment.inheritUpdating(overrides) if overrides.count() > 0 else Environment.inherit
 end 'pinnedEnvironment'
@@ -195,7 +199,7 @@ end 'pinnedEnvironment'
 			arguments.push(word)
 		end 'eachWord'
 
-		let run = spawnIn(Executable.path(shell), arguments: arguments, staged: staged, what: "the '{label}' build, paused", environment: pinnedEnvironment(staged, processors: ProcessorPin.machine, privateRunCache: true, runCacheDirName: PrivateRunCacheDirName), deadline: WaitDeadline.within(PausedBuildTimeoutMs))
+		let run = spawnIn(Executable.path(shell), arguments: arguments, staged: staged, what: "the '{label}' build, paused", environment: pinnedEnvironment(staged, processors: ProcessorPin.machine, privateRunCache: true, runCacheDirName: PrivateRunCacheDirName, extraVariables: EnvMap.create()), deadline: WaitDeadline.within(PausedBuildTimeoutMs))
 		try requireCompiled(run, label: label)
 
 		return metricsTableOf(staged, label: label)
@@ -377,13 +381,13 @@ function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailu
 	end 'compared'
 end 'requireIdenticalBytes'
 
-export function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName) returns MetricsTable throws TestFailure
-	_ = try meteredBuild(staged, label: label, extraArguments: StringArray.create(0), processors: ProcessorPin.machine, wholeDirectory: false, runCacheDirName: runCacheDirName)
+export function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName, extraVariables EnvMap = EnvMap.create()) returns MetricsTable throws TestFailure
+	_ = try meteredBuild(staged, label: label, extraArguments: StringArray.create(0), processors: ProcessorPin.machine, wholeDirectory: false, runCacheDirName: runCacheDirName, extraVariables: extraVariables)
 	return metricsTableOf(staged, label: label)
 end 'builtMetricsTable'
 
-export function meteredBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput throws TestFailure
-	let run = spawnPinnedBuild(staged, label: label, extraArguments: metricsArguments(staged, extraArguments: extraArguments), processors: processors, wholeDirectory: wholeDirectory, privateRunCache: true, runCacheDirName: runCacheDirName)
+export function meteredBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool, runCacheDirName String = PrivateRunCacheDirName, extraVariables EnvMap = EnvMap.create()) returns CollectedOutput throws TestFailure
+	let run = spawnPinnedBuild(staged, label: label, extraArguments: metricsArguments(staged, extraArguments: extraArguments), processors: processors, wholeDirectory: wholeDirectory, privateRunCache: true, runCacheDirName: runCacheDirName, extraVariables: extraVariables)
 	try requireCompiled(run, label: label)
 
 	return run

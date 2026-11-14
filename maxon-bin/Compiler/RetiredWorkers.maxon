@@ -27,14 +27,21 @@ export type RetiredWorkers
 	export var frontEnd as FrontEndRetirees
 	export var stdPass as StdPassRetirees
 	export var backend as BackendRetirees
+	export var fence as ServiceFence
 
 	export static function create() returns RetiredWorkers
-		return Self{frontEnd: FrontEndRetirees.create(), stdPass: StdPassRetirees.create(), backend: BackendRetirees.create()}
+		return Self{frontEnd: FrontEndRetirees.create(), stdPass: StdPassRetirees.create(), backend: BackendRetirees.create(), fence: ServiceFence.create()}
 	end 'create'
 
-	export function release()
+	// Leaves the fence's members: the pool that spawned them is still dispatching to them.
+	export function releaseRetired()
 		self.frontEnd.release()
 		self.stdPass.release()
 		self.backend.release()
+	end 'releaseRetired'
+
+	export function release()
+		self.fence.release()
+		self.releaseRetired()
 	end 'release'
 end 'RetiredWorkers'
