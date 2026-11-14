@@ -361,8 +361,10 @@ prove_lane() {
 
 	rm -rf "$directory"
 
-	git clone --quiet --no-checkout "$repo_root" "$directory"
+	git clone --quiet --no-checkout --config core.longpaths=true "$repo_root" "$directory"
 	git -C "$directory" checkout --quiet --detach "$sha"
+	[ -z "$(git -C "$directory" status --porcelain)" ] \
+		|| fail_proof "$lane" "checking out $sha, which left the checkout incomplete"
 
 	prove_step "$directory" "$lane" "fetching the frozen seed" bash ./scripts/fetch-seed.sh "$tag" "$lane" --from="../$(basename "$SeedDistDirectory")"
 	prove_step "$directory" "$lane" "the frozen seed's self-compile" "${self_compile_command[@]}"
