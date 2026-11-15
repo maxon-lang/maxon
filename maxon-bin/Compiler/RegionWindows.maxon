@@ -2,6 +2,7 @@ enum WindowKind
 	modify
 	oneStatement
 	acquire
+	lentArm
 end 'WindowKind'
 
 type OpenWindow
@@ -1307,13 +1308,48 @@ end 'RegionFacts'
 
 let noRegionFacts = RegionFacts.unwritten
 
+function windowIsAStrandBlock(window OpenWindow) returns bool
+	return window.kind == WindowKind.modify or window.kind == WindowKind.acquire
+end 'windowIsAStrandBlock'
+
+function windowIsABlockScope(window OpenWindow) returns bool
+	return windowIsAStrandBlock(window) or window.kind == WindowKind.lentArm
+end 'windowIsABlockScope'
+
+// A lent arm only pauses outer data: it never guards a strand, forbids a wait or confines a
+// returned value, so these two skip it. A read-only reason or call label asks innermostPausingWindowOf.
 function windowIsOpen(windows WindowStack) returns bool
-	return not windows.isEmpty()
+	for window in windows 'eachWindow'
+		if window.kind != WindowKind.lentArm 'aRegionWindow'
+			return true
+		end 'aRegionWindow'
+	end 'eachWindow'
+
+	return false
 end 'windowIsOpen'
 
+function innermostRegionWindowPosition(windows WindowStack) returns ElementIndex
+	var position = windows.count()
+
+	while position > 0 'outwardFromTheInnermost'
+		position = position - 1
+		let window = try windows.get(position) otherwise panic("innermostRegionWindowPosition: windows.get OOB at {position} below the count just read")
+
+		if window.kind != WindowKind.lentArm 'aRegionWindow'
+			return position
+		end 'aRegionWindow'
+	end 'outwardFromTheInnermost'
+
+	panic("innermostRegionWindowPosition: asked with no window open — every caller checks `windowIsOpen` first")
+end 'innermostRegionWindowPosition'
+
 function innermostWindowOf(windows WindowStack) returns OpenWindow
-	return try windows.last() otherwise panic("innermostWindowOf: asked with no window open — every caller checks `windowIsOpen` first")
+	return try windows.get(innermostRegionWindowPosition(windows)) otherwise panic("innermostWindowOf: the position came from innermostRegionWindowPosition")
 end 'innermostWindowOf'
+
+function innermostPausingWindowOf(windows WindowStack) returns OpenWindow
+	return try windows.last() otherwise panic("innermostPausingWindowOf: asked with no window open — every caller checks `windows.isEmpty()` first")
+end 'innermostPausingWindowOf'
 
 function capabilityWithinWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
 	if windows.isEmpty() 'noWindow'
@@ -1330,7 +1366,7 @@ function capabilityWithinExplicitWindows(windows WindowStack, value ValueId, int
 		position = position - 1
 		let window = try windows.get(position) otherwise panic("capabilityWithinExplicitWindows: windows.get OOB at {position} below the count just read")
 
-		if window.kind == WindowKind.modify or window.kind == WindowKind.acquire 'anExplicitWindow'
+		if windowIsABlockScope(window) 'anExplicitWindow'
 			return capabilityWithinWindowAt(windows, position: position, value: value, intrinsic: intrinsic)
 		end 'anExplicitWindow'
 	end 'outwardFromTheInnermost'
@@ -1339,7 +1375,7 @@ function capabilityWithinExplicitWindows(windows WindowStack, value ValueId, int
 end 'capabilityWithinExplicitWindows'
 
 function windowOpensARoot(window OpenWindow) returns bool
-	return not window.opensAField and window.kind != WindowKind.acquire
+	return not window.opensAField and window.kind != WindowKind.acquire and window.kind != WindowKind.lentArm
 end 'windowOpensARoot'
 
 enum WindowStanding
@@ -1368,7 +1404,7 @@ function standingInWindowAt(windows WindowStack, position ElementIndex, value Va
 end 'standingInWindowAt'
 
 function valueIsOutsideInnermostWindow(windows WindowStack, value ValueId) returns bool
-	return match standingInWindowAt(windows, position: windows.count() - 1, value: value) 'standing'
+	return match standingInWindowAt(windows, position: innermostRegionWindowPosition(windows), value: value) 'standing'
 		anEnclosingRoot or
 		outerData gives true
 		theOpenedRoot or
@@ -1440,7 +1476,7 @@ function modifyWindowCount(windows WindowStack) returns ElementIndex
 	var count = 0 as ElementIndex
 
 	for window in windows 'eachWindow'
-		if window.kind == WindowKind.modify or window.kind == WindowKind.acquire 'anExplicitBlock'
+		if windowIsAStrandBlock(window) 'anExplicitBlock'
 			count = count + 1
 		end 'anExplicitBlock'
 	end 'eachWindow'

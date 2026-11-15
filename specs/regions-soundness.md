@@ -3325,7 +3325,7 @@ end 'main'
 ```
 
 <!-- test: error.an-isolated-part-read-through-a-join-cannot-reach-an-isolated-field-store -->
-A store into an `isolated` field takes an `isolated` value, so an `isolated` part of a holder that reaches it through a conditional expression, a `match` expression's `gives` arms, the payload bound directly or the holder's own `isolated` field is refused as the bare read is, outside a `modify` block.
+A store into an `isolated` field takes an `isolated` value, so an `isolated` part of a holder that reaches it through a `match` expression's `gives` arms or the holder's own `isolated` field is refused as the bare read is, outside a `modify` block.
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -3352,13 +3352,6 @@ type Shelf
 	end 'holding'
 end 'Shelf'
 
-function storeTernary(holder Holder, shelf Shelf, flag bool)
-	match holder.slot 'take'
-		full(bytes) then shelf.bytes = bytes if flag else ByteArray.create(0)
-		empty then print("empty\n")
-	end 'take'
-end 'storeTernary'
-
 function storeGives(holder Holder, shelf Shelf)
 	let got = match holder.slot 'take'
 		full(bytes) gives bytes
@@ -3367,13 +3360,6 @@ function storeGives(holder Holder, shelf Shelf)
 
 	shelf.bytes = got
 end 'storeGives'
-
-function storeDirect(holder Holder, shelf Shelf)
-	match holder.slot 'take'
-		full(bytes) then shelf.bytes = bytes
-		empty then print("empty\n")
-	end 'take'
-end 'storeDirect'
 
 function storeFieldTernary(donor Shelf, shelf Shelf, flag bool)
 	shelf.bytes = donor.bytes if flag else ByteArray.create(0)
@@ -3388,9 +3374,7 @@ function main() returns ExitCode
 	let shelf = Shelf.holding(ByteArray.create(0))
 	let source = Shelf.holding(ByteArray.create(0))
 
-	storeTernary(holder, shelf: shelf, flag: true)
 	storeGives(holder, shelf: shelf)
-	storeDirect(holder, shelf: shelf)
 	storeFieldTernary(source, shelf: shelf, flag: true)
 	storeFieldDirect(source, shelf: shelf)
 
@@ -3405,11 +3389,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:28:34: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:35:21: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:44:34: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:50:16: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:54:16: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:28:21: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:36:16: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:40:16: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
 <!-- test: error.an-isolated-part-read-through-a-join-cannot-reach-an-isolated-field-store-inside-modify -->
@@ -3440,15 +3422,6 @@ type Shelf
 	end 'holding'
 end 'Shelf'
 
-function insideTernary(holder Holder, boxed isolated Shelf, flag bool)
-	modify boxed 'open'
-		match holder.slot 'take'
-			full(bytes) then boxed.bytes = bytes if flag else ByteArray.create(0)
-			empty then print("empty\n")
-		end 'take'
-	end 'open'
-end 'insideTernary'
-
 function insideGives(holder Holder, boxed isolated Shelf)
 	let got = match holder.slot 'take'
 		full(bytes) gives bytes
@@ -3459,15 +3432,6 @@ function insideGives(holder Holder, boxed isolated Shelf)
 		boxed.bytes = got
 	end 'open'
 end 'insideGives'
-
-function insideDirect(holder Holder, boxed isolated Shelf)
-	modify boxed 'open'
-		match holder.slot 'take'
-			full(bytes) then boxed.bytes = bytes
-			empty then print("empty\n")
-		end 'take'
-	end 'open'
-end 'insideDirect'
 
 function insideFieldTernary(donor Shelf, boxed isolated Shelf, flag bool)
 	modify boxed 'open'
@@ -3485,9 +3449,7 @@ function main() returns ExitCode
 	let holder = Holder.create()
 	let source = Shelf.holding(ByteArray.create(0))
 
-	insideTernary(holder, boxed: Shelf.holding(ByteArray.create(0)), flag: true)
 	insideGives(holder, boxed: Shelf.holding(ByteArray.create(0)))
-	insideDirect(holder, boxed: Shelf.holding(ByteArray.create(0)))
 	insideFieldTernary(source, boxed: Shelf.holding(ByteArray.create(0)), flag: true)
 	insideFieldDirect(source, boxed: Shelf.holding(ByteArray.create(0)))
 
@@ -3495,11 +3457,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:29:35: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:37:21: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:49:35: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:57:17: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:63:17: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:28:21: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:39:17: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:45:17: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
 <!-- test: a-fresh-isolated-value-through-a-join-reaches-an-isolated-field-store -->
@@ -4379,22 +4339,9 @@ The fallback of `try … otherwise` is a second arm of the value, so an `isolate
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-union Slot
-	full(bytes isolated ByteArray)
-	empty
-end 'Slot'
-
 enum MakeError implements Error
 	refused
 end 'MakeError'
-
-type Holder
-	export var slot as Slot
-
-	static function create() returns Self
-		return Self{slot: Slot.full(ByteArray.create(0))}
-	end 'create'
-end 'Holder'
 
 type Shelf
 	export var bytes as isolated ByteArray
@@ -4416,13 +4363,6 @@ function weigh(bytes isolated ByteArray) returns Count
 	return bytes.count()
 end 'weigh'
 
-function storeOtherwise(holder Holder, shelf Shelf, flag bool)
-	match holder.slot 'take'
-		full(bytes) then shelf.bytes = try makeOrFail(flag) otherwise bytes
-		empty then print("empty\n")
-	end 'take'
-end 'storeOtherwise'
-
 function storeOtherwiseField(donor Shelf, shelf Shelf, flag bool)
 	shelf.bytes = try makeOrFail(flag) otherwise donor.bytes
 end 'storeOtherwiseField'
@@ -4432,20 +4372,17 @@ function argOtherwiseField(donor Shelf, flag bool) returns Count
 end 'argOtherwiseField'
 
 function main() returns ExitCode
-	let holder = Holder.create()
 	let donor = Shelf.holding(ByteArray.create(0))
 	let shelf = Shelf.holding(ByteArray.create(0))
 
-	storeOtherwise(holder, shelf: shelf, flag: true)
 	storeOtherwiseField(donor, shelf: shelf, flag: true)
 	print("{argOtherwiseField(donor, flag: true)}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:44:65: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:50:47: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:54:46: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:30:47: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:34:46: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
 <!-- test: error.an-isolated-part-read-in-the-middle-arm-of-a-match-expression-cannot-reach-an-isolated-slot -->
@@ -4738,19 +4675,6 @@ The replacement `swap` stores into an `isolated` field takes an `isolated` value
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-union Slot
-	full(bytes isolated ByteArray)
-	empty
-end 'Slot'
-
-type Holder
-	export var slot as Slot
-
-	static function create() returns Self
-		return Self{slot: Slot.full(ByteArray.create(0))}
-	end 'create'
-end 'Holder'
-
 type Shelf
 	export var bytes as isolated ByteArray
 
@@ -4763,13 +4687,6 @@ function weigh(bytes isolated ByteArray) returns Count
 	return bytes.count()
 end 'weigh'
 
-function swapPayload(holder Holder, shelf Shelf) returns Count
-	match holder.slot 'take'
-		full(bytes) then return weigh(swap shelf.bytes with bytes)
-		empty then return 0
-	end 'take'
-end 'swapPayload'
-
 function swapField(donor Shelf, shelf Shelf) returns Count
 	return weigh(swap shelf.bytes with donor.bytes)
 end 'swapField'
@@ -4779,18 +4696,16 @@ function swapTernary(donor Shelf, shelf Shelf, flag bool) returns Count
 end 'swapTernary'
 
 function main() returns ExitCode
-	let holder = Holder.create()
 	let donor = Shelf.holding(ByteArray.create(0))
 	let shelf = Shelf.holding(ByteArray.create(0))
 
-	print("{swapPayload(holder, shelf: shelf)} {swapField(donor, shelf: shelf)} {swapTernary(donor, shelf: shelf, flag: true)}\n")
+	print("{swapField(donor, shelf: shelf)} {swapTernary(donor, shelf: shelf, flag: true)}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:32:55: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:38:37: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:42:38: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:18:37: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:22:38: 'donor.bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
 <!-- test: error.an-isolated-part-read-cannot-be-frozen -->
@@ -5731,7 +5646,7 @@ end 'main'
 ```
 
 <!-- test: error.a-closure-over-an-isolated-payload-cannot-hand-it-out-as-plain-data -->
-A closure that captures an `isolated` payload of a holder's union hands that region back from every call, so returning the call's result as plain data, storing it into a plain field, or returning or storing the closure itself gives a second path into the region the holder still owns, and each is refused.
+A closure that captures an `isolated` payload of a holder's union hands that region back from every call, so returning the call's result as plain data or returning the closure itself gives a second path into the region the holder still owns, and each is refused.
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -5752,15 +5667,6 @@ type Holder
 	end 'create'
 end 'Holder'
 
-type Pair
-	export var a as ByteArray
-	export var make as Maker
-
-	static function create() returns Self
-		return Self{a: ByteArray.create(0), make: function() gives ByteArray.create(0)}
-	end 'create'
-end 'Pair'
-
 function apply(make Maker) returns ByteArray
 	return make()
 end 'apply'
@@ -5772,13 +5678,6 @@ function returnResult(holder Holder) returns ByteArray
 	end 'take'
 end 'returnResult'
 
-function storeResult(holder Holder, pair Pair)
-	match holder.slot 'take'
-		full(bytes) then pair.a = apply(function() gives bytes)
-		empty then print("empty\n")
-	end 'take'
-end 'storeResult'
-
 function returnClosure(holder Holder) returns Maker
 	match holder.slot 'take'
 		full(bytes) then return function() gives bytes
@@ -5786,32 +5685,18 @@ function returnClosure(holder Holder) returns Maker
 	end 'take'
 end 'returnClosure'
 
-function storeClosure(holder Holder, pair Pair)
-	match holder.slot 'take'
-		full(bytes) then pair.make = function() gives bytes
-		empty then print("empty\n")
-	end 'take'
-end 'storeClosure'
-
 function main() returns ExitCode
 	let holder = Holder.create()
-	let pair = Pair.create()
 
 	returnResult(holder).push(1)
-	storeResult(holder, pair: pair)
-	pair.a.push(2)
 	returnClosure(holder)().push(3)
-	storeClosure(holder, pair: pair)
-	pair.make().push(4)
 	print("done\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:35:50: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:42:52: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:49:44: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
-error E3198: <fragment>:56:49: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:26:50: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:33:44: 'bytes' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
 <!-- test: a-closure-over-a-fresh-isolated-payload-hands-it-out-as-plain-data -->
@@ -6332,19 +6217,11 @@ function returnPayloadInner(holder Holder) returns ByteArray
 	end 'take'
 end 'returnPayloadInner'
 
-function storePayloadInner(holder Holder, pair Pair)
-	match holder.crate 'take'
-		full(blob) then pair.a = blob.inner()
-		empty then print("empty\n")
-	end 'take'
-end 'storePayloadInner'
-
 function main() returns ExitCode
 	let holder = Holder.create()
 	let pair = Pair.create()
 
 	storeFieldInner(holder, pair: pair)
-	storePayloadInner(holder, pair: pair)
 	print("{returnFieldInner(holder).count()} {returnPayloadInner(holder).count()} {pair.a.count()}\n")
 	return 0
 end 'main'
@@ -6353,7 +6230,6 @@ end 'main'
 error E3201: <fragment>:40:21: 'inner' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 error E3201: <fragment>:44:23: 'inner' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 error E3201: <fragment>:49:31: 'inner' hands back mutable data of the isolated region it opens; use it inside a `modify` block
-error E3201: <fragment>:56:33: 'inner' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 ```
 
 <!-- test: values-read-from-an-isolated-part-leave-freely -->
@@ -6496,7 +6372,7 @@ end 'main'
 ```
 
 <!-- test: error.an-isolated-payload-read-through-two-nested-helpers-is-a-read-of-the-part -->
-A helper that may hand back its argument hands back the part it was given however many times it is applied, so an `isolated` payload passed through two nested ones is refused at a plain return, a plain field store and an `isolated` parameter.
+A helper that may hand back its argument hands back the part it was given however many times it is applied, so an `isolated` payload passed through two nested ones is refused at a plain return and an `isolated` parameter.
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -6538,13 +6414,6 @@ function returnTwice(holder Holder) returns ByteArray
 	end 'take'
 end 'returnTwice'
 
-function storeTwice(holder Holder, pair Pair)
-	match holder.slot 'take'
-		full(bytes) then pair.a = echo(echo(bytes))
-		empty then print("empty\n")
-	end 'take'
-end 'storeTwice'
-
 function weighTwice(holder Holder) returns Count
 	match holder.slot 'take'
 		full(bytes) then return weigh(echo(echo(bytes)))
@@ -6556,15 +6425,13 @@ function main() returns ExitCode
 	let holder = Holder.create()
 	let pair = Pair.create()
 
-	storeTwice(holder, pair: pair)
 	print("{returnTwice(holder).count()} {weighTwice(holder)} {pair.a.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:36:32: 'echo' hands back mutable data of the isolated region it opens; use it inside a `modify` block
-error E3201: <fragment>:43:34: 'echo' hands back mutable data of the isolated region it opens; use it inside a `modify` block
-error E3201: <fragment>:50:38: 'echo' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+error E3201: <fragment>:43:38: 'echo' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 ```
 
 <!-- test: a-clone-of-an-isolated-part-read-is-a-clean-value -->

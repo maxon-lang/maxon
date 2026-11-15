@@ -4706,7 +4706,14 @@ extension Parser
 		// `dead` block for an exhaustive enum (created after the loop). `planMissIsUnreachable` is set
 		// for the dead block only, and the three travel to the dispatch as one `DispatchMiss`.
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
-		let lentRoots = self.lentArmRootsOf(scrut, scrutStart: scrutStart, scrutEnd: scrutEnd, isLentMatch: isEnumMatch and not deferredScrutinee and not isErrorUnionMatch)
+		let isLentMatch = isEnumMatch and not deferredScrutinee and not isErrorUnionMatch
+		let lentRoots = self.lentArmRootsOf(scrut, scrutStart: scrutStart, scrutEnd: scrutEnd, isLentMatch: isLentMatch)
+
+		// A frozen scrutinee lends nothing and an isolated one hands its payload out whole;
+		// frozen-union-iso-arm-write, imm-param-union-iso-arm-write and
+		// a-fresh-isolated-value-through-a-join-reaches-an-isolated-field-store pin both.
+		let scrutCapability = self.effectiveCapabilityOf(scrut)
+		let armsLendIsolatedPayloads = isLentMatch and not self.valueIsLinear(scrut) and scrutCapability != ValueCapability.immutable and scrutCapability != ValueCapability.isolated
 
 		// ⭐ **THE ENTRY BLOCK IS HELD BY ITS `BlockId`, NOT AS A SECOND NAME FOR `currentTestBlock`** —
 		// an IrBlock alias held across block-creating or block-mutating calls goes stale, and the arm loop
@@ -4929,10 +4936,12 @@ extension Parser
 				// (`enterErrorUnionArm`), as does an arm an `and fallthrough` reaches.
 				var armOwnsMemberBox = false
 				var armMemberBoxType = MaxonType.integer
+				var armLendsIsolatedPayload = false
 				let intervalMark = dispatchIntervals.count()
 
 				if isEnumMatch 'enumPattern'
 					arm = try self.collectEnumPatternIntervals(self.enumArmTable(enumMatch, errorUnion: errorUnion), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals, intervalMark: intervalMark)
+					armLendsIsolatedPayload = armsLendIsolatedPayloads and self.armCoversAnIsolatedPayload(arm, into: dispatchIntervals, intervalMark: intervalMark)
 
 					// An `and fallthrough` edge reaches this arm's BODY from a different case, and this arm's
 					// bindings sit at the head of that body — so they would destructure a case the value does
@@ -5014,6 +5023,10 @@ extension Parser
 				// `dropArmScopedOwned`) rather than accumulating there to be decref'd in the continuation,
 				// where a value defined in only one arm's block is garbage on every other arm's path.
 				let armOwnedFloor = self.bodyState.ownedBindings.count()
+
+				// Taken before the payload bindings load: after them, the payload would be outer data of
+				// its own arm.
+				let armValueFloor = self.bodyState.valueCapabilities.count() as ValueId
 				let deferredBindings = self.takeDeferredPatternBindings()
 				let hasPayloadBindings = arm.bindings.count() > 0 or deferredBindings.count() > 0
 				let opensArmScope = armOwnsMemberBox or hasPayloadBindings
@@ -5061,7 +5074,17 @@ extension Parser
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
 				let lentArmFloor = self.enterLentArm(lentRoots, scrutStart: scrutStart, scrutEnd: scrutEnd)
+
+				if armLendsIsolatedPayload 'openArmWindow'
+					self.openLentArmWindow(matchLabel, valueFloor: armValueFloor)
+				end 'openArmWindow'
+
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, destination: destination, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
+
+				if armLendsIsolatedPayload 'closeArmWindow'
+					self.closeLentArmWindow()
+				end 'closeArmWindow'
+
 				self.leaveLentArm(lentArmFloor)
 
 				if opensArmScope 'closeArmScope'
@@ -5446,6 +5469,34 @@ extension Parser
 
 		return floor
 	end 'enterLentArm'
+
+	function armCoversAnIsolatedPayload(arm EnumPatternArm, into DispatchIntervalArray, intervalMark ElementIndex) returns bool
+		let layout = requireEnumLayout(arm.payloadEnum)
+
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			if not self.armCoversTag(self.armDispatchTagOf(arm, payloadLayout: layout, index: ci), into: into, intervalMark: intervalMark) 'anotherArmsCase'
+				continue
+			end 'anotherArmsCase'
+
+			for field in layout.payloadsAt(ci) 'eachPayload'
+				if field.capability == ParamCapability.isolated 'anIsolatedSlot'
+					return true
+				end 'anIsolatedSlot'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return false
+	end 'armCoversAnIsolatedPayload'
+
+	function openLentArmWindow(label immutable ByteArray, valueFloor ValueId)
+		let windows = self.regionFactsForWrite().windows
+		windows.push(OpenWindow.create(label, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.lentArm, floor: valueFloor, openedValue: 0, holderValue: 0, holderField: 0, opensAField: false, ownerStatement: self.bodyState.statementStart))
+	end 'openLentArmWindow'
+
+	function closeLentArmWindow()
+		let windows = self.regionFactsForWrite().windows
+		_ = try windows.pop() otherwise panic("closeLentArmWindow: the window this arm pushed is gone from the stack it popped")
+	end 'closeLentArmWindow'
 
 	function leaveLentArm(floor ElementIndex)
 		while self.bodyState.lentArmRoots.count() > floor 'eachRoot'

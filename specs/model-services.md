@@ -1046,6 +1046,53 @@ end 'main'
 error E3221: <fragment>:23:18: the message 'go' may wait (it awaits a reply from 'S2' at line 25) while holding its own service; send the request with this service's handle and handle the reply in another message
 ```
 
+<!-- test: model-hand-af-h5-owned-payload-carries-handle -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `h5-owned-payload-carries-handle` of redteamAF.hand_af7, in capmodel `reggio/REPORTRTAF.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Hu
+	none
+	has(h isolated Hx)
+end 'Hu'
+
+type Hx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Hx'
+
+type Fx
+	var n as Num
+	var h as isolated Hx
+
+	static function create(n Num, h isolated Hx) returns Self
+		return Self{n: n, h: h}
+	end 'create'
+
+	export function put(me Fx.handle)
+		let _ = me
+		let u = Hu.has(Hx.create(1))
+		match u 'x1'
+			none then break
+			has(q) then self.h = q
+		end 'x1'
+	end 'put'
+end 'Fx'
+
+function main() returns ExitCode
+	let f = spawn Fx.create(0, h: Hx.create(0))
+	try f.put(f.clone()) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:30:16: cannot write 'h' through 'self', which is read-only while 'x1' is open
+```
+
 <!-- test: model-hand-ag-u1-none -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u1-none` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
 

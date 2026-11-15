@@ -1883,6 +1883,89 @@ end 'main'
 error E3207: <fragment>:51:27: 'eat' needs a writable parameter 'r' (it calls 'giveS', which writes 'r'); 'q' is read-only while 'm1' is open
 ```
 
+<!-- test: model-finding-ae-ro-union-iso-arm-write-modify -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `ro-union-iso-arm-write-modify` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Ub.u1(Bx.create(1))
+	modify bx 'm1'
+		match u 'x2'
+			u0 then break
+			u1 then bx.n = 3
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:23:12: cannot write 'n' through 'bx', which is read-only while 'x2' is open
+```
+
+<!-- test: model-finding-ae-ro-union-iso-arm-wait-modify -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `ro-union-iso-arm-wait-modify` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type S
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'S'
+
+function main() returns ExitCode
+	let _ = spawn S.create(0)
+	let bx = Bx.create(0) as isolated Bx
+	let u = Ub.u1(Bx.create(1))
+	modify bx 'm1'
+		match u 'x2'
+			u0 then break
+			u1 then bx.n = 3
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:36:12: cannot write 'n' through 'bx', which is read-only while 'x2' is open
+```
+
 <!-- test: model-finding-ae-iso-nonlinear-arm-write-own-root -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-nonlinear-arm-write-own-root` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
@@ -2263,6 +2346,92 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: model-finding-ae-modify-match-field-union-write-root -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `modify-match-field-union-write-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hd3
+	var n as Num
+	var u as Ub
+
+	static function create(n Num, u Ub) returns Self
+		return Self{n: n, u: u}
+	end 'create'
+end 'Hd3'
+
+function main() returns ExitCode
+	let h = Hd3.create(0, u: Ub.u1(Bx.create(1))) as isolated Hd3
+	modify h 'm1'
+		match h.u 'x2'
+			u0 then break
+			u1 then h.n = 3
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:31:12: cannot write 'n' through 'h', which is read-only while 'x2' is open
+```
+
+<!-- test: model-finding-ae-modify-match-field-union-write-other-field -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `modify-match-field-union-write-other-field` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hd3
+	var n as Num
+	var u as Ub
+
+	static function create(n Num, u Ub) returns Self
+		return Self{n: n, u: u}
+	end 'create'
+end 'Hd3'
+
+function main() returns ExitCode
+	let h = Hd3.create(0, u: Ub.u1(Bx.create(1))) as isolated Hd3
+	modify h 'm1'
+		match h.u 'x2'
+			u0 then break
+			u1 then h.u = Ub.u0
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:31:12: cannot write 'u' through 'h', which is read-only while 'x2' is open
 ```
 
 <!-- test: model-hand-ab-w-modify-root-linear-write -->
@@ -4560,6 +4729,72 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: model-hand-af-m-store-iso-slot -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `m-store-iso-slot` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Mx
+	m0(x Bx)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hs
+	var item as isolated Bx
+	var keep as Bx
+
+	static function create(item isolated Bx, keep Bx) returns Self
+		return Self{item: item, keep: keep}
+	end 'create'
+end 'Hs'
+
+type Sx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeB(b isolated Bx)
+		b.n = 1
+	end 'takeB'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Sx'
+
+function keepB(b Bx)
+	b.n = 7
+end 'keepB'
+
+function main() returns ExitCode
+	let hi = Hs.create(Bx.create(1), keep: Bx.create(2)) as isolated Hs
+	let rb = Bx.create(5) as isolated Bx
+	let _ = spawn Sx.create(0)
+	modify hi 'm1'
+		let u = Mx.m1(rb)
+		match u 'x2'
+			m0(x) then keepB(x)
+			m1(o) then hi.item = o
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:54:15: cannot write 'item' through 'hi', which is read-only while 'x2' is open
 ```
 
 <!-- test: model-hand-af-m-keep-into-window-obj -->

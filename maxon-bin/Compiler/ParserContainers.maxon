@@ -8410,7 +8410,7 @@ extension Parser
 
 	function anExplicitWindowIsOpen() returns bool
 		for window in self.regionFactsForRead().windows 'eachWindow'
-			if window.kind != WindowKind.oneStatement 'aBlock'
+			if windowIsAStrandBlock(window) 'aBlock'
 				return true
 			end 'aBlock'
 		end 'eachWindow'
@@ -8851,9 +8851,9 @@ extension Parser
 	end 'acquiredStateNameOf'
 
 	function windowOwnerState(window OpenWindow) returns ValueId throws AbsentError
-		if window.kind == WindowKind.acquire 'theBlockHoldsEveryName'
+		if window.kind == WindowKind.acquire or window.kind == WindowKind.lentArm 'ownsNoSingleState'
 			throw AbsentError.absent
-		end 'theBlockHoldsEveryName'
+		end 'ownsNoSingleState'
 
 		return try self.acquiredStateRootOf(window.openedValue)
 	end 'windowOwnerState'
@@ -9145,6 +9145,7 @@ extension Parser
 			modify gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave '{label}'; a value leaving a modify block must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
 			oneStatement gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave the statement that opens '{label}'; a value leaving a one-statement open must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
 			acquire gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave '{label}'; a value leaving an acquire block must be a value, immutable or a fresh isolated, because the services it names keep their state", line: at.line, column: at.column)
+			lentArm panic("valueLeavesWindowRefusal: a lent match arm is no region window, so innermostWindowOf never answers one")
 		end 'kind'
 	end 'valueLeavesWindowRefusal'
 
@@ -9587,15 +9588,15 @@ extension Parser
 	function readOnlyReason() returns ReadOnlyReason
 		let windows = self.regionFactsForRead().windows
 
-		if not windowIsOpen(windows) and self.statement.drainingLoops > 0 'aDrainedArray'
+		if windows.isEmpty() and self.statement.drainingLoops > 0 'aDrainedArray'
 			return ReadOnlyReason.whileDrained(String.from(self.statement.drainingLabel))
 		end 'aDrainedArray'
 
-		if not windowIsOpen(windows) 'noWindow'
+		if windows.isEmpty() 'noWindow'
 			return ReadOnlyReason.joinedData
 		end 'noWindow'
 
-		return ReadOnlyReason.whileOpen(String.from(innermostWindowOf(windows).label))
+		return ReadOnlyReason.whileOpen(String.from(innermostPausingWindowOf(windows).label))
 	end 'readOnlyReason'
 
 	function noteEditorBinding(binding VarInfo, line LineNumber, column ColumnNumber)
@@ -9641,6 +9642,7 @@ extension Parser
 			modify or
 			oneStatement gives "cannot wait inside '{String.from(window.label)}'; another coroutine could run while '{String.from(window.rootText)}' is open. Await before or after the block"
 			acquire gives "cannot wait inside '{String.from(window.label)}'; an acquire block holds its services and may not wait or acquire again. Await before or after the block"
+			lentArm panic("waitInsideWindowMessage: a lent match arm is no region window, so innermostWindowOf never answers one")
 		end 'kind'
 	end 'waitInsideWindowMessage'
 

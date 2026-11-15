@@ -847,6 +847,276 @@ end 'main'
 error E3204: <fragment>:18:3: 'keep' holds a record from outside 'fill' and cannot be reassigned while 'fill' is open
 ```
 
+<!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data -->
+The arm of a `match` over a union with an `isolated` payload is a window: data that existed before the arm is read-only in it, so `b.n = 5` is refused whether or not the arm names the payload.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Bk)
+end 'Sh'
+
+type Bk
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+end 'Bk'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(0)
+	let u = Sh.held(Bk.create(1))
+	match u 'x1'
+		none then break
+		held then b.n = 5
+	end 'x1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:30:13: cannot write 'n' through 'b', which is read-only while 'x1' is open
+```
+
+<!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-through-a-parameter -->
+A parameter is outer data of the arm, so the function cannot write the record it was handed there.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Bk)
+end 'Sh'
+
+type Bk
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+end 'Bk'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function bump(u Sh, c Bx)
+	match u 'x1'
+		none then break
+		held then c.n = 3
+	end 'x1'
+end 'bump'
+
+function main() returns ExitCode
+	let c = Bx.create(0)
+	bump(Sh.held(Bk.create(1)), c: c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:28:13: cannot write 'n' through 'c', which is read-only while 'x1' is open
+```
+
+<!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-through-self -->
+`match self.u` lends the payload of the field, and `self` is outer data inside the arm.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Bk)
+end 'Sh'
+
+type Bk
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+end 'Bk'
+
+type Hd
+	var n as Num
+	var u as Sh
+
+	static function create(n Num, u Sh) returns Self
+		return Self{n: n, u: u}
+	end 'create'
+
+	function bump()
+		match self.u 'x1'
+			none then break
+			held then self.n = 3
+		end 'x1'
+	end 'bump'
+end 'Hd'
+
+function main() returns ExitCode
+	let h = Hd.create(0, u: Sh.held(Bk.create(1)))
+	h.bump()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:28:14: cannot write 'n' through 'self', which is read-only while 'x1' is open
+```
+
+<!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-to-the-open-root -->
+Inside `modify h`, `h` is writable, but the arm of `match h.u` is a window within it, so the root is read-only there too.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Bk)
+end 'Sh'
+
+type Bk
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+end 'Bk'
+
+type Hd
+	var n as Num
+	var u as Sh
+
+	static function create(n Num, u Sh) returns Self
+		return Self{n: n, u: u}
+	end 'create'
+end 'Hd'
+
+function main() returns ExitCode
+	let h = Hd.create(0, u: Sh.held(Bk.create(1))) as isolated Hd
+	modify h 'm1'
+		match h.u 'x2'
+			none then break
+			held then h.n = 3
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:31:14: cannot write 'n' through 'h', which is read-only while 'x2' is open
+```
+
+<!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-call-that-writes-outer-data -->
+A call that needs a writable receiver is refused on outer data inside the arm.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Bk)
+end 'Sh'
+
+type Bk
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+end 'Bk'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(0)
+	let u = Sh.held(Bk.create(1))
+	match u 'x1'
+		none then break
+		held then b.bump()
+	end 'x1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:34:13: 'bump' needs a writable receiver at line 25; 'b' is read-only while 'x1' is open
+```
+
+<!-- test: a-match-arm-lending-an-isolated-payload-leaves-what-it-owns-writable -->
+An arm of a case with no `isolated` payload writes outer data, the payload is writable through its binding, outer data is read, and a counter that holds a number is written, so none of them is the window's business.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Bk)
+end 'Sh'
+
+type Bk
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+end 'Bk'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(0)
+	let u = Sh.held(Bk.create(1))
+	let v = Sh.none
+	var total = 0 as Num
+	match v 'x0'
+		none then b.n = 5
+		held then break
+	end 'x0'
+	match u 'x1'
+		none then b.n = 5
+		held(r) then r.code = 3
+	end 'x1'
+	let w = Sh.held(Bk.create(2))
+	match w 'x2'
+		none then break
+		held then total = total + b.n
+	end 'x2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: isolated-part-read-outside-block-refused -->
 `self.part` is an `isolated` field, and binding it with `let` is neither a move, an open nor a `swap`.
 

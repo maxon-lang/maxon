@@ -4165,6 +4165,120 @@ end 'main'
 error E3207: <fragment>:51:31: 'giveS' needs a writable parameter 'r' at line 35; 'q' is read-only while 'a1' is open
 ```
 
+<!-- test: model-finding-ae-state-union-iso-arm-write -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `state-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Cnt
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Cnt'
+
+type S
+	var n as Num
+	var u as Ub
+	var c as Cnt
+
+	static function create(n Num, u isolated Ub, c isolated Cnt) returns Self
+		return Self{n: n, u: merge u, c: merge c}
+	end 'create'
+
+	function go()
+		match self.u 'x1'
+			u0 then break
+			u1 then self.c.k = 3
+		end 'x1'
+	end 'go'
+end 'S'
+
+function main() returns ExitCode
+	let s = spawn S.create(0, u: Ub.u1(Bx.create(0)), c: Cnt.create(0))
+	acquire s 'a1'
+		s.go()
+	end 'a1' otherwise 's2'
+		let _ = 0 as Num
+	end 's2'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:37:12: cannot write 'k' through 'self.c', which is read-only while 'x1' is open
+```
+
+<!-- test: model-finding-ae-acquire-union-iso-arm-write -->
+The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `acquire-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Cnt
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Cnt'
+
+type S
+	var n as Num
+	var u as Ub
+	var c as Cnt
+
+	static function create(n Num, u isolated Ub, c isolated Cnt) returns Self
+		return Self{n: n, u: merge u, c: merge c}
+	end 'create'
+end 'S'
+
+function main() returns ExitCode
+	let s = spawn S.create(0, u: Ub.u1(Bx.create(0)), c: Cnt.create(0))
+	acquire s 'a1'
+		modify s 'm3'
+			match s.u 'x4'
+				u0 then break
+				u1 then s.c.k = 3
+			end 'x4'
+		end 'm3'
+	end 'a1' otherwise 's2'
+		let _ = 0 as Num
+	end 's2'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:41:13: cannot write 'k' through 's.c', which is read-only while 'x4' is open
+```
+
 <!-- test: model-hand-ab-w-acq-moves-outer -->
 <!-- unsupported-targets: wasm32-wasi -->
 The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-acq-moves-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
