@@ -8576,7 +8576,10 @@ extension Parser
 
 		if let settlingOp = try self.onlyUndecidedArmOp(arms) 'oneArmSettlesAfterParsing'
 			self.bodyState.undecidedResults.upsert(phi, value: settlingOp)
-			joined = ProvisionalForAUse
+
+			if joined != ValueCapability.temporary 'notAFreshJoin'
+				joined = ProvisionalForAUse
+			end 'notAFreshJoin'
 		end 'oneArmSettlesAfterParsing'
 
 		self.setValueCapability(phi, capability: joined)
@@ -8952,12 +8955,13 @@ extension Parser
 	function recoverIsolated(value ValueId, startIndex ElementIndex, site IsolatedRecoverySite) throws SourceParseError
 		try self.requireNotAnAcquiredState(value, verb: "frozen" if site == IsolatedRecoverySite.freeze else "moved", anchor: self.tokenAt(startIndex))
 
-		if self.isolateIfPossible(value) 'isolated'
+		let endIndex = self.argumentEndIndex(startIndex) if site == IsolatedRecoverySite.argument else self.pos
+
+		if self.isolateIfPossible(value, startIndex: startIndex, endIndex: endIndex) 'isolated'
 			return
 		end 'isolated'
 
 		let anchor = self.tokenAt(startIndex)
-		let endIndex = self.argumentEndIndex(startIndex) if site == IsolatedRecoverySite.argument else self.pos
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: startIndex, endIndex: endIndex, anchor: anchor)
 
 		let text = self.tokenTextFrom(startIndex, endIndex: endIndex)
@@ -9299,7 +9303,7 @@ extension Parser
 
 		match verdict 'verdict'
 			fits then self.promoteWhenHeld(value, holder: holder)
-			recovers then self.recoverAsIsolated(value)
+			recovers then self.recoverAsIsolated(value, startIndex: valueStart, endIndex: self.pos)
 			notRecoverable or
 			isolatedPartRead or
 			mutableIntoImmutable or
@@ -9453,11 +9457,17 @@ extension Parser
 		try self.requireStoreVerdictFits(verdict, fieldName: String.from(binding.name), value: value, valueStart: valueStart, valueEnd: valueEnd, joinedAtALoop: false)
 
 		if verdict == StoreVerdict.recovers 'aFreshValueTakenByAnIsolatedVariable'
-			self.recoverAsIsolated(value)
+			self.recoverAsIsolated(value, startIndex: valueStart, endIndex: valueEnd)
 		end 'aFreshValueTakenByAnIsolatedVariable'
 	end 'requireAssignmentFitsVariable'
 
-	function recoverAsIsolated(value ValueId)
+	function recoverAsIsolated(value ValueId, startIndex ElementIndex, endIndex ElementIndex)
+		if self.valueSettlesAfterParsing(value) 'aResultAssumedFresh'
+			let tok = self.tokenAt(startIndex)
+			let refusal = isolatedRecoveryRefusal("'{self.tokenTextFrom(startIndex, endIndex: endIndex)}'", advice: HandedBackReadOnlyAdvice)
+			self.fileResultUse(value, slot: ParamCapability.isolated, sends: false, judged: true, place: refusal, line: tok.line, column: tok.column)
+		end 'aResultAssumedFresh'
+
 		self.setValueCapability(value, capability: ValueCapability.isolated)
 		self.forgetUndecidedResult(value)
 	end 'recoverAsIsolated'

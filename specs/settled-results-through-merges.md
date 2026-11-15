@@ -18,12 +18,13 @@ parameter receives, into the copy a `return` hands back, and into a variable tha
 a loop beside a parameter or a plain local. A `match` or ternary that gives a parameter beside frozen data
 fits an `immutable` result, because the parameter is frozen by the result.
 
-A getter whose return paths mix frozen data (its own, such as an `immutable` field) with writable data is a
-mixed getter, and its result is read-only for every caller, whatever the receiver is: writing through it is
-**E3197**, and passing it to a `mutable` parameter is **E3207**. A
-single `return` whose `if … else`, ternary or `match` joins frozen and writable data counts as mixed too.
-Declare the getter `returns immutable` when every path is frozen, or return a `.clone()` of the frozen path
-when the caller must write.
+A function whose return paths mix frozen data (its own, such as an `immutable` field, a module `let` or a
+`static let`) with writable or fresh data is a mixed getter, and its result is read-only for every caller,
+whatever the receiver or the arguments are: writing through it is **E3197**, passing it to a `mutable`
+parameter is **E3207**, and moving it into an `isolated` position is **E3200**. A single `return` whose
+`if … else`, ternary or `match` joins frozen and writable data counts as mixed too, and a function that
+returns a mixed result unchanged is mixed. Declare the getter `returns immutable` when every path is frozen,
+or return a `.clone()` of the frozen path when the caller must write.
 
 ## Tests
 
@@ -879,4 +880,450 @@ end 'main'
 ```
 ```maxoncstderr
 error E3197: <fragment>:28:2: cannot write 'n' through 'picked', which is read-only
+```
+
+<!-- test: a-result-mixing-a-module-let-array-with-a-fresh-one-is-not-writable-for-its-caller -->
+`get` hands back image data on one path and a fresh array on the other, so its result is read-only for every caller: the call's arguments are all values, and that does not make the result fresh.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function get(fresh bool) returns Digits
+	if fresh 'fresh'
+		return Digits.create(0)
+	end 'fresh'
+
+	return Primes
+end 'get'
+
+function main() returns ExitCode
+	let d = get(false)
+	d.push(1)
+	print("{d.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:17:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-ternary-of-a-fresh-array-and-a-module-let-array-is-not-writable-for-its-caller -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function get(fresh bool) returns Digits
+	return Digits.create(0) if fresh else Primes
+end 'get'
+
+function main() returns ExitCode
+	let d = get(false)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:13:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-match-arm-giving-a-module-let-array-beside-a-fresh-one-is-not-writable-for-its-caller -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+enum Which
+	fixed
+	live
+end 'Which'
+
+function get(which Which) returns Digits
+	return match which 'which'
+		fixed gives Primes
+		live gives Digits.create(0)
+	end 'which'
+end 'get'
+
+function main() returns ExitCode
+	let d = get(Which.fixed)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:21:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-map-miss-falling-back-to-a-module-let-array-is-not-writable-for-its-caller -->
+`pick` builds its own map, so every argument it takes is a value; the `otherwise` fallback is the module `let` array, and the result mixes it with the stored one.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Items = Array with Count
+typealias ItemIndex = Map with (Count, Items)
+
+let Empty = Items from [1, 2]
+
+function pick(k Count) returns Items
+	let index = ItemIndex.create()
+	let stored = Items.create(0)
+	stored.push(7)
+	index.upsert(1, value: stored)
+	return try index.get(k) otherwise Empty
+end 'pick'
+
+function main() returns ExitCode
+	let mine = pick(9)
+	mine.push(3)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:18:7: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-static-let-array-beside-a-fresh-one-is-not-writable-for-its-caller -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+type Table
+	static let Primes = Digits from [2, 3, 5, 7]
+
+	static function get(fresh bool) returns Digits
+		if fresh 'fresh'
+			return Digits.create(0)
+		end 'fresh'
+
+		return Table.Primes
+	end 'get'
+end 'Table'
+
+function main() returns ExitCode
+	let d = Table.get(false)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:19:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-generic-function-handing-back-a-module-let-array-beside-a-fresh-one-is-not-writable -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function choose(_ T, fresh bool) uses T returns Digits
+	if fresh 'fresh'
+		return Digits.create(0)
+	end 'fresh'
+
+	return Primes
+end 'choose'
+
+function main() returns ExitCode
+	let d = choose(1, fresh: false)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:17:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-function-forwarding-a-mixed-result-is-not-writable-for-its-caller -->
+`outer` returns `get`'s result unchanged, so it is as read-only as `get`'s.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function get(fresh bool) returns Digits
+	if fresh 'fresh'
+		return Digits.create(0)
+	end 'fresh'
+
+	return Primes
+end 'get'
+
+function outer(fresh bool) returns Digits
+	return get(fresh)
+end 'outer'
+
+function main() returns ExitCode
+	let d = outer(false)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:21:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-method-forwarding-a-mixed-getter-is-not-writable-for-its-caller -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+type Holder
+	let shared as immutable Digits
+	var own as Digits
+
+	static function create() returns Self
+		return Self{shared: freeze Digits from [2, 3], own: Digits.create(0)}
+	end 'create'
+
+	function pick(flag bool) returns Digits
+		if flag 'sharedOne'
+			return self.shared
+		end 'sharedOne'
+
+		return self.own
+	end 'pick'
+
+	function outer(flag bool) returns Digits
+		return self.pick(flag)
+	end 'outer'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create()
+	let d = holder.outer(false)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:29:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-mixed-result-passed-straight-to-a-writing-function-is-refused -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function get(fresh bool) returns Digits
+	return Digits.create(0) if fresh else Primes
+end 'get'
+
+function writeIt(d mutable Digits)
+	d.push(1)
+end 'writeIt'
+
+function main() returns ExitCode
+	writeIt(get(false))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:16:10: 'writeIt' takes `mutable` 'd' (line 12: `d.push(1)`); 'get(false)' is read-only
+```
+
+<!-- test: a-mixed-result-bound-to-a-var-is-not-writable-for-its-caller -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function get(fresh bool) returns Digits
+	return Digits.create(0) if fresh else Primes
+end 'get'
+
+function main() returns ExitCode
+	var d = get(false)
+	d.push(1)
+	d = get(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:13:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-mixed-result-is-not-isolated -->
+A fresh clean call may become `isolated`; the result of `get` may be image data, so it may not.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+type Box
+	export var part as isolated Digits
+
+	static function holding(part isolated Digits) returns Self
+		return Self{part: part}
+	end 'holding'
+end 'Box'
+
+function get(fresh bool) returns Digits
+	if fresh 'fresh'
+		return Digits.create(0)
+	end 'fresh'
+
+	return Primes
+end 'get'
+
+function main() returns ExitCode
+	let b = Box.holding(Digits.create(0))
+	b.part = get(false)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:25:11: 'get(false)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; the call hands back read-only data, so pass a copy
+```
+
+<!-- test: a-mixed-result-is-read-and-a-copy-of-it-is-written -->
+The declaration is accepted: a mixed result is read-only for its callers, not refused where it is declared. Reading it, and writing a copy of it, are accepted.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+function get(fresh bool) returns Digits
+	if fresh 'fresh'
+		return Digits.create(0)
+	end 'fresh'
+
+	return Primes
+end 'get'
+
+function main() returns ExitCode
+	let d = get(false)
+	let mine = get(false).clone()
+	mine.push(1)
+	print("{d.count()} {mine.count()} {Primes.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 5 4
+```
+
+<!-- test: a-clean-call-building-its-own-array-stays-writable-and-isolated -->
+`build` takes only values and hands back an array it built, so the caller writes it and may move it into an `isolated` field.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+type Box
+	export var part as isolated Digits
+
+	static function holding(part isolated Digits) returns Self
+		return Self{part: part}
+	end 'holding'
+end 'Box'
+
+function build(extra Digit) returns Digits
+	let made = Digits.create(0)
+	made.push(extra)
+	return made
+end 'build'
+
+function main() returns ExitCode
+	let d = build(4)
+	d.push(5)
+	let b = Box.holding(Digits.create(0))
+	b.part = build(6)
+	modify b.part 'edit'
+		b.part.push(7)
+	end 'edit'
+	print("{d.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: a-static-let-record-beside-a-fresh-one-is-not-writable-for-its-caller -->
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Box
+	export var n as Tally
+
+	static let Shared = Self{n: 7}
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	static function get(fresh bool) returns Self
+		if fresh 'fresh'
+			return Self{n: 1}
+		end 'fresh'
+
+		return Box.Shared
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.get(false)
+	b.n = 9
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:24:2: cannot write 'n' through 'b', which is read-only
+```
+
+<!-- test: a-method-of-a-fresh-receiver-handing-back-a-module-let-array-is-not-writable-for-its-caller -->
+The receiver is a fresh value, so nothing about the call makes its result read-only except what `get` hands back.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+let Primes = Digits from [2, 3, 5, 7]
+
+type Source
+	var tag as Digit
+
+	static function create() returns Self
+		return Self{tag: 1}
+	end 'create'
+
+	function get(fresh bool) returns Digits
+		if fresh 'fresh'
+			return Digits.create(0)
+		end 'fresh'
+
+		return Primes
+	end 'get'
+end 'Source'
+
+function main() returns ExitCode
+	let d = Source.create().get(false)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:25:4: cannot write 'a container' through 'a call result', which is read-only
 ```

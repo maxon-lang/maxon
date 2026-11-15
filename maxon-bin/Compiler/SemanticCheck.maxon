@@ -1280,12 +1280,14 @@ type ReturnedCallResults
 		let func = self.sources.func
 		var closed = func.resultFromParamMask
 		var closedUnknown = func.resultMayBeUnknown
+		var closedFrozen = func.resultMayBeFrozen
 		self.sources.forgetMasks()
 
 		for value in self.values 'eachReturnedResult'
 			let opIdx = try self.sources.settlingOpOf(value) otherwise panic("widenResultMask: a returned call result has its settling op")
 			closed = closed or self.sources.maskOfResult(opIdx)
 			closedUnknown = closedUnknown or self.sources.resultIsUnknown(opIdx)
+			closedFrozen = closedFrozen or self.sources.resultMayBeFrozen(opIdx)
 		end 'eachReturnedResult'
 
 		// A held result does not make the result unknown: the record holding it is fresh, so its
@@ -1294,12 +1296,13 @@ type ReturnedCallResults
 			closed = closed or self.sources.maskOfResult(opIdx)
 		end 'eachHeldResult'
 
-		if closed == func.resultFromParamMask and closedUnknown == func.resultMayBeUnknown 'unchanged'
+		if closed == func.resultFromParamMask and closedUnknown == func.resultMayBeUnknown and closedFrozen == func.resultMayBeFrozen 'unchanged'
 			return false
 		end 'unchanged'
 
 		func.resultFromParamMask = closed
 		func.resultMayBeUnknown = closedUnknown
+		func.resultMayBeFrozen = closedFrozen
 		return true
 	end 'widenResultMask'
 end 'ReturnedCallResults'

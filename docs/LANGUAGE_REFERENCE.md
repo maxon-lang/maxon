@@ -6620,11 +6620,13 @@ A value joined from a parameter's data and fresh or local mutable data is judged
 the parameter's final class, and a write through it makes the parameter mutable only. A join with frozen data
 is read-only (`specs/regions-soundness.md`).
 
-A function whose return paths mix frozen data (its own, such as an `immutable` field) with writable data hands
-back a read-only result to every caller, whatever the receiver is: writing through it is **E3197**, and passing
-it to a `mutable` parameter is **E3207**. One `return` whose `if … else`, ternary or `match` joins both counts
-too. Declare the function `returns immutable` when every path is frozen, or return a `.clone()` of the frozen
-path (`specs/settled-results-through-merges.md`).
+A function whose return paths mix frozen data (its own, such as an `immutable` field, a module `let` or a
+`static let`) with writable or fresh data hands back a read-only result to every caller, whatever the receiver
+or the arguments are: writing through it is **E3197**, passing it to a `mutable` parameter is **E3207**, and
+moving it into an `isolated` position is **E3200**. One `return` whose `if … else`, ternary or `match` joins
+both counts too, and a function that returns a mixed result unchanged is mixed. Declare the function
+`returns immutable` when every path is frozen, or return a `.clone()` of the frozen path
+(`specs/settled-results-through-merges.md`).
 
 A record built from a parameter's data and returned (`return Self{field: parameter}`) holds that data and only
 reads it, so the parameter stays any-capability: a frozen argument gives a read-only record, a mutable one a

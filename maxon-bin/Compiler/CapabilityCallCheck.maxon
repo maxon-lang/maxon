@@ -67,8 +67,17 @@ function checkResultUses(project Project, funcNames FunctionNameIndex, facts Cap
 		end 'seededNotJudged'
 
 		let op = try facts.ir.ops.get(use.op) otherwise panic("checkResultUses: ops.get OOB at {use.op}")
-		let settled = settledResultCapability(project, funcNames: funcNames, facts: facts, func: func, op: op, provisional: ProvisionalForAUse, memo: memo)
+		let recovered = use.slot == ParamCapability.isolated
+		let settled = settledResultCapability(project, funcNames: funcNames, facts: facts, func: func, op: op, provisional: ValueCapability.mutable if recovered else ProvisionalForAUse, memo: memo)
 		let filePath = authoredFileOf(project, func: func, opIndex: use.op)
+
+		if recovered 'anIsolatedRecovery'
+			if capabilityIsReadOnly(settled) 'handsBackReadOnlyData'
+				reportPositioned(project, code: ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: use.place, line: use.line, column: use.column, filePath: filePath)
+			end 'handsBackReadOnlyData'
+
+			continue
+		end 'anIsolatedRecovery'
 
 		if use.sends 'aSend'
 			if capabilityBreaksAFrozenNeed(settled) 'notFrozen'

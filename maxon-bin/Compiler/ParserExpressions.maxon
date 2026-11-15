@@ -2089,7 +2089,7 @@ extension Parser
 		return openedTok.value
 	end 'openedRootName'
 
-	function isolateIfPossible(value ValueId) returns bool
+	function isolateIfPossible(value ValueId, startIndex ElementIndex, endIndex ElementIndex) returns bool
 		let capability = self.effectiveCapabilityOf(value)
 
 		if self.valueIsAValueType(value) or self.valueIsAnOwnedIsolatedRegion(value) 'alreadyIsolated'
@@ -2097,7 +2097,7 @@ extension Parser
 		end 'alreadyIsolated'
 
 		if capability == ValueCapability.temporary 'aCleanTemporary'
-			self.recoverAsIsolated(value)
+			self.recoverAsIsolated(value, startIndex: startIndex, endIndex: endIndex)
 			return true
 		end 'aCleanTemporary'
 
@@ -2170,7 +2170,9 @@ extension Parser
 
 		let aFreshRecordHoldingItsArguments = returnsFresh and not qualifiedMemberIs(callee, member: CloneMethodName) and not self.signatures.isArrayInstanceAt(self.tagOf(result), nameId: self.valueNameId(result)) and self.anyArgumentConstrainsTheResult(sources)
 
-		if (not returnsFresh and self.capabilityOfValue(result) != ValueCapability.temporary) or aFreshRecordHoldingItsArguments 'judgedOnceEveryBodyIsRead'
+		// A callee not known to build its result may hand back its own frozen data whatever its inputs are, so
+		// a clean call is judged once every body is read too.
+		if not returnsFresh or aFreshRecordHoldingItsArguments 'judgedOnceEveryBodyIsRead'
 			self.noteUndecidedResult(result, opFloor: opFloor)
 		end 'judgedOnceEveryBodyIsRead'
 	end 'noteCallResultCapability'

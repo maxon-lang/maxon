@@ -860,6 +860,13 @@ release's version as its heading when the release is cut.
 - `as isolated T` is the whole initializer of a `let` or `var`; written inside a call argument it is a syntax
   error (E2010).
   Fix: bind the region to a local first (`let fresh = Payload.create(1) as isolated Payload`) and pass the local.
+- A function whose unmarked result mixes frozen data (a module `let`, a `static let`, an `immutable` field, or
+  another mixed function's result it returns) with writable or fresh data hands every caller a read-only result,
+  also when the call's arguments are all values or fresh data. Writing through it is E3197, passing it to a
+  `mutable` parameter is E3207, and moving it into an `isolated` slot is E3200. Until now such a call read as
+  fresh, and a `push` on it compiled and crashed on the image data.
+  Fix: write a copy (`get(false).clone()`) where the caller must write, or declare the result `returns immutable`
+  when every path is frozen.
 
 ## 0.5.0 — 2026-10-08
 

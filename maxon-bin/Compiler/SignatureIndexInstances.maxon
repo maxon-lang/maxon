@@ -1338,7 +1338,9 @@ extension ProgramSignatures
 		let baselineMinted = self.baselineMintedLayoutCount()
 
 		if slot >= swept and slot - swept < baselineMinted 'aBaselineTuple'
-			return try self.baseTables().mintedTupleLayouts.get(slot - swept) otherwise panic("ProgramSignatures.layoutAtSlot: slot {slot} is below the {baselineMinted} tuples the template minted and the array does not hold it")
+			// The template is shared and frozen; handing its layout out as is would mix it with the overlay's
+			// own mutable layouts, and the callers store what this returns.
+			return (try self.baseTables().mintedTupleLayouts.get(slot - swept) otherwise panic("ProgramSignatures.layoutAtSlot: slot {slot} is below the {baselineMinted} tuples the template minted and the array does not hold it")).clone()
 		end 'aBaselineTuple'
 
 		return self.layoutIn(self.settledDeclarations().structLayouts, slot: slot, skipping: baselineMinted)
