@@ -242,3 +242,27 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   checkout, so a long spec plus case name fails at spawn on x64-windows. Fix: stage test executables in a short
   directory. Not re-run on 2026-11-14.
 - repro: on x64-windows, a spec case whose `<checkout>\specs\.spec-tmp\<spec>\<case>.exe` is over 259 characters
+
+## An author extension method on a library type captures a bare call inside the library, cold but not warm
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler, isImplicitSelfMethod: a bare call resolves to a sibling through a
+  program-wide member lookup that includes an author's extension methods
+- seen: the spec-suite speed plan's forward-callee landing; f518f20 behaves the same. An author
+  method's bare name is in no overlap set and no shared-parse key, so a cached library parse is served.
+- repro: a program declaring `extension String` with a method `scanIsAscii` of another return type
+  (the name of a free function `String.isAscii` calls bare) and calling `isAscii` on a string. Under a
+  fresh cache root it is refused E3005 at the `return` inside stdlib's String; built after any other
+  program under the same cache root it compiles and runs.
+
+## A library forwarder's promise-store facts are resolved by member name over author methods too
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler, closeForwardedStores: anyStoreResolvesByMemberName over
+  instanceMethodsByMemberName, then forwardedTargetTakes
+- seen: the spec-suite speed plan's forward-callee landing, by reading; not run. A store of the shape
+  `x.m(p)` in a library function is resolved against every swept instance method named `m`, the
+  author's included, and neither the overlap verdict nor a shared-parse key records an author
+  method's bare name.
+- repro: a library function forwarding a promise through `x.m(p)`, compiled by a program that
+  declares an instance method `m` taking a promise at that position, warm against cold
