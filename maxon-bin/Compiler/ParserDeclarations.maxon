@@ -5851,7 +5851,7 @@ extension Parser
 		return pairableConformanceBindings(self.extensionConformerLayout(conformer, index: index).bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
 	end 'conformerAssociatedBindings'
 
-	function extensionConformerLayout(conformer ByteArray, index ProgramSignatures) returns StructLayout
+	function extensionConformerLayout(conformer ByteArray, index ProgramSignatures) returns immutable StructLayout
 		match index.structInAnyFile(conformer) 'conformerLayout'
 			declared(layout) then return layout
 			undeclared then panic("Parser.extensionConformerLayout: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
@@ -6109,7 +6109,7 @@ extension Parser
 		self.declaredNestedAliases = noInnerAliases
 		self.clearBodyAliasScan()
 		self.innerAliasesFromIndex = false
-		self.enclosingWhereConstraints = WhereConstraintArray.create(0)
+		self.enclosingWhereConstraints = freeze WhereConstraintArray.create(0)
 		self.enclosingExtensionConstraints = WhereConstraintArray.create(0)
 		self.clearExtensionAssociatedTypes()
 	end 'enterTypeScope'
@@ -6275,7 +6275,7 @@ extension Parser
 
 		// Restored in lockstep so a dispatch outside a constrained type body resolves against
 		// no stale constraints — and allocates nothing, exactly as `emptyTypeParams` restores.
-		self.enclosingWhereConstraints = WhereConstraintArray.create(0)
+		self.enclosingWhereConstraints = freeze WhereConstraintArray.create(0)
 		self.enclosingExtensionConstraints = WhereConstraintArray.create(0)
 
 		// Restored in lockstep for the identical reason (conditional extensions): the NEXT conformer's pass
@@ -10122,7 +10122,7 @@ extension Parser
 		if self.at(TokenKind.where) 'whereClause'
 			let spelledBounds = RegionBoundArray.create(0)
 			let constraints = try self.readWhereClause(self.enclosingTypeParams, owner: TypeWhereClauseOwner, admitsAssociatedBindings: true, bounds: spelledBounds)
-			self.enclosingWhereConstraints = constraints
+			self.enclosingWhereConstraints = freeze constraints.clone()
 			layout.recordWhereConstraints(constraints)
 			layout.recordRegionBounds(spelledBounds)
 		end 'whereClause'

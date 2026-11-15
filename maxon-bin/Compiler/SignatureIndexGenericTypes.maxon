@@ -1404,7 +1404,7 @@ extension ProgramSignatures
 	// by-name struct question shares, written once because it was written SIX times, each copy carrying its
 	// own panic message saying the same one thing. A miss is a precondition rather than a case: the name
 	// came from a `structOf` the caller already asked.
-	function structLayoutOf(structName ByteArray) returns StructLayout
+	function structLayoutOf(structName ByteArray) returns immutable StructLayout
 		return try self.registeredLayout(structName) otherwise panic("ProgramSignatures.structLayoutOf: no `type {String.from(structName)}` is declared — every caller resolves the name before asking")
 	end 'structLayoutOf'
 
@@ -2707,7 +2707,7 @@ extension ProgramSignatures
 		return self.unionRepresentation(layout) == UnionRepresentation.word
 	end 'unionNameIsUnboxed'
 
-	function declaredStructLayoutOf(name ByteArray) returns StructLayout throws AbsentError
+	function declaredStructLayoutOf(name ByteArray) returns immutable StructLayout throws AbsentError
 		if not self.containsStructInAnyFile(name) 'notAStruct'
 			throw AbsentError.absent
 		end 'notAStruct'
@@ -5630,7 +5630,7 @@ extension ProgramSignatures
 		end 'eachInstance'
 	end 'adoptRequestedTupleLayouts'
 
-	function holdsAnUnregisteredLayout(layouts StructLayoutArray) returns bool
+	function holdsAnUnregisteredLayout(layouts SettledStructLayoutArray) returns bool
 		for layout in layouts 'eachLayout'
 			if not self.hasRegisteredLayout(layout.name) 'notRegistered'
 				return true
@@ -6044,10 +6044,10 @@ extension ProgramSignatures
 	export function closeParseBand(filePath FilePath) returns LocalInstanceMints
 		let typeNameBaseline = self.typeNames.baselineNameCount()
 		let bandNames = self.typeNames.namesSinceBaseline()
-		let tupleLayouts = StructLayoutArray.create(self.journal.tupleNames.count(), zeroed: false)
+		let tupleLayouts = SettledStructLayoutArray.create(self.journal.tupleNames.count(), zeroed: false)
 
 		for name in self.journal.tupleNames 'eachMintedTuple'
-			tupleLayouts.push((try self.registeredLayout(name) otherwise panic("ProgramSignatures.closeParseBand: the journal lists tuple `{String.from(name)}` and `structSlots` does not hold it")).clone())
+			tupleLayouts.push(try self.registeredLayout(name) otherwise panic("ProgramSignatures.closeParseBand: the journal lists tuple `{String.from(name)}` and `structSlots` does not hold it"))
 		end 'eachMintedTuple'
 
 		let origins = SubstitutionOriginArray.create(self.journal.originIds.count(), zeroed: false)
@@ -6194,7 +6194,7 @@ extension ProgramSignatures
 
 	function resetOverlayTables()
 		self.structSlots = StructSlotMap.create()
-		self.mintedTupleLayouts = StructLayoutArray.create(0)
+		self.mintedTupleLayouts = SettledStructLayoutArray.create(0)
 		self.compiledInstanceNames = CompiledInstanceNameMap.create()
 		self.canonicalInstanceNames = CanonicalInstanceNameMap.create()
 		self.substitutedInstanceOrigins = SubstitutedInstanceOriginMap.create()

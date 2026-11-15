@@ -6683,7 +6683,7 @@ extension Parser
 	//
 	// The `baseTok` `structLayoutOfType` names in its diagnostics is the FIELD token here — for a hop, the
 	// field IS what the reader must fix.
-	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns StructLayout throws SourceParseError
+	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns immutable StructLayout throws SourceParseError
 		let resolved = resolveNamedStruct(fieldType, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: baseLayout.declFilePath)
 		let tag = maxonTypeTag(resolved)
 
@@ -7448,7 +7448,7 @@ extension Parser
 	// Both misses panic rather than report, and for `requireConstructible`'s reason: every caller
 	// is inside an instance method, so an enclosing type exists by construction, and the
 	// declaration sweep recorded every `type` in the program before this file's parse began.
-	function enclosingLayout(anchor Token) returns StructLayout throws SourceParseError
+	function enclosingLayout(anchor Token) returns immutable StructLayout throws SourceParseError
 		let typeName = try self.enclosingType.typeName() otherwise panic("enclosingLayout: asked for the enclosing type's layout at {anchor.line}:{anchor.column}, but the cursor is at file scope — every caller is inside an instance method, whose body only `parseTypeDeclaration` reaches")
 
 		// ⛔ **AN `enum`/`union` HAS NO LAYOUT TO ASK FOR** — and this is the one door the RECEIVER-FIELD
@@ -7922,7 +7922,7 @@ extension Parser
 	// instance half asks the SAME walk gate the four `SignatureIndex` field walks open with, for the reason
 	// the gate below states: a name being declared is not the same fact as this instance's fields living
 	// there, and where they came apart the compiler read a heap pointer out as user data.
-	function structLayoutOfType(access BaseAccessKind, tag ValueTypeTag, nameId TypeNameId, baseTok Token) returns StructLayout throws SourceParseError
+	function structLayoutOfType(access BaseAccessKind, tag ValueTypeTag, nameId TypeNameId, baseTok Token) returns immutable StructLayout throws SourceParseError
 		let typeName = self.baseStructNameOfType(tag, nameId: nameId, baseTok: baseTok)
 
 		// ⚠⚠ **AN INSTANCE ASKS `genericInstanceHasBaseLayout`, NEVER `structOf` ALONE — THE TWO DISAGREE,

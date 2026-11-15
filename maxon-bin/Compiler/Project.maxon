@@ -7792,15 +7792,21 @@ export type StructLayout
 		try self.fieldDeclaredBrands.set(index, value: declaredBrand) otherwise panic("StructLayout.rebrandField: fieldDeclaredBrands.set OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
 	end 'rebrandField'
 
-	export function settleInlinePacking(bitWidths BitWidthArray)
+	export function packedInline(bitWidths BitWidthArray) returns immutable StructLayout
 		if bitWidths.count() != self.fieldTypes.count() 'notOneWidthPerField'
-			panic("StructLayout.settleInlinePacking: `type {String.from(self.name)}` declares {self.fieldCount()} field(s) and the width column holds a different number — the two are read by one `FieldIndex`, so a short column answers with a neighbour's width")
+			panic("StructLayout.packedInline: `type {String.from(self.name)}` declares {self.fieldCount()} field(s) and the width column holds a different number — the two are read by one `FieldIndex`, so a short column answers with a neighbour's width")
 		end 'notOneWidthPerField'
 
-		self.packsInlineIntoAWord = true
-		self.fieldBitWidths = bitWidths
-		self.rebuildSlotGeometry()
-	end 'settleInlinePacking'
+		let packed = self.clone() as isolated StructLayout
+
+		modify packed 'pack'
+			packed.packsInlineIntoAWord = true
+			packed.fieldBitWidths = bitWidths.clone()
+			packed.rebuildSlotGeometry()
+		end 'pack'
+
+		return freeze packed
+	end 'packedInline'
 
 	export function fieldBitWidth(index FieldIndex) returns BitWidth
 		return try self.fieldBitWidths.get(index) otherwise panic("StructLayout.fieldBitWidth: fieldBitWidths.get OOB at {index} for `type {String.from(self.name)}`, which packs {self.fieldBitWidths.count()} field(s) into a word")
@@ -7949,6 +7955,16 @@ export type StructLayout
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
+		self.fieldTypeSites.cacheWrite(writer)
+		writer.flag(self.packsInlineIntoAWord)
+		writer.flag(self.isUnique)
+		writer.flag(self.isLinear)
+		writer.unsigned(self.slotBytes as CacheUnsigned)
+		cacheWriteNameRoster(writer, value: self.typeParamNames)
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.declLine as CacheUnsigned)
+		writer.unsigned(self.declColumn as CacheUnsigned)
 		cacheWriteNameRoster(writer, value: self.fieldNames)
 		cacheWriteMaxonTypeArray(writer, value: self.fieldTypes)
 		cacheWriteBoolArray(writer, value: self.fieldMutable)
@@ -7957,28 +7973,28 @@ export type StructLayout
 		cacheWriteDeclaredSurfaceArray(writer, value: self.fieldDeclaredSurfaces)
 		cacheWriteNameRoster(writer, value: self.fieldDeclaredBrands)
 		cacheWriteSpelledFieldNameArray(writer, value: self.fieldSpelledNames)
-		self.fieldTypeSites.cacheWrite(writer)
 		cacheWriteByteOffsetArray(writer, value: self.fieldOffsets)
-		writer.flag(self.packsInlineIntoAWord)
-		writer.flag(self.isUnique)
-		writer.flag(self.isLinear)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitWidths)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitOffsets)
-		writer.unsigned(self.slotBytes as CacheUnsigned)
-		cacheWriteNameRoster(writer, value: self.typeParamNames)
 		cacheWriteWhereConstraintArray(writer, value: self.whereConstraints)
 		cacheWriteRegionBoundArray(writer, value: self.regionBounds)
 		cacheWriteNameRoster(writer, value: self.conformsTo)
 		cacheWriteConformanceBindingArray(writer, value: self.conformanceBindings)
 		cacheWriteNameRoster(writer, value: self.messageMethodNames)
-		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
-		writer.text(self.declFilePath.toString())
-		writer.unsigned(self.declLine as CacheUnsigned)
-		writer.unsigned(self.declColumn as CacheUnsigned)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns StructLayout throws LibraryCacheDamage
 		let f_name = freeze try reader.bytes()
+		let f_fieldTypeSites = try DeclaredTypeSites.cacheRead(reader)
+		let f_packsInlineIntoAWord = try reader.flag()
+		let f_isUnique = try reader.flag()
+		let f_isLinear = try reader.flag()
+		let f_slotBytes = (try reader.unsigned()) as ByteOffset
+		let f_typeParamNames = try cacheReadFrozenNameRoster(reader)
+		let f_visibility = try cacheReadVisibility(reader)
+		let f_declFilePath = try reader.path()
+		let f_declLine = (try reader.unsigned()) as LineNumber
+		let f_declColumn = (try reader.unsigned()) as ColumnNumber
 		let f_fieldNames = try cacheReadNameRoster(reader)
 		let f_fieldTypes = try cacheReadMaxonTypeArray(reader)
 		let f_fieldMutable = try cacheReadBoolArray(reader)
@@ -7987,27 +8003,163 @@ export type StructLayout
 		let f_fieldDeclaredSurfaces = try cacheReadDeclaredSurfaceArray(reader)
 		let f_fieldDeclaredBrands = try cacheReadNameRoster(reader)
 		let f_fieldSpelledNames = try cacheReadSpelledFieldNameArray(reader)
-		let f_fieldTypeSites = try DeclaredTypeSites.cacheRead(reader)
 		let f_fieldOffsets = try cacheReadByteOffsetArray(reader)
-		let f_packsInlineIntoAWord = try reader.flag()
-		let f_isUnique = try reader.flag()
-		let f_isLinear = try reader.flag()
 		let f_fieldBitWidths = try cacheReadBitWidthArray(reader)
 		let f_fieldBitOffsets = try cacheReadBitWidthArray(reader)
-		let f_slotBytes = (try reader.unsigned()) as ByteOffset
-		let f_typeParamNames = try cacheReadFrozenNameRoster(reader)
 		let f_whereConstraints = try cacheReadWhereConstraintArray(reader)
 		let f_regionBounds = try cacheReadRegionBoundArray(reader)
 		let f_conformsTo = try cacheReadNameRoster(reader)
 		let f_conformanceBindings = try cacheReadConformanceBindingArray(reader)
 		let f_messageMethodNames = try cacheReadNameRoster(reader)
+
+		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldTypeSites: f_fieldTypeSites, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, isUnique: f_isUnique, isLinear: f_isLinear, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, regionBounds: f_regionBounds, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
+	end 'cacheRead'
+
+	static function cacheReadFrozen(reader LibraryCacheReader) returns immutable StructLayout throws LibraryCacheDamage
+		let f_name = freeze try reader.bytes()
+		let f_fieldTypeSites = try DeclaredTypeSites.cacheRead(reader)
+		let f_packsInlineIntoAWord = try reader.flag()
+		let f_isUnique = try reader.flag()
+		let f_isLinear = try reader.flag()
+		let f_slotBytes = (try reader.unsigned()) as ByteOffset
+		let f_typeParamNames = try cacheReadFrozenNameRoster(reader)
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_declFilePath = try reader.path()
 		let f_declLine = (try reader.unsigned()) as LineNumber
 		let f_declColumn = (try reader.unsigned()) as ColumnNumber
 
-		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldTypeSites: f_fieldTypeSites, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, isUnique: f_isUnique, isLinear: f_isLinear, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, regionBounds: f_regionBounds, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
-	end 'cacheRead'
+		let built = Self{name: f_name, fieldNames: NameRoster.create(0), fieldTypes: MaxonTypeArray.create(0), fieldMutable: BoolArray.create(0), fieldVisibility: VisibilityArray.create(0), fieldDefaults: FieldDefaultArray.create(0), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(0), fieldDeclaredBrands: NameRoster.create(0), fieldSpelledNames: SpelledFieldNameArray.create(0), fieldTypeSites: f_fieldTypeSites.clone(), fieldOffsets: ByteOffsetArray.create(0), packsInlineIntoAWord: f_packsInlineIntoAWord, isUnique: f_isUnique, isLinear: f_isLinear, fieldBitWidths: BitWidthArray.create(0), fieldBitOffsets: BitWidthArray.create(0), slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: WhereConstraintArray.create(0), regionBounds: RegionBoundArray.create(0), conformsTo: NameRoster.create(0), conformanceBindings: ConformanceBindingArray.create(0), messageMethodNames: NameRoster.create(0), visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn} as isolated Self
+
+		let count_fieldNames = try reader.count()
+		built.fieldNames.reserve(count_fieldNames)
+
+		for _ in 0 upto count_fieldNames 'eachFieldNames'
+			let item = freeze try reader.bytes()
+			built.fieldNames.push(item)
+		end 'eachFieldNames'
+
+		let count_fieldTypes = try reader.count()
+		built.fieldTypes.reserve(count_fieldTypes)
+
+		for _ in 0 upto count_fieldTypes 'eachFieldTypes'
+			let item = try cacheReadMaxonType(reader)
+			built.fieldTypes.push(item)
+		end 'eachFieldTypes'
+
+		let count_fieldMutable = try reader.count()
+		built.fieldMutable.reserve(count_fieldMutable)
+
+		for _ in 0 upto count_fieldMutable 'eachFieldMutable'
+			let item = try reader.flag()
+			built.fieldMutable.push(item)
+		end 'eachFieldMutable'
+
+		let count_fieldVisibility = try reader.count()
+		built.fieldVisibility.reserve(count_fieldVisibility)
+
+		for _ in 0 upto count_fieldVisibility 'eachFieldVisibility'
+			let item = try cacheReadVisibility(reader)
+			built.fieldVisibility.push(item)
+		end 'eachFieldVisibility'
+
+		let count_fieldDefaults = try reader.count()
+		built.fieldDefaults.reserve(count_fieldDefaults)
+
+		for _ in 0 upto count_fieldDefaults 'eachFieldDefaults'
+			let item = try cacheReadFieldDefault(reader)
+			built.fieldDefaults.push(item)
+		end 'eachFieldDefaults'
+
+		let count_fieldDeclaredSurfaces = try reader.count()
+		built.fieldDeclaredSurfaces.reserve(count_fieldDeclaredSurfaces)
+
+		for _ in 0 upto count_fieldDeclaredSurfaces 'eachFieldDeclaredSurfaces'
+			let item = try cacheReadFrozenDeclaredSurface(reader)
+			built.fieldDeclaredSurfaces.push(item)
+		end 'eachFieldDeclaredSurfaces'
+
+		let count_fieldDeclaredBrands = try reader.count()
+		built.fieldDeclaredBrands.reserve(count_fieldDeclaredBrands)
+
+		for _ in 0 upto count_fieldDeclaredBrands 'eachFieldDeclaredBrands'
+			let item = freeze try reader.bytes()
+			built.fieldDeclaredBrands.push(item)
+		end 'eachFieldDeclaredBrands'
+
+		let count_fieldSpelledNames = try reader.count()
+		built.fieldSpelledNames.reserve(count_fieldSpelledNames)
+
+		for _ in 0 upto count_fieldSpelledNames 'eachFieldSpelledNames'
+			let item = try cacheReadSpelledFieldName(reader)
+			built.fieldSpelledNames.push(item)
+		end 'eachFieldSpelledNames'
+
+		let count_fieldOffsets = try reader.count()
+		built.fieldOffsets.reserve(count_fieldOffsets)
+
+		for _ in 0 upto count_fieldOffsets 'eachFieldOffsets'
+			let item = (try reader.unsigned()) as ByteOffset
+			built.fieldOffsets.push(item)
+		end 'eachFieldOffsets'
+
+		let count_fieldBitWidths = try reader.count()
+		built.fieldBitWidths.reserve(count_fieldBitWidths)
+
+		for _ in 0 upto count_fieldBitWidths 'eachFieldBitWidths'
+			let item = (try reader.boundedUnsigned(0, high: 64)) as BitWidth
+			built.fieldBitWidths.push(item)
+		end 'eachFieldBitWidths'
+
+		let count_fieldBitOffsets = try reader.count()
+		built.fieldBitOffsets.reserve(count_fieldBitOffsets)
+
+		for _ in 0 upto count_fieldBitOffsets 'eachFieldBitOffsets'
+			let item = (try reader.boundedUnsigned(0, high: 64)) as BitWidth
+			built.fieldBitOffsets.push(item)
+		end 'eachFieldBitOffsets'
+
+		let count_whereConstraints = try reader.count()
+		built.whereConstraints.reserve(count_whereConstraints)
+
+		for _ in 0 upto count_whereConstraints 'eachWhereConstraints'
+			let item = try WhereConstraint.cacheRead(reader)
+			built.whereConstraints.push(item)
+		end 'eachWhereConstraints'
+
+		let count_regionBounds = try reader.count()
+		built.regionBounds.reserve(count_regionBounds)
+
+		for _ in 0 upto count_regionBounds 'eachRegionBounds'
+			let item = try RegionBound.cacheRead(reader)
+			built.regionBounds.push(item)
+		end 'eachRegionBounds'
+
+		let count_conformsTo = try reader.count()
+		built.conformsTo.reserve(count_conformsTo)
+
+		for _ in 0 upto count_conformsTo 'eachConformsTo'
+			let item = freeze try reader.bytes()
+			built.conformsTo.push(item)
+		end 'eachConformsTo'
+
+		let count_conformanceBindings = try reader.count()
+		built.conformanceBindings.reserve(count_conformanceBindings)
+
+		for _ in 0 upto count_conformanceBindings 'eachConformanceBindings'
+			let item = try ConformanceBinding.cacheRead(reader)
+			built.conformanceBindings.push(item)
+		end 'eachConformanceBindings'
+
+		let count_messageMethodNames = try reader.count()
+		built.messageMethodNames.reserve(count_messageMethodNames)
+
+		for _ in 0 upto count_messageMethodNames 'eachMessageMethodNames'
+			let item = freeze try reader.bytes()
+			built.messageMethodNames.push(item)
+		end 'eachMessageMethodNames'
+
+		return freeze built
+	end 'cacheReadFrozen'
 
 	static function cacheLayoutBytes() returns CacheSize216
 		return sizeof(StructLayout) as CacheSize216
@@ -8040,12 +8192,35 @@ function cacheReadStructLayoutArray(reader LibraryCacheReader) returns StructLay
 end 'cacheReadStructLayoutArray'
 
 // @generated library-cache end
-export typealias SettledStructLayoutArray = Array with StructLayout
+export typealias SettledStructLayoutArray = Array with immutable StructLayout
+
+// @generated library-cache begin
+function cacheWriteSettledStructLayoutArray(writer LibraryCacheWriter, value SettledStructLayoutArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteSettledStructLayoutArray'
+
+function cacheReadSettledStructLayoutArray(reader LibraryCacheReader) returns SettledStructLayoutArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = SettledStructLayoutArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try StructLayout.cacheReadFrozen(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadSettledStructLayoutArray'
+
+// @generated library-cache end
 
 // Registry: struct-type name -> its declaration. The twin of `RangedTypeAliasMap`, filled from
 // each file's artifact by `mergeArtifact` and read by TypeResolution to turn `MaxonType.named` for
 // a declared `type` into `MaxonType.structRef`.
-export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
+export typealias StructLayoutMap = Map with (ByteArray, immutable StructLayout)
 
 // --- Union payload fields ---
 

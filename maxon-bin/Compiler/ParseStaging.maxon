@@ -2740,14 +2740,12 @@ end 'commitStructTypes'
 // layout is the parse artifact's. `MmRuntime.installStructRuntimeEntries` stamps the runtime's
 // entries off `project.structTypes`, and left unsettled it answers a box's `sizeBytes()` for a
 // type whose value is a word.
-function committedStructLayout(layout StructLayout, signatures ProgramSignatures) returns StructLayout
+function committedStructLayout(layout StructLayout, signatures ProgramSignatures) returns immutable StructLayout
 	if not signatures.nameIsInlineRecord(layout.name) 'aHeapRecord'
-		return layout
+		return freeze layout.clone()
 	end 'aHeapRecord'
 
-	let settled = layout.clone()
-	settled.settleInlinePacking(signatures.inlineBitWidthsOf(layout.name))
-	return settled
+	return layout.packedInline(signatures.inlineBitWidthsOf(layout.name))
 end 'committedStructLayout'
 
 function commitWrittenTupleTypes(project Project, artifact FileParseArtifact)

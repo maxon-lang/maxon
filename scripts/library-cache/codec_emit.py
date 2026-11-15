@@ -417,6 +417,9 @@ class Emitter:
         if frozen and self.fills_container(declaration, field):
             return "%s: %s" % (field.name, self.empty_container(node))
 
+        if frozen and node.kind == "record" and not getattr(node, "frozen", False):
+            return "%s: f_%s.clone()" % (field.name, field.name)
+
         return "%s: f_%s" % (field.name, field.name)
 
     def empty_container(self, node):

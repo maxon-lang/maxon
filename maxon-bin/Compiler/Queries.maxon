@@ -3376,7 +3376,7 @@ function foldVerdictFinish(project Project, pool FrontEndPool, signatures Progra
 end 'foldVerdictFinish'
 
 function requestedTupleTypesOf(project Project, signatures ProgramSignatures, instance GenericFunctionInstance) returns RequestedTupleTypes
-	let layouts = StructLayoutArray.create(0)
+	let layouts = SettledStructLayoutArray.create(0)
 
 	for argument in instance.arguments 'eachArgument'
 		if argument.kind == GenericArgumentKind.record and isTupleTypeName(argument.name) 'aTupleArgument'
@@ -3415,7 +3415,7 @@ function requestedTupleTypesOf(project Project, signatures ProgramSignatures, in
 	return RequestedTupleTypes.create(layouts, footprint: footprint)
 end 'requestedTupleTypesOf'
 
-function instancesHeldBy(layouts StructLayoutArray) returns GenericInstanceIdSet
+function instancesHeldBy(layouts SettledStructLayoutArray) returns GenericInstanceIdSet
 	let held = GenericInstanceIdSet.create()
 
 	for layout in layouts 'eachLayout'
@@ -3429,7 +3429,7 @@ function instancesHeldBy(layouts StructLayoutArray) returns GenericInstanceIdSet
 	return held
 end 'instancesHeldBy'
 
-function collectRequestedTupleLayout(project Project, name ByteArray, into StructLayoutArray)
+function collectRequestedTupleLayout(project Project, name ByteArray, into SettledStructLayoutArray)
 	for filed in into 'eachFiled'
 		if filed.name.equals(name) 'alreadyFiled'
 			return
@@ -3437,7 +3437,7 @@ function collectRequestedTupleLayout(project Project, name ByteArray, into Struc
 	end 'eachFiled'
 
 	let layout = try project.structTypes.get(name) otherwise panic("collectRequestedTupleLayout: the tuple `{String.from(name)}` is named by a requested generic instance and no merged artifact committed its layout — every tuple a body mints is filed by `Parser.internTupleLayout` and committed by `commitStructTypes` before `foldVerdict` reads the requests")
-	into.push(layout.clone())
+	into.push(layout)
 
 	for element in layout.fieldTypes 'eachNestedElement'
 		if maxonTypeTag(element) != ValueTypeTag.structRef 'notARecord'

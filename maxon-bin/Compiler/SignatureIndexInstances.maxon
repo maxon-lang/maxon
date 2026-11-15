@@ -1,13 +1,13 @@
 extension ProgramSignatures
-	function sweptLayoutDeclaredAt(site ConformanceClauseDeclSite) returns StructLayout throws MapError
-		let layout = self.ownLayoutAtSlot(try self.structSlots.get(site.declName))
+	function sweptSlotDeclaredAt(site ConformanceClauseDeclSite) returns ElementIndex throws MapError
+		let slot = try self.structSlots.get(site.declName)
 
-		if not layout.declFilePath.equals(site.path) 'theRegistryHoldsAnotherDeclaration'
+		if not self.ownLayoutAtSlot(slot).declFilePath.equals(site.path) 'theRegistryHoldsAnotherDeclaration'
 			throw MapError.keyNotFound
 		end 'theRegistryHoldsAnotherDeclaration'
 
-		return layout
-	end 'sweptLayoutDeclaredAt'
+		return slot
+	end 'sweptSlotDeclaredAt'
 
 	// ⭐⭐ **THE DECLARED-CONFORMANCE INDEX AS THIS PHASE CAN SEE IT — the same map `ConformanceCheck` builds,
 	// from the only store that exists this early.** `declaredConformanceIndex(project)` reads
@@ -189,8 +189,8 @@ extension ProgramSignatures
 	// An undeclared type answers the SHARED empty rather than a fresh one: this sits on the per-call-site path
 	// that decides whether to append witness arguments (`witnessConstraintsOfMethod`), where the answer for
 	// almost every call in a program is "none".
-	export function structWhereConstraints(typeName ByteArray) returns WhereConstraintArray
-		let layout = try self.registeredLayout(typeName) otherwise return WhereConstraintArray.create(0)
+	export function structWhereConstraints(typeName ByteArray) returns immutable WhereConstraintArray
+		let layout = try self.registeredLayout(typeName) otherwise return freeze WhereConstraintArray.create(0)
 		return layout.whereConstraints
 	end 'structWhereConstraints'
 
@@ -322,7 +322,7 @@ extension ProgramSignatures
 	//
 	// The unconditional arm returns the type's own array rather than a copy of it — the answer for every method
 	// in a program that declares no conditional extension, which is the whole corpus but one spec.
-	export function typeExtensionWitnessConstraints(typeName ByteArray, extensionConstraints WhereConstraintArray) returns WhereConstraintArray
+	export function typeExtensionWitnessConstraints(typeName ByteArray, extensionConstraints WhereConstraintArray) returns immutable WhereConstraintArray
 		let declared = self.structWhereConstraints(typeName)
 
 		if extensionConstraints.isEmpty() 'unconditional'
@@ -340,7 +340,7 @@ extension ProgramSignatures
 			reserved.push(constraint)
 		end 'eachExtra'
 
-		return reserved
+		return freeze reserved.clone()
 	end 'typeExtensionWitnessConstraints'
 
 	// ⭐ The constraints `callee` carries that came from a conditional TYPE EXTENSION rather than from its
@@ -931,7 +931,7 @@ extension ProgramSignatures
 	// to decide whether to upsert a compiler-owned layout the compiler itself wrote. The corpus declares the
 	// type, so the ordinary declaration fold registers it in every program and there is nothing to decide —
 	// no probe, no bit, and no second layout.
-	export function stringIndexLayoutOrPanic() returns StructLayout
+	export function stringIndexLayoutOrPanic() returns immutable StructLayout
 		return try self.registeredLayout(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — it is declared by `stdlib/String.maxon`, which `StdlibLoader` loads into every program, so the declaration fold has not run or has dropped it")
 	end 'stringIndexLayoutOrPanic'
 
@@ -1005,7 +1005,7 @@ extension ProgramSignatures
 	// not to use strings — `StdlibLoader` loads every module under `stdlib/`, both declaring modules
 	// included — so what reaches here is that declaration deleted, or its file gone from the checkout.
 	// `stringIndexLayoutOrPanic`'s argument, two type names over.
-	function corpusDeclaredFusedWrapper(typeName ByteArray) returns StructLayout
+	function corpusDeclaredFusedWrapper(typeName ByteArray) returns immutable StructLayout
 		return try self.registeredLayout(typeName) otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: this compile declares no `type {String.from(typeName)}`, and the compiler mints that type's record FROM the corpus's declaration rather than transcribing it — the module declaring it must be present under `stdlib/` and must still declare it")
 	end 'corpusDeclaredFusedWrapper'
 
@@ -1287,7 +1287,7 @@ extension ProgramSignatures
 		return self.registerTupleLayout(interned, written: written, capabilities: capabilities, declFilePath: slotScopeFilePath)
 	end 'internTupleType'
 
-	function registeredLayout(name ByteArray) returns StructLayout throws MapError
+	function registeredLayout(name ByteArray) returns immutable StructLayout throws MapError
 		return self.layoutAtSlot(try self.slotOfLayout(name))
 	end 'registeredLayout'
 
@@ -1333,24 +1333,26 @@ extension ProgramSignatures
 		end 'overlaid'
 	end 'requireWholeProgramIndex'
 
-	function layoutAtSlot(slot ElementIndex) returns StructLayout
+	function layoutAtSlot(slot ElementIndex) returns immutable StructLayout
 		let swept = self.settledDeclarations().structLayouts.count()
 		let baselineMinted = self.baselineMintedLayoutCount()
 
 		if slot >= swept and slot - swept < baselineMinted 'aBaselineTuple'
-			// The template is shared and frozen; handing its layout out as is would mix it with the overlay's
-			// own mutable layouts, and the callers store what this returns.
-			return (try self.baseTables().mintedTupleLayouts.get(slot - swept) otherwise panic("ProgramSignatures.layoutAtSlot: slot {slot} is below the {baselineMinted} tuples the template minted and the array does not hold it")).clone()
+			return try self.baseTables().mintedTupleLayouts.get(slot - swept) otherwise panic("ProgramSignatures.layoutAtSlot: slot {slot} is below the {baselineMinted} tuples the template minted and the array does not hold it")
 		end 'aBaselineTuple'
 
 		return self.layoutIn(self.settledDeclarations().structLayouts, slot: slot, skipping: baselineMinted)
 	end 'layoutAtSlot'
 
-	function ownLayoutAtSlot(slot ElementIndex) returns StructLayout
+	function ownLayoutAtSlot(slot ElementIndex) returns immutable StructLayout
 		return self.layoutIn(self.mainThreadSettled().structLayouts, slot: slot, skipping: 0)
 	end 'ownLayoutAtSlot'
 
-	function layoutIn(sweptLayouts StructLayoutArray, slot ElementIndex, skipping ElementIndex) returns StructLayout
+	function refileOwnLayout(slot ElementIndex, settled immutable StructLayout)
+		try self.mainThreadSettled().structLayouts.set(slot, value: settled) otherwise panic("ProgramSignatures.refileOwnLayout: slot {slot} is past the {self.mainThreadSettled().structLayouts.count()} swept layouts")
+	end 'refileOwnLayout'
+
+	function layoutIn(sweptLayouts SettledStructLayoutArray, slot ElementIndex, skipping ElementIndex) returns immutable StructLayout
 		let swept = sweptLayouts.count()
 
 		if slot < swept 'aSweptLayout'
@@ -1361,13 +1363,15 @@ extension ProgramSignatures
 	end 'layoutIn'
 
 	function addRegisteredLayout(layout StructLayout)
+		let settled = freeze layout.clone()
+
 		if self.baseline.settled 'mintedPastTheBaseline'
 			self.structSlots.upsert(layout.name, value: self.settledDeclarations().structLayouts.count() + self.mintedLayoutCount())
-			self.mintedTupleLayouts.push(layout)
+			self.mintedTupleLayouts.push(settled)
 			self.journal.noteTupleName(layout.name)
 		end 'mintedPastTheBaseline' else 'sweptWithTheDeclarations'
 			self.structSlots.upsert(layout.name, value: self.settledDeclarations().structLayouts.count())
-			self.mainThreadSettled().structLayouts.push(layout)
+			self.mainThreadSettled().structLayouts.push(settled)
 		end 'sweptWithTheDeclarations'
 	end 'addRegisteredLayout'
 
@@ -1419,12 +1423,29 @@ extension ProgramSignatures
 			let layout = self.ownLayoutAtSlot(slot)
 			let brands = self.tupleElementBrands(layout.fieldTypes, instanceBrands: instanceBrandsOf(layout.fieldTypes, written: self.writtenBrandsOf(layout, types: layout.fieldTypes)), declFilePath: layout.declFilePath)
 
+			if not tupleBrandsMove(layout, brands: brands) 'everyBrandStands'
+				continue
+			end 'everyBrandStands'
+
+			let revised = layout.clone()
+
 			for i in 0 upto brands.count() 'eachElement'
-				let brand = try brands.get(i) otherwise panic("ProgramSignatures.settleSweptTupleElementBrands: brands.get OOB at {i} below count {brands.count()}")
-				layout.rebrandField(i as FieldIndex, declaredBrand: brand)
+				revised.rebrandField(i as FieldIndex, declaredBrand: try brands.get(i) otherwise panic("ProgramSignatures.settleSweptTupleElementBrands: brands.get OOB at {i} below count {brands.count()}"))
 			end 'eachElement'
+
+			self.refileOwnLayout(slot, settled: freeze revised.clone())
 		end 'eachLayout'
 	end 'settleSweptTupleElementBrands'
+
+	function tupleBrandsMove(layout StructLayout, brands NameRoster) returns bool
+		for i in 0 upto brands.count() 'eachElement'
+			if not (try brands.get(i) otherwise panic("ProgramSignatures.tupleBrandsMove: brands.get OOB at {i} below count {brands.count()}")).equals(layout.fieldDeclaredBrand(i as FieldIndex)) 'aBrandMoved'
+				return true
+			end 'aBrandMoved'
+		end 'eachElement'
+
+		return false
+	end 'tupleBrandsMove'
 
 	function tupleElementBrands(elements MaxonTypeArray, instanceBrands NameRoster, declFilePath FilePath) returns NameRoster
 		let brands = NameRoster.create(elements.count(), zeroed: false)
@@ -5706,17 +5727,8 @@ extension ProgramSignatures
 		self.requireWholeProgramIndex("rewriteRecordedSlotTypes")
 
 		for (_, slot) in self.structSlots 'eachStruct'
-			let layout = self.ownLayoutAtSlot(slot)
-
-			for index in 0 upto layout.fieldCount() 'eachField'
-				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.rewriteRecordedSlotTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
-
-				if let rewritten = try self.rewrittenSlotTypeUnder(rule, declared: declared, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
-					layout.retypeField(index, declaredType: rewritten)
-				end 'theRuleClaimsIt'
-
-				layout.rebrandField(index, declaredBrand: self.sharedInstanceMintOr(layout.fieldDeclaredBrand(index), readerFilePath: layout.declFilePath, fallback: layout.fieldDeclaredBrand(index)))
-			end 'eachField'
+			let revised = try self.revisedStructWithRecordedTypes(rule, layout: self.ownLayoutAtSlot(slot)) otherwise continue
+			self.refileOwnLayout(slot, settled: revised)
 		end 'eachStruct'
 
 		let revisedEnums = EnumLayoutArray.create(0)
@@ -5729,6 +5741,34 @@ extension ProgramSignatures
 			fileEnumLayout(self.mainThreadSettled().enumTypes, layout: revised)
 		end 'eachRevised'
 	end 'rewriteRecordedSlotTypes'
+
+	function revisedStructWithRecordedTypes(rule RecordedReturnTypeRule, layout StructLayout) returns immutable StructLayout throws AbsentError
+		let revised = layout.clone()
+		var anyMoved = false
+
+		for index in 0 upto layout.fieldCount() 'eachField'
+			let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.revisedStructWithRecordedTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
+
+			if let rewritten = try self.rewrittenSlotTypeUnder(rule, declared: declared, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
+				revised.retypeField(index, declaredType: rewritten)
+				anyMoved = true
+			end 'theRuleClaimsIt'
+
+			let brand = layout.fieldDeclaredBrand(index)
+			let minted = self.sharedInstanceMintOr(brand, readerFilePath: layout.declFilePath, fallback: brand)
+
+			if not minted.equals(brand) 'aBrandMoved'
+				revised.rebrandField(index, declaredBrand: minted)
+				anyMoved = true
+			end 'aBrandMoved'
+		end 'eachField'
+
+		if not anyMoved 'nothingToRewrite'
+			throw AbsentError.absent
+		end 'nothingToRewrite'
+
+		return freeze revised.clone()
+	end 'revisedStructWithRecordedTypes'
 
 	// One recorded SLOT type under `rule`, or a refusal when the rule does not claim it. The one rule that
 	// reaches a slot is spelled here; the two that exist only for a `returns` clause panic rather than
@@ -6007,20 +6047,10 @@ extension ProgramSignatures
 			return
 		end 'noInterfaceIsDeclared'
 
-		for (_, slot) in self.structSlots 'eachStruct'
-			let layout = self.ownLayoutAtSlot(slot)
+		self.repairSweptStructFields(SweptFieldRepair.interfaceTyped)
 
-			for index in 0 upto layout.fieldCount() 'eachField'
-				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
-
-				if let asInterface = try self.sweptInterfaceTypeOf(declared, readerFilePath: layout.declFilePath) 'namesAnInterface'
-					layout.retypeField(index, declaredType: asInterface)
-				end 'namesAnInterface'
-			end 'eachField'
-		end 'eachStruct'
-
-		// ⚠ **THE RETURN-TYPE HALF IS THE SHARED WALK AND THE FIELD HALF CANNOT BE.** A field re-tag writes
-		// THROUGH a layout (`retypeField`) and touches no map, so it may run in place above; a return-type
+		// ⚠ **THE RETURN-TYPE HALF IS THE SHARED WALK AND THE FIELD HALF CANNOT BE.** A field re-tag refiles a
+		// revised layout over its own slot and touches no map, so it needs no collect-then-apply; a return-type
 		// re-tag rewrites the very map it walks, which is the collect-then-apply
 		// `rewriteRecordedReturnTypes` states once for all three rules.
 		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredInterface)
@@ -6046,7 +6076,7 @@ extension ProgramSignatures
 
 			match self.inlineRecordShapeOf(layout) 'shape'
 				notInline then continue
-				packed(bitWidths) then layout.settleInlinePacking(bitWidths)
+				packed(bitWidths) then self.refileOwnLayout(slot, settled: layout.packedInline(bitWidths))
 			end 'shape'
 		end 'eachDeclaredType'
 
@@ -6149,8 +6179,8 @@ extension ProgramSignatures
 		return globalStdType(tag, name: name)
 	end 'foldedGlobalStdType'
 
-	export function inlineBitWidthsOf(name ByteArray) returns BitWidthArray
-		return (try self.registeredLayout(name) otherwise panic("ProgramSignatures.inlineBitWidthsOf: `{String.from(name)}` is not a declared type — every caller asks `nameIsInlineRecord` first")).fieldBitWidths.clone()
+	export function inlineBitWidthsOf(name ByteArray) returns immutable BitWidthArray
+		return (try self.registeredLayout(name) otherwise panic("ProgramSignatures.inlineBitWidthsOf: `{String.from(name)}` is not a declared type — every caller asks `nameIsInlineRecord` first")).fieldBitWidths
 	end 'inlineBitWidthsOf'
 
 	export function nameIsInlineRecord(name ByteArray) returns bool
@@ -6260,25 +6290,54 @@ extension ProgramSignatures
 			return
 		end 'noTypeParameterIsDeclared'
 
-		for (_, slot) in self.structSlots 'eachStruct'
-			let layout = self.ownLayoutAtSlot(slot)
-
-			// A non-generic declaring type binds nothing, so it cannot make a bare name mean an instance —
-			// `fieldTypeOf`'s own measured gate, which exists because `scopedGenericInstanceOf` returns a UNION
-			// and Maxon heap-boxes even its payload-free arm.
-			if layout.typeParamNames.isEmpty() 'scopeBindsNothing'
-				continue
-			end 'scopeBindsNothing'
-
-			for index in 0 upto layout.fieldCount() 'eachField'
-				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.normalizeSweptScopedGenericFields: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
-
-				if let asInstance = try self.sweptScopedGenericFieldTypeOf(declared, layout: layout) 'namesABareGeneric'
-					layout.retypeField(index, declaredType: asInstance)
-				end 'namesABareGeneric'
-			end 'eachField'
-		end 'eachStruct'
+		self.repairSweptStructFields(SweptFieldRepair.scopedGeneric)
 	end 'normalizeSweptScopedGenericFields'
+
+	function repairSweptStructFields(repair SweptFieldRepair)
+		for (_, slot) in self.structSlots 'eachStruct'
+			let revised = try self.revisedStructWithRepairedFields(repair, layout: self.ownLayoutAtSlot(slot)) otherwise continue
+			self.refileOwnLayout(slot, settled: revised)
+		end 'eachStruct'
+	end 'repairSweptStructFields'
+
+	function revisedStructWithRepairedFields(repair SweptFieldRepair, layout StructLayout) returns immutable StructLayout throws AbsentError
+		if repair == SweptFieldRepair.scopedGeneric and layout.typeParamNames.isEmpty() 'scopeBindsNothing'
+			throw AbsentError.absent
+		end 'scopeBindsNothing'
+
+		var firstClaimed = layout.fieldCount()
+		var firstRepair = MaxonType.unresolved
+
+		for index in 0 upto layout.fieldCount() 'eachField'
+			if let repaired = try self.repairedSweptFieldType(repair, declared: try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.revisedStructWithRepairedFields: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`"), layout: layout) 'theRepairClaimsIt'
+				firstClaimed = index
+				firstRepair = repaired
+				break
+			end 'theRepairClaimsIt'
+		end 'eachField'
+
+		if firstClaimed == layout.fieldCount() 'nothingToRepair'
+			throw AbsentError.absent
+		end 'nothingToRepair'
+
+		let revised = layout.clone()
+		revised.retypeField(firstClaimed, declaredType: firstRepair)
+
+		for index in firstClaimed + 1 upto layout.fieldCount() 'eachRepairedField'
+			if let repaired = try self.repairedSweptFieldType(repair, declared: try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.revisedStructWithRepairedFields: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`"), layout: layout) 'theRepairClaimsIt'
+				revised.retypeField(index, declaredType: repaired)
+			end 'theRepairClaimsIt'
+		end 'eachRepairedField'
+
+		return freeze revised.clone()
+	end 'revisedStructWithRepairedFields'
+
+	function repairedSweptFieldType(repair SweptFieldRepair, declared MaxonType, layout StructLayout) returns MaxonType throws MapError
+		match repair 'repair'
+			interfaceTyped then return try self.sweptInterfaceTypeOf(declared, readerFilePath: layout.declFilePath)
+			scopedGeneric then return try self.sweptScopedGenericFieldTypeOf(declared, layout: layout)
+		end 'repair'
+	end 'repairedSweptFieldType'
 
 	// The instance a swept `named` field of `layout` denotes; `MapError.keyNotFound` when the name is not a
 	// bare generic one — `sweptInterfaceTypeOf`'s shape, and its "absence is a throw" convention, so both
@@ -8482,7 +8541,7 @@ extension ProgramSignatures
 	// The `StructLayout` of instance `id`'s base struct. Precondition: `genericInstanceHasBaseLayout(id)` —
 	// an instance is interned for ANY base a `with` names, declared or not, so the caller opens the walk with
 	// that gate. See its header for the two ways a base has no layout and why they are one stop condition.
-	export function baseLayoutOf(id GenericInstanceId) returns StructLayout
+	export function baseLayoutOf(id GenericInstanceId) returns immutable StructLayout
 		let baseName = self.genericInstanceBaseName(id)
 		return try self.registeredLayout(baseName) otherwise panic("ProgramSignatures.baseLayoutOf: generic instance {id}'s base struct '{String.from(baseName)}' has no declared layout — every field walk opens with genericInstanceHasBaseLayout")
 	end 'baseLayoutOf'
@@ -9190,11 +9249,11 @@ extension ProgramSignatures
 		return false
 	end 'typeMentionsTypeParameter'
 
-	export function tupleElementTypesOf(t MaxonType) returns MaxonTypeArray throws MapError
+	export function tupleElementTypesOf(t MaxonType) returns immutable MaxonTypeArray throws MapError
 		return (try self.tupleLayoutOf(t)).fieldTypes
 	end 'tupleElementTypesOf'
 
-	function tupleLayoutOf(t MaxonType) returns StructLayout throws MapError
+	function tupleLayoutOf(t MaxonType) returns immutable StructLayout throws MapError
 		if not tagNamesADeclaredType(maxonTypeTag(t)) 'notADeclaredType'
 			throw MapError.keyNotFound
 		end 'notADeclaredType'
@@ -9202,7 +9261,7 @@ extension ProgramSignatures
 		return try self.tupleLayoutNamed(try self.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.tupleLayoutOf: type-name id {typeNameIdOf(t)} is not in the index's own interner, which every instance argument and field type is minted into"))
 	end 'tupleLayoutOf'
 
-	function tupleLayoutNamed(name ByteArray) returns StructLayout throws MapError
+	function tupleLayoutNamed(name ByteArray) returns immutable StructLayout throws MapError
 		if not isTupleTypeName(name) 'aPlainStruct'
 			throw MapError.keyNotFound
 		end 'aPlainStruct'

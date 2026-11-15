@@ -712,7 +712,7 @@ end 'serviceIndexTypeName'
 //
 // It THROWS rather than answering a default: "no such type" is the target classification's own first
 // verdict, and every other caller has already established the declaration.
-function serviceLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout throws MapError
+function serviceLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns immutable StructLayout throws MapError
 	match signatures.structInAnyFile(typeName) 'lookup'
 		undeclared then throw MapError.keyNotFound
 		declared(layout) then return layout
@@ -720,7 +720,7 @@ function serviceLayoutOf(signatures ProgramSignatures, typeName ByteArray) retur
 end 'serviceLayoutOf'
 
 // The layout of a type a caller has already classified a spawn TARGET.
-function spawnTargetLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
+function spawnTargetLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns immutable StructLayout
 	return try serviceLayoutOf(signatures, typeName: typeName) otherwise panic("spawnTargetLayoutOf: nothing declares `type {String.from(typeName)}` — every caller has already classified it a spawn target, which requires the declaration")
 end 'spawnTargetLayoutOf'
 

@@ -440,15 +440,16 @@ end 'remapMaxonReturnType'
 
 // Rewrite a declared struct's field types through a remap, IN PLACE.
 //
-// Two callers reconcile a file's struct layouts into a bigger table — `mergeArtifact`'s
+// The callers that reconcile a file's struct layouts into a bigger table — `mergeArtifact`'s
 // `remapArtifact` (into `Project`) and `ProgramSignatures.foldFile` (into the signature index) —
-// and they must not come to disagree about what a field's declared type means. One mechanism, two
+// and they must not come to disagree about what a field's declared type means. One mechanism, many
 // callers, exactly as `foldInto` + `remapMaxonReturnType` already are for a signature.
 //
-// It mutates rather than returning a copy because `StructLayout` is a heap `type` and both callers
-// own the array they are folding: rebuilding the record would allocate a second layout per declared
-// type to hold data neither caller keeps. The struct's NAME needs no remap — it is a `ByteArray`,
-// and names travel (see SignatureIndex's header on the id problem).
+// It mutates rather than returning a copy because those callers own the staging array they are
+// folding: rebuilding the record would allocate a second layout per declared type to hold data neither
+// caller keeps. A settled layout is frozen, so `remappedStructLayout` runs it on a copy. The struct's
+// NAME needs no remap — it is a `ByteArray`, and names travel (see SignatureIndex's header on the id
+// problem).
 //
 // ⚠ **THE HAND-OFF IS `StructLayout.replaceFieldTypes` AND NOT A BARE ASSIGNMENT, BECAUSE THE LAYOUT NOW
 // CACHES GEOMETRY DERIVED FROM THIS COLUMN** (`fieldOffsets`/`slotBytes`, the existential two-slot
@@ -463,6 +464,13 @@ function remapStructLayoutFieldTypes(layout StructLayout, remap TypeIdRemap)
 	layout.recordWhereConstraints(renumberedWhereConstraints(layout.whereConstraints, remap: remap))
 	layout.recordConformances(layout.conformsTo, bindings: renumberedConformanceBindings(layout.conformanceBindings, remap: remap))
 end 'remapStructLayoutFieldTypes'
+
+function remappedStructLayout(layout StructLayout, remap TypeIdRemap) returns immutable StructLayout
+	let copy = layout.clone()
+	remapStructLayoutFieldTypes(copy, remap: remap)
+
+	return freeze copy.clone()
+end 'remappedStructLayout'
 
 // Rewrite a declared union/enum's PAYLOAD field types through a remap, IN PLACE — the enum twin of
 // `remapStructLayoutFieldTypes`, and it exists for the identical reason: a payload field declared

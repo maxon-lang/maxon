@@ -2113,7 +2113,7 @@ union RegistryReplacement
 end 'RegistryReplacement'
 
 union DestructuredSource
-	tuple(layout StructLayout)
+	tuple(layout immutable StructLayout)
 	deferred
 end 'DestructuredSource'
 
@@ -5699,7 +5699,7 @@ end 'MemberAccess'
 // PROVED beside a box it merely ASSUMED. They were two separate reads off one `VarInfo` at three
 // call sites, and one of the two reads was wrong at all three — see `requireStructBase`.
 type StructBase
-	export var layout as StructLayout
+	export var layout as immutable StructLayout
 	export let box as ValueId
 
 	// The name an E3207 would blame for a write through this base, `unblamed` when it may be written
@@ -5714,7 +5714,7 @@ type StructBase
 	// does, and is a DIFFERENT fact from it.
 	export var subjectName as StorageSubject
 
-	static function create(layout StructLayout, box ValueId, immutableName immutable ByteArray, subjectName StorageSubject) returns StructBase
+	static function create(layout immutable StructLayout, box ValueId, immutableName immutable ByteArray, subjectName StorageSubject) returns StructBase
 		return Self{layout: layout, box: box, immutableName: immutableName, subjectName: subjectName}
 	end 'create'
 end 'StructBase'
@@ -5835,13 +5835,13 @@ end 'bindingMayRootACell'
 // `resolveFieldChain` is the one producer; a chained read and a chained write are its two consumers.
 type FieldChainStep
 	export let box as ValueId
-	export var layout as StructLayout
+	export var layout as immutable StructLayout
 	export let lastFieldTok as Token
 	export let baseTok as Token
 	export var baseBinding as VarInfo
 	export var cell as ArgumentRoot
 
-	static function create(box ValueId, layout StructLayout, lastFieldTok Token, baseTok Token, baseBinding VarInfo, cell ArgumentRoot) returns FieldChainStep
+	static function create(box ValueId, layout immutable StructLayout, lastFieldTok Token, baseTok Token, baseBinding VarInfo, cell ArgumentRoot) returns FieldChainStep
 		return Self{box: box, layout: layout, lastFieldTok: lastFieldTok, baseTok: baseTok, baseBinding: baseBinding, cell: cell}
 	end 'create'
 end 'FieldChainStep'
@@ -7173,7 +7173,7 @@ enum ArrayStaticKind
 end 'ArrayStaticKind'
 
 union ImageNote
-	construction(layout StructLayout, fields ValueIdArray)
+	construction(layout immutable StructLayout, fields ValueIdArray)
 	call(callee immutable ByteArray, args ValueIdArray, labels NameRoster)
 	unionCase(typeName immutable ByteArray, caseName immutable ByteArray)
 	emptyContainer
@@ -10133,7 +10133,7 @@ type Parser
 	// they are the fields of. Every instance method of a type installs the same aliases, and resolving one field's type
 	// probes several registries — resolved per method, a type's parse would cost its field count times its method count.
 	var selfFieldTypes as MaxonTypeArray
-	var selfFieldTypesLayout as StructLayoutArray
+	var selfFieldTypesLayout as SettledStructLayoutArray
 
 	// The GENERIC TYPE PARAMETERS of the type currently being declared — `[T]` while parsing
 	// `type Box uses T`, empty otherwise. It is how `parseTypeReference` recognizes a bare `T` as a
@@ -10161,7 +10161,7 @@ type Parser
 	// interface declares `digest`) and how `parseFunction` decides an instance method needs witness
 	// parameters. Written and cleared in lockstep with `enclosingTypeParams` (`parseTypeDeclaration`/
 	// `recordScannedType` are the writers).
-	var enclosingWhereConstraints as WhereConstraintArray
+	var enclosingWhereConstraints as immutable WhereConstraintArray
 
 	// ⭐⭐ **THE EXTRA CLAUSE OF THE CONDITIONAL TYPE EXTENSION whose body is being parsed** — the
 	// half of `enclosingWhereConstraints` that came from the `extension … where …` header rather than from
@@ -10665,8 +10665,8 @@ type Parser
 			enclosingTypeIsEnum: false,
 			enclosingTypeParams: freeze NameRoster.create(0),
 			selfFieldTypes: MaxonTypeArray.create(0),
-			selfFieldTypesLayout: StructLayoutArray.create(0),
-			enclosingWhereConstraints: WhereConstraintArray.create(0),
+			selfFieldTypesLayout: SettledStructLayoutArray.create(0),
+			enclosingWhereConstraints: freeze WhereConstraintArray.create(0),
 			enclosingExtensionConstraints: WhereConstraintArray.create(0),
 			declaringWitnessParamBase: 0,
 			declaringWitnessParamCount: 0,

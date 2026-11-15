@@ -2482,7 +2482,7 @@ extension Parser
 		return self.valueIsBufferSurface(result) and not self.signatures.returnsFreshValue(callee)
 	end 'callResultMayViewItsInputs'
 
-	function layoutOfOrigin(origin FieldOrigin) returns StructLayout
+	function layoutOfOrigin(origin FieldOrigin) returns immutable StructLayout
 		match self.signatures.structFor(origin.layoutName, readerFilePath: self.job.path) 'declaration'
 			undeclared then panic("layoutOfOrigin: a field was read out of a record the index no longer declares")
 			declared(layout) then return layout
@@ -3218,7 +3218,7 @@ extension Parser
 
 	// The `<T>.handle` layout, or a panic: the companions were minted for every ACCEPTED spawn target inside
 	// `queryProgramSignatures`, and every caller here has just been through `classifyServiceTarget`.
-	function serviceHandleLayout(typeName ByteArray) returns StructLayout
+	function serviceHandleLayout(typeName ByteArray) returns immutable StructLayout
 		return match self.signatures.structInAnyFile(serviceHandleCompanionName(typeName)) 'lookup'
 			declared(layout) gives layout
 			undeclared panic("serviceHandleLayout: nothing declares `type {String.from(serviceHandleCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it for every accepted spawn target before any body is parsed, and this caller has already accepted one")
@@ -7128,7 +7128,7 @@ extension Parser
 	// resolves them against the index's interner (`ProgramSignatures.fieldTypeOf`'s precondition). Read that
 	// way, a sweep-minted `named` element denotes whichever name the index numbered alike — a record element
 	// classified scalar is stored raw and released at scope exit.
-	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, capabilities ParamCapabilityArray, anchor Token) returns StructLayout throws SourceParseError
+	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, capabilities ParamCapabilityArray, anchor Token) returns immutable StructLayout throws SourceParseError
 		let name = try self.internedTupleName(elements, brands: brands, capabilities: capabilities, from: self.artifact.typeNames, anchor: anchor)
 
 		if not self.memos.filedTupleNames.contains(name) 'firstMintInThisFile'
@@ -7151,7 +7151,7 @@ extension Parser
 	// is why a miss is a panic — every tuple type in the compiler is registered by `internTupleType` before
 	// anything is typed with it. A tuple's name is unspellable in source, so no alias can shadow it and the
 	// reader-scoped `structFor` has nothing to add.
-	function registeredTupleLayout(name ByteArray) returns StructLayout
+	function registeredTupleLayout(name ByteArray) returns immutable StructLayout
 		match self.signatures.structInAnyFile(name) 'registered'
 			declared(layout) then return layout
 			undeclared then panic("registeredTupleLayout: the tuple `{String.from(name)}` is not registered — every tuple `structRef` in the compiler names a layout `internTupleType` registered before it handed the name back")
@@ -8931,7 +8931,7 @@ extension Parser
 	// ⚠ It takes the TOKEN and reads the name off it, rather than taking both: the name and the position are
 	// one fact about one token, and a second parameter is a licence for a later caller to make a diagnostic
 	// NAME one token while POINTING AT another.
-	function requireConstructible(typeTok Token) returns StructLayout throws SourceParseError
+	function requireConstructible(typeTok Token) returns immutable StructLayout throws SourceParseError
 		let typeName = typeTok.value
 
 		// The RESTRICTION is checked before the LOOKUP, and the order is the decision: `Foo{…}`
@@ -9897,9 +9897,9 @@ extension Parser
 		return self.job.initializerRole == InitializerRole.recordProbe
 	end 'notingImages'
 
-	function noteConstructionImage(box ValueId, layout StructLayout, fields ValueIdArray)
+	function noteConstructionImage(box ValueId, layout immutable StructLayout, fields ValueIdArray)
 		if self.notingImages() 'theProbeReadsNotes'
-			self.imageNotes.upsert(box, value: ImageNote.construction(layout.clone(), fields: fields.clone()))
+			self.imageNotes.upsert(box, value: ImageNote.construction(layout, fields: fields.clone()))
 		end 'theProbeReadsNotes'
 	end 'noteConstructionImage'
 

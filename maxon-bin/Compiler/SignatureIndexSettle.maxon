@@ -6939,7 +6939,7 @@ extension ProgramSignatures
 		end 'outcome'
 	end 'nestedRecordBoxSlot'
 
-	function nullaryFactoryLayoutOf(declared MaxonType) returns StructLayout throws AbsentError
+	function nullaryFactoryLayoutOf(declared MaxonType) returns immutable StructLayout throws AbsentError
 		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise throw AbsentError.absent
 
 		match self.constFactoryConstructionAt(qualifiedMethodName(name, methodName: CreateMethod)) 'known'
@@ -6948,7 +6948,7 @@ extension ProgramSignatures
 		end 'known'
 	end 'nullaryFactoryLayoutOf'
 
-	function nullaryLayout(layout StructLayout, paramNames NameRoster) returns StructLayout throws AbsentError
+	function nullaryLayout(layout immutable StructLayout, paramNames NameRoster) returns immutable StructLayout throws AbsentError
 		if paramNames.count() != 0 'takesArguments'
 			throw AbsentError.absent
 		end 'takesArguments'
@@ -8047,7 +8047,7 @@ extension ProgramSignatures
 	// The layout a `construct` node names. The probe recorded the node only after `Parser.requireConstructible`
 	// answered `declared` for this very name, so a miss here is the declaration sweep and the arena disagreeing
 	// about what a `type` is — `recordedDeclFor`'s drift guard, stated for a struct.
-	function constStructLayoutOf(typeName ByteArray, declName ByteArray) returns StructLayout
+	function constStructLayoutOf(typeName ByteArray, declName ByteArray) returns immutable StructLayout
 		match self.structInAnyFile(typeName) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("ProgramSignatures.constStructLayoutOf: '{String.from(declName)}' is initialized by a `{String.from(typeName)}\{…\}` literal, and no file declares `type {String.from(typeName)}` — the probe records the form only after `Parser.requireConstructible` has resolved that very layout")
@@ -8220,7 +8220,7 @@ extension ProgramSignatures
 
 	// The base layout an imaged container's box is described by — read back through the SAME door the
 	// admission read it through, so the fold's proof and the image's field walk cannot be about two layouts.
-	function containerBoxLayoutOf(giid GenericInstanceId) returns StructLayout
+	function containerBoxLayoutOf(giid GenericInstanceId) returns immutable StructLayout
 		match self.constFactoryConstructionAt(qualifiedMethodName(self.genericInstanceBaseName(giid), methodName: CreateMethod)) 'known'
 			folds(layout, _) then return layout
 			unfoldable then panic("ProgramSignatures.containerBoxLayoutOf: generic instance {giid} is imaged but its base declares no foldable `{String.from(CreateMethod)}` — `declaredContainerBoxIsImageData` answers false for exactly that, and it is the one thing that decides imaging")
@@ -10508,7 +10508,7 @@ extension ProgramSignatures
 		return self.tuplesConflict(expectedName, got: gotName)
 	end 'nestedTuplesConflict'
 
-	function registeredTupleLayoutNamed(name ByteArray) returns StructLayout
+	function registeredTupleLayoutNamed(name ByteArray) returns immutable StructLayout
 		return try self.registeredLayout(self.canonicalNameOfStruct(name)) otherwise panic("ProgramSignatures.registeredTupleLayoutNamed: tuple `{String.from(name)}` is not registered — `internTupleType` registers the layout before it hands the name back")
 	end 'registeredTupleLayoutNamed'
 
@@ -11574,9 +11574,9 @@ extension ProgramSignatures
 	end 'declaredEnumNames'
 
 	// ⭐⭐ **REPLACE WHAT THE SWEEP RECORDED FOR ONE `implements` CLAUSE WITH THE WHOLE-PROGRAM RE-READ'S
-	// ANSWER** — the write half of `Queries.foldConformanceClauses`. It writes THROUGH the registry's
-	// own layout (`normalizeSweptInterfaceTypes`' shape one column over), so every reader that already holds
-	// one sees the corrected list; nothing is re-keyed and no map is rewritten.
+	// ANSWER** — the write half of `Queries.foldConformanceClauses`. The registry's layout is frozen, so
+	// the answer lands on a copy that is filed over the same slot; a reader holding the earlier layout
+	// keeps the sweep's list.
 	//
 	// ⚠ **THE DECLARING FILE IS CHECKED, AND IT IS THE ONLY THING STANDING BETWEEN THIS AND A DROPPED
 	// DECLARATION.** `recordStruct` DROPS a user declaration that contests a compiler-owned name, leaving the
@@ -11602,8 +11602,10 @@ extension ProgramSignatures
 			enumLayout.recordConformances(clause.names)
 			fileEnumLayout(self.mainThreadSettled().enumTypes, layout: enumLayout)
 		end 'anEnum' else 'aType'
-			let layout = try self.sweptLayoutDeclaredAt(site) otherwise return
-			layout.recordConformances(clause.names, bindings: clause.bindings)
+			let slot = try self.sweptSlotDeclaredAt(site) otherwise return
+			let revised = self.ownLayoutAtSlot(slot).clone()
+			revised.recordConformances(clause.names, bindings: clause.bindings)
+			self.refileOwnLayout(slot, settled: freeze revised.clone())
 		end 'aType'
 
 		let named = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeRefoldedConformance), bytes: site.declName)
@@ -11611,8 +11613,10 @@ extension ProgramSignatures
 	end 'refoldConformanceClause'
 
 	export function refoldWhereConstraints(site ConformanceClauseDeclSite, constraints WhereConstraintArray)
-		let layout = try self.sweptLayoutDeclaredAt(site) otherwise return
-		layout.recordWhereConstraints(constraints)
+		let slot = try self.sweptSlotDeclaredAt(site) otherwise return
+		let revised = self.ownLayoutAtSlot(slot).clone()
+		revised.recordWhereConstraints(constraints)
+		self.refileOwnLayout(slot, settled: freeze revised.clone())
 
 		self.hash = self.mixWhereConstraints(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeRefoldedWhereConstraint), bytes: site.declName), constraints: constraints)
 	end 'refoldWhereConstraints'

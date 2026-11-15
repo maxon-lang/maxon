@@ -28,7 +28,7 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "baseline"): "IndexBaseline.unsettled()",
     ("ProgramSignatures", "journal"): "IndexJournal.create()",
     ("ProgramSignatures", "rowSetLog"): "RowSetLog.closed()",
-    ("ProgramSignatures", "mintedTupleLayouts"): "StructLayoutArray.create(0)",
+    ("ProgramSignatures", "mintedTupleLayouts"): "SettledStructLayoutArray.create(0)",
     ("ProgramSignatures", "published"): "SettledCellArray.create(0)",
     ("ProgramSignatures", "sharedSettled"): "freeze SettledDeclarations.unused()",
     ("ProgramSignatures", "contestedAliasesDigest"): "Hasher.empty()",
