@@ -245,7 +245,7 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 
 ## An author extension method on a library type captures a bare call inside the library, cold but not warm
 - priority: normal
-- status: open
+- status: claimed session_01SFxFLo9SEBchUck6FPwAPt 2026-11-15
 - where: maxon-bin/Compiler, isImplicitSelfMethod: a bare call resolves to a sibling through a
   program-wide member lookup that includes an author's extension methods
 - seen: the spec-suite speed plan's forward-callee landing; f518f20 behaves the same. An author
