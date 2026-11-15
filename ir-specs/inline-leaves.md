@@ -11779,7 +11779,7 @@ func @main {
     x64.callDirect __managed_push
     x64.jmp __im_cont
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1119: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1113: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
