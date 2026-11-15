@@ -24,7 +24,7 @@ ruling, a release plan or an assignment is not made until it is written there.
 Maxon is public. **What a contributor needs is public; what concerns the maintainer's own agents is
 private.**
 
-| public — `maxon-lang/maxon`, the Roadmap and the Backlog | private — the fleet repository (`$MAXON_FLEET_REPO`) |
+| public — `maxon-lang/maxon`, the Roadmap and the Backlog | private — the fleet repository (`git config --global maxon.fleetRepo`) |
 |---|---|
 | `design` issues: the direction, every design question and its ruling | `task` issues: which session owns what, its area, its status |
 | milestones: what each release carries | mailboxes: every message to and from a session |
@@ -143,7 +143,7 @@ workers than an account has, ask the user once whether to start that many more s
 ## Assigning
 
 **A task is one `/land` (or one `/plan-and-land`) — never a slice of one.** Open a `task` issue in the
-fleet repository for it (`gh issue create -R $MAXON_FLEET_REPO --label task`), its body holding the
+fleet repository for it (`gh issue create -R <fleet repository> --label task`), its body holding the
 fields below, then send `ASSIGN` carrying the same:
 
 1. the task issue number and a one-line goal;

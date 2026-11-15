@@ -28,10 +28,17 @@ function fail(message) {
   process.exit(1);
 }
 
+const FLEET_REPO_CONFIG_KEY = 'maxon.fleetRepo';
+
+let fleetRepo = null;
+
 function repo() {
-  const name = process.env.MAXON_FLEET_REPO;
-  if (!name) fail('MAXON_FLEET_REPO is not set; name the private fleet repository as owner/name');
-  return name;
+  if (fleetRepo) return fleetRepo;
+  const result = spawnSync('git', ['config', '--global', '--get', FLEET_REPO_CONFIG_KEY], { encoding: 'utf8' });
+  const name = result.status === 0 ? result.stdout.trim() : '';
+  if (!name) fail(`git config --global ${FLEET_REPO_CONFIG_KEY} is not set; set it to the private fleet repository, owner/name`);
+  fleetRepo = name;
+  return fleetRepo;
 }
 
 function gh(args, input) {

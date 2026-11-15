@@ -14,7 +14,9 @@ designs and release plan live on that GitHub project, and what is proposed but u
 Backlog (`CONTRIBUTING.md`, "The roadmap"): read the rulings that touch your change before you start it. A change that contradicts one is a question on its `design` issue, not
 an implementation choice.
 
-**When `MAXON_FLEET_REPO` is set, you are a worker in the maintainer's fleet**, run by the
+**When `git config --global --get maxon.fleetRepo` prints a repository, you are a worker in the
+maintainer's fleet** — check it at the start of every task, since a session that predates the setting
+is in the fleet as soon as it is set — run by the
 `orchestrator` session (`.claude/agents/orchestrator.md`), which owns direction and assigns all work so
 that no two sessions own the same problem. It may be on another machine or another Claude account, so
 every message goes through the private fleet repository with `node .claude/fleet/fleet.mjs`, never
@@ -50,7 +52,10 @@ through `SendMessage`. Your fleet id is your session's name (`claude -n <id>`); 
 - **No answer from the orchestrator within 30 minutes:** tell the user, and fall back to the user and
   `/land` §10.
 
-Without `MAXON_FLEET_REPO`, none of this applies: `/land` §10 and the user are your coordination.
+- **Joining with work already under way:** send a `REQUEST` describing it and carry on with it unless the
+  answer is `STOP`; its `ASSIGN` gives the task its number.
+
+Without `maxon.fleetRepo`, none of this applies: `/land` §10 and the user are your coordination.
 
 A symptom with no mechanism (a one-off hang, a flake that will not reproduce) is the next thing to debug,
 not a risk to record: never ship it described as "unexplained". A hang and a crash in the same subsystem
