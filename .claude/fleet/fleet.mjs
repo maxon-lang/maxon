@@ -169,13 +169,27 @@ function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 }
 
-function account() {
+const ACCOUNT_LABEL_PATTERN = new RegExp(`^[0-9a-f]{${ACCOUNT_LABEL_LENGTH}}$`);
+const ACCOUNT_ENV = 'MAXON_FLEET_ACCOUNT';
+const ACCOUNT_OPTION_HINT = `pass --account <label> or set ${ACCOUNT_ENV}, the account's label as \`fleet.mjs status\` shows it`;
+
+function account(options) {
+  const given = options.account ?? process.env[ACCOUNT_ENV];
+  if (given !== undefined && !ACCOUNT_LABEL_PATTERN.test(given)) fail(`the account label must be ${ACCOUNT_LABEL_LENGTH} lowercase hex digits; ${ACCOUNT_OPTION_HINT}`);
+
   const result = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8', shell: true });
-  if (result.status !== 0) fail(`claude auth status exited ${result.status}`);
-  const status = JSON.parse(result.stdout);
-  if (!status.orgId) fail('claude auth status names no organisation; is this session logged in to claude.ai?');
+  const status = result.status === 0 ? JSON.parse(result.stdout) : {};
+  const planTier = status.planTier ?? status.subscriptionType ?? 'unknown';
+
+  if (!status.orgId) {
+    if (given !== undefined) return { label: given, planTier };
+    if (result.status !== 0) fail(`claude auth status exited ${result.status}; ${ACCOUNT_OPTION_HINT}`);
+    fail(`claude auth status names no organisation, as in a cloud session; ${ACCOUNT_OPTION_HINT}`);
+  }
+
   const label = createHash('sha256').update(status.orgId).digest('hex').slice(0, ACCOUNT_LABEL_LENGTH);
-  return { label, planTier: status.planTier ?? status.subscriptionType ?? 'unknown' };
+  if (given !== undefined && given !== label) fail(`account label ${given} is not this session's account, ${label}`);
+  return { label, planTier };
 }
 
 function limitKey(limit) {
@@ -291,7 +305,7 @@ async function commandHeartbeat(options) {
   const state = required(options, 'state');
   if (!STATES.includes(state)) fail(`--state must be one of ${STATES.join(', ')}`);
   const model = required(options, 'model');
-  const { label, planTier } = account();
+  const { label, planTier } = account(options);
   const usage = await usageSample();
   const data = {
     id,

@@ -28,7 +28,9 @@ checkout.
   `READY`. Start only on its `ASSIGN`. A `STOP` means another session owns the problem: tell the user.
 - **Check your inbox at every step boundary** (`fleet.mjs inbox --as <id>`, then `ack` what you have
   acted on), and send a `heartbeat --as <id> --model <model id> --state working --task <n>` there too:
-  the orchestrator sizes the fleet to the plans' usage from it.
+  the orchestrator sizes the fleet to the plans' usage from it. A cloud session cannot name its account
+  itself: it heartbeats with `--account <label>`, or with `MAXON_FLEET_ACCOUNT` set in its environment,
+  the label `fleet.mjs status` shows for the account it runs on.
 - **`PAUSE`:** stop at the next step boundary, keeping your task and your tree — never inside §8's gates
   or the push. Heartbeat `--state paused` and wait (below) for `RESUME`.
 - **Waiting** — for an `ASSIGN`, a `RULING` or a `RESUME` — is `fleet.mjs wait --as <id>` run with
