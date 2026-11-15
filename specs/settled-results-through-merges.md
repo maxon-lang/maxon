@@ -1419,3 +1419,200 @@ end 'main'
 ```maxoncstderr
 error E3211: <fragment>:35:11: 'Bump' mutates captures and cannot be called through read-only data
 ```
+
+<!-- test: a-conformer-returning-a-receiver-field-through-a-frozen-holder-is-not-writable -->
+`Shelf.part` hands back a field of its receiver without building a record, and `through` passes that result along from a frozen holder, so the caller holds frozen data.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+interface Parted
+	function part() returns Digits
+end 'Parted'
+
+type Shelf implements Parted
+	var items as Digits
+
+	static function create() returns Self
+		return Self{items: Digits.create(0)}
+	end 'create'
+
+	function part() returns Digits
+		return self.items
+	end 'part'
+end 'Shelf'
+
+function through(h Parted) returns Digits
+	return h.part()
+end 'through'
+
+function main() returns ExitCode
+	let h = freeze Shelf.create()
+	let d = through(h)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:28:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-conformer-reached-through-an-interface-field-of-a-frozen-holder-is-not-writable -->
+The call dispatches through a witness table, so the caller cannot see which conformer answers, and the holder is frozen all the same.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+interface Parted
+	function part() returns Digits
+end 'Parted'
+
+type Shelf implements Parted
+	var items as Digits
+
+	static function create() returns Self
+		return Self{items: Digits.create(0)}
+	end 'create'
+
+	function part() returns Digits
+		return self.items
+	end 'part'
+end 'Shelf'
+
+type Cabinet
+	var parted as Parted
+
+	static function create() returns Self
+		return Self{parted: Shelf.create()}
+	end 'create'
+end 'Cabinet'
+
+function through(c Cabinet) returns Digits
+	return c.parted.part()
+end 'through'
+
+function main() returns ExitCode
+	let c = freeze Cabinet.create()
+	let d = through(c)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:36:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-conformer-declared-mutable-self-reached-through-a-frozen-holder-is-not-writable -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+interface Parted
+	function part(mutable self) returns Digits
+end 'Parted'
+
+type Shelf implements Parted
+	var items as Digits
+
+	static function create() returns Self
+		return Self{items: Digits.create(0)}
+	end 'create'
+
+	function part() returns Digits
+		return self.items
+	end 'part'
+end 'Shelf'
+
+type Cabinet
+	var parted as Parted
+
+	static function create() returns Self
+		return Self{parted: Shelf.create()}
+	end 'create'
+end 'Cabinet'
+
+function main() returns ExitCode
+	let c = freeze Cabinet.create()
+	let d = c.parted.part()
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:32:4: cannot write through a read-only value, as it joins immutable and mutable data
+```
+
+<!-- test: a-method-relaying-a-mixed-getter-with-fixed-arguments-is-not-writable-for-its-caller -->
+`relay` names no flag of its own, so nothing about its call tells the caller that `pick` may hand back the frozen `shared` array.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+type Holder
+	let shared as immutable Digits
+	var own as Digits
+
+	static function create() returns Self
+		return Self{shared: freeze Digits from [2, 3], own: Digits.create(0)}
+	end 'create'
+
+	function pick(flag bool) returns Digits
+		if flag 'sharedOne'
+			return self.shared
+		end 'sharedOne'
+
+		return self.own
+	end 'pick'
+
+	function relay() returns Digits
+		return self.pick(true)
+	end 'relay'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create()
+	let d = holder.relay()
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:29:4: cannot write 'a container' through 'a call result', which is read-only
+```
+
+<!-- test: a-mixed-getter-called-on-a-fresh-receiver-is-not-writable-for-its-caller -->
+`Holder.create()` is a clean call, so nothing it was handed is read-only, and the result of `pick` is read-only because `pick` itself may return the frozen `shared` array.
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias Digits = Array with Digit
+
+type Holder
+	let shared as immutable Digits
+	var own as Digits
+
+	static function create() returns Self
+		return Self{shared: freeze Digits from [2, 3], own: Digits.create(0)}
+	end 'create'
+
+	function pick(flag bool) returns Digits
+		if flag 'sharedOne'
+			return self.shared
+		end 'sharedOne'
+
+		return self.own
+	end 'pick'
+end 'Holder'
+
+function main() returns ExitCode
+	let d = Holder.create().pick(true)
+	d.push(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:24:4: cannot write 'a container' through 'a call result', which is read-only
+```
