@@ -1177,7 +1177,7 @@ extension Parser
 			let negatedAlias = self.operandAliasName(operand)
 
 			if self.namesAFullWidthAlias(OperandAlias.named(negatedAlias)) 'aFullWidthQuantity'
-				throw SourceParseError.registryRefused(ErrorCode.semanticUnsignedNegation, explanation: unsignedNegationMessage(String.from(negatedAlias)), line: opTok.line, column: opTok.column, note: DiagnosticNote.none)
+				throw SourceParseError.registryRefused(ErrorCode.semanticUnsignedNegation, explanation: unsignedNegationMessage(String.from(negatedAlias)), line: opTok.line, column: opTok.column, notes: PositionedNoteArray.create(0))
 			end 'aFullWidthQuantity'
 
 			let negated = self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
@@ -1281,12 +1281,13 @@ extension Parser
 		self.releaseHandOffBuildTemps(tempFloor, ownedFloor: ownedFloor, handedOff: frozenOperand, anchor: opTok)
 
 		match self.transferWalkOfValue(operand) 'graph'
-			refused(noun) then throw self.unwalkableTransferGraphError(operand, blame: "a `freeze`", noun: noun, anchor: opTok)
+			refused(noun) then throw self.shareRefusalError(self.displayTypeNameOf(self.tagOf(operand), nameId: self.valueNameId(operand)), door: ShareDoor.freeze, reason: "it is {noun}", anchor: opTok)
 			closed or
 			walkedBy or
 			walkedThroughWitness then break
 		end 'graph'
 
+		self.recordShareDoor(ShareDoor.freeze, subject: ShareSubject.value(operand), line: opTok.line, column: opTok.column)
 		self.emitTransferGraphProof(operand, anchor: opTok)
 
 		var frozen = operand
@@ -3214,10 +3215,10 @@ extension Parser
 			factoryParameterIsNotTransferable or
 			messageParameterNeedsACapability or
 			messageReplyNeedsACapability or
-			factoryParameterNeedsACapability then throw SourceParseError.registryRefused(ErrorCode.semanticMessageNeedsACapability, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
+			factoryParameterNeedsACapability then throw SourceParseError.registryRefused(ErrorCode.semanticMessageNeedsACapability, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, notes: PositionedNoteArray.create(0))
 			messageReplyIsNotCarriable then throw SourceParseError.serviceReplyNotCarriable(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
-			messageDeclaresTheSendTimeoutLabel then throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
-			stateFieldHoldsAPromise then throw SourceParseError.registryRefused(ErrorCode.semanticServiceStateHoldsAPromise, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
+			messageDeclaresTheSendTimeoutLabel then throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, notes: PositionedNoteArray.create(0))
+			stateFieldHoldsAPromise then throw SourceParseError.registryRefused(ErrorCode.semanticServiceStateHoldsAPromise, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, notes: PositionedNoteArray.create(0))
 		end 'roster'
 	end 'requireServiceRosterIsDispatchable'
 

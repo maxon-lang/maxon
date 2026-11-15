@@ -6058,3 +6058,40 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.a-field-reaching-its-owner-through-a-held-container-nests-without-end -->
+`Nest.kids` holds an array of `Nest` over a type built from `U`, which no value of `U` is stored in; the instances are laid out all the same, so the nesting never ends.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Cell uses T
+	export let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Cell'
+
+type Nest uses T, U
+	typealias Kid = Nest with (T, Cell with U)
+	typealias Kids = Array with Kid
+	export let item as T
+	export let kids as Kids
+
+	static function create(item T) returns Self
+		return Self{item: item, kids: Kids.create(0)}
+	end 'create'
+end 'Nest'
+
+typealias TallyNest = Nest with (Tally, Tally)
+
+function main() returns ExitCode
+	let n = TallyNest.create(1)
+	print("{n.item} {n.kids.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3184: <fragment>:16:21: field 'kids' of generic type 'Nest' is declared 'Nest.Kids', which holds 'Nest' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion
+```

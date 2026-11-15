@@ -1186,6 +1186,130 @@ typealias Integer = int(i64.min to i64.max)
 7
 ```
 
+<!-- test: tuple-of-a-type-parameter-returned-by-a-function-field-text-first -->
+`Sink` never types a value at `T`: the only place `T` appears is the tuple its `make` field returns, and the tuple's release is a read of `T`'s descriptor. `Top with String` and `Top with Integer` each hand `Sink` their own, so the two instances of `Sink` must not share one descriptor. The `String` instance is built first, and an `Integer` tuple released through it would free an integer as text.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Sink uses K, T
+	typealias Pair = (T, K)
+	typealias Maker = function() returns Pair
+	let make as Maker
+	var count as Integer
+
+	static function create(make Maker) returns Self
+		return Self{make: make, count: 0}
+	end 'create'
+
+	function run()
+		let r = self.make()
+		self.count = self.count + r.1
+	end 'run'
+
+	function total() returns Integer
+		return self.count
+	end 'total'
+end 'Sink'
+
+type Top uses U
+	typealias Maker = function() returns (U, Integer)
+	typealias S = Sink with (Integer, U)
+	var sink as S
+
+	static function create(make Maker) returns Self
+		return Self{sink: S.create(make)}
+	end 'create'
+
+	function go()
+		self.sink.run()
+	end 'go'
+
+	function total() returns Integer
+		return self.sink.total()
+	end 'total'
+end 'Top'
+
+typealias TopInt = Top with Integer
+typealias TopText = Top with String
+
+function main() returns ExitCode
+	let b = TopText.create(function() gives ("a heap string long enough to allocate", 3))
+	b.go()
+	let a = TopInt.create(function() gives (5, 2))
+	a.go()
+	print("{a.total()} {b.total()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 3
+```
+
+<!-- test: tuple-of-a-type-parameter-returned-by-a-function-field-integer-first -->
+The same program with the `Integer` instance built first: a `String` tuple released through the `Integer` descriptor would never free its text, which is exit 101.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Sink uses K, T
+	typealias Pair = (T, K)
+	typealias Maker = function() returns Pair
+	let make as Maker
+	var count as Integer
+
+	static function create(make Maker) returns Self
+		return Self{make: make, count: 0}
+	end 'create'
+
+	function run()
+		let r = self.make()
+		self.count = self.count + r.1
+	end 'run'
+
+	function total() returns Integer
+		return self.count
+	end 'total'
+end 'Sink'
+
+type Top uses U
+	typealias Maker = function() returns (U, Integer)
+	typealias S = Sink with (Integer, U)
+	var sink as S
+
+	static function create(make Maker) returns Self
+		return Self{sink: S.create(make)}
+	end 'create'
+
+	function go()
+		self.sink.run()
+	end 'go'
+
+	function total() returns Integer
+		return self.sink.total()
+	end 'total'
+end 'Top'
+
+typealias TopInt = Top with Integer
+typealias TopText = Top with String
+
+function main() returns ExitCode
+	let a = TopInt.create(function() gives (5, 2))
+	a.go()
+	let b = TopText.create(function() gives ("a heap string long enough to allocate", 3))
+	b.go()
+	print("{a.total()} {b.total()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 3
+```
+
 <!-- test: duplicate-owned-element-co-owns -->
 One owned value CAN fill two slots of one record: each slot is a durable sink and takes its own reference,
 so the tuple's drop cascade releases exactly the two it took and `s` releases the one it

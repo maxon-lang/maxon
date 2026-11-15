@@ -2377,3 +2377,31 @@ Measured with `--metrics`, before → after, deltas between rungs (allocations, 
 | 1600 | +1,011,064 → +955,072 | +15579 → −434 | +1,548,061 → +1,564,077 | +954 → +568 |
 
 `parse` cputicks are now flat within noise across the ladder (its floor is the standard library); `checkClosureCycles` reads 184 → 356 samples from N = 1600 to 3200 under `profile run` (×1.93). The constant +450 `parse` and +19,728 `signatures` allocations are the two indexes each `Parser` creates; `semanticCheck`'s +4,194 to +32,234 is each trace's edge map.
+
+### Result — 2026-11-15, the share verdict and the instantiation-closure rule are linear in generic bases, owners, door sites and binding chains
+
+Four steps decide E3171 at a share door and E2015 on a growing generic chain:
+
+- `semanticCheck` records each interface conversion and door subject (`ShareConversions`).
+- lowering's verdict (`ShareVerdict`, run inside the `deriveRuntimeNeeds` window) closes over the concrete owner instances each recorded conformer resolves to (`ShareOwners`).
+- descriptor dependence (`DescriptorDependence`) decides which parameter positions a descriptor and a bound table are keyed by.
+- one finite-instantiation-closure predicate (`InstantiationGraph`: parameter-position nodes, expansive edges, one Tarjan pass per closure) serves E3184's laid-out rows, the lowering descriptors, the owner closure and the binding chains (`ShareBindingChain`).
+
+Each closure is memoized per owner and per base once the declaration fold has sealed (`GrowthMemo`), and owners that differ only in positions nothing depends on share one walk.
+
+Read on `tests/ladders/genshare.sh <N> <mode> <out>`, since the `scale-test` corpus holds no share door. The table gives allocations per phase (`--metrics`, field 4) at N = 100 / 200 / 400 / 800, as the ratios of the differences between rungs; every run exits 0:
+
+| Ladder | `semanticCheck` | `deriveRuntimeNeeds` | `lowerMaxonToStd` | `semanticCheck` allocations |
+|---|---|---|---|---|
+| `bases` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 407,928 / 519,813 / 743,511 / 1,190,823 |
+| `owners` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 398,770 / 501,032 / 705,483 / 1,114,362 |
+| `returns` | ×1.99, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 304,099 / 311,878 / 327,384 / 358,371 |
+| `returnsfree` | ×1.99, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 302,986 / 309,757 / 323,255 / 350,234 |
+| `doors` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 341,028 / 385,983 / 475,825 / 655,503 |
+| `closure` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 397,781 / 498,819 / 700,858 / 1,104,913 |
+| `dedupe` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×1.98, ×2.00 | 354,971 / 413,006 / 529,034 / 761,078 |
+| `cycle` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 388,150 / 479,822 / 663,083 / 1,029,583 |
+| `nested` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×1.99, ×2.00 | 361,097 / 426,342 / 556,780 / 817,634 |
+| `phantom` | ×2.00, ×2.00 | ×2.00, ×2.00 | ×2.00, ×2.00 | 421,064 / 545,698 / 794,945 / 1,293,393 |
+
+`doors` also reads a doors × fields term in `parse` (×2.94, ×3.27 here; ×3.6, ×3.8 at N = 400 / 800 / 1600), and a compiler built from the parent commit reads the same ×3.6, ×3.8.

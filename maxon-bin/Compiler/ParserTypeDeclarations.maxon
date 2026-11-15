@@ -281,7 +281,7 @@ extension Parser
 	end 'nestedRangedAlias'
 
 	function duplicateNestedAliasRefusal(nameTok Token, qualified ByteArray, declaredBy String) returns SourceParseError
-		return SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared {declaredBy}", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+		return SourceParseError.registryRefused(ErrorCode.semanticDuplicateTypeAlias, explanation: "Duplicate typealias '{String.from(nameTok.value)}': `{String.from(qualified)}` is already declared {declaredBy}", line: nameTok.line, column: nameTok.column, notes: PositionedNoteArray.create(0))
 	end 'duplicateNestedAliasRefusal'
 
 	function requireNestedAliasDeclaredOnce(nameTok Token) throws SourceParseError
@@ -872,8 +872,9 @@ extension Parser
 		try self.consume(TokenKind.with)
 		let spellings = NameRoster.create(0)
 		let types = RequirementTypeArray.create(0)
-		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spellings: spellings, types: types, owner: owner)
-		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings, withArgTypes: types)
+		let sites = ConformanceBindingSiteArray.create(0)
+		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spellings: spellings, types: types, sites: sites, owner: owner)
+		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings, withArgTypes: types, withArgSites: sites)
 	end 'parseOneConformance'
 
 	// ⭐ **THE `with <TypeArg>` / `with (<TypeArgs>)` ASSOCIATED-TYPE BINDING, IN BOTH SPELLINGS.**
@@ -910,7 +911,7 @@ extension Parser
 	// its written spelling, neither of which records the parentheses, so the two list forms are already
 	// indistinguishable one line later — recording a flag on it purely so a later pass could re-derive what
 	// this function is looking straight at would be plumbing a parse fact through the whole tier for no gain.
-	function parseConformanceWithArgs(interfaceName ByteArray, spellings NameRoster, types RequirementTypeArray, owner ConformanceOwner) returns NameRoster throws SourceParseError
+	function parseConformanceWithArgs(interfaceName ByteArray, spellings NameRoster, types RequirementTypeArray, sites ConformanceBindingSiteArray, owner ConformanceOwner) returns NameRoster throws SourceParseError
 		let args = NameRoster.create(0)
 
 		if self.at(TokenKind.leftParen) and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
@@ -918,7 +919,7 @@ extension Parser
 			// routes to `parseTupleTypeReference`, which is what mints and interns the tuple's layout. So the
 			// binding this records is the same tuple instance `WithIterIterator.current`'s declared
 			// `returns (Source, Element)` resolves to, which is what `ConformanceCheck` compares.
-			try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
+			try self.readConformanceWithArgInto(args, spellings: spellings, types: types, sites: sites, owner: owner, interfaceName: interfaceName)
 			return args
 		end 'oneTupleArgument'
 
@@ -929,7 +930,7 @@ extension Parser
 			try self.consume(TokenKind.leftParen)
 
 			while true 'eachArg'
-				try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
+				try self.readConformanceWithArgInto(args, spellings: spellings, types: types, sites: sites, owner: owner, interfaceName: interfaceName)
 
 				if not self.at(TokenKind.comma) 'lastArg'
 					break
@@ -943,7 +944,7 @@ extension Parser
 			return args
 		end 'parenthesized'
 
-		try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
+		try self.readConformanceWithArgInto(args, spellings: spellings, types: types, sites: sites, owner: owner, interfaceName: interfaceName)
 
 		if not self.at(TokenKind.comma) 'singleArg'
 			return args
@@ -953,14 +954,15 @@ extension Parser
 
 		while args.count() < arity and self.at(TokenKind.comma) 'moreArgs'
 			try self.consume(TokenKind.comma)
-			try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
+			try self.readConformanceWithArgInto(args, spellings: spellings, types: types, sites: sites, owner: owner, interfaceName: interfaceName)
 		end 'moreArgs'
 
 		return args
 	end 'parseConformanceWithArgs'
 
-	function readConformanceWithArgInto(args NameRoster, spellings NameRoster, types RequirementTypeArray, owner ConformanceOwner, interfaceName ByteArray) throws SourceParseError
+	function readConformanceWithArgInto(args NameRoster, spellings NameRoster, types RequirementTypeArray, sites ConformanceBindingSiteArray, owner ConformanceOwner, interfaceName ByteArray) throws SourceParseError
 		let bindingTok = self.current()
+		sites.push(ConformanceBindingSite.create(bindingTok.line, column: bindingTok.column))
 		spellings.push(self.typeSpellingAt(self.pos))
 		let bound = try self.readConformanceWithArg(types)
 
@@ -5350,7 +5352,7 @@ extension Parser
 				let delimited = self.at(TokenKind.leftParen)
 				let spellings = NameRoster.create(0)
 				let types = RequirementTypeArray.create(0)
-				_ = try self.parseConformanceWithArgs(nameTok.value, spellings: spellings, types: types, owner: ConformanceOwner.unchecked)
+				_ = try self.parseConformanceWithArgs(nameTok.value, spellings: spellings, types: types, sites: ConformanceBindingSiteArray.create(0), owner: ConformanceOwner.unchecked)
 				bindings.push(ConformanceBinding.create(spellings, types: types))
 
 				if not delimited and not self.conformanceArityResolves(nameTok.value) 'theArityIsNotKnownYet'
@@ -9603,7 +9605,7 @@ extension Parser
 			return
 		end 'aRebindableName'
 
-		throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: letPassedToMutableParameterMessage(String.from(baseTok.value), parameter: WrittenParameter.named(SelfParamName)), line: methodTok.line, column: methodTok.column, note: DiagnosticNote.none)
+		throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: letPassedToMutableParameterMessage(String.from(baseTok.value), parameter: WrittenParameter.named(SelfParamName)), line: methodTok.line, column: methodTok.column, notes: PositionedNoteArray.create(0))
 	end 'requireTextReceiverIsRebindable'
 
 	function requireMutableBinding(binding VarInfo, nameTok Token) throws SourceParseError

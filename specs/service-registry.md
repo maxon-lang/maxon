@@ -2624,6 +2624,150 @@ typealias Integer = int(i64.min to i64.max)
 error E3171: <fragment>:12:24: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
 ```
 
+<!-- test: error.publish-of-an-interface-whose-converted-conformer-holds-a-function-value -->
+`stepped` converts a `Stepper` to `Shape`, so a published `Config` may reach a function value. The alias is accepted, because an interface field is judged at the door that shares the value; the `create` that makes the cell is such a door too, so it is refused beside the `publish`.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Step = function(Tally) returns Tally
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Plain implements Shape
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Plain'
+
+type Stepper implements Shape
+	export let step as Step
+
+	static function create(step Step) returns Self
+		return Self{step: step}
+	end 'create'
+
+	function area() returns Tally
+		return self.step(1)
+	end 'area'
+end 'Stepper'
+
+type Config
+	export let shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Config'
+
+typealias Cell = SharedValue with Config
+
+function stepped() returns Shape
+	return Stepper.create(function(n Tally) gives n + 1)
+end 'stepped'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	let cell = Cell.create(Config.create(Plain.create()))
+	cell.publish(Config.create(Plain.create()))
+	print("{cell.current().shape.area()} {stepped().area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:60:25: `Config` cannot be published to a `SharedValue`: its `shape` is a `Shape`, and `Stepper` stands at `Shape` but no share walk can mark it: its `step` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:54:9: `Stepper` is converted to `Shape` here
+error E3171: <fragment>:61:15: `Config` cannot be published to a `SharedValue`: its `shape` is a `Shape`, and `Stepper` stands at `Shape` but no share walk can mark it: its `step` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:54:9: `Stepper` is converted to `Shape` here
+```
+
+<!-- test: error.a-value-default-holding-an-interface-whose-conformer-holds-a-function-value -->
+The `default` holds a `Plain`, but `stepped` converts a `Stepper` to `Shape`, so the registry value may reach a function value.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Step = function(Tally) returns Tally
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Plain implements Shape
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Plain'
+
+type Stepper implements Shape
+	export let step as Step
+
+	static function create(step Step) returns Self
+		return Self{step: step}
+	end 'create'
+
+	function area() returns Tally
+		return self.step(1)
+	end 'area'
+end 'Stepper'
+
+type Config
+	export let shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(Plain.create())
+
+function stepped() returns Shape
+	return Stepper.create(function(n Tally) gives n + 1)
+end 'stepped'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	print("{Config.current().shape.area()} {stepped().area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:51:9: `Config` cannot be a registry value or a `SharedValue`: its `shape` is a `Shape`, and `Stepper` stands at `Shape` but no share walk can mark it: its `step` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:54:9: `Stepper` is converted to `Shape` here
+```
+
 <!-- test: error.a-field-store-through-a-shared-value-read -->
 **A READ IS A READ-ONLY VIEW.** `around` builds a record of its own around the `Inner` the shared value
 holds, so the field store through `w.inner` would change the value under every other reader; the field is declared `immutable` because the read is.
@@ -3313,7 +3457,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3171: <fragment>:10:24: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+error E3171: <fragment>:10:24: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches an OS handle — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
 ```
 
 <!-- test: error.a-value-default-holding-a-promise-is-refused -->
@@ -3343,6 +3487,155 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3171: <fragment>:17:9: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: error.create-of-an-interface-whose-converted-conformer-holds-an-os-handle -->
+The cell is made holding a `Plain`, but `open` converts a `Port` to `Shape`, so a `Config` may reach a listening socket. The alias is accepted: an interface field is judged at the door that shares the value.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Plain implements Shape
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Plain'
+
+type Port implements Shape
+	export let listener as TcpListener
+
+	static function create(listener TcpListener) returns Self
+		return Self{listener: listener}
+	end 'create'
+
+	function area() returns Tally
+		return 2
+	end 'area'
+end 'Port'
+
+type Config
+	export let shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Config'
+
+typealias Cell = SharedValue with Config
+
+function open(listener TcpListener) returns Shape
+	return Port.create(listener)
+end 'open'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let cell = Cell.create(Config.create(Plain.create()))
+	print("{cell.current().shape.area()} {open(listener).area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:60:25: `Config` cannot be published to a `SharedValue`: its `shape` is a `Shape`, and `Port` stands at `Shape` but no share walk can mark it: its `listener` is a `TcpListener`, which holds an OS handle — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:53:9: `Port` is converted to `Shape` here
+```
+
+<!-- test: error.register-of-an-interface-whose-converted-conformer-holds-a-promise -->
+`later` converts a `Pending` to `Shape`, so a registered `Config` may reach a promise. The `default` is a share door too, so it is refused beside the `register`.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyPromise = Promise with Tally
+
+function work() returns Tally
+	Scheduler.yield()
+	return 7
+end 'work'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Plain implements Shape
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Plain'
+
+type Pending implements Shape
+	export let pending as TallyPromise
+
+	static function create(pending TallyPromise) returns Self
+		return Self{pending: pending}
+	end 'create'
+
+	function area() returns Tally
+		return 2
+	end 'area'
+end 'Pending'
+
+type Config
+	export let shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(Plain.create())
+
+function later() returns Shape
+	return Pending.create(async work())
+end 'later'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	Config.register(Config.create(Plain.create()))
+	print("{Config.current().shape.area()} {later().area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:56:9: `Config` cannot be a registry value or a `SharedValue`: its `shape` is a `Shape`, and `Pending` stands at `Shape` but no share walk can mark it: its `pending` is a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:59:9: `Pending` is converted to `Shape` here
+error E3171: <fragment>:65:18: `Config` cannot be registered under `Config`: its `shape` is a `Shape`, and `Pending` stands at `Shape` but no share walk can mark it: its `pending` is a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:59:9: `Pending` is converted to `Shape` here
 ```
 
 <!-- test: a-registered-immutable-value-that-has-been-viewed-is-shared -->

@@ -8,71 +8,6 @@
 // source of truth for the 4-digit code space. A number spelled anywhere else is a
 // second copy of it, free to name one code here and another there.
 
-// A SECOND source position on one diagnostic — a line the reader has to see beside
-// the one the error is anchored at. `none` for the overwhelming majority.
-//
-// ⭐ **TWO PRODUCERS, AND THEY DIFFER IN WHETHER THEY SWAP.**
-// `Diagnostic.blamedAt` MOVES a library line into the note and promotes the user's
-// construct to the primary slot, with fixed text. `Diagnostic.withNote` ADDS
-// one: both sites are the author's, neither displaces the other, and the text is
-// the caller's.
-export union DiagnosticNote
-	none
-	at(message String, line LineNumber, column ColumnNumber, filePath FilePath)
-
-	function reportedUnder(origins StagedOriginIndex) returns DiagnosticNote
-		return match self 'note'
-			none gives DiagnosticNote.none
-			at(message, line, column, filePath) gives DiagnosticNote.at(message, line: line, column: column, filePath: origins.authoredPathOf(filePath))
-		end 'note'
-	end 'reportedUnder'
-
-	function respelledFor(respellingsOf ShadowRespellingsOf) returns DiagnosticNote
-		return match self 'note'
-			none gives DiagnosticNote.none
-			at(message, line, column, filePath) gives DiagnosticNote.at(respellingsOf(filePath).respell(message), line: line, column: column, filePath: filePath)
-		end 'note'
-	end 'respelledFor'
-end 'DiagnosticNote'
-
-// @generated library-cache begin
-function cacheWriteDiagnosticNote(writer LibraryCacheWriter, value DiagnosticNote)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		none then break
-		at(a0, a1, a2, a3) then cacheWriteDiagnosticNoteAt(writer, a0: a0, a1: a1, a2: a2, a3: a3)
-	end 'payload'
-end 'cacheWriteDiagnosticNote'
-
-function cacheWriteDiagnosticNoteAt(writer LibraryCacheWriter, a0 String, a1 LineNumber, a2 ColumnNumber, a3 FilePath)
-	writer.text(a0)
-	writer.unsigned(a1 as CacheUnsigned)
-	writer.unsigned(a2 as CacheUnsigned)
-	writer.text(a3.toString())
-end 'cacheWriteDiagnosticNoteAt'
-
-function cacheReadDiagnosticNote(reader LibraryCacheReader) returns DiagnosticNote throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives DiagnosticNote.none
-		1 gives try cacheReadDiagnosticNoteAt(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadDiagnosticNote'
-
-function cacheReadDiagnosticNoteAt(reader LibraryCacheReader) returns DiagnosticNote throws LibraryCacheDamage
-	let a0 = try reader.text()
-	let a1 = (try reader.unsigned()) as LineNumber
-	let a2 = (try reader.unsigned()) as ColumnNumber
-	let a3 = try reader.path()
-
-	return DiagnosticNote.at(a0, line: a1, column: a2, filePath: a3)
-end 'cacheReadDiagnosticNoteAt'
-
-// @generated library-cache end
-
 export enum ShadowSpellingReader
 	authorCode
 	libraryCode
@@ -818,11 +753,92 @@ end 'cacheReadDiagnosticAnchorAt'
 
 // @generated library-cache end
 
+export type PositionedNote
+	export let message as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(message String, line LineNumber, column ColumnNumber, filePath FilePath) returns Self
+		return Self{message: message, line: line, column: column, filePath: filePath}
+	end 'create'
+
+	function reportedUnder(origins StagedOriginIndex) returns PositionedNote
+		return Self{message: self.message, line: self.line, column: self.column, filePath: origins.authoredPathOf(self.filePath)}
+	end 'reportedUnder'
+
+	function respelledFor(respellingsOf ShadowRespellingsOf) returns PositionedNote
+		return Self{message: respellingsOf(self.filePath).respell(self.message), line: self.line, column: self.column, filePath: self.filePath}
+	end 'respelledFor'
+
+	function rendered() returns String
+		return "\nnote: {self.filePath.toString()}:{self.line}:{self.column}: {self.message}"
+	end 'rendered'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.message)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.filePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PositionedNote throws LibraryCacheDamage
+		let f_message = try reader.text()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+
+		return Self{message: f_message, line: f_line, column: f_column, filePath: f_filePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(PositionedNote) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'PositionedNote'
+
+export typealias PositionedNoteArray = Array with PositionedNote
+
+// @generated library-cache begin
+function cacheWritePositionedNoteArray(writer LibraryCacheWriter, value PositionedNoteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePositionedNoteArray'
+
+// @generated library-cache end
+
+// @generated library-cache begin
+function cacheReadFrozenPositionedNoteArray(reader LibraryCacheReader) returns immutable PositionedNoteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = PositionedNoteArray.create(count, zeroed: false) as isolated PositionedNoteArray
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PositionedNote.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return freeze result
+end 'cacheReadFrozenPositionedNoteArray'
+
+// @generated library-cache end
+typealias NoteMapping = function(PositionedNote) returns PositionedNote mutates captures
+
+function singleNote(note PositionedNote) returns PositionedNoteArray
+	let single = PositionedNoteArray.create(1, zeroed: false)
+	single.push(note)
+	return single
+end 'singleNote'
+
 export type Diagnostic
 	export let code as ErrorCode
 	export let message as String
 	export let anchor as DiagnosticAnchor
-	export let note as DiagnosticNote
+	export let notes as immutable PositionedNoteArray
 
 	export static function programWide(code ErrorCode, message String) returns Diagnostic
 		return Self.anchored(code, message: message, anchor: DiagnosticAnchor.programWide)
@@ -845,36 +861,37 @@ export type Diagnostic
 	end 'create'
 
 	static function anchored(code ErrorCode, message String, anchor DiagnosticAnchor) returns Diagnostic
-		return Self{code: code, message: message, anchor: anchor, note: DiagnosticNote.none}
+		return Self{code: code, message: message, anchor: anchor, notes: freeze PositionedNoteArray.create(0)}
 	end 'anchored'
 
-	// ⭐ **THE ONE PRODUCER OF A NOTED DIAGNOSTIC — the blame SWAP, in one place.**
-	// The user's site becomes primary and the location this diagnostic was raised
-	// at becomes the note, so nothing is lost and the reader meets their own line
-	// first. `unblamed` — every diagnostic in a normal compile — returns `self`
-	// untouched, so a program that forces nothing out of the library renders
-	// byte-for-byte what it always did.
 	export function blamedAt(blame LibraryBlame) returns Diagnostic
 		match blame 'blame'
 			unblamed then return self
-			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, anchor: DiagnosticAnchor.at(blamedPath, line: blamedLine as DiagnosticLine, column: blamedColumn as DiagnosticColumn), note: self.libraryBlameNote()}
+			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, anchor: DiagnosticAnchor.at(blamedPath, line: blamedLine as DiagnosticLine, column: blamedColumn as DiagnosticColumn), notes: self.notes}.withNotes(singleNote(self.libraryBlameNote()))
 		end 'blame'
 	end 'blamedAt'
 
-	function libraryBlameNote() returns DiagnosticNote
+	function libraryBlameNote() returns PositionedNote
 		match self.anchor 'raisedAt'
-			at(filePath, line, column) then return DiagnosticNote.at(LibraryBlameNoteText, line: line, column: column, filePath: filePath)
+			at(filePath, line, column) then return PositionedNote.create(LibraryBlameNoteText, line: line, column: column, filePath: filePath)
 			programWide or
 			file then panic("Diagnostic.blamedAt: {self.code.rawValue} was raised at no library line, so there is no library site to keep as the blame note")
 		end 'raisedAt'
 	end 'libraryBlameNote'
 
-	// The same diagnostic carrying a second source position. Split from `create` because a note is the
-	// exception rather than a parameter every one of the hundreds of `create` calls would have to answer —
-	// and split from `blamedAt` because that one SWAPS and this one ADDS.
-	export function withNote(second DiagnosticNote) returns Diagnostic
-		return Self{code: self.code, message: self.message, anchor: self.anchor, note: second}
-	end 'withNote'
+	export function withNotes(added PositionedNoteArray) returns Diagnostic
+		let extended = PositionedNoteArray.create(self.notes.count() + added.count(), zeroed: false) as isolated PositionedNoteArray
+
+		for held in self.notes 'eachHeld'
+			extended.push(held)
+		end 'eachHeld'
+
+		for note in added 'eachAdded'
+			extended.push(note)
+		end 'eachAdded'
+
+		return Self{code: self.code, message: self.message, anchor: self.anchor, notes: freeze extended}
+	end 'withNotes'
 
 	// Applied by the sink `reportDiagnostic` after `blamedAt`, so both slots a blame swap produces are
 	// rewritten and neither keeps a staged path.
@@ -883,46 +900,59 @@ export type Diagnostic
 			return self
 		end 'nothingWasStaged'
 
-		return Self{code: self.code, message: self.message, anchor: self.anchor.reportedUnder(origins), note: self.note.reportedUnder(origins)}
+		return Self{code: self.code, message: self.message, anchor: self.anchor.reportedUnder(origins), notes: self.notesMapped(function(note) gives note.reportedUnder(origins))}
 	end 'reportedUnder'
 
 	export function respelledFor(programWide ShadowRespellings, respellingsOf ShadowRespellingsOf) returns Diagnostic
-		return Self{code: self.code, message: self.anchor.respellings(programWide, respellingsOf: respellingsOf).respell(self.message), anchor: self.anchor, note: self.note.respelledFor(respellingsOf)}
+		return Self{code: self.code, message: self.anchor.respellings(programWide, respellingsOf: respellingsOf).respell(self.message), anchor: self.anchor, notes: self.notesMapped(function(note) gives note.respelledFor(respellingsOf))}
 	end 'respelledFor'
+
+	function notesMapped(through NoteMapping) returns immutable PositionedNoteArray
+		let mapped = PositionedNoteArray.create(self.notes.count(), zeroed: false) as isolated PositionedNoteArray
+
+		for held in self.notes 'eachNote'
+			mapped.push(through(held))
+		end 'eachNote'
+
+		return freeze mapped
+	end 'notesMapped'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
 	// `maxoncstderr` blocks compare against. The code's `.rawValue` is the 4-digit
 	// string.
 	export function render() returns String
-		return "error {self.code.rawValue}: {self.anchor.renderedPosition()}{self.message}{self.renderedNote()}"
+		return "error {self.code.rawValue}: {self.anchor.renderedPosition()}{self.message}{self.renderedNotes()}"
 	end 'render'
 
 	// A NOTE renders as a SECOND LINE below the error, `note: <file>:<line>:<col>:
 	// <message>` — clang's shape, and one a `maxoncstderr` block can carry unchanged,
 	// since that comparison is a whole-text equality after trimming
 	// (`SpecTestRunner.checkCompilerError`) rather than a per-line match.
-	function renderedNote() returns String
-		match self.note 'note'
-			none then return ""
-			at(noteText, noteLine, noteColumn, notePath) then return "\nnote: {notePath.toString()}:{noteLine}:{noteColumn}: {noteText}"
-		end 'note'
-	end 'renderedNote'
+	function renderedNotes() returns String
+		var rendered = ""
+
+		for held in self.notes 'eachNote'
+			rendered.append(held.rendered())
+		end 'eachNote'
+
+		return rendered
+	end 'renderedNotes'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.unsigned(self.code.ordinal as CacheUnsigned)
 		writer.text(self.message)
 		cacheWriteDiagnosticAnchor(writer, value: self.anchor)
-		cacheWriteDiagnosticNote(writer, value: self.note)
+		cacheWritePositionedNoteArray(writer, value: self.notes)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns Diagnostic throws LibraryCacheDamage
 		let f_code = try cacheReadErrorCode(reader)
 		let f_message = try reader.text()
 		let f_anchor = try cacheReadDiagnosticAnchor(reader)
-		let f_note = try cacheReadDiagnosticNote(reader)
+		let f_notes = try cacheReadFrozenPositionedNoteArray(reader)
 
-		return Self{code: f_code, message: f_message, anchor: f_anchor, note: f_note}
+		return Self{code: f_code, message: f_message, anchor: f_anchor, notes: f_notes}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize32

@@ -772,26 +772,41 @@ extension Parser
 	// file is parsed — so `SemanticCheck.checkExistentialFieldStores` asks both, whole-program.
 	function fieldStoreWitness(box ValueId, layout StructLayout, index FieldIndex, declared MaxonType, value ValueId, range SourceRange) returns ValueId
 		let interfaceName = interfaceNameOfType(declared, typeNames: self.artifact.typeNames)
-		self.recordExistentialStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: self.signatures.fieldExistentialSites(layout, index: index), fieldSite: freeze self.fieldSiteName(layout, index: index).toByteArray(), place: ExistentialStorePlace.structField, line: range.line, column: range.column, filePath: self.job.path))
 
-		return self.widenedWitnessOf(value, interfaceName: interfaceName, range: range)
+		return self.widenedWitnessOf(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: self.signatures.fieldExistentialSites(layout, index: index), fieldSite: freeze self.fieldSiteName(layout, index: index).toByteArray(), place: ExistentialStorePlace.structField, line: range.line, column: range.column, filePath: self.job.path), range: range)
 	end 'fieldStoreWitness'
 
-	function recordExistentialStore(store ExistentialFieldStore)
-		self.bodyState.existentialFieldStores.push(store)
-	end 'recordExistentialStore'
+	function recordReturnedValueStart(value ValueId, retStart ElementIndex)
+		let startTok = self.tokenAt(retStart)
+		self.bodyState.returnedValueStarts.add(ReturnedValueStart.create(value, line: startTok.line, column: startTok.column))
+	end 'recordReturnedValueStart'
 
-	// The witness half a value takes where a STORE widens it into a place declared at `interfaceName` — a
-	// struct field or a message payload.
-	function widenedWitnessOf(value ValueId, interfaceName ByteArray, range SourceRange) returns ValueId
-		if self.tagOf(value) == ValueTypeTag.interfaceRef 'forwardsItsOwnWitness'
-			return self.witnessOfValue(value)
+	function recordShareDoor(door ShareDoor, subject ShareSubject, line LineNumber, column ColumnNumber)
+		self.bodyState.shareDoorSites.add(ShareDoorSite.create(door, subject: subject, line: line, column: column, filePath: self.job.path))
+	end 'recordShareDoor'
+
+	// The witness half a value takes where a STORE widens it into a place declared at `store.interfaceName` — a
+	// struct field or a message payload. Every such arrival records its store here, so the roster the
+	// conformance verdict and the share-conversion log both read cannot miss one.
+	function widenedWitnessOf(store ExistentialFieldStore, range SourceRange) returns ValueId
+		self.bodyState.existentialFieldStores.push(store)
+
+		if self.tagOf(store.value) == ValueTypeTag.interfaceRef 'forwardsItsOwnWitness'
+			return self.witnessOfValue(store.value)
 		end 'forwardsItsOwnWitness'
 
 		let witness = self.mintValueOfType(MaxonType.integer)
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), range: range)
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.existentialWitness(witness, interfaceName: store.interfaceName, conformer: store.value), range: range)
 		return witness
 	end 'widenedWitnessOf'
+
+	function forwardedWitnessOf(value ValueId) returns ValueId
+		if self.tagOf(value) != ValueTypeTag.interfaceRef 'notAForwardedValue'
+			panic("forwardedWitnessOf: v{value} is stored into a cell declared at an interface but is not held at one — an assignment of a concrete conformer to an interface-typed variable is E3005, so a cell only ever receives a value already paired with its witness")
+		end 'notAForwardedValue'
+
+		return self.witnessOfValue(value)
+	end 'forwardedWitnessOf'
 
 	// ⭐ **THE ONE `storeIndirect` EMIT**, the mirror of `emitIndirectLoad` above and true on the same
 	// terms. A field write, a union tag store, a union payload store, a union's unused-slot zero-fill, a
@@ -901,7 +916,7 @@ extension Parser
 		self.emitIndirectStore(cell, offset: ParameterCellValueOffset, value: value, storageType: self.wordSlotStorageType(resolved), range: range)
 
 		if parameterCellHoldsAWitness(resolved) 'andItsWitness'
-			self.emitIndirectStore(cell, offset: ParameterCellWitnessOffset, value: self.widenedWitnessOf(value, interfaceName: interfaceNameOfType(resolved, typeNames: self.artifact.typeNames), range: range), storageType: MaxonType.integer, range: range)
+			self.emitIndirectStore(cell, offset: ParameterCellWitnessOffset, value: self.forwardedWitnessOf(value), storageType: MaxonType.integer, range: range)
 		end 'andItsWitness'
 	end 'storeCellOccupant'
 
@@ -2408,7 +2423,7 @@ extension Parser
 		let bodyValue = try self.parseExpression(lifted, block: block)
 		let bodyType = self.typeOf(bodyValue)
 		try self.requireFunctionValueReturnHasRoom(MaxonReturnType.value(bodyType), tok: givesTok)
-		try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
+		_ = try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
 
 		if not self.valueIsAValueType(bodyValue) 'aRecordResult'
 			try self.notePlainResultData(lifted, value: bodyValue, retStart: bodyStart)
@@ -3188,7 +3203,7 @@ extension Parser
 			typeBody gives decl.name
 		end 'scope'
 
-		return ConstEvalError.defective(SourceParseError.registryRefused(ErrorCode.semanticModuleLetCallsAFunction, explanation: moduleLetCallMessage(String.from(written), callee: callee), line: first.line, column: first.column, note: DiagnosticNote.none))
+		return ConstEvalError.defective(SourceParseError.registryRefused(ErrorCode.semanticModuleLetCallsAFunction, explanation: moduleLetCallMessage(String.from(written), callee: callee), line: first.line, column: first.column, notes: PositionedNoteArray.create(0)))
 	end 'moduleLetCallRefusal'
 
 	function initializerCallAt(op ElementIndex, callee ByteArray) returns InitializerCall
@@ -3734,7 +3749,7 @@ extension Parser
 	function requireNoDefectIn(recorded DiagnosticArray) throws ConstEvalError
 		for diagnostic in recorded 'eachDiagnostic'
 			match diagnostic.anchor 'anchor'
-				at(_, line, column) then throw ConstEvalError.defective(SourceParseError.registryRefused(diagnostic.code, explanation: diagnostic.message, line: line, column: column, note: DiagnosticNote.none))
+				at(_, line, column) then throw ConstEvalError.defective(SourceParseError.registryRefused(diagnostic.code, explanation: diagnostic.message, line: line, column: column, notes: PositionedNoteArray.create(0)))
 				programWide or
 				file then panic("Parser.requireNoDefectIn: a diagnostic recorded while folding an initializer carries no source position — `recordArtifactDiagnostic` anchors every one at a range")
 			end 'anchor'
@@ -6612,7 +6627,7 @@ extension Parser
 		let enclosingHandOffs = self.openByRefHandOffs.count()
 		let firstLend = self.bodyState.operandOrder.lendCount()
 		_ = self.bodyState.operandOrder.beginCall()
-		var places = PlaceArgumentColumn.unwritten
+		let places = PlaceArgumentArray.create(0)
 
 		for i in 0 upto receiverArgs 'eachReceiver'
 			let receiver = try args.get(i) otherwise panic("parseCallArgs: args.get OOB at {i} inside the receiver count")
@@ -6692,7 +6707,7 @@ extension Parser
 
 				if readsAPlace 'bindsAfterTheCalleeIsResolved'
 					self.lendOperandCell(valueStart, handed: handed, target: target, argIndex: argIndex, label: label)
-					places = withPlaceArgument(places, place: PlaceArgument.create(column, value: value, storage: handedPlace, anchor: valueTok, source: PlaceSource.written(valueStart, position: argIndex)))
+					places.push(PlaceArgument.create(column, value: value, storage: handedPlace, anchor: valueTok, source: PlaceSource.written(valueStart, position: argIndex)))
 				end 'bindsAfterTheCalleeIsResolved'
 
 				// An r-value at a by-reference position gets a scratch cell — a literal, an expression, a fresh
@@ -6740,7 +6755,7 @@ extension Parser
 			try self.requireFirstArgLabelHasDefault(message, firstParam: self.serviceMessageFirstParam(message), argLabels: argLabels, argRanges: argRanges, receiverArgs: receiverArgs)
 		end 'aMessageSend'
 
-		return placeArgumentsOf(places)
+		return places
 	end 'parseCallArgs'
 
 	function parseSendTimeoutValue(func IrFunction, labelTok Token) returns ValueId throws SourceParseError
@@ -6752,7 +6767,7 @@ extension Parser
 		try self.requireArgumentFitsDeclaredAlias(value, alias: self.millisecondsAlias(), paramName: labelTok.value, anchor: valueTok)
 
 		if self.at(TokenKind.comma) 'notTheLastArgument'
-			throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceSendTimeoutNotLastRefusal(), line: labelTok.line, column: labelTok.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceSendTimeoutNotLastRefusal(), line: labelTok.line, column: labelTok.column, notes: PositionedNoteArray.create(0))
 		end 'notTheLastArgument'
 
 		return value
@@ -6784,7 +6799,7 @@ extension Parser
 		try args.set(place.column, value: storage) otherwise panic("bindPlaceStorage: a place argument's column {place.column} is outside the call's {args.count()} arguments")
 
 		match place.storage 'storage'
-			unreachable(blame) then throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: capturedCopyMutatingCallMessage(String.from(blame), parameter: WrittenParameter.positional(place.column), functionName: calleeName), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
+			unreachable(blame) then throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: capturedCopyMutatingCallMessage(String.from(blame), parameter: WrittenParameter.positional(place.column), functionName: calleeName), line: callAnchor.line, column: callAnchor.column, notes: PositionedNoteArray.create(0))
 			handed or
 			notHanded then return
 		end 'storage'
@@ -6792,7 +6807,7 @@ extension Parser
 
 	function recordDeferredArgumentBindings(places PendingArgumentBindingArray, callResult ValueId)
 		for place in places 'eachPlace'
-			self.bodyState.deferredArgumentBindings = withDeferredArgumentBinding(self.bodyState.deferredArgumentBindings, binding: DeferredArgumentBinding.create(callResult, column: place.column, cell: place.cell))
+			self.bodyState.deferredArgumentBindings.add(DeferredArgumentBinding.create(callResult, column: place.column, cell: place.cell))
 		end 'eachPlace'
 	end 'recordDeferredArgumentBindings'
 
@@ -7024,7 +7039,7 @@ extension Parser
 		end 'nothingOverlaps'
 
 		for candidate in self.bodyState.operandOrder.found 'eachCandidate'
-			self.bodyState.pendingOverlaps = withPendingOverlap(self.bodyState.pendingOverlaps, overlap: self.pendingOverlapOf(candidate))
+			self.bodyState.pendingOverlaps.add(self.pendingOverlapOf(candidate))
 		end 'eachCandidate'
 
 		self.bodyState.operandOrder.clearFound()
@@ -7144,7 +7159,7 @@ extension Parser
 
 	function requireRootOfPlaceIsMutable(valueStart ElementIndex, parameter WrittenParameter, callAnchor Token) throws SourceParseError
 		if let name = try self.immutableRootOfPlaceAt(valueStart) 'aPlaceRootedAtAnImmutableName'
-			throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: letPassedToMutableParameterMessage(String.from(name), parameter: parameter), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: letPassedToMutableParameterMessage(String.from(name), parameter: parameter), line: callAnchor.line, column: callAnchor.column, notes: PositionedNoteArray.create(0))
 		end 'aPlaceRootedAtAnImmutableName'
 	end 'requireRootOfPlaceIsMutable'
 
@@ -7189,7 +7204,7 @@ extension Parser
 			return
 		end 'notACapturedName'
 
-		throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: capturedCopyMutatingCallMessage(String.from(self.tokenAt(valueStart).value), parameter: parameter, functionName: self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).bare()), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
+		throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: capturedCopyMutatingCallMessage(String.from(self.tokenAt(valueStart).value), parameter: parameter, functionName: self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).bare()), line: callAnchor.line, column: callAnchor.column, notes: PositionedNoteArray.create(0))
 	end 'requireNotACapturedCopy'
 
 	function requireLocalIsWritableByReference(name ByteArray, parameter WrittenParameter, callAnchor Token) throws SourceParseError
@@ -7199,14 +7214,14 @@ extension Parser
 			return
 		end 'aWritableName'
 
-		throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: letPassedToMutableParameterMessage(String.from(name), parameter: parameter), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
+		throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: letPassedToMutableParameterMessage(String.from(name), parameter: parameter), line: callAnchor.line, column: callAnchor.column, notes: PositionedNoteArray.create(0))
 	end 'requireLocalIsWritableByReference'
 
 	function requireNotAnUnmarkedParameter(func IrFunction, name ByteArray, parameter WrittenParameter, callAnchor Token) throws SourceParseError
 		let binding = self.bodyState.scope.getInfo(name)
 
 		if binding.isParameter and not binding.isCellBinding and self.parameterReassignKindOf(binding) == ParameterReassignKind.valueParameter 'anUnmarkedParameter'
-			throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: unmarkedParameterPassedMessage(String.from(name), parameter: parameter, functionName: self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).bare()), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: unmarkedParameterPassedMessage(String.from(name), parameter: parameter, functionName: self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).bare()), line: callAnchor.line, column: callAnchor.column, notes: PositionedNoteArray.create(0))
 		end 'anUnmarkedParameter'
 	end 'requireNotAnUnmarkedParameter'
 

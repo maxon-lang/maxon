@@ -32,6 +32,7 @@ function semanticCheck(project Project, module MaxonModule, signatures ProgramSi
 	try requireStillWanted(project)
 	beginEditorFunctionFacts(project)
 	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(project, module: module)
+	project.shareConversions = openShareConversionLog(project, module: module)
 	let summaryIndex = CallSummaryIndex.create(project, module: module, signatures: signatures, funcIndexByName: funcNames.byName, funcCount: funcNames.functions.count())
 	settleBrandAdoption(project, module: module, signatures: signatures, calls: summaryIndex)
 	bindIndirectCallPlaces(project, module: module, signatures: signatures)
@@ -6278,7 +6279,9 @@ end 'returnExistentialSitesOfFunc'
 // whose signature actually recorded a claim for this parameter — `paramExistentialSiteAt` throws for every
 // other parameter of every other function, which is nearly all of them, so the shared empty column costs one
 // failed scan of an empty list.
-function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, paramExistentialSites ParamExistentialSiteArray, position ParamCount, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, param ArgumentParameter, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath)
+function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, argId ValueId, handedAt SourceRange, paramExistentialSites ParamExistentialSiteArray, position ParamCount, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, param ArgumentParameter, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath)
+	noteShareConversion(project, func: func, value: argId, interfaceName: interfaceName, line: handedAt.line, column: handedAt.column, filePath: filePath)
+
 	let declaredSite = try paramExistentialSiteAt(paramExistentialSites, position: position) otherwise return
 	let signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtArgument")
 
@@ -6395,7 +6398,9 @@ end 'checkDeferredClaimAgainstExistentialValue'
 //
 // A value that is ALREADY an existential is passed over: `function id(t TakerOfT) returns TakerOfT` hands back
 // what it was given, no widening happens, and the claim it restates is its own.
-function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, returnExistentialSites GenericInstanceIdArray, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, retRange SourceRange)
+function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, value ValueId, returnExistentialSites GenericInstanceIdArray, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, retRange SourceRange)
+	noteShareConversionAtReturn(project, func: func, value: value, interfaceName: interfaceName, retRange: retRange)
+
 	if valueTag == ValueTypeTag.interfaceRef 'alreadyWidenedElsewhere'
 		return
 	end 'alreadyWidenedElsewhere'
@@ -6573,7 +6578,7 @@ function checkOneReturnedValue(project Project, func IrFunction, value ValueId, 
 
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, readerFilePath: func.sourceFilePath) 'widening'
 		// The parameterized half, asked once conformance is settled — the argument position's twin.
-		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
+		widens then checkExistentialSiteClaimAtReturn(project, func: func, value: value, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
 		deferred then break
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from {functionDisplay(project, func: func).quoted()}, which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 		refused(code, reason) then reportPositioned(project, code: code, message: intoExistentialMessage(WideningPlace.returned(functionDisplay(project, func: func).quoted()), interfaceName: displayName, reason: reason), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
@@ -6653,6 +6658,8 @@ end 'existentialStoreMismatchSubject'
 // parameter into its own `TakerOfT` field restates a claim the call that passed `t` already settled. Any other
 // already-held value is refused as an argument is (`checkDeferredClaimAgainstExistentialValue`).
 function checkExistentialSiteClaimAtFieldStore(project Project, func IrFunction, store ExistentialFieldStore, valueTag ValueTypeTag, valueNameId TypeNameId)
+	noteShareConversion(project, func: func, value: store.value, interfaceName: store.interfaceName, line: store.line, column: store.column, filePath: store.filePath)
+
 	let declaredSite = try store.claims.get(0) otherwise return
 	let signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtFieldStore")
 	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: CallSubject.heldBy(store.subject), siteInstance: declaredSite)
@@ -6734,7 +6741,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// original verdict and says nothing about `with` arguments — a `Runner` implements `Taker` whichever
 			// type the site claims `Element` is. Asked only once conformance is settled, because a
 			// non-conformer's bindings are not the fault worth reporting.
-			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, param: param, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
+			widens then checkExistentialSiteClaimAtArgument(project, func: func, argId: argId, handedAt: handedAt, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, param: param, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
 			deferred then break
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(param, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
 			refused(code, reason) then reportPositioned(project, code: code, message: intoExistentialMessage(WideningPlace.argument(argParamLabel(param, position: position)), interfaceName: displayName, reason: reason), line: callRange.line, column: callRange.column, filePath: filePath)

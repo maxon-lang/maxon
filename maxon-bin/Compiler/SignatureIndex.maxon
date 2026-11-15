@@ -6450,6 +6450,11 @@ export enum TransferKind
 	share
 end 'TransferKind'
 
+enum PromiseWalkAtInterfaces
+	declaredConformers
+	leftToTheRoster
+end 'PromiseWalkAtInterfaces'
+
 function transferPurposeOf(kind TransferKind, pastFunctionValues bool) returns GraphCascadePurpose
 	return match kind 'kind'
 		send gives GraphCascadePurpose.sendPastFunctionValues if pastFunctionValues else GraphCascadePurpose.send
@@ -6546,6 +6551,108 @@ union ConformerCloneBlame
 	conformer(name immutable ByteArray)
 end 'ConformerCloneBlame'
 
+export union ShareConformer
+	named(name immutable ByteArray)
+	instance(id GenericInstanceId)
+end 'ShareConformer'
+
+// A request: `witnessTableInstanceFor` reduces a non-concrete instance to `shared`, which cannot
+// serve it, so the constraint-argument door asks `constraintArgumentHasNoTable` first and passes a
+// proved zero.
+export union WitnessTableInstance
+	shared
+
+	perInstance(gid GenericInstanceId)
+end 'WitnessTableInstance'
+
+export union ShareSlotLabel
+	field(name immutable ByteArray)
+	tupleElement(position ElementIndex)
+	element
+
+	export function rendered() returns String
+		return match self 'label'
+			field(name) gives String.from(name)
+			tupleElement(position) gives "{position}"
+			element panic("ShareSlotLabel.rendered: a container's element is not a slot an author names")
+		end 'label'
+	end 'rendered'
+end 'ShareSlotLabel'
+
+let ProductSlotCase = 0 as ElementIndex
+
+export union ShareHoldRole
+	viaArguments(role String)
+	inItsOwnFields
+end 'ShareHoldRole'
+
+export type ShareSlot
+	export let label as ShareSlotLabel
+	export let slotType as MaxonType
+	export let caseIndex as ElementIndex
+	export let index as ElementIndex
+
+	export static function create(label ShareSlotLabel, slotType MaxonType, caseIndex ElementIndex, index ElementIndex) returns Self
+		return Self{label: label, slotType: slotType, caseIndex: caseIndex, index: index}
+	end 'create'
+end 'ShareSlot'
+
+export typealias ShareSlotArray = Array with ShareSlot
+
+export union ShareNode
+	leaf
+	existential(name immutable ByteArray)
+	composite(composite ShareConformer)
+end 'ShareNode'
+
+export union ShareWalkRefusal
+	none
+	field(label ShareSlotLabel, noun String)
+	itself(noun String)
+end 'ShareWalkRefusal'
+
+union SlotShareRefusal
+	walkable
+	refused(noun String)
+end 'SlotShareRefusal'
+
+export union BindingDeclaration
+	nominal
+	instance(row GenericInstanceId)
+end 'BindingDeclaration'
+
+export union HeldBinding
+	none
+	binds(held immutable ByteArray, conformer ShareConformer, declaredAs BindingDeclaration, line LineNumber, column ColumnNumber, filePath FilePath)
+end 'HeldBinding'
+
+export typealias ParameterPositions = Set with ElementIndex
+
+export typealias OpenInstancesByOwner = Map with (ByteArray, GenericInstanceIdArray)
+
+export type OpaqueSlotHop
+	export let offset as ByteOffset
+	export let declared as MaxonType
+
+	export static function create(offset ByteOffset, declared MaxonType) returns Self
+		return Self{offset: offset, declared: declared}
+	end 'create'
+end 'OpaqueSlotHop'
+
+export typealias OpaqueSlotHopArray = Array with OpaqueSlotHop
+
+export type OpaqueSlotPath
+	export let hops as OpaqueSlotHopArray
+	export let slotOffset as ByteOffset
+	export let slotType as MaxonType
+
+	export static function create(hops OpaqueSlotHopArray, slotOffset ByteOffset, slotType MaxonType) returns Self
+		return Self{hops: hops, slotOffset: slotOffset, slotType: slotType}
+	end 'create'
+end 'OpaqueSlotPath'
+
+export typealias OpaqueSlotPathArray = Array with OpaqueSlotPath
+
 union UnsendableConformer
 	none
 	conformer(name immutable ByteArray)
@@ -6602,17 +6709,6 @@ export type CascadeWalkBreak
 
 	// @generated library-cache end
 end 'CascadeWalkBreak'
-
-type GrowthStep
-	export let base as immutable ByteArray
-	export let args as MaxonTypeArray
-
-	static function create(base ByteArray, args MaxonTypeArray) returns Self
-		return Self{base: base, args: args}
-	end 'create'
-end 'GrowthStep'
-
-typealias GrowthPath = Array with GrowthStep
 
 export type CascadeWalkFrame
 	export let depth as ElementIndex
@@ -6738,7 +6834,7 @@ function transferWalkFrom(strategy ManagedCascadeStrategy, display String) retur
 		direct(callee) gives TransferWalk.walkedBy(callee)
 		managedElements panic("transferWalkFrom: `{display}` resolved to a two-argument `managedElements` strategy, where `asElement: true` resolves to the one-argument thunk")
 		throughWitness panic("transferWalkFrom: `{display}` resolved to a witness-read walk, which only a FIELD held at an interface type takes")
-		unsupported gives unwalkableTransfer(display, kind: TransferKind.share, onlyFunctionValuesBlockIt: false)
+		unsupported panic("transferWalkFrom: `{display}` passed the transfer gate and resolved to an unsupported strategy — the gate and the strategy are one decision")
 	end 'strategy'
 end 'transferWalkFrom'
 
@@ -6759,20 +6855,41 @@ function byteRecordTransferWalk(kind TransferKind) returns TransferWalk
 	end 'kind'
 end 'byteRecordTransferWalk'
 
-function unwalkableTransfer(display String, kind TransferKind, onlyFunctionValuesBlockIt bool) returns TransferWalk
-	if onlyFunctionValuesBlockIt 'aFunctionValueBlocksIt'
-		return TransferWalk.refused("a `{display}` whose graph reaches {FunctionValueCrossingNoun}")
-	end 'aFunctionValueBlocksIt'
-
-	return TransferWalk.refused("a `{display}` whose graph reaches {unsendableShapes(kind)}")
+function unwalkableTransfer(display String, kind TransferKind, blocker TransferBlocker) returns TransferWalk
+	return match blocker 'blocker'
+		onlyFunctionValues gives TransferWalk.refused("a `{display}` whose graph reaches {FunctionValueCrossingNoun}")
+		cause(unwalkable) gives TransferWalk.refused("a `{display}` whose graph reaches {unwalkableCauseNoun(unwalkable, kind: kind)}")
+	end 'blocker'
 end 'unwalkableTransfer'
 
-function unsendableShapes(kind TransferKind) returns String
+union TransferBlocker
+	onlyFunctionValues
+	cause(unwalkable UnwalkableCause)
+end 'TransferBlocker'
+
+export enum FunctionMentions
+	counted
+	ignored
+end 'FunctionMentions'
+
+union UnwalkableCause
+	osHandle
+	baselessInstance
+	opaqueSlot
+end 'UnwalkableCause'
+
+function unwalkableCauseNoun(cause UnwalkableCause, kind TransferKind) returns String
+	let stem = match cause 'cause'
+		osHandle gives "an OS handle"
+		baselessInstance gives "a generic instance with no base struct"
+		opaqueSlot gives "a slot standing at a type parameter, whose walk exists only once an instance names the type"
+	end 'cause'
+
 	return match kind 'kind'
-		send gives "an OS handle other than a socket, or a base-struct-less generic instance, which cannot cross to another green thread"
-		share gives "a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance"
+		send gives "{stem}, which cannot cross to another green thread"
+		share gives stem
 	end 'kind'
-end 'unsendableShapes'
+end 'unwalkableCauseNoun'
 
 // The clone strategy for a managed field of declared type `fieldType`. Mirrors `managedFieldDropCallee`'s
 // dispatch exactly: `typeNames` resolves a `named`/`structRef` id to a NAME; pass the interner the field
@@ -8149,6 +8266,8 @@ export type ProgramSignatures
 	var ownSettled as OwnedDeclarations
 	let sharedSettled as immutable SettledDeclarations
 	var structSlots = StructSlotMap.create()
+	var growthMemo = GrowthMemo.create()
+	var descriptorReads = DescriptorReads.create()
 	var mintedTupleLayouts = SettledStructLayoutArray.create(0)
 	var published = SettledCellArray.create(0)
 
@@ -8627,11 +8746,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: Hasher.empty(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, growthMemo: GrowthMemo.create(), descriptorReads: DescriptorReads.create(), mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: Hasher.empty(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize608
-		return sizeof(ProgramSignatures) as CacheSize608
+	static function cacheLayoutBytes() returns CacheSize624
+		return sizeof(ProgramSignatures) as CacheSize624
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

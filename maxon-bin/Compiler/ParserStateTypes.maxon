@@ -107,7 +107,7 @@ end 'GreenThreadHandOff'
 union ThreadHandOffDoor
 	message(blame String, argumentOf String)
 	spawnFactory(blame String, argumentOf String)
-	publish(key immutable ByteArray)
+	publish(shared ShareDoor)
 	coroutine(callee immutable ByteArray)
 	closureCapture(name immutable ByteArray)
 end 'ThreadHandOffDoor'
@@ -116,7 +116,7 @@ function handOffDoorBlame(door ThreadHandOffDoor) returns String
 	return match door 'door'
 		message(blame, _) gives blame
 		spawnFactory(blame, _) gives blame
-		publish(key) gives "the value published to `{String.from(key)}`"
+		publish panic("handOffDoorBlame: a published value is refused as E3171, which names its door by `shareDoorHead`, never by a blame clause")
 		coroutine(callee) gives "the value handed to `async {String.from(callee)}(…)`"
 		closureCapture(name) gives "the value of `{String.from(name)}` a closure captures"
 	end 'door'
@@ -181,7 +181,7 @@ function registryNotSolelyOwnedExplanation(key ByteArray) returns String
 end 'registryNotSolelyOwnedExplanation'
 
 function registryNotSolelyOwnedError(key ByteArray, anchor Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.registryPublishedValueNotSolelyOwned, explanation: registryNotSolelyOwnedExplanation(key), line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.registryPublishedValueNotSolelyOwned, explanation: registryNotSolelyOwnedExplanation(key), line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
 end 'registryNotSolelyOwnedError'
 
 // A witness dispatch's final argument list: the BORROWED receiver, then the user's actuals already in the
@@ -7267,7 +7267,7 @@ function parameterReassignMessage(name String, kind ParameterReassignKind) retur
 end 'parameterReassignMessage'
 
 function parameterReassignError(nameTok Token, kind ParameterReassignKind) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: parameterReassignMessage(String.from(nameTok.value), kind: kind), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: parameterReassignMessage(String.from(nameTok.value), kind: kind), line: nameTok.line, column: nameTok.column, notes: PositionedNoteArray.create(0))
 end 'parameterReassignError'
 
 function notATypeError(tok Token) returns SourceParseError
@@ -7302,7 +7302,7 @@ function unmarkedParameterPassedMessage(name String, parameter WrittenParameter,
 end 'unmarkedParameterPassedMessage'
 
 function mutableArgumentNeedsAVarError(subject String, parameter WrittenParameter, functionName String, anchor Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: "cannot pass {subject} to a function that writes {parameter.display()} (in {functionName}); pass a `var`", line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: "cannot pass {subject} to a function that writes {parameter.display()} (in {functionName}); pass a `var`", line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
 end 'mutableArgumentNeedsAVarError'
 
 function assignToImmutableError(nameTok Token) returns SourceParseError
@@ -8782,9 +8782,11 @@ type FunctionBodyState
 	export var valueExistentialScope as ValueExistentialScopeColumn
 	export var valueCallInstance as ValueCallInstanceColumn
 
-	// Every store this function makes into an interface-typed field (`ExistentialFieldStore`), started at the
-	// shared empty and replaced on the first write, and swapped across a closure body for its sibling's reason.
+	// Every store this function makes into an interface-typed field (`ExistentialFieldStore`), swapped
+	// across a closure body for its sibling's reason.
 	export var existentialFieldStores as ExistentialFieldStoreArray
+	export var shareDoorSites as ShareDoorSiteColumn
+	export var returnedValueStarts as ReturnedValueStartColumn
 
 	// ⭐⭐ **THE RANGED TYPEALIAS EACH VALUE'S DECLARED TYPE NAMES, where the value's own type columns cannot
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
@@ -9413,6 +9415,8 @@ type FunctionBodyState
 			valueExistentialScope: noValueExistentialScopes,
 			valueCallInstance: noValueCallInstances,
 			existentialFieldStores: ExistentialFieldStoreArray.create(0),
+			shareDoorSites: ShareDoorSiteColumn.unwritten(),
+			returnedValueStarts: ReturnedValueStartColumn.unwritten(),
 			valueDeclaredAlias: noValueDeclaredAliases,
 			literalCasts: noLiteralCasts,
 			literalCastArguments: noLiteralCastArguments,
@@ -9420,8 +9424,8 @@ type FunctionBodyState
 			scratchCellFills: noScratchCellFills,
 			argumentStorage: noValueMarks,
 			borrowedScratchCells: noValueMarks,
-			deferredArgumentBindings: DeferredArgumentBindingColumn.unwritten,
-			pendingOverlaps: PendingOverlapColumn.unwritten,
+			deferredArgumentBindings: DeferredArgumentBindingColumn.unwritten(),
+			pendingOverlaps: PendingOverlapColumn.unwritten(),
 			loopScans: LoopMoveScanArray.create(0),
 			dropCascade: DropCascadeState.unbuilt,
 			wrapOperands: noWrapOperands,

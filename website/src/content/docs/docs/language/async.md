@@ -508,8 +508,9 @@ either side could write, because the two green threads may run at the same time 
   `clone()` of one is [E3214](/docs/cli/error-codes/#e3214--semanticuniquevaluerefused). A `SharedValue` or a
   registry value that reaches one is **E3171**.
 - Freezing or publishing a graph walks it to mark every record shared. A value held at an interface type is
-  walked through the conformer it holds, and one no walk can be built for stops the program with exit code
-  **96** before anything is published.
+  walked through the conformer it holds, so every conformer the program converts to that interface is judged
+  at the `freeze`, the publish or the registration: one no walk can be built for is **E3171**, naming the
+  interface, the conformer and the field, with a note where the conformer is converted.
 
 **A service's state holds no promise.** A field of a service type that is a `Promise`, an array of promises, or a
 record or union that holds one is [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise), reported at the
@@ -906,7 +907,8 @@ A top-level `default Key = expression` declares the program-wide default for `Ke
   ([E3170](/docs/cli/error-codes/#e3170--registrydefaultservicedoesnotimplementkey) otherwise), and `Key.current()` returns an
   owned `Key.handle`.
 - **A value key** is a type whose graph a share walk can mark: one that reaches no OS handle, function value
-  or promise ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). Its fields may be `var`,
+  or promise, also through a conformer the program converts to an interface the graph holds
+  ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). Its fields may be `var`,
   and may hold containers. The expression builds one, and may spawn services for its fields.
   `Key.current()` returns the published record, [read-only](/docs/language/memory-model/#read-only-values) all the way down: a write
   through it is **E3197** (**E3207** where it is handed to a parameter the callee writes), and `clone()` makes
@@ -1078,7 +1080,7 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 | 75 | a green thread was neither awaited nor dropped when the program ended |
 | 90 | a service's message loop received a message its type does not declare — reachable only if a send the compiler built names no message of the service |
 | 92 | deadlock: `main` is unfinished and every green thread waits for good (for example `awaitAny` on an empty array, or a `sendTimeout: ForeverMs` send to a mailbox that stays full) |
-| 96 | a share walk (`freeze`, `SharedValue.publish`, `Key.register`) reached a value held at an interface type whose conformer no walk can be built for |
+| 96 | a share walk (`freeze`, `SharedValue.publish`, `Key.register`) reached a value held at an interface type whose conformer no walk can be built for — reachable only if a share door the front end should have refused (E3171) was compiled |
 | 98 | a service send waiting for room broke the protocol between the sender and the party that wakes it — reachable only through a send the compiler built wrongly |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 | 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |

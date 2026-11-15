@@ -28,6 +28,8 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "baseline"): "IndexBaseline.unsettled()",
     ("ProgramSignatures", "journal"): "IndexJournal.create()",
     ("ProgramSignatures", "rowSetLog"): "RowSetLog.closed()",
+    ("ProgramSignatures", "growthMemo"): "GrowthMemo.create()",
+    ("ProgramSignatures", "descriptorReads"): "DescriptorReads.create()",
     ("ProgramSignatures", "mintedTupleLayouts"): "SettledStructLayoutArray.create(0)",
     ("ProgramSignatures", "published"): "SettledCellArray.create(0)",
     ("ProgramSignatures", "sharedSettled"): "freeze SettledDeclarations.unused()",

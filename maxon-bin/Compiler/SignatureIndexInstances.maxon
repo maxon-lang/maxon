@@ -3655,6 +3655,48 @@ extension ProgramSignatures
 		return maxonTypeTag(self.substituteInstanceFieldType(id, index: index)) == ValueTypeTag.typeParameter
 	end 'genericInstanceFieldIsOpaque'
 
+	export function opaqueSlotPathsOf(id GenericInstanceId) returns OpaqueSlotPathArray
+		let paths = OpaqueSlotPathArray.create(0)
+
+		if self.instanceArgsAreFullyConcrete(id) 'aConcreteInstanceClonesDeeply'
+			return paths
+		end 'aConcreteInstanceClonesDeeply'
+
+		self.collectOpaqueSlotPaths(id, hops: OpaqueSlotHopArray.create(0), standingIn: ClonerSet.create(), into: paths)
+		return paths
+	end 'opaqueSlotPathsOf'
+
+	function collectOpaqueSlotPaths(id GenericInstanceId, hops OpaqueSlotHopArray, standingIn ClonerSet, into OpaqueSlotPathArray)
+		if not self.genericInstanceHasBaseLayout(id) 'noFieldsToHold'
+			return
+		end 'noFieldsToHold'
+
+		let key = self.mangleGenericInstance(id)
+
+		if standingIn.contains(key) 'aRecordThatHoldsItself'
+			return
+		end 'aRecordThatHoldsItself'
+
+		standingIn.insert(key)
+
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			let fieldType = self.substituteInstanceFieldType(id, index: i)
+			let offset = self.genericInstanceFieldOffset(id, index: i)
+
+			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'anOpaqueSlot'
+				into.push(OpaqueSlotPath.create(hops.clone(), slotOffset: offset, slotType: fieldType))
+			end 'anOpaqueSlot'
+
+			if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance 'aNestedRecord'
+				hops.push(OpaqueSlotHop.create(offset, declared: fieldType))
+				self.collectOpaqueSlotPaths(genericInstanceIdOf(fieldType), hops: hops, standingIn: standingIn, into: into)
+				_ = try hops.pop() otherwise panic("ProgramSignatures.collectOpaqueSlotPaths: the hop pushed above is on the path")
+			end 'aNestedRecord'
+		end 'eachField'
+
+		_ = standingIn.remove(key)
+	end 'collectOpaqueSlotPaths'
+
 	// ⭐⭐ **WHICH DICTIONARY BLOCK RELEASES OPAQUE FIELD `index`, IN THE ENCLOSING BODY'S OWN `uses`-LIST
 	// TERMS.** The substituted field type names a parameter of the type whose SHARED BODY holds the descriptor
 	// — `BagIter with Element`'s `slot` substitutes to `Bag`'s `Element`, and `Bag.contains` is the frame that
@@ -3663,7 +3705,7 @@ extension ProgramSignatures
 	// blocks, instead of the caller having to pre-offset one: a PERMUTED instance (`Pair with (U, T)` inside
 	// `Holder uses T, U`) is served for free, where a single forwarded block base could not express it.
 	export function genericInstanceFieldOpaqueBlockOffset(id GenericInstanceId, index FieldIndex) returns ByteOffset
-		return layoutBlockOffsetFor(self.opaqueTypeParamPosition(self.substituteInstanceFieldType(id, index: index)))
+		return self.descriptorBlockOffsetOf(self.substituteInstanceFieldType(id, index: index))
 	end 'genericInstanceFieldOpaqueBlockOffset'
 
 	// ⭐⭐ **THE WALK'S TWO ALLOCATION-FREE PRECONDITIONS, ASKED BEFORE ITS CYCLE SET EXISTS.** A fully
@@ -9066,10 +9108,6 @@ extension ProgramSignatures
 		return substituted
 	end 'substituteInstanceFieldType'
 
-	function expandedInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
-		return self.substituteThroughInstanceInterned(self.declaredInstanceFieldType(self.baseLayoutOf(id), index: index), id: id, interner: self.typeNames)
-	end 'expandedInstanceFieldType'
-
 	function declaredInstanceFieldType(layout StructLayout, index FieldIndex) returns MaxonType
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.declaredInstanceFieldType: field {index} out of range for the base struct")
 		return self.declaredSlotType(fieldType, into: self.typeNames, slotScopeFilePath: layout.declFilePath)
@@ -9144,18 +9182,6 @@ extension ProgramSignatures
 		return base
 	end 'genericInstanceCallerParameterRunBase'
 
-	export function genericInstanceArgsBuildOnATypeParameter(gid GenericInstanceId) returns bool
-		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
-			let arg = self.instanceArgType(gid, position: position)
-
-			if maxonTypeTag(arg) != ValueTypeTag.typeParameter and self.typeIsBuiltOnATypeParameter(arg) 'builtOnAParameter'
-				return true
-			end 'builtOnAParameter'
-		end 'eachArg'
-
-		return false
-	end 'genericInstanceArgsBuildOnATypeParameter'
-
 	export function instanceDescriptorIsComposedFromTheCaller(gid GenericInstanceId) returns bool
 		try self.genericInstanceCallerParameterRunBase(gid) otherwise return self.instanceIsBuiltOnATypeParameter(gid)
 		return false
@@ -9205,13 +9231,13 @@ extension ProgramSignatures
 			return try self.firstTypeParameterInInstanceArgs(genericInstanceIdOf(resolved))
 		end 'aNestedInstance'
 
-		let elements = try self.tupleElementTypesOf(resolved)
+		let components = try self.aggregateComponentsOf(resolved, functions: FunctionMentions.ignored) otherwise throw MapError.keyNotFound
 
-		for element in elements 'eachElement'
-			if let found = try self.firstTypeParameterIn(element) 'mentionsOne'
+		for component in components 'eachComponent'
+			if let found = try self.firstTypeParameterIn(component) 'mentionsOne'
 				return found
 			end 'mentionsOne'
-		end 'eachElement'
+		end 'eachComponent'
 
 		throw MapError.keyNotFound
 	end 'firstTypeParameterIn'
@@ -9238,13 +9264,13 @@ extension ProgramSignatures
 			return self.instanceArgsMentionTypeParameter(genericInstanceIdOf(resolved), param: param)
 		end 'aNestedInstance'
 
-		let elements = try self.tupleElementTypesOf(resolved) otherwise return false
+		let components = try self.aggregateComponentsOf(resolved, functions: FunctionMentions.ignored) otherwise return false
 
-		for element in elements 'eachElement'
-			if self.typeMentionsTypeParameter(element, param: param) 'mentionsIt'
+		for component in components 'eachComponent'
+			if self.typeMentionsTypeParameter(component, param: param) 'mentionsIt'
 				return true
 			end 'mentionsIt'
-		end 'eachElement'
+		end 'eachComponent'
 
 		return false
 	end 'typeMentionsTypeParameter'
@@ -9325,31 +9351,267 @@ extension ProgramSignatures
 		return not self.typeIsBuiltOnATypeParameter(arg)
 	end 'argIsFullyConcrete'
 
-	// Does the field reach `owner` again, through declared generics' fields, over arguments that
-	// properly contain the ones it was reached with? Such a type needs a larger instance at every
-	// depth (E3184).
 	export function fieldTypeGrowsItsOwner(owner ByteArray, fieldName ByteArray) returns bool
-		let paramNames = self.structTypeParamsOf(owner)
-
-		if paramNames.isEmpty() 'notGeneric'
+		if self.structTypeParamsOf(owner).isEmpty() 'notGeneric'
 			return false
 		end 'notGeneric'
 
-		let fieldType = self.denotedType(try self.declaredSlotTypeOfField(owner, fieldName: fieldName) otherwise return false)
-		let ownParameters = MaxonTypeArray.create(paramNames.count(), zeroed: false)
+		let fieldType = try self.declaredSlotTypeOfField(owner, fieldName: fieldName) otherwise return false
+		let policy = MentionPolicy.everyPosition(FunctionMentions.ignored)
+		let fieldRows = GenericInstanceIdArray.create(0)
+		self.collectLaidOutOpenInstances(fieldType, into: fieldRows)
 
-		for paramName in paramNames 'eachParameter'
-			ownParameters.push(MaxonType.typeParameter(typeParamTokenFor(owner, paramName: paramName)))
-		end 'eachParameter'
-
-		if not self.typeWrapsAParameter(fieldType, parameters: ownParameters) 'nothingCanGrow'
+		if not self.anyRowExpands(fieldRows, policy: policy) 'nothingCanGrow'
 			return false
 		end 'nothingCanGrow'
 
-		let path = GrowthPath.create(0)
-		path.push(GrowthStep.create(owner, args: ownParameters))
-		return self.typeGrowsOwner(fieldType, owner: owner, path: path, visited: ClonerSet.create())
+		let growing = self.growingFieldRowsOf(owner, policy: policy)
+
+		for row in fieldRows 'eachFieldRow'
+			if growing.contains(row) 'closesACycle'
+				return true
+			end 'closesACycle'
+		end 'eachFieldRow'
+
+		return false
 	end 'fieldTypeGrowsItsOwner'
+
+	function growingFieldRowsOf(owner ByteArray, policy MentionPolicy) returns GrowingRows
+		if let known = try self.growthMemo.growingByOwner.get(owner) 'anOwnerAlreadyAnswered'
+			return known
+		end 'anOwnerAlreadyAnswered'
+
+		let graph = InstantiationGraph.create(self, policy: policy)
+		self.addFieldDenotationsReachedFrom(owner, graph: graph)
+		let growing = graph.growingRows()
+
+		if self.growthMemo.sealed 'everyDeclarationIsSettled'
+			self.growthMemo.growingByOwner.upsert(owner, value: growing)
+		end 'everyDeclarationIsSettled'
+
+		return growing
+	end 'growingFieldRowsOf'
+
+	export function heldPositionsOfBase(base ByteArray) returns ParameterPositions
+		if let known = try self.growthMemo.heldByBase.get(base) 'aBaseAlreadyAnswered'
+			return known
+		end 'aBaseAlreadyAnswered'
+
+		let held = self.layoutHeldPositionsOf(base)
+
+		if self.growthMemo.sealed 'everyDeclarationIsSettled'
+			self.growthMemo.heldByBase.upsert(base, value: held)
+		end 'everyDeclarationIsSettled'
+
+		return held
+	end 'heldPositionsOfBase'
+
+	function layoutHeldPositionsOf(base ByteArray) returns ParameterPositions
+		let held = ParameterPositions.create()
+
+		if not self.containsStructInAnyFile(base) or not self.structDeclaresTypeParams(base) 'aContainerHoldingEveryArgument'
+			for position in 0 upto self.structTypeParamsOf(base).count() 'eachPosition'
+				held.insert(position)
+			end 'eachPosition'
+
+			return held
+		end 'aContainerHoldingEveryArgument'
+
+		for position in 0 upto self.structTypeParamsOf(base).count() 'eachParameter'
+			if self.baseLayoutHoldsPosition(base, position: position, visiting: ClonerSet.create()) 'heldByTheLayout'
+				held.insert(position)
+			end 'heldByTheLayout'
+		end 'eachParameter'
+
+		return held
+	end 'layoutHeldPositionsOf'
+
+	function baseLayoutHoldsPosition(base ByteArray, position ElementIndex, visiting ClonerSet) returns bool
+		let key = freeze "{String.from(base)}#{position}".toByteArray()
+
+		if visiting.contains(key) 'alreadyBeingAsked'
+			return false
+		end 'alreadyBeingAsked'
+
+		visiting.insert(key)
+		let layout = self.structLayoutOf(base)
+
+		for index in 0 upto layout.fieldCount() 'eachField'
+			if self.typeHoldsPosition(self.declaredInstanceFieldType(layout, index: index), base: base, position: position, visiting: visiting) 'aFieldHoldsIt'
+				return true
+			end 'aFieldHoldsIt'
+		end 'eachField'
+
+		return false
+	end 'baseLayoutHoldsPosition'
+
+	function typeHoldsPosition(type MaxonType, base ByteArray, position ElementIndex, visiting ClonerSet) returns bool
+		let resolved = self.typeArgumentType(type)
+		let tag = maxonTypeTag(resolved)
+
+		if tag == ValueTypeTag.typeParameter 'aParameter'
+			return self.opaqueTypeParamDeclaredBy(resolved, typeName: base) and self.opaqueTypeParamPosition(resolved) == position
+		end 'aParameter'
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceHoldsPosition(genericInstanceIdOf(resolved), base: base, position: position, visiting: visiting)
+		end 'anInstance'
+
+		let components = try self.aggregateComponentsOf(resolved, functions: FunctionMentions.ignored) otherwise return false
+
+		for component in components 'eachComponent'
+			if self.typeHoldsPosition(component, base: base, position: position, visiting: visiting) 'aComponentHoldsIt'
+				return true
+			end 'aComponentHoldsIt'
+		end 'eachComponent'
+
+		return false
+	end 'typeHoldsPosition'
+
+	function instanceHoldsPosition(id GenericInstanceId, base ByteArray, position ElementIndex, visiting ClonerSet) returns bool
+		let holdsEveryArgument = self.isElementBearingRecordInstance(id) or not self.genericInstanceHasBaseLayout(id)
+		let target = self.genericInstanceBaseName(id)
+
+		for argument in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			if not holdsEveryArgument and not self.baseLayoutHoldsPosition(target, position: argument, visiting: visiting) 'theTargetIgnoresIt'
+				continue
+			end 'theTargetIgnoresIt'
+
+			if self.typeHoldsPosition(self.substitutedInstanceArg(id, position: argument), base: base, position: position, visiting: visiting) 'theArgumentHoldsIt'
+				return true
+			end 'theArgumentHoldsIt'
+		end 'eachArgument'
+
+		return false
+	end 'instanceHoldsPosition'
+
+	function anyRowExpands(rows GenericInstanceIdArray, policy MentionPolicy) returns bool
+		for row in rows 'eachRow'
+			for edge in self.instantiationEdgesOf(row, policy: policy) 'eachEdge'
+				if edge.expansive 'anExpansiveEdge'
+					return true
+				end 'anExpansiveEdge'
+			end 'eachEdge'
+		end 'eachRow'
+
+		return false
+	end 'anyRowExpands'
+
+	function addFieldDenotationsReachedFrom(owner ByteArray, graph InstantiationGraph)
+		let queue = NameRoster.create(0)
+		let reached = ClonerSet.create()
+		queue.push(owner)
+		reached.insert(owner)
+		var head = 0 as ElementIndex
+
+		while head < queue.count() 'eachBase'
+			let base = try queue.get(head) otherwise panic("ProgramSignatures.addFieldDenotationsReachedFrom: queue.get OOB at {head}")
+			head = head + 1
+
+			for row in self.laidOutFieldInstancesOf(base) 'eachDenotedRow'
+				graph.addRow(base, row: row, only: TargetFilter.every)
+				let target = self.genericInstanceBaseName(row)
+
+				if self.genericInstanceHasBaseLayout(row) and not reached.contains(target) 'aBaseNotYetWalked'
+					reached.insert(target)
+					queue.push(target)
+				end 'aBaseNotYetWalked'
+			end 'eachDenotedRow'
+		end 'eachBase'
+	end 'addFieldDenotationsReachedFrom'
+
+	function laidOutFieldInstancesOf(base ByteArray) returns GenericInstanceIdArray
+		let layout = self.structLayoutOf(base)
+		let rows = GenericInstanceIdArray.create(0)
+
+		for index in 0 upto layout.fieldCount() 'eachField'
+			self.collectLaidOutOpenInstances(self.declaredInstanceFieldType(layout, index: index), into: rows)
+		end 'eachField'
+
+		return rows
+	end 'laidOutFieldInstancesOf'
+
+	function collectLaidOutOpenInstances(type MaxonType, into GenericInstanceIdArray)
+		let resolved = self.typeArgumentType(type)
+
+		if maxonTypeTag(resolved) == ValueTypeTag.genericInstance 'anInstance'
+			let id = genericInstanceIdOf(resolved)
+
+			if self.instanceIsBuiltOnATypeParameter(id) and not into.contains(id) 'anOpenRowNotYetNoted'
+				into.push(id)
+			end 'anOpenRowNotYetNoted'
+
+			for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+				if self.instanceLaysOutArgument(id, position: position) 'theArgumentIsLaidOut'
+					self.collectLaidOutOpenInstances(self.substitutedInstanceArg(id, position: position), into: into)
+				end 'theArgumentIsLaidOut'
+			end 'eachArgument'
+
+			return
+		end 'anInstance'
+
+		let components = try self.aggregateComponentsOf(resolved, functions: FunctionMentions.ignored) otherwise return
+
+		for component in components 'eachComponent'
+			self.collectLaidOutOpenInstances(component, into: into)
+		end 'eachComponent'
+	end 'collectLaidOutOpenInstances'
+
+	function instanceLaysOutArgument(id GenericInstanceId, position ElementIndex) returns bool
+		if self.isElementBearingRecordInstance(id) or not self.genericInstanceHasBaseLayout(id) 'aContainerHoldingEveryArgument'
+			return true
+		end 'aContainerHoldingEveryArgument'
+
+		return self.heldPositionsOfBase(self.genericInstanceBaseName(id)).contains(position)
+	end 'instanceLaysOutArgument'
+
+	export function instantiationEdgesOf(row GenericInstanceId, policy MentionPolicy) returns InstantiationEdgeArray
+		let edges = InstantiationEdgeArray.create(0)
+
+		for target in 0 upto self.genericInstanceArgCount(row) 'eachArgument'
+			let arg = self.instanceArgType(row, position: target)
+			let isTheParameterItself = maxonTypeTag(arg) == ValueTypeTag.typeParameter
+
+			for owner in self.typeMentionedParameters(arg, policy: policy) 'eachMentionedParameter'
+				edges.push(InstantiationEdge.create(owner, targetPosition: target, expansive: not isTheParameterItself))
+			end 'eachMentionedParameter'
+		end 'eachArgument'
+
+		return edges
+	end 'instantiationEdgesOf'
+
+	function aggregateComponentsOf(resolved MaxonType, functions FunctionMentions) returns MaxonTypeArray throws AbsentError
+		if maxonTypeTag(resolved) == ValueTypeTag.function 'aFunctionValue'
+			match functions 'functions'
+				counted then return try self.functionAliasComponentsOf(resolved)
+				ignored then throw AbsentError.absent
+			end 'functions'
+		end 'aFunctionValue'
+
+		return try self.tupleElementTypesOf(resolved) otherwise throw AbsentError.absent
+	end 'aggregateComponentsOf'
+
+	function functionAliasComponentsOf(resolved MaxonType) returns MaxonTypeArray throws AbsentError
+		match self.functionAliasInAnyFile(self.nameOfId(typeNameIdOf(resolved))) 'alias'
+			undeclared then throw AbsentError.absent
+			declared(alias) then return self.slotTypesOfFunctionAlias(alias)
+		end 'alias'
+	end 'functionAliasComponentsOf'
+
+	function slotTypesOfFunctionAlias(alias FunctionTypeAlias) returns MaxonTypeArray
+		let slots = MaxonTypeArray.create(alias.paramTypes.count() + 1, zeroed: false)
+
+		for param in alias.paramTypes 'eachParameter'
+			slots.push(maxonTypeOfStoredAliasParam(param, typeNames: self.typeNames))
+		end 'eachParameter'
+
+		match maxonTypeOfStoredAliasReturn(alias, typeNames: self.typeNames) 'returned'
+			void then break
+			value(returnType) then slots.push(returnType)
+		end 'returned'
+
+		return slots
+	end 'slotTypesOfFunctionAlias'
 
 	export function declaredFieldTypeDisplayName(structName ByteArray, fieldName ByteArray) returns String
 		return self.typeDisplayName(try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise panic("declaredFieldTypeDisplayName: '{String.from(structName)}' has no field '{String.from(fieldName)}' — the caller named a field it just read"))
@@ -9363,130 +9625,6 @@ extension ProgramSignatures
 		let denoted = try self.denotedInstance(type) otherwise return type
 		return MaxonType.genericInstance(denoted)
 	end 'denotedType'
-
-	function typeWrapsAParameter(type MaxonType, parameters MaxonTypeArray) returns bool
-		if maxonTypeTag(type) != ValueTypeTag.genericInstance 'holdsNoInstance'
-			return false
-		end 'holdsNoInstance'
-
-		let id = genericInstanceIdOf(type)
-		let declared = self.genericInstanceHasBaseLayout(id)
-
-		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
-			let arg = self.denotedArg(id, position: position)
-
-			if declared and maxonTypeTag(arg) == ValueTypeTag.genericInstance and self.typeMentionsAParameter(arg, parameters: parameters) 'aDeclaredGenericOverATermBuiltOnAParameter'
-				return true
-			end 'aDeclaredGenericOverATermBuiltOnAParameter'
-
-			if self.typeWrapsAParameter(arg, parameters: parameters) 'deeper'
-				return true
-			end 'deeper'
-		end 'eachArgument'
-
-		return false
-	end 'typeWrapsAParameter'
-
-	function typeMentionsAParameter(type MaxonType, parameters MaxonTypeArray) returns bool
-		for parameter in parameters 'eachParameter'
-			if maxonTypesDenoteSame(type, b: parameter) or self.typeProperlyContains(type, inner: parameter) 'mentionsOne'
-				return true
-			end 'mentionsOne'
-		end 'eachParameter'
-
-		return false
-	end 'typeMentionsAParameter'
-
-	function typeProperlyContains(type MaxonType, inner MaxonType) returns bool
-		if maxonTypeTag(type) != ValueTypeTag.genericInstance 'holdsNoInstance'
-			return false
-		end 'holdsNoInstance'
-
-		let id = genericInstanceIdOf(type)
-
-		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
-			let arg = self.denotedArg(id, position: position)
-
-			if maxonTypesDenoteSame(arg, b: inner) or self.typeProperlyContains(arg, inner: inner) 'inside'
-				return true
-			end 'inside'
-		end 'eachArgument'
-
-		return false
-	end 'typeProperlyContains'
-
-	function argsGrowOver(args MaxonTypeArray, earlier MaxonTypeArray) returns bool
-		for arg in args 'eachArgument'
-			for inner in earlier 'eachEarlier'
-				if self.typeProperlyContains(arg, inner: inner) 'wrapsIt'
-					return true
-				end 'wrapsIt'
-			end 'eachEarlier'
-		end 'eachArgument'
-
-		return false
-	end 'argsGrowOver'
-
-	function typeGrowsOwner(type MaxonType, owner ByteArray, path GrowthPath, visited ClonerSet) returns bool
-		if maxonTypeTag(type) != ValueTypeTag.genericInstance 'holdsNoInstance'
-			return false
-		end 'holdsNoInstance'
-
-		return self.instanceGrowsOwner(genericInstanceIdOf(type), owner: owner, path: path, visited: visited)
-	end 'typeGrowsOwner'
-
-	function instanceGrowsOwner(id GenericInstanceId, owner ByteArray, path GrowthPath, visited ClonerSet) returns bool
-		let key = self.mangleGenericInstance(id)
-
-		if visited.contains(key) 'alreadyWalked'
-			return false
-		end 'alreadyWalked'
-
-		visited.insert(key)
-		let base = self.genericInstanceBaseName(id)
-
-		if self.genericInstanceHasBaseLayout(id) and not layoutTakesEveryTypeArgument(self.baseLayoutOf(id), count: self.genericInstanceArgCount(id)) 'aTypeArgumentIsOmitted'
-			return false
-		end 'aTypeArgumentIsOmitted'
-
-		let argCount = self.genericInstanceArgCount(id)
-		let args = MaxonTypeArray.create(argCount, zeroed: false)
-
-		for position in 0 upto argCount 'eachArgument'
-			args.push(self.denotedArg(id, position: position))
-		end 'eachArgument'
-
-		for step in path 'eachStep'
-			if step.base.equals(base) and self.argsGrowOver(args, earlier: step.args) 'theSameTypeOverAGrowingTerm'
-				return base.equals(owner)
-			end 'theSameTypeOverAGrowingTerm'
-		end 'eachStep'
-
-		path.push(GrowthStep.create(base, args: args))
-		let grows = self.instanceHoldsGrowth(id, owner: owner, path: path, visited: visited)
-		_ = try path.pop() otherwise panic("instanceGrowsOwner: the step pushed above is on the path")
-		return grows
-	end 'instanceGrowsOwner'
-
-	function instanceHoldsGrowth(id GenericInstanceId, owner ByteArray, path GrowthPath, visited ClonerSet) returns bool
-		if self.genericInstanceHasBaseLayout(id) 'aDeclaredGeneric'
-			for index in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-				if self.typeGrowsOwner(self.denotedType(self.expandedInstanceFieldType(id, index: index)), owner: owner, path: path, visited: visited) 'aFieldGrows'
-					return true
-				end 'aFieldGrows'
-			end 'eachField'
-
-			return false
-		end 'aDeclaredGeneric'
-
-		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
-			if self.typeGrowsOwner(self.denotedArg(id, position: position), owner: owner, path: path, visited: visited) 'anElementGrows'
-				return true
-			end 'anElementGrows'
-		end 'eachArgument'
-
-		return false
-	end 'instanceHoldsGrowth'
 
 	export function constraintsNameABareTypeParameter(callee ByteArray, extensionConstraints WhereConstraintArray, gid GenericInstanceId) returns bool
 		for constraint in self.witnessConstraintsOfMethod(callee, extensionConstraints: extensionConstraints) 'eachConstraint'

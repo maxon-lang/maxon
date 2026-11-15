@@ -256,7 +256,7 @@ export function installEnumLookupHelpers(module StdModule, project Project, sign
 				continue
 			end 'caseNotReferenced'
 
-			synthesizeEnumFromNameCase(module, layout: layout, caseIndex: i, project: project, representation: representation)
+			synthesizeEnumFromNameCase(module, layout: layout, caseIndex: i, project: project, signatures: signatures, representation: representation)
 		end 'eachCase'
 	end 'each'
 end 'installEnumLookupHelpers'
@@ -398,9 +398,10 @@ end 'synthesizeEnumFromName'
 //
 // ⚠ **NO COMMITTED CASE COVERS A MANAGED PAYLOAD THROUGH THIS MEMBER**, so the suite would not catch a
 // regression here; the consuming discipline at the call site is the whole of what keeps it correct.
-function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project, representation UnionRepresentation)
+function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project, signatures ProgramSignatures, representation UnionRepresentation)
 	let arity = layout.payloadArityAt(caseIndex)
-	let paramCount = (1 + arity) as ParamCount
+	let existentialSlots = existentialPayloadSlotsOf(layout, caseIndex: caseIndex, signatures: signatures, typeNames: project.typeNames)
+	let paramCount = (1 + arity + existentialSlots.count()) as ParamCount
 	let paramTypes = StdTypeArray.create(paramCount, zeroed: false)
 
 	for _ in 0 upto paramCount 'eachParam'
@@ -432,11 +433,19 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 	// Slot `j` takes parameter `j + 1` — the name is parameter 0. The zero-fill past this case's own arity is
 	// `Parser.emitEnumBox`'s, and for its stated reason: E3129 admits a binding read on the path of a case that
 	// declares no such slot precisely because that 0 is pinned by a STORE rather than by the allocator.
+	var cursor = 1 as ValueId
+
 	for j in 0 upto layout.maxPayloadArity() 'eachSlot'
 		// Written as an `if` and not a ternary because the else arm EMITS: a ternary would append the zero
 		// constant on the parameter path too, leaving one orphan op per filled slot in the IR.
 		if j < arity 'ownSlot'
-			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: (j + 1) as ValueId)
+			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: cursor)
+			cursor = cursor + 1
+
+			if existentialSlots.contains(j) 'andItsWitnessHalf'
+				emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j) + InterfaceWitnessHalfOffset, value: cursor)
+				cursor = cursor + 1
+			end 'andItsWitnessHalf'
 		end 'ownSlot' else 'widerSiblingsSlot'
 			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: emitConst(module, block: build, value: 0, ids: ids))
 		end 'widerSiblingsSlot'
@@ -448,6 +457,22 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 
 	module.functions.push(func)
 end 'synthesizeEnumFromNameCase'
+
+function existentialPayloadSlotsOf(layout EnumLayout, caseIndex CaseIndex, signatures ProgramSignatures, typeNames TypeNameInterner) returns ParameterPositions
+	let slots = ParameterPositions.create()
+	let payloads = layout.payloadsAt(caseIndex)
+
+	for slot in 0 upto payloads.count() 'eachSlot'
+		let field = try payloads.get(slot) otherwise panic("existentialPayloadSlotsOf: payloadsAt count disagrees with get at {slot}")
+		let declared = signatures.payloadTypeOf(field, layout: layout, into: typeNames)
+
+		if payloadClassIsExistential(classifyUnionPayload(signatures, typeNames: typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)) 'anInterfaceSlot'
+			slots.insert(slot)
+		end 'anInterfaceSlot'
+	end 'eachSlot'
+
+	return slots
+end 'existentialPayloadSlotsOf'
 
 // Terminate `block` with "does `name` equal this case's name?" — a `__str_eq` against an immortal `.rdata`
 // String built from the case's own bytes. ONE emitter for the general chain and for the per-case helper, so

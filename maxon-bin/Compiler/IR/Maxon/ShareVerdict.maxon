@@ -1,0 +1,813 @@
+union ShareEdge
+	holds(label ShareSlotLabel)
+	standsAt(conformerName String, site ShareConversionSite)
+end 'ShareEdge'
+
+type ShareLink
+	export let target as ElementIndex
+	export let edge as ShareEdge
+
+	static function create(target ElementIndex, edge ShareEdge) returns Self
+		return Self{target: target, edge: edge}
+	end 'create'
+end 'ShareLink'
+
+typealias ShareLinkArray = Array with ShareLink
+
+type ShareParent
+	export let parent as ElementIndex
+	export let link as ElementIndex
+
+	static function create(parent ElementIndex, link ElementIndex) returns Self
+		return Self{parent: parent, link: link}
+	end 'create'
+end 'ShareParent'
+
+typealias ShareParentArray = Array with ShareParent
+
+union ShareBlock
+	clear
+	seed(refusal ShareWalkRefusal)
+	through(link ElementIndex)
+end 'ShareBlock'
+
+union NodeHolder
+	namedInterface(name immutable ByteArray)
+	concrete(conformer ShareConformer)
+end 'NodeHolder'
+
+type ShareGraphNode
+	export let key as immutable ByteArray
+	export let display as String
+	export let holder as NodeHolder
+	export let library as bool
+	export let links as ShareLinkArray
+	export let parents as ShareParentArray
+	export var block as ShareBlock
+
+	static function create(key ByteArray, display String, holder NodeHolder, library bool) returns Self
+		return Self{key: key, display: display, holder: holder, library: library, links: ShareLinkArray.create(0), parents: ShareParentArray.create(0), block: ShareBlock.clear}
+	end 'create'
+
+	function isInterface() returns bool
+		return match self.holder 'holder'
+			namedInterface gives true
+			concrete gives false
+		end 'holder'
+	end 'isInterface'
+
+	function libraryConformer() returns ShareConformer throws AbsentError
+		if not self.library 'aUserType'
+			throw AbsentError.absent
+		end 'aUserType'
+
+		match self.holder 'holder'
+			namedInterface then throw AbsentError.absent
+			concrete(held) then return held
+		end 'holder'
+	end 'libraryConformer'
+
+	function isClear() returns bool
+		return match self.block 'block'
+			clear gives true
+			seed or
+			through gives false
+		end 'block'
+	end 'isClear'
+end 'ShareGraphNode'
+
+typealias ShareGraphNodeArray = Array with ShareGraphNode
+typealias ShareNodeIndex = Map with (ByteArray, ElementIndex)
+typealias ShareQueue = Array with ElementIndex
+
+type HeldLink
+	export let held as immutable ByteArray
+	export let label as immutable ByteArray
+
+	static function create(held ByteArray, label ByteArray) returns Self
+		return Self{held: held, label: label}
+	end 'create'
+end 'HeldLink'
+
+typealias HeldLinkArray = Array with HeldLink
+typealias HeldLinksByConformer = Map with (ByteArray, HeldLinkArray)
+
+union GraphSlot
+	leaf
+	node(index ElementIndex)
+end 'GraphSlot'
+
+type ShareBlame
+	export let reason as String
+	export let notes as PositionedNoteArray
+
+	static function create(reason String, notes PositionedNoteArray) returns Self
+		return Self{reason: reason, notes: notes}
+	end 'create'
+end 'ShareBlame'
+
+type BlamePiece
+	let subject as String
+	let predicate as String
+
+	static function create(subject String, predicate String) returns Self
+		return Self{subject: subject, predicate: predicate}
+	end 'create'
+
+	function rendered(opener String) returns String
+		if self.subject.isEmpty() 'theHolderItself'
+			return "it {self.predicate}"
+		end 'theHolderItself'
+
+		return "{opener} `{self.subject}` {self.predicate}"
+	end 'rendered'
+end 'BlamePiece'
+
+typealias BlamePieceArray = Array with BlamePiece
+
+union LibraryHold
+	outside
+	inside(root ShareConformer)
+end 'LibraryHold'
+
+let FirstSegmentOpener = "its"
+let FollowingSegmentOpener = ", whose"
+let ConformerSegmentOpener = ", and its"
+
+function articledName(display String) returns String
+	let lowered = display.toLower()
+	let opensWithAVowel = lowered.startsWith("a") or lowered.startsWith("e") or lowered.startsWith("i") or lowered.startsWith("o") or lowered.startsWith("u")
+	return "an `{display}`" if opensWithAVowel else "a `{display}`"
+end 'articledName'
+
+type ShareBlameWriter
+	let signatures as ProgramSignatures
+	var reason as String
+	let notes as PositionedNoteArray
+	let path as NameRoster
+	let pieces as BlamePieceArray
+	var segmentOpener as String
+	var library as LibraryHold
+
+	static function create(signatures ProgramSignatures) returns Self
+		return Self{signatures: signatures, reason: "", notes: PositionedNoteArray.create(0), path: NameRoster.create(0), pieces: BlamePieceArray.create(0), segmentOpener: FirstSegmentOpener, library: LibraryHold.outside}
+	end 'create'
+
+	function hold(label ShareSlotLabel)
+		self.path.push(freeze label.rendered().toByteArray())
+	end 'hold'
+
+	function enterLibrary(root ShareConformer)
+		self.library = LibraryHold.inside(root)
+	end 'enterLibrary'
+
+	function reachNode(target ShareGraphNode)
+		match self.library 'library'
+			outside then self.reachOutsideLibrary(target)
+			inside(root) then self.leaveLibrary(root, target: target)
+		end 'library'
+	end 'reachNode'
+
+	function reachOutsideLibrary(target ShareGraphNode)
+		if target.isInterface() 'anInterface'
+			self.pieces.push(BlamePiece.create(self.takePath(), predicate: "is {articledName(target.display)}"))
+			self.flushSegment()
+		end 'anInterface'
+	end 'reachOutsideLibrary'
+
+	function leaveLibrary(root ShareConformer, target ShareGraphNode)
+		let held = match self.signatures.shareConformerHoldRole(root, heldKey: target.key) 'role'
+			viaArguments(role) gives "`{target.display}` {role}"
+			inItsOwnFields gives "`{target.display}` in its own fields"
+		end 'role'
+
+		self.pieces.push(BlamePiece.create(self.takePath(), predicate: "holds {held}"))
+		self.library = LibraryHold.outside
+
+		if target.isInterface() 'aHeldInterface'
+			self.flushSegment()
+		end 'aHeldInterface'
+	end 'leaveLibrary'
+
+	function takePath() returns String
+		var joined = ""
+
+		for position in 0 upto self.path.count() 'eachLabel'
+			if position > 0 'afterTheFirst'
+				joined.append(".")
+			end 'afterTheFirst'
+
+			joined.append(String.from(try self.path.get(position) otherwise panic("ShareBlameWriter.takePath: path.get OOB at {position}")))
+		end 'eachLabel'
+
+		self.path.truncate(0)
+		return joined
+	end 'takePath'
+
+	function flushSegment()
+		self.reason.append(self.renderedPieces(self.segmentOpener))
+		self.pieces.truncate(0)
+		self.segmentOpener = FollowingSegmentOpener
+	end 'flushSegment'
+
+	function renderedPieces(firstOpener String) returns String
+		var rendered = ""
+
+		for position in 0 upto self.pieces.count() 'eachPiece'
+			let piece = try self.pieces.get(position) otherwise panic("ShareBlameWriter.renderedPieces: pieces.get OOB at {position}")
+			rendered.append(piece.rendered(firstOpener if position == 0 else FollowingSegmentOpener))
+		end 'eachPiece'
+
+		return rendered
+	end 'renderedPieces'
+
+	function standAt(conformerName String, interfaceName String, site ShareConversionSite)
+		self.reason.append(", and `{conformerName}` stands at `{interfaceName}`")
+		self.notes.push(PositionedNote.create("`{conformerName}` is converted to `{interfaceName}` here", line: site.line, column: site.column, filePath: site.filePath))
+		self.segmentOpener = ConformerSegmentOpener
+	end 'standAt'
+
+	function finished(refusal ShareWalkRefusal) returns ShareBlame
+		self.pieces.push(self.terminalPiece(refusal))
+		return ShareBlame.create("{self.reason} but no share walk can mark it: {self.renderedPieces(FirstSegmentOpener)}", notes: self.notes)
+	end 'finished'
+
+	function terminalPiece(refusal ShareWalkRefusal) returns BlamePiece
+		let noun = match refusal 'refusal'
+			none panic("ShareBlameWriter.terminalPiece: a blocked conformer carries a refusal — `ShareVerdict.admitConformer` files only a refusing conformer")
+			field(_, cause) gives cause
+			itself(cause) gives cause
+		end 'refusal'
+
+		match self.library 'library'
+			inside(root) then return BlamePiece.create(self.takePath(), predicate: "is {articledName(self.signatures.shareConformerDisplay(root))}, which holds {noun}")
+			outside then return self.userTerminalPiece(refusal, noun: noun)
+		end 'library'
+	end 'terminalPiece'
+
+	function userTerminalPiece(refusal ShareWalkRefusal, noun String) returns BlamePiece
+		match refusal 'refusal'
+			field(label, _) then self.hold(label)
+			none or
+			itself then break
+		end 'refusal'
+
+		return BlamePiece.create(self.takePath(), predicate: "is {noun}")
+	end 'userTerminalPiece'
+end 'ShareBlameWriter'
+
+union DoorOutcome
+	refusedWalk(noun String)
+	reaches(slot GraphSlot)
+end 'DoorOutcome'
+
+type PendingDoor
+	export let site as ShareDoorSite
+	export let subject as MaxonType
+	export let resolved as bool
+
+	static function create(site ShareDoorSite, subject MaxonType, resolved bool) returns Self
+		return Self{site: site, subject: subject, resolved: resolved}
+	end 'create'
+end 'PendingDoor'
+
+typealias PendingDoorArray = Array with PendingDoor
+
+type JudgedDoor
+	export let site as ShareDoorSite
+	export let subject as MaxonType
+	export let outcome as DoorOutcome
+
+	static function create(site ShareDoorSite, subject MaxonType, outcome DoorOutcome) returns Self
+		return Self{site: site, subject: subject, outcome: outcome}
+	end 'create'
+end 'JudgedDoor'
+
+typealias JudgedDoorArray = Array with JudgedDoor
+
+function shareSubjectTypeOf(func IrFunction, subject ShareSubject) returns MaxonType
+	return match subject 'subject'
+		value(value) gives maxonTypeOfTag(try func.valueTags.get(value) otherwise panic("shareSubjectTypeOf: value v{value} of function '{String.from(func.name)}' has no recorded type"), nameId: try func.valueNameIds.get(value) otherwise panic("shareSubjectTypeOf: value v{value} of function '{String.from(func.name)}' has no recorded type name"))
+		declaredReturn gives try valueTypeOfReturn(func.maxonReturnType) otherwise panic("shareSubjectTypeOf: '{String.from(func.name)}' records a `default` door and returns void")
+	end 'subject'
+end 'shareSubjectTypeOf'
+
+union BindingChainState
+	unsettled
+	settled(chain BindingChain)
+end 'BindingChainState'
+
+type ShareVerdict
+	let project as Project
+	let signatures as ProgramSignatures
+	let judgement as ShareJudgement
+	let roster as ShareRoster
+	let entries as ShareEntriesByOwner
+
+	let pending as PendingDoorArray
+	let judged as JudgedDoorArray
+	let nodes as ShareGraphNodeArray
+	let indexByKey as ShareNodeIndex
+	let seeds as ShareQueue
+	let heldLinks as HeldLinksByConformer
+	let linkedPairs as ClonerSet
+	let derivedBindings as ClonerSet
+	var refused as bool
+	var bindingChain as BindingChainState
+
+	static function create(project Project, signatures ProgramSignatures) returns Self
+		return Self{project: project, signatures: signatures, judgement: project.shareConversions.judgement, roster: ShareRoster.create(), entries: ShareEntriesByOwner.create(), pending: PendingDoorArray.create(0), judged: JudgedDoorArray.create(0), nodes: ShareGraphNodeArray.create(0), indexByKey: ShareNodeIndex.create(), seeds: ShareQueue.create(0), heldLinks: HeldLinksByConformer.create(), linkedPairs: ClonerSet.create(), derivedBindings: ClonerSet.create(), refused: false, bindingChain: BindingChainState.unsettled}
+	end 'create'
+
+	function nodeAt(index ElementIndex) returns ShareGraphNode
+		return try self.nodes.get(index) otherwise panic("ShareVerdict.nodeAt: node {index} is outside the {self.nodes.count()} this verdict admitted")
+	end 'nodeAt'
+
+	function ownerOf(openType MaxonType) returns immutable ByteArray
+		return try self.signatures.openTypeOwnerName(openType) otherwise panic("ShareVerdict.ownerOf: a type built on a type parameter names the declaration that owns it — `recordStruct` files every declared parameter as the sweep folds")
+	end 'ownerOf'
+
+	function fileEntry(owner ByteArray, entry ShareEntry)
+		if let filed = try self.entries.get(owner) 'knownOwner'
+			filed.push(entry)
+			return
+		end 'knownOwner'
+
+		let fresh = ShareEntryArray.create(1, zeroed: false)
+		fresh.push(entry)
+		self.entries.upsert(owner, value: fresh)
+	end 'fileEntry'
+
+	function fileRecordedConversions()
+		let recorded = self.project.shareConversions.roster
+
+		for interfaceName in recorded.names() 'eachInterface'
+			for conversion in recorded.conversionsOf(interfaceName) 'eachConversion'
+				self.fileConversion(interfaceName, conformer: conversion.conformer, site: conversion.site)
+			end 'eachConversion'
+		end 'eachInterface'
+	end 'fileRecordedConversions'
+
+	function fileConversion(interfaceName ByteArray, conformer ShareConformer, site ShareConversionSite)
+		match conformer 'conformer'
+			named then self.addConversion(interfaceName, conformer: conformer, site: site)
+			instance(id) then self.fileInstanceConversion(interfaceName, instance: id, site: site)
+		end 'conformer'
+	end 'fileConversion'
+
+	function fileInstanceConversion(interfaceName ByteArray, instance GenericInstanceId, site ShareConversionSite)
+		let instanceType = MaxonType.genericInstance(instance)
+
+		if not self.signatures.typeIsBuiltOnATypeParameter(instanceType) 'aConcreteConformer'
+			self.addConversion(interfaceName, conformer: ShareConformer.instance(instance), site: site)
+			return
+		end 'aConcreteConformer'
+
+		self.fileEntry(self.ownerOf(instanceType), entry: ShareEntry.conversion(interfaceName, instance: instance, site: site))
+	end 'fileInstanceConversion'
+
+	function fileDoors(module MaxonModule)
+		for func in module.functions 'eachFunc'
+			if self.project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
+				continue
+			end 'notInTheProgram'
+
+			for site in func.shareDoorSites 'eachDoor'
+				self.fileDoor(site, subject: self.signatures.denotedShareSubject(shareSubjectTypeOf(func, subject: site.subject), from: self.project.typeNames, inFunction: func.name, readerFilePath: site.filePath))
+			end 'eachDoor'
+		end 'eachFunc'
+	end 'fileDoors'
+
+	function fileDoor(site ShareDoorSite, subject MaxonType)
+		if maxonTypeTag(subject) != ValueTypeTag.genericInstance or not self.signatures.typeIsBuiltOnATypeParameter(subject) 'aConcreteSubject'
+			self.pending.push(PendingDoor.create(site, subject: subject, resolved: false))
+			return
+		end 'aConcreteSubject'
+
+		self.fileEntry(self.ownerOf(subject), entry: ShareEntry.door(site, subject: subject))
+	end 'fileDoor'
+
+	function addConversion(interfaceName ByteArray, conformer ShareConformer, site ShareConversionSite)
+		if not self.roster.note(interfaceName, conformer: conformer, key: self.signatures.shareConformerKey(conformer), site: site) 'alreadyConverted'
+			return
+		end 'alreadyConverted'
+
+		if let interfaceIndex = try self.indexByKey.get(interfaceName) 'theInterfaceIsAdmitted'
+			self.linkConversion(interfaceIndex, conformer: conformer, site: site)
+		end 'theInterfaceIsAdmitted'
+
+		if self.signatures.interfaceHoldsAnAssociatedType(interfaceName) 'holdsAssociatedTypes'
+			self.deriveHeldBindings(interfaceName, conformer: conformer)
+		end 'holdsAssociatedTypes'
+	end 'addConversion'
+
+	function linkConversion(interfaceIndex ElementIndex, conformer ShareConformer, site ShareConversionSite)
+		let target = self.admitConformer(conformer)
+		self.linkOnce(interfaceIndex, target: target, edge: ShareEdge.standsAt(self.signatures.shareConformerDisplay(conformer), site: site))
+	end 'linkConversion'
+
+	function deriveHeldBindings(interfaceName ByteArray, conformer ShareConformer)
+		match self.chain().derivationOf(self.signatures, interfaceName: interfaceName, conformer: conformer) 'derivation'
+			nothingToDerive then return
+			keyed(key) then self.deriveKeyedBindings(key, interfaceName: interfaceName, conformer: conformer)
+		end 'derivation'
+	end 'deriveHeldBindings'
+
+	function deriveKeyedBindings(key ByteArray, interfaceName ByteArray, conformer ShareConformer)
+		let descending = not self.derivedBindings.contains(key)
+		self.derivedBindings.insert(key)
+
+		match lookupInterface(self.project.interfaces, name: interfaceName) 'lookup'
+			notFound then panic("ShareVerdict.deriveHeldBindings: `{String.from(interfaceName)}` holds an associated type and so names a declared interface — the caller asks `interfaceHoldsAnAssociatedType` first")
+			found(iface) then self.deriveHeldBindingsOf(iface, interfaceName: interfaceName, conformer: conformer, descending: descending)
+		end 'lookup'
+	end 'deriveKeyedBindings'
+
+	function deriveHeldBindingsOf(iface IrInterface, interfaceName ByteArray, conformer ShareConformer, descending bool)
+		for position in 0 upto iface.associatedTypeNames.count() 'eachPosition'
+			let label = try iface.associatedTypeNames.get(position) otherwise panic("ShareVerdict.deriveHeldBindingsOf: associatedTypeNames.get OOB at {position}")
+
+			match self.signatures.heldBindingAt(conformer, interfaceName: interfaceName, position: position, conformances: self.project.conformances) 'binding'
+				none then break
+				binds(heldName, bound, declaredAs, line, column, filePath) then self.admitHeldBinding(conformer, label: label, heldName: heldName, bound: bound, declaredAs: declaredAs, site: ShareConversionSite.create(line, column: column, filePath: filePath), descending: descending)
+			end 'binding'
+		end 'eachPosition'
+	end 'deriveHeldBindingsOf'
+
+	function admitHeldBinding(conformer ShareConformer, label ByteArray, heldName ByteArray, bound ShareConformer, declaredAs BindingDeclaration, site ShareConversionSite, descending bool)
+		if self.bindingGrowsWithoutBound(declaredAs) 'anEverDeeperBinding'
+			self.refuseGrowingBinding(conformer, heldName: heldName, declaredAs: declaredAs, site: site)
+			return
+		end 'anEverDeeperBinding'
+
+		let key = self.signatures.shareConformerKey(conformer)
+		self.heldLinksNamed(key).push(HeldLink.create(heldName, label: label))
+
+		if let index = try self.indexByKey.get(key) 'theConformerIsAdmitted'
+			self.linkOnce(index, target: self.admitInterface(heldName), edge: ShareEdge.holds(ShareSlotLabel.field(label)))
+		end 'theConformerIsAdmitted'
+
+		if descending 'theBoundConformerIsNew'
+			self.addConversion(heldName, conformer: bound, site: site)
+		end 'theBoundConformerIsNew'
+	end 'admitHeldBinding'
+
+	function bindingGrowsWithoutBound(declaredAs BindingDeclaration) returns bool
+		return match declaredAs 'declared'
+			nominal gives false
+			instance(row) gives self.chain().grows(row)
+		end 'declared'
+	end 'bindingGrowsWithoutBound'
+
+	function chain() returns BindingChain
+		match self.bindingChain 'state'
+			settled(known) then return known
+			unsettled then break
+		end 'state'
+
+		let settled = BindingChain.settle(self.signatures, conformances: self.project.conformances, roster: self.project.shareConversions.roster, keying: BindingKeying.verdict)
+		self.bindingChain = BindingChainState.settled(settled)
+		return settled
+	end 'chain'
+
+	function refuseGrowingBinding(conformer ShareConformer, heldName ByteArray, declaredAs BindingDeclaration, site ShareConversionSite)
+		let row = match declaredAs 'declared'
+			nominal panic("ShareVerdict.refuseGrowingBinding: a nominal binding builds no instance, so it cannot grow")
+			instance(declaredRow) gives declaredRow
+		end 'declared'
+
+		self.refused = true
+		reportPositioned(self.project, code: ErrorCode.parserUnsupportedFeature, message: growingBindingMessage(self.signatures.shareConformerDisplay(conformer), heldName: String.from(heldName), row: String.from(self.signatures.instanceDisplayName(row))), line: site.line, column: site.column, filePath: site.filePath)
+	end 'refuseGrowingBinding'
+
+	function heldLinksNamed(key ByteArray) returns HeldLinkArray
+		if let known = try self.heldLinks.get(key) 'known'
+			return known
+		end 'known'
+
+		let fresh = HeldLinkArray.create(0)
+		self.heldLinks.upsert(key, value: fresh)
+		return fresh
+	end 'heldLinksNamed'
+
+	function admitSlot(slotType MaxonType, from TypeNameInterner) returns GraphSlot
+		return match self.signatures.shareNodeOfSlot(slotType, from: from) 'node'
+			leaf gives GraphSlot.leaf
+			existential(name) gives GraphSlot.node(self.admitInterface(name))
+			composite(composite) gives GraphSlot.node(self.admitComposite(composite))
+		end 'node'
+	end 'admitSlot'
+
+	function admitNode(key ByteArray, holder NodeHolder) returns ElementIndex
+		let index = self.nodes.count() as ElementIndex
+		self.nodes.push(self.nodeHeldBy(key, holder: holder))
+		self.indexByKey.upsert(key, value: index)
+		return index
+	end 'admitNode'
+
+	function nodeHeldBy(key ByteArray, holder NodeHolder) returns ShareGraphNode
+		return match holder 'holder'
+			namedInterface(name) gives ShareGraphNode.create(key, display: String.from(name), holder: holder, library: self.interfaceIsLibrary(name))
+			concrete(conformer) gives ShareGraphNode.create(key, display: self.signatures.shareConformerDisplay(conformer), holder: holder, library: self.signatures.shareConformerIsLibrary(conformer))
+		end 'holder'
+	end 'nodeHeldBy'
+
+	function interfaceIsLibrary(name ByteArray) returns bool
+		return match lookupInterface(self.project.interfaces, name: name) 'lookup'
+			notFound panic("ShareVerdict.interfaceIsLibrary: `{String.from(name)}` is the name of an interface a slot is declared at, so the interface registry holds it")
+			found(iface) gives self.signatures.declaredInTheLibrary(iface.declFilePath)
+		end 'lookup'
+	end 'interfaceIsLibrary'
+
+	function admitComposite(composite ShareConformer) returns ElementIndex
+		let key = self.signatures.shareConformerKey(composite)
+
+		if let known = try self.indexByKey.get(key) 'alreadyAdmitted'
+			return known
+		end 'alreadyAdmitted'
+
+		let index = self.admitNode(key, holder: NodeHolder.concrete(composite))
+		self.judgeNode(index, conformer: composite)
+
+		for slot in self.signatures.shareSlotsOf(composite) 'eachSlot'
+			match self.admitSlot(slot.slotType, from: self.signatures.indexTypeNames()) 'child'
+				leaf then break
+				node(target) then self.linkOnce(index, target: target, edge: ShareEdge.holds(slot.label))
+			end 'child'
+		end 'eachSlot'
+
+		return index
+	end 'admitComposite'
+
+	function admitInterface(name ByteArray) returns ElementIndex
+		if let known = try self.indexByKey.get(name) 'alreadyAdmitted'
+			return known
+		end 'alreadyAdmitted'
+
+		let index = self.admitNode(name, holder: NodeHolder.namedInterface(name))
+		let converted = self.roster.conversionsOf(name)
+		let convertedCount = converted.count()
+
+		for position in 0 upto convertedCount 'eachConverted'
+			let conversion = try converted.get(position) otherwise panic("ShareVerdict.admitInterface: conversions.get OOB at {position}")
+			self.linkConversion(index, conformer: conversion.conformer, site: conversion.site)
+		end 'eachConverted'
+
+		return index
+	end 'admitInterface'
+
+	function admitConformer(conformer ShareConformer) returns ElementIndex
+		return match self.signatures.shareNodeOfConformer(conformer) 'node'
+			composite(composite) gives self.admitComposite(composite)
+			leaf gives self.admitLeafConformer(conformer)
+			existential panic("ShareVerdict.admitConformer: a conformer is a concrete type and never denotes an interface")
+		end 'node'
+	end 'admitConformer'
+
+	function admitLeafConformer(conformer ShareConformer) returns ElementIndex
+		let key = self.signatures.shareConformerKey(conformer)
+
+		if let known = try self.indexByKey.get(key) 'alreadyAdmitted'
+			return known
+		end 'alreadyAdmitted'
+
+		let index = self.admitNode(key, holder: NodeHolder.concrete(conformer))
+		self.judgeNode(index, conformer: conformer)
+		return index
+	end 'admitLeafConformer'
+
+	function judgeNode(index ElementIndex, conformer ShareConformer)
+		let refusal = self.signatures.shareWalkRefusalOf(conformer, judgement: self.judgement)
+
+		match refusal 'refusal'
+			none then break
+			field or
+			itself then self.seed(index, refusal: refusal)
+		end 'refusal'
+
+		let held = self.heldLinksNamed(self.signatures.shareConformerKey(conformer))
+		let heldCount = held.count()
+
+		for position in 0 upto heldCount 'eachHeldBinding'
+			let heldLink = try held.get(position) otherwise panic("ShareVerdict.judgeNode: held links get OOB at {position}")
+			self.linkOnce(index, target: self.admitInterface(heldLink.held), edge: ShareEdge.holds(ShareSlotLabel.field(heldLink.label)))
+		end 'eachHeldBinding'
+	end 'judgeNode'
+
+	function seed(index ElementIndex, refusal ShareWalkRefusal)
+		let node = self.nodeAt(index)
+		node.block = ShareBlock.seed(refusal)
+		self.seeds.push(index)
+	end 'seed'
+
+	function linkOnce(parent ElementIndex, target ElementIndex, edge ShareEdge)
+		let pair = freeze "{parent}>{target}".toByteArray()
+
+		if self.linkedPairs.contains(pair) 'alreadyLinked'
+			return
+		end 'alreadyLinked'
+
+		self.linkedPairs.insert(pair)
+		let parentNode = self.nodeAt(parent)
+		let position = parentNode.links.count() as ElementIndex
+		parentNode.links.push(ShareLink.create(target, edge: edge))
+		self.nodeAt(target).parents.push(ShareParent.create(parent, link: position))
+	end 'linkOnce'
+
+	function resolvedWalkOf(door PendingDoor) returns TransferWalk
+		let subject = transferSubjectOf(maxonTypeTag(door.subject), nameId: typeNameIdOf(door.subject), typeNames: self.project.typeNames)
+		return self.signatures.transferWalkOf(subject, kind: TransferKind.share, readerFilePath: door.site.filePath)
+	end 'resolvedWalkOf'
+
+	function outcomeOf(door PendingDoor) returns DoorOutcome
+		if door.resolved 'aSubjectTheParserSawOpen'
+			match self.resolvedWalkOf(door) 'walk'
+				refused(noun) then return DoorOutcome.refusedWalk(noun)
+				closed or
+				walkedBy or
+				walkedThroughWitness then break
+			end 'walk'
+		end 'aSubjectTheParserSawOpen'
+
+		return DoorOutcome.reaches(self.admitSlot(door.subject, from: self.project.typeNames))
+	end 'outcomeOf'
+
+	function judgeDoors()
+		let doorCount = self.pending.count()
+
+		for position in 0 upto doorCount 'eachDoor'
+			let door = try self.pending.get(position) otherwise panic("ShareVerdict.judgeDoors: pending.get OOB at {position}")
+			self.judged.push(JudgedDoor.create(door.site, subject: door.subject, outcome: self.outcomeOf(door)))
+		end 'eachDoor'
+	end 'judgeDoors'
+
+	function propagate()
+		var head = 0 as ElementIndex
+
+		while head < self.seeds.count() 'eachBlocked'
+			let current = try self.seeds.get(head) otherwise panic("ShareVerdict.propagate: seeds.get OOB at {head}")
+			head = head + 1
+
+			for parent in self.nodeAt(current).parents 'eachParent'
+				let node = self.nodeAt(parent.parent)
+
+				if node.isClear() 'notYetBlocked'
+					node.block = ShareBlock.through(parent.link)
+					self.seeds.push(parent.parent)
+				end 'notYetBlocked'
+			end 'eachParent'
+		end 'eachBlocked'
+	end 'propagate'
+
+	function blameFrom(writer ShareBlameWriter, at ElementIndex) returns ShareBlame
+		let node = self.nodeAt(at)
+
+		match node.block 'block'
+			clear then panic("ShareVerdict.blameFrom: node {at} is not blocked, and a blame path follows only blocked nodes")
+			seed(refusal) then return writer.finished(refusal)
+			through(position) then return self.blameFrom(writer, at: self.stepThrough(writer, node: node, position: position))
+		end 'block'
+	end 'blameFrom'
+
+	function stepThrough(writer ShareBlameWriter, node ShareGraphNode, position ElementIndex) returns ElementIndex
+		let link = try node.links.get(position) otherwise panic("ShareVerdict.stepThrough: links.get OOB at {position}")
+		let target = self.nodeAt(link.target)
+
+		match link.edge 'edge'
+			holds(label) then self.stepHolding(writer, parent: node, label: label, target: target)
+			standsAt(conformerName, site) then self.stepStandingAt(writer, parent: node, conformerName: conformerName, site: site, target: target)
+		end 'edge'
+
+		return link.target
+	end 'stepThrough'
+
+	function stepHolding(writer ShareBlameWriter, parent ShareGraphNode, label ShareSlotLabel, target ShareGraphNode)
+		if not parent.library 'aUserSlot'
+			writer.hold(label)
+		end 'aUserSlot'
+
+		if target.isInterface() or not target.library 'leavesTheLibrary'
+			writer.reachNode(target)
+			return
+		end 'leavesTheLibrary'
+
+		if not parent.library 'entersTheLibrary'
+			writer.enterLibrary(self.libraryConformerOf(target))
+		end 'entersTheLibrary'
+	end 'stepHolding'
+
+	function stepStandingAt(writer ShareBlameWriter, parent ShareGraphNode, conformerName String, site ShareConversionSite, target ShareGraphNode)
+		writer.standAt(conformerName, interfaceName: parent.display, site: site)
+
+		if target.library 'aLibraryConformer'
+			writer.enterLibrary(self.libraryConformerOf(target))
+		end 'aLibraryConformer'
+	end 'stepStandingAt'
+
+	function libraryConformerOf(node ShareGraphNode) returns ShareConformer
+		return try node.libraryConformer() otherwise panic("ShareVerdict.libraryConformerOf: node '{node.display}' is not a library composite")
+	end 'libraryConformerOf'
+
+	function subjectDisplay(door JudgedDoor) returns String
+		return typeDisplayName(self.project, tag: maxonTypeTag(door.subject), nameId: typeNameIdOf(door.subject), readerFilePath: door.site.filePath)
+	end 'subjectDisplay'
+
+	function reportJudgedDoors()
+		for door in self.judged 'eachDoor'
+			match door.outcome 'outcome'
+				refusedWalk(noun) then self.reportRefusedWalk(door, noun: noun)
+				reaches(slot) then self.reportReach(door, slot: slot)
+			end 'outcome'
+		end 'eachDoor'
+	end 'reportJudgedDoors'
+
+	function reportRefusedWalk(door JudgedDoor, noun String)
+		self.refused = true
+		reportPositioned(self.project, code: ErrorCode.registryValueNotShareable, message: shareRefusalMessage(self.subjectDisplay(door), door: door.site.door, reason: "it is {noun}", route: ShareRefusalRoute.ownGraph), line: door.site.line, column: door.site.column, filePath: door.site.filePath)
+	end 'reportRefusedWalk'
+
+	function reportReach(door JudgedDoor, slot GraphSlot)
+		match slot 'slot'
+			leaf then break
+			node(index) then self.reportIfBlocked(door, index: index)
+		end 'slot'
+	end 'reportReach'
+
+	function reportIfBlocked(door JudgedDoor, index ElementIndex)
+		let start = self.nodeAt(index)
+
+		if start.isClear() 'walkable'
+			return
+		end 'walkable'
+
+		let writer = ShareBlameWriter.create(self.signatures)
+
+		if start.isInterface() or not start.library 'theSubjectIsAUserType'
+			writer.reachNode(start)
+		end 'theSubjectIsAUserType' else 'theSubjectIsALibraryType'
+			writer.enterLibrary(self.libraryConformerOf(start))
+		end 'theSubjectIsALibraryType'
+
+		let blame = self.blameFrom(writer, at: index)
+		let site = door.site
+		self.refused = true
+		reportDiagnostic(self.project, diagnostic: Diagnostic.create(ErrorCode.registryValueNotShareable, message: shareRefusalMessage(self.subjectDisplay(door), door: site.door, reason: blame.reason, route: ShareRefusalRoute.throughAnInterface), line: site.line, column: site.column, filePath: site.filePath).withNotes(blame.notes))
+	end 'reportIfBlocked'
+
+	function reachedInterfaces() returns ClonerSet
+		let reached = ClonerSet.create()
+
+		if self.judgement == ShareJudgement.promisesOnly 'noShareWalkRuns'
+			return reached
+		end 'noShareWalkRuns'
+
+		for node in self.nodes 'eachNode'
+			if node.isInterface() 'anInterfaceASlotReaches'
+				reached.insert(node.key)
+			end 'anInterfaceASlotReaches'
+		end 'eachNode'
+
+		return reached
+	end 'reachedInterfaces'
+
+	function resolveOwnerEntries() throws CompileError
+		if self.entries.count() == 0 'nothingIsFiledOverTypeParameters'
+			return
+		end 'nothingIsFiledOverTypeParameters'
+
+		let closure = OwnerClosure.create(self.project, signatures: self.signatures, entries: self.entries)
+		try closure.run()
+
+		for conversion in closure.conversions 'eachResolvedConversion'
+			self.addConversion(conversion.interfaceName, conformer: ShareConformer.instance(conversion.instance), site: conversion.site)
+		end 'eachResolvedConversion'
+
+		for door in closure.doors 'eachResolvedDoor'
+			self.pending.push(PendingDoor.create(door.site, subject: door.subject, resolved: true))
+		end 'eachResolvedDoor'
+	end 'resolveOwnerEntries'
+
+	function settle() throws CompileError
+		try self.resolveOwnerEntries()
+
+		self.judgeDoors()
+		self.propagate()
+		self.reportJudgedDoors()
+
+		if self.refused 'someDoorRefused'
+			throw CompileError.compileError
+		end 'someDoorRefused'
+	end 'settle'
+end 'ShareVerdict'
+
+export function requireShareDoorsWalkable(project Project, module MaxonModule, signatures ProgramSignatures) returns ClonerSet throws CompileError
+	if not project.shareConversions.judging() 'noDoorToJudge'
+		return ClonerSet.create()
+	end 'noDoorToJudge'
+
+	let verdict = ShareVerdict.create(project, signatures: signatures)
+	verdict.fileRecordedConversions()
+	verdict.fileDoors(module)
+	try verdict.settle()
+	return verdict.reachedInterfaces()
+end 'requireShareDoorsWalkable'

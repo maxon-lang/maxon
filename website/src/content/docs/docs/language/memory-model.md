@@ -325,12 +325,13 @@ decorator of that shape reaches the clone check.
   value published through `SharedValue` or a registry `default`, and an `immutable` argument sent in a message
   are marked shared before a second thread can see them. A shared value uses atomic counts, and nothing can
   write it, because it is read-only.
-- **A shared graph must be walkable.** A `SharedValue` or registry value that holds an OS handle, a function value
-  or a promise is **E3171**. A module `let` can hold none of them.
+- **A shared graph must be walkable.** A `SharedValue` or registry value type whose graph holds an OS handle, a
+  function value or a promise is **E3171**. A `freeze`, a publish and a registration are judged the same way,
+  through every conformer the program converts to an interface the graph holds: for every cause in a program
+  that spawns a service, and for a promise in any program. A module `let` can hold none of them.
 - **A moved value has one owner.** A mutable value that crosses to another thread is `isolated`, so the sender
   holds no other name for it (**E3200**, **E3102**); the compiler decides this, and a send checks nothing at run
-  time. The share walk a `freeze` or a publish runs stops the program with exit code **96** only at a value held
-  at an interface type whose conformer no walk can be built for.
+  time.
 
 ### Raw Memory and the Library Tier
 
@@ -490,14 +491,14 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3086](/docs/cli/error-codes/#e3086--semanticfieldnotinitialized) | a field not definitely assigned before its struct literal |
 | [E3102](/docs/cli/error-codes/#e3102--useaftermove) | use of a moved value |
 | [E3152](/docs/cli/error-codes/#e3152--rawintrinsicoutsideruntimetier) | `__Raw` used outside `runtime/` |
-| [E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) | a shared value whose graph holds an OS handle, a function value or a promise |
+| [E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) | a shared value whose graph holds an OS handle, a function value or a promise, directly or through a conformer converted to an interface it holds |
 | [E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned) | a published value that is not solely owned |
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |
 | [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
 | [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore)–[E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) and [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait)–[E3224](/docs/cli/error-codes/#e3224--semanticlinearrefused) | the capability, window, tied-promise, unique, service-state, holder-wait, reply and linear checks (see [Capability Errors](/docs/language/regions/#capability-errors)) |
 | [E5004](/docs/cli/error-codes/#e5004--unguardedstackchain) | a chain of unchecked runtime functions that can exceed the stack margin |
 | [E3220](/docs/cli/error-codes/#e3220--semanticmoduleletcallsafunction) | a call in the initializer of a module-level `let` or a `static let` |
-| exit 96 | a share walk reached a value held at an interface type whose conformer no walk can be built for |
+| exit 96 | a share walk reached a value held at an interface type whose conformer no walk can be built for — a compiler bug, since E3171 refuses such a share door |
 | exit 101 | memory still allocated when `main` returns |
 
 ## Code Generation

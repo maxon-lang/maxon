@@ -484,15 +484,21 @@ extension Parser
 
 		func.existentialFieldStores = self.bodyState.existentialFieldStores
 
-		match self.bodyState.deferredArgumentBindings 'function'
-			unwritten then break
-			entries(bindings) then func.deferredArgumentBindings = bindings
-		end 'function'
+		if self.bodyState.shareDoorSites.isWritten() 'writesShareDoorSites'
+			func.shareDoorSites = self.bodyState.shareDoorSites.entries
+		end 'writesShareDoorSites'
 
-		match self.bodyState.pendingOverlaps 'function'
-			unwritten then break
-			entries(overlaps) then func.pendingOverlaps = overlaps
-		end 'function'
+		if self.bodyState.returnedValueStarts.isWritten() 'writesReturnedValueStarts'
+			func.returnedValueStarts = self.bodyState.returnedValueStarts.entries
+		end 'writesReturnedValueStarts'
+
+		if self.bodyState.deferredArgumentBindings.isWritten() 'writesDeferredArgumentBindings'
+			func.deferredArgumentBindings = self.bodyState.deferredArgumentBindings.entries
+		end 'writesDeferredArgumentBindings'
+
+		if self.bodyState.pendingOverlaps.isWritten() 'writesPendingOverlaps'
+			func.pendingOverlaps = self.bodyState.pendingOverlaps.entries
+		end 'writesPendingOverlaps'
 
 		match self.bodyState.brandOrigins 'function'
 			unwritten then break
@@ -2069,7 +2075,8 @@ extension Parser
 		// `rangeCheckReturnAlias`, which is the declared return type's RANGED-ALIAS name, and an interface is
 		// not one — so it is empty on every path that reaches here.
 		if declaredTag == ValueTypeTag.interfaceRef 'existentialReturn'
-			try self.emitOwnedValueReturn(retVal, anchor: anchor)
+			let handedBack = try self.emitOwnedValueReturn(retVal, anchor: anchor)
+			self.recordReturnedValueStart(handedBack, retStart: retStart)
 			return
 		end 'existentialReturn'
 
@@ -2109,7 +2116,7 @@ extension Parser
 		let returned = self.coerceToDeclared(admitted, declared: declaredTag, anchor: anchor)
 		self.carryCapability(expression, target: returned)
 
-		try self.emitOwnedValueReturn(returned, anchor: anchor)
+		_ = try self.emitOwnedValueReturn(returned, anchor: anchor)
 
 		// A `return` in a ranged-int-alias-returning function is a narrowing site. `returned` is the
 		// scalar the exit carries — on its `ret`, or on the edge of its `branch` into the function's
@@ -2253,7 +2260,7 @@ extension Parser
 	// **THE DROPS GO AFTER THE VALUE, BEFORE THE TERMINATOR.** AFTER the value, because `return p.x + p.y`
 	// READS the box; dropping first would free the memory the loads are about to read. BEFORE the
 	// terminator, because a `ret` ENDS the block. `returned` is already in a register by then.
-	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws SourceParseError
+	function emitOwnedValueReturn(retVal ValueId, anchor Token) returns ValueId throws SourceParseError
 		// A promise still naming a container slot is a borrow, and a borrow may not leave the frame — see the
 		// predicate for why this is what refuses `last()` on a promise array while leaving `pop` legal.
 		try self.requireReturnedPromiseIsNotABorrow(retVal, anchor: anchor)
@@ -2286,7 +2293,7 @@ extension Parser
 			end 'ownedDespiteTheSweep'
 
 			self.emitHandoffExit(FunctionExit.returnValue(returned), anchor: anchor)
-			return
+			return returned
 		end 'handedBackUncounted'
 
 		if self.borrowedValueOwesAHandoffReference(returned) 'promoteBorrowed'
@@ -2297,6 +2304,7 @@ extension Parser
 		end 'promoteBorrowed'
 
 		self.emitHandoffExit(FunctionExit.returnValue(returned), anchor: anchor)
+		return returned
 	end 'emitOwnedValueReturn'
 
 	function returnedValueIsTheReceiversFieldRecord(returned ValueId) returns bool
@@ -3477,7 +3485,7 @@ extension Parser
 	function requireSendSettled() throws SourceParseError
 		match self.statement.unsettledSend 'unsettled'
 			settled then return
-			pending(opIdx, range) then throw SourceParseError.registryRefused(ErrorCode.throwingFunctionRequiresTry, explanation: throwingCallRequiresTryMessage(recordedSendOf(self.statement.lastSend, opIdx: opIdx).spelling), line: range.line, column: range.column, note: DiagnosticNote.none)
+			pending(opIdx, range) then throw SourceParseError.registryRefused(ErrorCode.throwingFunctionRequiresTry, explanation: throwingCallRequiresTryMessage(recordedSendOf(self.statement.lastSend, opIdx: opIdx).spelling), line: range.line, column: range.column, notes: PositionedNoteArray.create(0))
 		end 'unsettled'
 	end 'requireSendSettled'
 
@@ -3498,7 +3506,7 @@ extension Parser
 			atTheSend gives self.artifact.opRanges.get(opIdx)
 		end 'where'
 
-		throw SourceParseError.registryRefused(ErrorCode.semanticServiceReplyDropped, explanation: serviceReplyDroppedRefusal(sent.spelling), line: range.line, column: range.column, note: DiagnosticNote.none)
+		throw SourceParseError.registryRefused(ErrorCode.semanticServiceReplyDropped, explanation: serviceReplyDroppedRefusal(sent.spelling), line: range.line, column: range.column, notes: PositionedNoteArray.create(0))
 	end 'requireNotADroppedReply'
 
 	function emitRefusedSendFlag(sent SentMessage, layout EnumLayout, status ValueId, range SourceRange, anchor Token) returns ValueId

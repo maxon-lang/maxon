@@ -492,34 +492,10 @@ union ServiceStartCell
 	allocated(value ValueId)
 end 'ServiceStartCell'
 
-// ⭐⭐ **WHICH TABLE A WITNESS MINT IS FOR — the conformer's ONE SHARED table, or the table of ONE CONCRETE
-// INSTANCE of it.**
-//
-// The compiler keys a generic conformer's table by its BASE name, and that reduction is what lets one compiled impl
-// and one table serve every instantiation (`ProgramSignatures.conformerNameOfType`). Its premise, stated at
-// that door and again on `ErrorCode.semanticSharedConformanceReadsDictionary`, is that the impls are
-// INDEPENDENT of the type argument — and an impl that reads the hidden dictionary its generic declaration
-// reserves is not. Such a conformance gets a table PER INSTANCE, whose slots point at adapters carrying that
-// instance's OWN descriptor, element count and witnesses; every other conformance keeps the one shared table
-// it always had, byte for byte, so no program that never needed a dictionary moves.
-//
-// ⚠ **IT IS A REQUEST, NOT A VERDICT.** A caller states which instance it holds and
-// `witnessTableInstanceFor` decides — a conformance whose impls need nothing, and whose instance releases
-// as the base does, reduces back to `shared`, and so does an instance that is not CONCRETE (an instance over the enclosing body's own parameters has no
-// descriptor to name, exactly as `emitInstanceDescriptorAddr` records one mechanism over).
-//
-// ⚠⚠ **THOSE TWO REDUCTIONS ARE NOT ONE FACT, AND A CALL SITE HAS TO TELL THEM APART.** The first
-// is served correctly by the shared table; the second is served by NOTHING, and sending it here anyway is
-// what made `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` refuse with E3128 for a witness
-// its callee never reads. The constraint-argument door asks `constraintArgumentHasNoTable` FIRST and passes
-// a proved zero instead; see `NullWitnessArgRequest`.
-union WitnessTableInstance
-	// No instance is in hand — the base-keyed table, and the answer for every non-generic conformer.
-	shared
-
-	// This concrete instance's own table.
-	perInstance(gid GenericInstanceId)
-end 'WitnessTableInstance'
+union DescriptorWidening
+	notThroughIt
+	throughTheDescriptor(instance GenericInstanceId)
+end 'DescriptorWidening'
 
 function witnessInstanceOfRequirement(binding RequirementType) returns WitnessTableInstance
 	return match binding.identity 'identity'
@@ -1128,8 +1104,6 @@ function stampedContainerCreateArity(callee ByteArray) returns ParamCount
 	panic("stampedContainerCreateArity: '{String.from(callee)}' is not a container create whose element stamp a descriptor supplies")
 end 'stampedContainerCreateArity'
 
-typealias DescriptorTableOwnerSet = Set with ByteArray
-
 type WideningSite
 	export let instance as GenericInstanceId
 	export let interfaceName as immutable ByteArray
@@ -1616,6 +1590,12 @@ type MaxonToStdLowering
 	var hasImplicitLayout as bool
 	var descriptorTables as DescriptorTableMap
 	var descriptorWidenings as WideningSiteArray
+	let descriptorReads as DescriptorReads
+	let descriptorRepresentatives as Representatives
+	var boundTableChain = BindingChainState.unsettled
+	let boundTableRepresentatives as Representatives
+	let shareReachedInterfaces as ClonerSet
+	let shareConversions as ShareConversionLog
 	var hiddenSlotUses as HiddenSlotUseMap
 	var instanceParameterUses as InstanceParameterUses
 
@@ -1711,7 +1691,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by FrontEndRun before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(0), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(0), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(0), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(0), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(0), currentFunction: LoweredFunction.none, parameterCellsLowered: false, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), descriptorWidenings: WideningSiteArray.create(0), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create(0), tiedPromiseCarriers: TiedCarrierMap.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(0), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(0), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(0), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(0), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(0), currentFunction: LoweredFunction.none, parameterCellsLowered: false, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), descriptorWidenings: WideningSiteArray.create(0), descriptorReads: signatures.descriptorReadsForLowering(), descriptorRepresentatives: Representatives.create(), boundTableRepresentatives: Representatives.create(), shareReachedInterfaces: project.shareReachedInterfaces, shareConversions: project.shareConversions, hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create(0), tiedPromiseCarriers: TiedCarrierMap.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -2835,14 +2815,30 @@ type MaxonToStdLowering
 			panic("emitConformerWitness: v{conformer} is already held at an interface in '{String.from(self.currentFuncName())}' — its witness is forwarded (`pairedWitnessOf`), and the parser emits `existentialWitness` only for a concrete conformer")
 		end 'alreadyAnExistential'
 
-		if self.valueTagOf(conformer) == ValueTypeTag.genericInstance and self.instanceWidensThroughTheDescriptor(self.instanceIdOfValue(conformer)) 'tableLivesInTheCallersDescriptor'
-			let slot = try self.callersDescriptorWitnessSlot(self.instanceIdOfValue(conformer), interfaceName: interfaceName) otherwise panic("emitConformerWitness: '{String.from(self.currentFuncName())}' widens v{conformer} to `{String.from(interfaceName)}` through its caller's descriptor, which holds no such table — `noteWidening` marks the function a carrier and `fileWideningTableEntries` files the entry for every such site")
-			self.loadCallersDescriptorWitness(result, slot: slot, dstBlock: dstBlock)
-			return
-		end 'tableLivesInTheCallersDescriptor'
+		self.requireWideningIsJudged(conformer, interfaceName: interfaceName)
 
-		self.emitWitnessTableAddr(result, conformerType: self.conformerNameOf(conformer), instance: self.witnessInstanceOfValue(conformer), interfaceName: interfaceName, dstBlock: dstBlock)
+		match self.descriptorWidening(conformer, interfaceName: interfaceName) 'widening'
+			throughTheDescriptor(instance) then self.loadDescriptorWideningWitness(result, instance: instance, conformer: conformer, interfaceName: interfaceName, dstBlock: dstBlock)
+			notThroughIt then self.emitWitnessTableAddr(result, conformerType: self.conformerNameOf(conformer), instance: self.signatures.witnessTableOf(self.widenedConformerOf(conformer)), interfaceName: interfaceName, dstBlock: dstBlock)
+		end 'widening'
 	end 'emitConformerWitness'
+
+	function requireWideningIsJudged(conformer ValueId, interfaceName ByteArray)
+		if not self.shareConversions.judging() or not self.shareReachedInterfaces.contains(interfaceName) 'nothingJudgesThisWidening'
+			return
+		end 'nothingJudgesThisWidening'
+
+		let conformerType = self.widenedConformerOf(conformer)
+
+		if not self.shareConversions.roster.records(interfaceName, key: self.signatures.shareConformerKey(conformerType)) 'anUnjudgedWidening'
+			panic("requireWideningIsJudged: '{String.from(self.currentFuncName())}' widens '{self.signatures.shareConformerDisplay(conformerType)}' to the share-reached interface `{String.from(interfaceName)}`, and no semantic-check claim site recorded that conversion — the share verdict judged a roster that lacks it, so the table this builds would be walked unjudged")
+		end 'anUnjudgedWidening'
+	end 'requireWideningIsJudged'
+
+	function loadDescriptorWideningWitness(result ValueId, instance GenericInstanceId, conformer ValueId, interfaceName ByteArray, dstBlock IrBlock)
+		let slot = try self.callersDescriptorWitnessSlot(instance, interfaceName: interfaceName) otherwise panic("emitConformerWitness: '{String.from(self.currentFuncName())}' widens v{conformer} to `{String.from(interfaceName)}` through its caller's descriptor, which holds no such table — `noteWidening` marks the function a carrier and `fileWideningTableEntries` files the entry for every such site")
+		self.loadCallersDescriptorWitness(result, slot: slot, dstBlock: dstBlock)
+	end 'loadDescriptorWideningWitness'
 
 	// The witness the parser paired with an existential VALUE (`IrFunction.valueWitnessIds`). It refuses the
 	// `0` filler rather than passing it: a null table address is a wild jump at the callee's first dispatch,
@@ -3131,10 +3127,6 @@ type MaxonToStdLowering
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
 		// HOW A SECOND OWNER OF ONE IS TAKEN.** Both are derived from
 		// ONE ownership-protocol answer, so they are non-zero together and cannot disagree about a conformer.
-		//
-		// ⭐⭐ **A PER-INSTANCE TABLE ASKS THE INSTANCE, WHICH IS THE WHOLE POINT OF HAVING ONE** — see
-		// `ProgramSignatures.instanceDropCallee` for the leak the conformer-name answer produced on a nested
-		// container. A shared table has no instance to ask and keeps the conformer's answer, byte for byte.
 		self.stampOwnershipWord(self.witnessDestroyCallee(typeName, instance: table), label: label, offsetInLabel: WitnessDestroyFuncOffset)
 		self.stampOwnershipWord(self.witnessRetainCallee(typeName, instance: table), label: label, offsetInLabel: WitnessRetainFuncOffset)
 
@@ -3142,11 +3134,11 @@ type MaxonToStdLowering
 		// that hands a value to another green thread and so the only reader of the word. Stamped in every
 		// program, each conformer's walk cascades would be installed where nothing can reach them.
 		if self.signatures.spawnsAnyService() 'aValueCanCross'
-			self.stampOwnershipWord(self.witnessCascadeCallee(typeName, instance: table, action: CascadeAction.shareWalk), label: label, offsetInLabel: WitnessShareWalkFuncOffset)
+			self.stampOwnershipWord(self.signatures.cascadeCalleeFor(typeName, table: table, action: CascadeAction.shareWalk), label: label, offsetInLabel: WitnessShareWalkFuncOffset)
 		end 'aValueCanCross'
 
 		if self.signatures.anyRecordHoldsAnInterfaceValue() 'aValueCanBeCloned'
-			self.stampOwnershipWord(self.witnessCascadeCallee(typeName, instance: table, action: CascadeAction.clone), label: label, offsetInLabel: WitnessCloneFuncOffset)
+			self.stampOwnershipWord(self.signatures.cascadeCalleeFor(typeName, table: table, action: CascadeAction.clone), label: label, offsetInLabel: WitnessCloneFuncOffset)
 		end 'aValueCanBeCloned'
 
 		for i in 0 upto methodCount 'eachMethod'
@@ -3158,7 +3150,7 @@ type MaxonToStdLowering
 			self.globalData.recordFuncAbs64InRdata(self.witnessSlotCallee(typeName, instance: table, slot: slot, tableInterface: iface), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i as WitnessMethodIndex))
 		end 'eachMethod'
 
-		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount as WitnessMethodIndex, associatedCount: associatedCount)
+		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount as WitnessMethodIndex, associatedCount: associatedCount, within: table)
 		return label
 	end 'ensureWitnessTable'
 
@@ -3175,7 +3167,7 @@ type MaxonToStdLowering
 	// A non-concrete instance has no descriptor and no argument witness to put in a table, and a table has
 	// no caller to forward from, so it takes the shared one here. A widening that needs the per-instance
 	// table of such an instance reads it from the caller's layout descriptor instead
-	// (`instanceWidensThroughTheDescriptor`).
+	// (`descriptorWidening`).
 	function witnessTableInstanceFor(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns WitnessTableInstance
 		match instance 'stated'
 			shared then return WitnessTableInstance.shared
@@ -3221,13 +3213,6 @@ type MaxonToStdLowering
 			perInstance(gid) gives self.signatures.instanceRetainCallee(gid)
 		end 'table'
 	end 'witnessRetainCallee'
-
-	function witnessCascadeCallee(typeName ByteArray, instance WitnessTableInstance, action CascadeAction) returns OwnershipCallee
-		return match instance 'table'
-			shared gives self.signatures.existentialCascadeCallee(typeName, action: action)
-			perInstance(gid) gives self.signatures.instanceExistentialCascadeCallee(gid, action: action)
-		end 'table'
-	end 'witnessCascadeCallee'
 
 	// The `<Type>` half of a table's label: the conformer's own name for the shared table, the instance's
 	// canonical mangling for a per-instance one — the SAME mangling `__layout_<instance>` is built from
@@ -3347,16 +3332,9 @@ type MaxonToStdLowering
 		end 'outlook'
 	end 'constraintArgumentHasNoTable'
 
-	// The table a VALUE's witness is taken from — `perInstance` when the value is typed at a generic instance,
-	// `shared` otherwise. The one place a value's own type column becomes a table request, so the existential
-	// widening door and the constraint door cannot come to read a receiver differently.
-	function witnessInstanceOfValue(value ValueId) returns WitnessTableInstance
-		if self.valueTagOf(value) != ValueTypeTag.genericInstance 'namesNoInstance'
-			return WitnessTableInstance.shared
-		end 'namesNoInstance'
-
-		return WitnessTableInstance.perInstance(self.instanceIdOfValue(value))
-	end 'witnessInstanceOfValue'
+	function widenedConformerOf(value ValueId) returns ShareConformer
+		return self.signatures.shareConformerOfValue(self.valueTagOf(value), nameId: try self.valueNameIds.get(value) otherwise panic("widenedConformerOf: value v{value} has no recorded type name — the two type columns are minted in lockstep"), inFunction: self.currentFuncName(), idsFrom: self.typeNames, readerFilePath: self.currentSourceFilePath)
+	end 'widenedConformerOf'
 
 	// ⭐ **THE TABLE REQUEST FOR ONE `where` CONSTRAINT'S SUBSTITUTED ARGUMENT** — the door
 	// `materializeWitnessArg` and the adapter's own constraint walk both come through, so a constraint
@@ -4018,29 +3996,67 @@ type MaxonToStdLowering
 	// names `__witness_DownCursor.Cursor`, and a dispatch through either lands in the right one without the
 	// call site knowing which.
 	//
-	// ⚠⚠ **THE BINDING IS REDUCED TO ITS CONFORMER NAME FIRST, EXACTLY AS THIS PASS'S OTHER TWO
-	// `ensureWitnessTable` CALLERS DO.** A binding to a generic instance names the instance
-	// (`UpCursor_Integer`) — and a table is keyed by the CONFORMER
-	// (`materializeWitnessArg` uses `conformerTypeArgName`, `witnessForExistentialValue` uses
-	// `conformerNameOfType`). Under dictionary-passing that reduction is what makes the table right rather
-	// than merely findable: `UpCursor.current` is compiled ONCE over an opaque layout, so one
-	// `__witness_UpCursor.Cursor` answers for every instantiation, and it is bit-for-bit the table a DIRECT
-	// widening of the same value already mints. Unreduced, the label names `__witness_UpCursor_Integer.Cursor`
-	// and `witnessSlotImpl` panics, because `checkConformance` files its selections under the declared name.
+	// ⚠⚠ **THE BINDING IS REDUCED TO ITS CONFORMER NAME FIRST.** `checkConformance` files its
+	// selections under the declared name, so a label spelled at the instance
+	// (`__witness_UpCursor_Integer.Cursor`) makes `witnessSlotImpl` panic. Whether the name keys the
+	// shared table or an instance's is `boundTableRequest`'s.
 	//
 	// A conformance that bound nothing at this position is E3016's to report and stamps nothing: leaving the
 	// zero-fill is right, because nothing will read a slot for a position that has no binding to widen.
-	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementIndex)
+	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementIndex, within WitnessTableInstance)
 		for position in 0 upto associatedCount 'eachAssociatedType'
 			if let held = try self.signatures.associatedTypeHeldAt(interfaceName, position: position) 'heldAtAnInterface'
 				if let bound = try conformanceDeclBindingType(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
 					let (decl, binding) = bound
-					let conformer = self.signatures.conformerNameOfRequirement(binding, readerFilePath: decl.filePath)
-					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, instance: witnessInstanceOfRequirement(binding), interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
+					let resolved = self.signatures.resolveBindingThrough(binding, owner: within)
+					let conformer = self.signatures.conformerNameOfRequirement(resolved, readerFilePath: decl.filePath)
+					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, instance: self.boundTableRequest(held, binding: binding, resolved: resolved), interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
 				end 'thisConformerBoundIt'
 			end 'heldAtAnInterface'
 		end 'eachAssociatedType'
 	end 'stampAssociatedWitnessSlots'
+
+	function boundTableRequest(held ByteArray, binding RequirementType, resolved RequirementType) returns WitnessTableInstance
+		if not self.shareReachedInterfaces.contains(held) 'aTableNoShareWalkReads'
+			return witnessInstanceOfRequirement(binding)
+		end 'aTableNoShareWalkReads'
+
+		return match witnessInstanceOfRequirement(resolved) 'request'
+			shared gives WitnessTableInstance.shared
+			perInstance(gid) gives WitnessTableInstance.perInstance(self.boundTableRepresentative(held, instance: gid))
+		end 'request'
+	end 'boundTableRequest'
+
+	function boundTableRepresentative(held ByteArray, instance GenericInstanceId) returns GenericInstanceId
+		let representative = self.boundTableRepresentatives.establish(self.boundTableChainOfTheProgram().flow, signatures: self.signatures, instance: instance, scope: String.from(held))
+
+		if representative != instance 'aSharedTable'
+			requireSameDescriptorKey(self.descriptorDependence(), signatures: self.signatures, first: representative, second: instance)
+		end 'aSharedTable'
+
+		return representative
+	end 'boundTableRepresentative'
+
+	function boundTableChainOfTheProgram() returns BindingChain
+		match self.boundTableChain 'state'
+			settled(known) then return known
+			unsettled then break
+		end 'state'
+
+		let settled = BindingChain.settle(self.signatures, conformances: self.conformances, roster: self.shareConversions.roster, keying: BindingKeying.tables(self.descriptorDependence().positions))
+		self.boundTableChain = BindingChainState.settled(settled)
+		return settled
+	end 'boundTableChainOfTheProgram'
+
+	function requireBoundTablesAreFinite(project Project) throws CompileError
+		if self.shareReachedInterfaces.count() == 0 'noTableIsPerInstance'
+			return
+		end 'noTableIsPerInstance'
+
+		let binding = try self.boundTableChainOfTheProgram().firstGrowing() otherwise return
+		reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: growingBindingMessage(String.from(binding.owner), heldName: String.from(binding.heldName), row: String.from(self.signatures.instanceDisplayName(binding.row))), line: binding.site.line, column: binding.site.column, filePath: binding.site.filePath)
+		throw CompileError.compileError
+	end 'requireBoundTablesAreFinite'
 
 	// Stamp ONE ownership word of a `.rdata` blob with the `funcAbs64InRdata` reloc the witness method slots
 	// take. An `inert` callee leaves the zero-fill in place, which is the encoding every runtime entry
@@ -4204,6 +4220,7 @@ type MaxonToStdLowering
 
 		if self.hasImplicitLayout 'forwardsTheCallersOwnRun'
 			if let base = try self.signatures.genericInstanceCallerParameterRunBase(gid) 'aRunOfTheCallersParameters'
+				self.descriptorReads.requireForwardCovered(self.signatures, callee: gid, base: base)
 				return self.descriptorBlockAddr(layoutBlockOffsetFor(base), dstBlock: dstBlock)
 			end 'aRunOfTheCallersParameters'
 		end 'forwardsTheCallersOwnRun'
@@ -4259,7 +4276,8 @@ type MaxonToStdLowering
 		end 'notShortTheStamp'
 
 		let destroyId = self.mintStdValueId()
-		self.loadDescriptorWord(destroyId, descriptor: self.emitDescriptorTableRead(self.instanceIdOfValue(result), dstBlock: dstBlock), blockOffset: layoutBlockOffsetFor(ContainerElementPosition), field: LAYOUT_OFFSET_DESTROY_FUNC, dstBlock: dstBlock)
+		let composed = self.instanceIdOfValue(result)
+		self.loadDescriptorWord(destroyId, descriptor: self.emitDescriptorTableRead(composed, dstBlock: dstBlock), blockOffset: self.descriptorReads.blockOffsetFor(self.signatures.genericInstanceBaseName(composed), position: ContainerElementPosition), field: LAYOUT_OFFSET_DESTROY_FUNC, dstBlock: dstBlock)
 		let fullArgs = ValueIdArray.create(0)
 		fullArgs.append(args)
 		fullArgs.push(destroyId)
@@ -4352,11 +4370,12 @@ type MaxonToStdLowering
 			continue
 		end 'aRoundFiledAnEntry'
 
-		self.dropGrowingWitnessEntries()
+		let growing = self.dropGrowingWitnessEntries(self.growingDescriptorRows())
 
 		try self.requireWideningTablesAreKept(project)
 		self.requireEveryComposedDescriptorHasASource(subjects.withoutADescriptor)
-		try self.requireDescriptorTablesAreFinite(subjects.candidates, project: project)
+		try self.requireDescriptorTablesAreFinite(subjects.candidates, growing: growing, project: project)
+		try self.requireBoundTablesAreFinite(project)
 	end 'planDescriptorTables'
 
 	function fileWideningTableEntries()
@@ -4379,7 +4398,7 @@ type MaxonToStdLowering
 
 			if self.tableDropped(table, instance: site.instance, interfaceName: site.interfaceName) 'aChainThatGrows'
 				let func = self.functionAt(site.funcIndex, reader: "requireWideningTablesAreKept")
-				reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(func.name)}' widens '{String.from(self.signatures.instanceDisplayName(site.instance))}' to `{String.from(site.interfaceName)}`, whose type arguments build on the type parameters of '{String.from(owner)}', and whose methods reach '{String.from(owner)}' again — so composing its witness table at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own"))
+				reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(func.name)}' widens '{String.from(self.signatures.instanceDisplayName(site.instance))}' to `{String.from(site.interfaceName)}`, whose type arguments build on the type parameters of '{String.from(owner)}', and whose methods reach '{String.from(owner)}' again — so composing its witness table at a concrete instantiation would build an unbounded chain of ever-deeper instances. {UnboundedChainCure}"))
 				throw CompileError.compileError
 			end 'aChainThatGrows'
 		end 'eachSite'
@@ -4440,6 +4459,8 @@ type MaxonToStdLowering
 	end 'planLayoutCarriers'
 
 	function noteCarrierFactsOf(func IrFunction, index CsrIndex, scan LayoutCarrierScan)
+		self.descriptorReads.noteFunction(self.signatures, func: func)
+
 		for opIndex in self.bodyOpIndicesOf(func.blockRefs) 'eachOp'
 			self.noteCarrierFactsOfOp(self.maxonOpAt(opIndex), opIndex: opIndex, func: func, caller: index, scan: scan)
 		end 'eachOp'
@@ -4457,7 +4478,7 @@ type MaxonToStdLowering
 
 	function noteCarrierFactsOfOp(op MaxonOp, opIndex ElementIndex, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
 		match op 'shape'
-			sizeofType then scan.mark(caller, mark: CarrierSeedMark)
+			sizeofType(_, targetType) then self.noteSizeofRead(targetType, caller: caller, scan: scan)
 			call(result, callee, args, argLabels, _, _, _) then self.noteCarrierFactsOfCall(result, callee: callee, args: args, argLabels: argLabels, opIndex: opIndex, func: func, caller: caller, scan: scan)
 			tryCall(result, _, callee, args, argLabels, _, _, _) then self.noteCarrierFactsOfCall(result, callee: callee, args: args, argLabels: argLabels, opIndex: opIndex, func: func, caller: caller, scan: scan)
 			asyncCall(_, callee, args, argLabels, _, _, _) then self.noteSpawnedCall(callee, args: args, argLabels: argLabels, opIndex: opIndex, caller: caller, scan: scan)
@@ -4498,6 +4519,16 @@ type MaxonToStdLowering
 			holdEnd then break
 		end 'shape'
 	end 'noteCarrierFactsOfOp'
+
+	function noteSizeofRead(targetType MaxonType, caller CsrIndex, scan LayoutCarrierScan)
+		scan.mark(caller, mark: CarrierSeedMark)
+
+		if maxonTypeTag(targetType) != ValueTypeTag.typeParameter 'aFoldedConstant'
+			panic("noteSizeofRead: a `sizeof` op over {maxonTypeTag(targetType).name} reached lowering — the parser folds every concrete sizeof, so only a type parameter's size is read from a descriptor")
+		end 'aFoldedConstant'
+
+		self.signatures.noteOpenTypeFacts(targetType, into: self.descriptorReads)
+	end 'noteSizeofRead'
 
 	function noteArgumentWidenings(callee ByteArray, args ValueIdArray, argLabels NameRoster, caller CsrIndex, scan LayoutCarrierScan)
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'aCompilerOwnCall'
@@ -4541,23 +4572,39 @@ type MaxonToStdLowering
 	end 'noteReturnWidening'
 
 	function noteWidening(value ValueId, interfaceName ByteArray, caller CsrIndex, scan LayoutCarrierScan)
-		if self.valueTagOf(value) != ValueTypeTag.genericInstance 'namesNoInstance'
-			return
-		end 'namesNoInstance'
-
-		let instance = self.instanceIdOfValue(value)
-
-		if not self.instanceWidensThroughTheDescriptor(instance) 'aTableThatNeedsNoDescriptor'
-			return
-		end 'aTableThatNeedsNoDescriptor'
-
-		scan.mark(caller, mark: CarrierSeedMark)
-		self.descriptorWidenings.push(WideningSite.create(instance, interfaceName: interfaceName, conformer: self.conformerNameOf(value), funcIndex: caller as ElementIndex))
+		match self.descriptorWidening(value, interfaceName: interfaceName) 'widening'
+			throughTheDescriptor(instance) then self.noteDescriptorWidening(instance, value: value, interfaceName: interfaceName, caller: caller, scan: scan)
+			notThroughIt then break
+		end 'widening'
 	end 'noteWidening'
 
-	function instanceWidensThroughTheDescriptor(gid GenericInstanceId) returns bool
-		return not self.signatures.instanceArgsAreFullyConcrete(gid) and self.signatures.instanceRestsARetainedSlot(gid)
-	end 'instanceWidensThroughTheDescriptor'
+	function noteDescriptorWidening(instance GenericInstanceId, value ValueId, interfaceName ByteArray, caller CsrIndex, scan LayoutCarrierScan)
+		scan.mark(caller, mark: CarrierSeedMark)
+		self.descriptorWidenings.push(WideningSite.create(instance, interfaceName: interfaceName, conformer: self.conformerNameOf(value), funcIndex: caller as ElementIndex))
+	end 'noteDescriptorWidening'
+
+	function descriptorWidening(value ValueId, interfaceName ByteArray) returns DescriptorWidening
+		return match self.widenedConformerOf(value) 'conformer'
+			named gives DescriptorWidening.notThroughIt
+			instance(gid) gives self.instanceDescriptorWidening(gid, conformer: self.conformerNameOf(value), interfaceName: interfaceName)
+		end 'conformer'
+	end 'descriptorWidening'
+
+	function instanceDescriptorWidening(gid GenericInstanceId, conformer ByteArray, interfaceName ByteArray) returns DescriptorWidening
+		if self.signatures.instanceArgsAreFullyConcrete(gid) 'aTableKeyedAtTheInstance'
+			return DescriptorWidening.notThroughIt
+		end 'aTableKeyedAtTheInstance'
+
+		if self.signatures.instanceRestsARetainedSlot(gid) or self.sharedTableShareWalkCannotServe(conformer, interfaceName: interfaceName) 'aTableOnlyTheDescriptorCanServe'
+			return DescriptorWidening.throughTheDescriptor(gid)
+		end 'aTableOnlyTheDescriptorCanServe'
+
+		return DescriptorWidening.notThroughIt
+	end 'instanceDescriptorWidening'
+
+	function sharedTableShareWalkCannotServe(conformer ByteArray, interfaceName ByteArray) returns bool
+		return self.shareReachedInterfaces.contains(interfaceName) and not self.signatures.conformerHasAShareWalk(ShareConformer.named(conformer), judgement: ShareJudgement.everyCause)
+	end 'sharedTableShareWalkCannotServe'
 
 	function noteWitnessDispatch(func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
 		scan.mark(caller, mark: DispatchMark)
@@ -4853,12 +4900,10 @@ type MaxonToStdLowering
 		reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: func.sourceFilePath)
 	end 'reportAtOp'
 
-	// A witness entry whose instance's own table leads back to its owner would stamp an ever-larger
-	// instance at every level, so the mint would never end. Unlike an instance entry, which
-	// `requireDescriptorTablesAreFinite` refuses, a witness has a fallback: it is dropped, and its
-	// calls pass the zero `NullWitnessArgRequest` proves unread. It runs before that check, which
-	// walks witness entries too and would otherwise refuse the program.
-	function dropGrowingWitnessEntries()
+	// A witness entry on a growing row is dropped, not refused: its calls pass the zero
+	// `NullWitnessArgRequest` proves unread. Dropping changes the rows, so
+	// `requireDescriptorTablesAreFinite` must read the ones returned.
+	function dropGrowingWitnessEntries(growing GrowingRows) returns GrowingRows
 		let owners = NameRoster.create(self.descriptorTables.count(), zeroed: false)
 
 		for (owner, _) in self.descriptorTables 'eachOwner'
@@ -4866,6 +4911,7 @@ type MaxonToStdLowering
 		end 'eachOwner'
 
 		let partitions = WitnessPartitionArray.create(owners.count(), zeroed: false)
+		var shedAny = false
 
 		for owner in owners 'eachOwnerWithWitnesses'
 			let table = try self.descriptorTables.get(owner) otherwise panic("dropGrowingWitnessEntries: '{String.from(owner)}' was just listed and is not there")
@@ -4873,15 +4919,14 @@ type MaxonToStdLowering
 			let shed = WitnessTableEntryArray.create(0)
 
 			for entry in table.witnesses 'eachEntry'
-				let visited = DescriptorTableOwnerSet.create()
-
-				if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(entry.instance), visited: visited) 'aChainThatGrows'
+				if growing.contains(entry.instance) 'aChainThatGrows'
 					shed.push(entry)
 				end 'aChainThatGrows' else 'staysFiled'
 					kept.push(entry)
 				end 'staysFiled'
 			end 'eachEntry'
 
+			shedAny = shedAny or not shed.isEmpty()
 			partitions.push(WitnessPartition.create(owner, kept: kept, shed: shed))
 		end 'eachOwnerWithWitnesses'
 
@@ -4891,6 +4936,12 @@ type MaxonToStdLowering
 			table.witnesses = partition.kept
 			table.dropped.append(partition.shed)
 		end 'eachPartition'
+
+		if not shedAny 'theRowsAreUnchanged'
+			return growing
+		end 'theRowsAreUnchanged'
+
+		return self.growingDescriptorRows()
 	end 'dropGrowingWitnessEntries'
 
 	function requireEveryComposedDescriptorHasASource(sites DescriptorSubjectSiteArray)
@@ -4901,41 +4952,51 @@ type MaxonToStdLowering
 		end 'eachSite'
 	end 'requireEveryComposedDescriptorHasASource'
 
-	function requireDescriptorTablesAreFinite(candidates DescriptorSubjectSiteArray, project Project) throws CompileError
+	function requireDescriptorTablesAreFinite(candidates DescriptorSubjectSiteArray, growing GrowingRows, project Project) throws CompileError
 		for site in candidates 'eachCandidate'
-			if not self.descriptorTableHolds(site.instance) or not self.signatures.genericInstanceArgsBuildOnATypeParameter(site.instance) 'cannotGrow'
+			if not self.descriptorTableHolds(site.instance) 'notFiled'
 				continue
-			end 'cannotGrow'
+			end 'notFiled'
 
 			let owner = self.descriptorTableOwnerOf(site.instance)
-			let visited = DescriptorTableOwnerSet.create()
 
-			if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(site.instance), visited: visited) 'aChainThatGrows'
-				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose type arguments build on the type parameters of '{String.from(owner)}', and whose methods reach '{String.from(owner)}' again — so composing its layout descriptor at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own")
+			if growing.contains(site.instance) 'aChainThatGrows'
+				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose type arguments build on the type parameters of '{String.from(owner)}', and whose methods reach '{String.from(owner)}' again — so composing its layout descriptor at a concrete instantiation would build an unbounded chain of ever-deeper instances. {UnboundedChainCure}")
 			end 'aChainThatGrows'
 		end 'eachCandidate'
 	end 'requireDescriptorTablesAreFinite'
 
-	function descriptorTableReaches(owner ByteArray, from ByteArray, visited DescriptorTableOwnerSet) returns bool
-		if from.equals(owner) 'reached'
-			return true
-		end 'reached'
+	function growingDescriptorRows() returns GrowingRows
+		let reached = OpenRowLog.create()
 
-		if visited.contains(from) 'alreadyWalked'
-			return false
-		end 'alreadyWalked'
+		for (owner, table) in self.descriptorTables 'eachOwner'
+			for row in table.reachedInstances() 'eachReachedInstance'
+				reached.file(owner, row: row)
+			end 'eachReachedInstance'
+		end 'eachOwner'
 
-		visited.insert(from)
-		let table = try self.descriptorTables.get(from) otherwise return false
+		return self.descriptorDependence().growingAmong(self.signatures, reachedRows: reached)
+	end 'growingDescriptorRows'
 
-		for entry in table.reachedInstances() 'eachEntry'
-			if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(entry), visited: visited) 'reachedThroughAnEntry'
-				return true
-			end 'reachedThroughAnEntry'
-		end 'eachEntry'
+	function descriptorDependence() returns DependenceFlow
+		if not self.layoutCarriersSettled 'readsStillBeingNoted'
+			panic("descriptorDependence: asked before `planLayoutCarriers` settled, and that scan is what notes every body's descriptor reads — the flow would settle over an incomplete log")
+		end 'readsStillBeingNoted'
 
-		return false
-	end 'descriptorTableReaches'
+		return self.descriptorReads.settledFlow(self.signatures)
+	end 'descriptorDependence'
+
+	function descriptorBlobInstanceOf(resolved GenericInstanceId) returns GenericInstanceId
+		return self.descriptorRepresentatives.standIn(self.descriptorDependence(), signatures: self.signatures, instance: resolved, scope: DescriptorBlobScope)
+	end 'descriptorBlobInstanceOf'
+
+	function noteDescriptorBlobInstance(gid GenericInstanceId)
+		if self.descriptorTables.count() == 0 'noTableChainsAnyBlob'
+			return
+		end 'noTableChainsAnyBlob'
+
+		_ = self.descriptorRepresentatives.establish(self.descriptorDependence(), signatures: self.signatures, instance: gid, scope: DescriptorBlobScope)
+	end 'noteDescriptorBlobInstance'
 
 	function refuseDescriptorSubject(site DescriptorSubjectSite, project Project, reason String) throws CompileError
 		let func = self.functionAt(site.funcIndex, reader: "refuseDescriptorSubject")
@@ -4953,7 +5014,9 @@ type MaxonToStdLowering
 				continue
 			end 'nothingToFile'
 
-			self.tableOfOwnerForWrite(self.descriptorTableOwnerOf(gid)).instances.push(gid)
+			let owner = self.descriptorTableOwnerOf(gid)
+			self.tableOfOwnerForWrite(owner).instances.push(gid)
+			self.descriptorReads.noteRow(owner, row: gid)
 			filed = true
 		end 'eachCandidate'
 
@@ -5058,6 +5121,7 @@ type MaxonToStdLowering
 		end 'alreadyFiled'
 
 		table.witnesses.push(WitnessTableEntry.create(argGid, interfaceName: interfaceName, conformer: conformer))
+		self.descriptorReads.noteRow(owner, row: argGid)
 	end 'fileWitnessTableEntry'
 
 	function tableDropped(table DescriptorTable, instance GenericInstanceId, interfaceName ByteArray) returns bool
@@ -5205,6 +5269,7 @@ type MaxonToStdLowering
 		appendLayoutTableSlots(image, entryCount: table.count() + witnesses.count())
 		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: image, kind: RdataPayloadKind.layoutDescriptor)
 		self.layoutDescriptors.record(gid, label: label)
+		self.noteDescriptorBlobInstance(gid)
 
 		// A MANAGED opaque-`T` `Array` field's `destroyFunc@40` is the ONLY compile-time reference to the
 		// element destructor — the shared body's `loadIndirect(descriptor, +40)` is a runtime read the usage
@@ -5252,8 +5317,9 @@ type MaxonToStdLowering
 
 		for entry in 0 upto table.count() 'eachTableEntry'
 			let nested = try table.get(entry) otherwise panic("ensureLayoutDescriptor: table.get({entry}) below count")
+			self.descriptorReads.requireRow(self.signatures.genericInstanceBaseName(gid), row: nested)
 			let resolved = genericInstanceIdOf(self.signatures.substituteThroughInstance(MaxonType.genericInstance(nested), id: gid))
-			self.globalData.recordRdataAbs64InRdata(self.ensureLayoutDescriptor(resolved), rdataLabel: label, offsetInLabel: layoutTableSlotOffset(paramCount, entry: entry))
+			self.globalData.recordRdataAbs64InRdata(self.ensureLayoutDescriptor(self.descriptorBlobInstanceOf(resolved)), rdataLabel: label, offsetInLabel: layoutTableSlotOffset(paramCount, entry: entry))
 		end 'eachTableEntry'
 
 		for entry in 0 upto witnesses.count() 'eachWitnessEntry'
@@ -5268,6 +5334,7 @@ type MaxonToStdLowering
 	end 'tableOfBase'
 
 	function stampWitnessTableEntry(entry WitnessTableEntry, root GenericInstanceId, label String, offsetInLabel ByteOffset)
+		self.descriptorReads.requireRow(self.signatures.genericInstanceBaseName(root), row: entry.instance)
 		let resolved = genericInstanceIdOf(self.signatures.substituteThroughInstance(MaxonType.genericInstance(entry.instance), id: root))
 
 		if not self.signatures.instanceArgsAreFullyConcrete(resolved) 'aBlobNothingReadsATableFrom'
@@ -5286,7 +5353,7 @@ type MaxonToStdLowering
 		end 'notTypeParam'
 
 		self.requireImplicitLayout("lowerSizeofType")
-		let blockOffset = layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(targetType))
+		let blockOffset = self.signatures.descriptorBlockOffsetOf(targetType)
 		self.loadDescriptorWord(result, descriptor: self.implicitLayoutValueId, blockOffset: blockOffset, field: LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, dstBlock: dstBlock)
 	end 'lowerSizeofType'
 
@@ -5914,7 +5981,7 @@ type MaxonToStdLowering
 		end 'notATypeParameter'
 
 		let token = try self.valueNameIds.get(value) otherwise panic("typeParamValueBlockOffset: typeParameter value v{value} has no name-id (its type-parameter token) — the two type columns are dense and in lockstep")
-		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token as TypeParamId)))
+		return self.signatures.descriptorBlockOffsetOf(MaxonType.typeParameter(token as TypeParamId))
 	end 'typeParamValueBlockOffset'
 
 	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
@@ -5964,7 +6031,7 @@ type MaxonToStdLowering
 	// so the write side and this read side name one block by construction. A concrete-element container never
 	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueElementCopyCallee`).
 	function opaqueContainerBlockOffset(containerInstance ValueId) returns ByteOffset
-		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(self.instanceIdOfValue(containerInstance))))
+		return self.signatures.descriptorBlockOffsetOf(self.signatures.containerElementType(self.instanceIdOfValue(containerInstance)))
 	end 'opaqueContainerBlockOffset'
 
 	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor** —

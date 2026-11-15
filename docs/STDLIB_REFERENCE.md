@@ -4737,7 +4737,8 @@ dropped unanswered, a holder freed with it still inside included:
 `SharedValue with T` is a live cell every thread can read: a reader takes an immutable snapshot lock-free,
 and a writer publishes a whole new value. Use it through an alias:
 `typealias ConfigCell = SharedValue with Config`. `T` is any type whose value graph reaches no OS handle,
-function value or promise ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171)): records with `var`
+function value or promise, also through a conformer the program converts to an interface the graph holds
+([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171)): records with `var`
 fields, `Array` and `Map` publish as well as scalars, strings and service handles. It is the run-time form of
 a registry key's `default` ([`SharedValue`](LANGUAGE_REFERENCE.md#sharedvalue--a-live-value-made-at-run-time)).
 

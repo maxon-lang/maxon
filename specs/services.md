@@ -13525,7 +13525,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3217: <fragment>:21:10: parameter `seed` of the factory `Maker.create` is a `MachinePin` whose graph reaches an OS handle other than a socket, or a base-struct-less generic instance, which cannot cross to another green thread, and this `spawn` moves its arguments into the state of `Maker`, a service — which another green thread runs. Pass a value whose graph holds no function value, promise or thread-bound handle, or drop the parameter from the factory
+error E3217: <fragment>:21:10: parameter `seed` of the factory `Maker.create` is a `MachinePin` whose graph reaches an OS handle, which cannot cross to another green thread, and this `spawn` moves its arguments into the state of `Maker`, a service — which another green thread runs. Pass a value whose graph holds no function value, promise or thread-bound handle, or drop the parameter from the factory
 ```
 
 <!-- test: services.a-reply-a-sibling-builds-in-a-local-is-fresh -->

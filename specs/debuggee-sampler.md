@@ -1457,7 +1457,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3171: <fragment>:2:9: `DebugPort` cannot be a registry value or a `SharedValue`: it is a `DebugPort` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+error E3171: <fragment>:2:9: `DebugPort` cannot be a registry value or a `SharedValue`: it is a `DebugPort` whose graph reaches an OS handle — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
 ```
 
 <!-- test: error.a-process-trace-cannot-be-shared-between-threads -->
@@ -1471,5 +1471,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3171: <fragment>:2:25: `ProcessTrace` cannot be a registry value or a `SharedValue`: it is a `ProcessTrace` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+error E3171: <fragment>:2:25: `ProcessTrace` cannot be a registry value or a `SharedValue`: it is a `ProcessTrace` whose graph reaches an OS handle — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
 ```

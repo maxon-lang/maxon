@@ -1052,3 +1052,994 @@ end 'main'
 ```maxoncstderr
 error E3126: <fragment>:27:6: 'OddBag' binds 'Bag's associated type 'Iter' to 'IntTally', and this program holds 'Iter' at the interface type 'Cursor' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and 'IntTally' does not implement 'Cursor'. Declare the conformance, or hold the associated type at an interface every conformer implements
 ```
+
+<!-- test: held.a-generic-conformer-binding-an-instance-over-its-own-parameter-is-frozen -->
+`UpBag with Tally` binds `Cursor` to `UpCursor with Slot`, an instance over its own parameter, so the nested table its `Bag` table carries is the instance's own, and a freeze in a program that spawns a service walks the cursor through it.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Cursor
+	function current() returns Tally
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type UpCursor uses Slot implements Cursor
+	var pos as Tally
+	let spare as Slot
+
+	static function create(pos Tally, spare Slot) returns Self
+		return Self{pos: pos, spare: spare}
+	end 'create'
+
+	function current() returns Tally
+		return self.pos
+	end 'current'
+end 'UpCursor'
+
+type UpBag uses Slot implements Bag with SlotCursor
+	typealias SlotCursor = UpCursor with Slot
+	let spare as Slot
+
+	static function create(spare Slot) returns Self
+		return Self{spare: spare}
+	end 'create'
+
+	function createIterator() returns SlotCursor throws IterationError
+		return SlotCursor.create(7, spare: self.spare)
+	end 'createIterator'
+end 'UpBag'
+
+typealias TallyBag = UpBag with Tally
+typealias CursorBag = Bag with Cursor
+
+type Holder
+	export let cursor as Cursor
+
+	static function create(cursor Cursor) returns Self
+		return Self{cursor: cursor}
+	end 'create'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+function pick(source CursorBag) returns Cursor
+	return try source.createIterator() otherwise panic("none")
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let held = freeze Holder.create(pick(TallyBag.create(1)))
+	print("{held.cursor.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.held-binding-whose-conformer-holds-a-function-value-is-frozen -->
+`StepBag` binds `Bag`'s associated type to `StepCursor`, so its `Bag` table carries `StepCursor` to `Cursor` without any widening in a body; a freeze of a value holding a `Cursor` is refused because no share walk can mark `StepCursor`'s function value.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Step = function(Tally) returns Tally
+
+interface Cursor
+	function current() returns Tally
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type PlainCursor implements Cursor
+	var pos as Tally
+
+	static function create(pos Tally) returns Self
+		return Self{pos: pos}
+	end 'create'
+
+	function current() returns Tally
+		return self.pos
+	end 'current'
+end 'PlainCursor'
+
+type StepCursor implements Cursor
+	let step as Step
+
+	static function create(step Step) returns Self
+		return Self{step: step}
+	end 'create'
+
+	function current() returns Tally
+		return self.step(1)
+	end 'current'
+end 'StepCursor'
+
+type PlainBag implements Bag with PlainCursor
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function createIterator() returns PlainCursor throws IterationError
+		return PlainCursor.create(3)
+	end 'createIterator'
+end 'PlainBag'
+
+type StepBag implements Bag with StepCursor
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function createIterator() returns StepCursor throws IterationError
+		return StepCursor.create(function(n Tally) gives n + 1)
+	end 'createIterator'
+end 'StepBag'
+
+typealias CursorBag = Bag with Cursor
+
+type Holder
+	export let cursor as Cursor
+
+	static function create(cursor Cursor) returns Self
+		return Self{cursor: cursor}
+	end 'create'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+function pick(source CursorBag) returns Cursor
+	return try source.createIterator() otherwise panic("none")
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let held = freeze Holder.create(pick(StepBag.create()))
+	let other = pick(PlainBag.create())
+	print("{held.cursor.current()} {other.current()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:87:13: `Holder` cannot be frozen: its `cursor` is a `Cursor`, and `StepCursor` stands at `Cursor` but no share walk can mark it: its `step` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:47:34: `StepCursor` is converted to `Cursor` here
+```
+
+<!-- test: error.held-bindings-naming-ever-deeper-instances-are-refused -->
+`Nest` holds a value of its parameter and binds the associated type of `A` and of `B`, each held at the other, to an instance that nests `Nest`'s own parameter one level deeper, so the conformers a share walk must judge never end.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface A uses X
+	function makeX() returns X
+end 'A'
+
+interface B uses Y
+	function makeY() returns Y
+end 'B'
+
+type Nest uses T implements A with Deeper, B with Deeper
+	typealias Deeper = Nest with (Nest with T)
+	let n as Tally
+	let held as T
+
+	static function create(n Tally, held T) returns Self
+		return Self{n: n, held: held}
+	end 'create'
+
+	function makeX() returns Deeper
+		return Deeper.create(self.n + 1, held: Self{n: self.n, held: self.held})
+	end 'makeX'
+
+	function makeY() returns Deeper
+		return Deeper.create(self.n + 2, held: Self{n: self.n, held: self.held})
+	end 'makeY'
+end 'Nest'
+
+typealias HeldA = A with B
+typealias HeldB = B with A
+typealias TextNest = Nest with String
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+type Holder
+	export let a as A
+
+	static function create(a A) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Holder'
+
+function viaA(source HeldA) returns Tally
+	_ = source
+	return 0
+end 'viaA'
+
+function viaB(source HeldB) returns Tally
+	_ = source
+	return 0
+end 'viaB'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	let frozen = freeze Holder.create(TextNest.create(1, held: "held"))
+	print("{viaA(TextNest.create(1, held: "held"))} {viaB(TextNest.create(2, held: "held"))}\n")
+	_ = frozen
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:36: Unsupported: sharing is judged at every conformer an interface that holds an associated type reaches, and 'TextNest' binds the held `B` to 'Nest.Deeper', an instance whose type arguments nest its own type parameters deeper — so the conformers a share walk must judge are an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
+error E2015: <fragment>:12:51: Unsupported: sharing is judged at every conformer an interface that holds an associated type reaches, and 'TextNest' binds the held `A` to 'Nest.Deeper', an instance whose type arguments nest its own type parameters deeper — so the conformers a share walk must judge are an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
+```
+
+<!-- test: held-bindings-naming-ever-deeper-instances-over-an-unread-parameter-run -->
+`Nest` binds the associated type of `A` and of `B` to an instance that nests its own parameter one level deeper, and nothing reads that parameter, so every conformer a share walk judges is the same.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface A uses X
+	function makeX() returns X
+end 'A'
+
+interface B uses Y
+	function makeY() returns Y
+end 'B'
+
+type Nest uses T implements A with Deeper, B with Deeper
+	typealias Deeper = Nest with (Nest with T)
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function makeX() returns Deeper
+		return Deeper.create(self.n + 1)
+	end 'makeX'
+
+	function makeY() returns Deeper
+		return Deeper.create(self.n + 2)
+	end 'makeY'
+end 'Nest'
+
+typealias HeldA = A with B
+typealias HeldB = B with A
+typealias TextNest = Nest with String
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+type Holder
+	export let a as A
+
+	static function create(a A) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Holder'
+
+function viaA(source HeldA) returns Tally
+	_ = source
+	return 0
+end 'viaA'
+
+function viaB(source HeldB) returns Tally
+	_ = source
+	return 0
+end 'viaB'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	let frozen = freeze Holder.create(TextNest.create(1))
+	print("{viaA(TextNest.create(1))} {viaB(TextNest.create(2))}\n")
+	_ = frozen
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 0
+```
+
+<!-- test: held-binding-chains-follow-only-the-conformers-converted-to-an-interface -->
+`Bar` binds `J`'s associated type to `Foo` over its own parameter, and `Foo` binds `I`'s to `Bar` over a `Box` of its own; only `Foo` is converted to `I`, and `I` holds its associated type at an interface with none of its own, so the chain ends at `Bar`.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Plain0
+	function id0() returns Tally
+end 'Plain0'
+
+interface I uses A
+	function makeA() returns A
+end 'I'
+
+interface J uses B
+	function makeB() returns B
+end 'J'
+
+type Box uses T
+	let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+type Foo uses T implements Plain0, I with Next
+	typealias Boxed = Box with T
+	typealias Next = Bar with Boxed
+	let held as T
+	let n as Tally
+
+	static function create(held T, n Tally) returns Self
+		return Self{held: held, n: n}
+	end 'create'
+
+	function id0() returns Tally
+		return self.n
+	end 'id0'
+
+	function makeA() returns Next
+		return Next.create(Boxed.create(self.held), n: self.n + 1)
+	end 'makeA'
+end 'Foo'
+
+type Bar uses U implements Plain0, J with Back
+	typealias Back = Foo with U
+	let held as U
+	let n as Tally
+
+	static function create(held U, n Tally) returns Self
+		return Self{held: held, n: n}
+	end 'create'
+
+	function id0() returns Tally
+		return self.n
+	end 'id0'
+
+	function makeB() returns Back
+		panic("makeB is never called")
+	end 'makeB'
+end 'Bar'
+
+type Other implements Plain0, J with Other
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function id0() returns Tally
+		return self.n
+	end 'id0'
+
+	function makeB() returns Other
+		return Other.create(self.n + 1)
+	end 'makeB'
+end 'Other'
+
+typealias HeldI = I with Plain0
+typealias HeldJ = J with Plain0
+typealias TextFoo = Foo with String
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+type Holder
+	export let i as I
+
+	static function create(i I) returns Self
+		return Self{i: i}
+	end 'create'
+end 'Holder'
+
+function viaI(source HeldI) returns Tally
+	_ = source
+	return 0
+end 'viaI'
+
+function viaJ(source HeldJ) returns Tally
+	_ = source
+	return 0
+end 'viaJ'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	let frozen = freeze Holder.create(TextFoo.create("held", n: 1))
+	print("{viaI(TextFoo.create("held", n: 1))} {viaJ(Other.create(2))}\n")
+	_ = frozen
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 0
+```
+
+<!-- test: held-binding-cycle-over-an-unread-parameter-runs -->
+`P`, `Q` and `R` bind each other's associated types in a cycle that nests `Cell` around the parameter once, and no `T` is stored anywhere, so the cycle builds no deeper conformer.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface A uses X
+	function makeX() returns X
+end 'A'
+
+type Cell uses T
+	export let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Cell'
+
+type P uses T implements A with Next
+	typealias Next = Q with T
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function makeX() returns Next
+		return Next.create(self.n + 1)
+	end 'makeX'
+end 'P'
+
+type Q uses T implements A with Next
+	typealias Next = R with (Cell with T)
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function makeX() returns Next
+		return Next.create(self.n + 1)
+	end 'makeX'
+end 'Q'
+
+type R uses T implements A with Next
+	typealias Next = P with T
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function makeX() returns Next
+		return Next.create(self.n + 1)
+	end 'makeX'
+end 'R'
+
+typealias HeldA = A with A
+typealias TextP = P with String
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+type Holder
+	export let a as A
+
+	static function create(a A) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Holder'
+
+function viaA(source HeldA) returns Tally
+	_ = source
+	return 0
+end 'viaA'
+
+function main() returns ExitCode
+	let door = spawn Door.create()
+	door.shutdown()
+	let frozen = freeze Holder.create(TextP.create(1))
+	print("{viaA(TextP.create(1))}\n")
+	_ = frozen
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: held.bindings-differing-in-a-parameter-only-a-nested-instance-reads-keep-their-own-tables -->
+`Outer` binds `Bag`'s associated type to `Inner with (Wrap with (X, Y))`. `Wrap` stores only its `X`, so a share walk cannot tell `Wrap with (Tally, bool)` from `Wrap with (Tally, Tally)`; but `Wrap.width` reads `sizeof(Y)`, and `Inner.current` reaches it through its `where W is Probe` witness. The two bindings' `Cursor` tables must stay apart, each handing `current` its own descriptor: 1 and 8.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Probe
+	function width() returns Tally
+end 'Probe'
+
+interface Cursor
+	function current() returns Tally
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Wrap uses X, Y implements Probe
+	let x as X
+
+	static function create(x X) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function width() returns Tally
+		return sizeof(Y)
+	end 'width'
+end 'Wrap'
+
+type Inner uses W implements Cursor where W is Probe
+	let w as W
+
+	static function create(w W) returns Self
+		return Self{w: w}
+	end 'create'
+
+	function current() returns Tally
+		return self.w.width()
+	end 'current'
+end 'Inner'
+
+type Outer uses X, Y implements Bag with In
+	typealias Pairing = Wrap with (X, Y)
+	typealias In = Inner with Pairing
+	let x as X
+
+	static function create(x X) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function createIterator() returns In throws IterationError
+		return In.create(Pairing.create(self.x))
+	end 'createIterator'
+end 'Outer'
+
+typealias Wide = int(0 to u64.max)
+typealias SmallOuter = Outer with (Tally, bool)
+typealias WideOuter = Outer with (Tally, Wide)
+typealias CursorBag = Bag with Cursor
+
+type Holder
+	export let cursor as Cursor
+
+	static function create(cursor Cursor) returns Self
+		return Self{cursor: cursor}
+	end 'create'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+function pick(source CursorBag) returns Cursor
+	return try source.createIterator() otherwise panic("none")
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let small = freeze Holder.create(pick(SmallOuter.create(1)))
+	let wide = freeze Holder.create(pick(WideOuter.create(1)))
+	print("{small.cursor.current()} {wide.cursor.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 8
+```
+
+<!-- test: held.bindings-differing-in-a-held-position-no-share-walk-reaches-keep-their-own-tables -->
+`Item` holds its `P` only as the element of an `Array`, a position no share walk of `Item` names. `Item with (Tally, String)` and `Item with (Tally, Tally)` still release different arrays, so each binding's `Cursor` table keeps its own.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Cursor
+	function current() returns Tally
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Item uses T, P implements Cursor
+	export let t as T
+	typealias PItems = Array with P
+	export let items as PItems
+
+	static function create(t T, items PItems) returns Self
+		return Self{t: t, items: items}
+	end 'create'
+
+	function current() returns Tally
+		return self.items.count()
+	end 'current'
+end 'Item'
+
+type Outer uses X, Y implements Bag with In
+	typealias In = Item with (Tally, Y)
+	typealias Items = Array with Y
+	let y as Y
+
+	static function create(y Y) returns Self
+		return Self{y: y}
+	end 'create'
+
+	function createIterator() returns In throws IterationError
+		let items = Items.create(1, zeroed: false)
+		items.push(self.y)
+		return In.create(1, items: items)
+	end 'createIterator'
+end 'Outer'
+
+typealias TextOuter = Outer with (Tally, String)
+typealias TallyOuter = Outer with (Tally, Tally)
+typealias CursorBag = Bag with Cursor
+
+type Holder
+	export let cursor as Cursor
+
+	static function create(cursor Cursor) returns Self
+		return Self{cursor: cursor}
+	end 'create'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+function pick(source CursorBag) returns Cursor
+	return try source.createIterator() otherwise panic("none")
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let tally = freeze Holder.create(pick(TallyOuter.create(1)))
+	let text = freeze Holder.create(pick(TextOuter.create("a heap string long enough to allocate")))
+	print("{tally.cursor.current()} {text.cursor.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
+```
+
+<!-- test: held.bindings-differing-in-a-constrained-position-keep-their-own-tables -->
+`Item` constrains `P` with `where P is Weigh` and reads `sizeof(P)` in `current`, which the `Cursor` table's adapter reaches through its descriptor and `P`'s witness; the two bindings' tables stay apart: 8 and 16.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Weigh
+	function weigh() returns Tally
+end 'Weigh'
+
+type Light implements Weigh
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function weigh() returns Tally
+		return self.n
+	end 'weigh'
+end 'Light'
+
+type Heavy implements Weigh
+	let n as Tally
+	let m as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n, m: n}
+	end 'create'
+
+	function weigh() returns Tally
+		return self.n + self.m
+	end 'weigh'
+end 'Heavy'
+
+interface Cursor
+	function current() returns Tally
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Item uses T, P implements Cursor where P is Weigh
+	let t as T
+
+	static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	function current() returns Tally
+		return sizeof(P) as Tally
+	end 'current'
+end 'Item'
+
+type Outer uses X, Y implements Bag with In where Y is Weigh
+	typealias In = Item with (Tally, Y)
+	let x as X
+
+	static function create(x X) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function createIterator() returns In throws IterationError
+		return In.create(1)
+	end 'createIterator'
+end 'Outer'
+
+typealias LightOuter = Outer with (Tally, Light)
+typealias HeavyOuter = Outer with (Tally, Heavy)
+typealias CursorBag = Bag with Cursor
+
+type Holder
+	export let cursor as Cursor
+
+	static function create(cursor Cursor) returns Self
+		return Self{cursor: cursor}
+	end 'create'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+function pick(source CursorBag) returns Cursor
+	return try source.createIterator() otherwise panic("none")
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let light = freeze Holder.create(pick(LightOuter.create(1)))
+	let heavy = freeze Holder.create(pick(HeavyOuter.create(1)))
+	print("{light.cursor.current()} {heavy.cursor.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 16
+```
+
+<!-- test: held.bindings-differing-in-a-constrained-position-nothing-reads-run -->
+`Item` constrains `P` and nothing reads it, so the two bindings stay correct whichever tables they get: both answer 1.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Weigh
+	function weigh() returns Tally
+end 'Weigh'
+
+type Light implements Weigh
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function weigh() returns Tally
+		return self.n
+	end 'weigh'
+end 'Light'
+
+type Heavy implements Weigh
+	let n as Tally
+	let m as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n, m: n}
+	end 'create'
+
+	function weigh() returns Tally
+		return self.n + self.m
+	end 'weigh'
+end 'Heavy'
+
+interface Cursor
+	function current() returns Tally
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Item uses T, P implements Cursor where P is Weigh
+	let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function current() returns Tally
+		return self.n
+	end 'current'
+end 'Item'
+
+type Outer uses X, Y implements Bag with In where Y is Weigh
+	typealias In = Item with (Tally, Y)
+	let x as X
+
+	static function create(x X) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function createIterator() returns In throws IterationError
+		return In.create(1)
+	end 'createIterator'
+end 'Outer'
+
+typealias LightOuter = Outer with (Tally, Light)
+typealias HeavyOuter = Outer with (Tally, Heavy)
+typealias CursorBag = Bag with Cursor
+
+type Holder
+	export let cursor as Cursor
+
+	static function create(cursor Cursor) returns Self
+		return Self{cursor: cursor}
+	end 'create'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+
+function pick(source CursorBag) returns Cursor
+	return try source.createIterator() otherwise panic("none")
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let light = freeze Holder.create(pick(LightOuter.create(1)))
+	let heavy = freeze Holder.create(pick(HeavyOuter.create(1)))
+	print("{light.cursor.current()} {heavy.cursor.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
+```

@@ -1,0 +1,211 @@
+let DescriptorBlobScope = ""
+
+union DescriptorFlowState
+	unsettled
+	settled(flow DependenceFlow)
+end 'DescriptorFlowState'
+
+export type DescriptorReads
+	let log as OpenRowLog
+	let bare as ParameterPositionsByBase
+	var state as DescriptorFlowState
+
+	export static function create() returns Self
+		return Self{log: OpenRowLog.create(), bare: ParameterPositionsByBase.create(), state: DescriptorFlowState.unsettled}
+	end 'create'
+
+	function requireOpen(reader String)
+		match self.state 'state'
+			unsettled then return
+			settled then panic("DescriptorReads.{reader}: the dependence flow already settled, so a descriptor read noted now would not count — every read is noted before `settledFlow` first runs")
+		end 'state'
+	end 'requireOpen'
+
+	export function noteBare(owner ByteArray, position ElementIndex)
+		self.requireOpen("noteBare")
+		positionsOfBase(self.bare, base: owner).insert(position)
+	end 'noteBare'
+
+	export function noteRow(owner ByteArray, row GenericInstanceId)
+		self.requireOpen("noteRow")
+		self.log.note(owner, row: row)
+	end 'noteRow'
+
+	export function noteFunction(signatures ProgramSignatures, func IrFunction)
+		for index in 0 upto func.valueTags.count() 'eachValue'
+			let tag = try func.valueTags.get(index) otherwise panic("DescriptorReads.noteFunction: valueTags.get OOB at {index}")
+
+			if not tagMayMentionAParameter(tag) 'aTypeNamingNoParameter'
+				continue
+			end 'aTypeNamingNoParameter'
+
+			let nameId = try func.valueNameIds.get(index) otherwise panic("DescriptorReads.noteFunction: valueNameIds.get OOB at {index} — the two type columns are minted in lockstep")
+			signatures.noteOpenTypeFacts(maxonTypeOfTag(tag, nameId: nameId), into: self)
+		end 'eachValue'
+
+		for (_, instance) in func.valueCallInstances 'eachCallInstance'
+			signatures.noteOpenTypeFacts(MaxonType.genericInstance(instance), into: self)
+		end 'eachCallInstance'
+
+		self.noteExtensionConstraints(signatures, func: func)
+	end 'noteFunction'
+
+	function noteExtensionConstraints(signatures ProgramSignatures, func IrFunction)
+		let constraints = signatures.extensionMethodConstraintsOf(func.name)
+
+		if constraints.isEmpty() 'noExtensionClause'
+			return
+		end 'noExtensionClause'
+
+		match signatures.functionDeclaringType(func.name) 'declaring'
+			method(typeName) then self.noteConstrainedPositions(typeName, constraints: constraints)
+			freeFunction or
+			undeclared then panic("DescriptorReads.noteExtensionConstraints: '{String.from(func.name)}' carries conditional-extension constraints and is not a method of any type")
+		end 'declaring'
+	end 'noteExtensionConstraints'
+
+	function noteConstrainedPositions(typeName ByteArray, constraints WhereConstraintArray)
+		for constraint in constraints 'eachConstraint'
+			self.noteBare(typeName, position: constraint.typeParamIndex)
+		end 'eachConstraint'
+	end 'noteConstrainedPositions'
+
+	function settledFlow(signatures ProgramSignatures) returns DependenceFlow
+		match self.state 'state'
+			settled(known) then return known
+			unsettled then break
+		end 'state'
+
+		let flow = DependenceFlow.settledOver(signatures, policy: MentionPolicy.everyPosition(FunctionMentions.ignored), rows: self.log, seeding: BaseSeeding.descriptorReads, mentions: self.bare)
+		self.state = DescriptorFlowState.settled(flow)
+		return flow
+	end 'settledFlow'
+
+	function flowOf(reader String) returns DependenceFlow
+		match self.state 'state'
+			settled(flow) then return flow
+			unsettled then panic("DescriptorReads.{reader}: the dependence flow has not settled — a descriptor is read only once lowering planned its tables")
+		end 'state'
+	end 'flowOf'
+
+	export function requireRow(owner ByteArray, row GenericInstanceId)
+		if not self.log.holds(owner, row: row) 'aRowTheScanNeverNoted'
+			panic("DescriptorReads.requireRow: instance {row} is an entry of '{String.from(owner)}''s descriptor table and the dependence scan never noted it — a position it reads would be erased from the key two descriptors share")
+		end 'aRowTheScanNeverNoted'
+	end 'requireRow'
+
+	export function isSettled() returns bool
+		return match self.state 'state'
+			unsettled gives false
+			settled gives true
+		end 'state'
+	end 'isSettled'
+
+	export function blockOffsetFor(owner ByteArray, position ElementIndex) returns ByteOffset
+		match self.state 'state'
+			unsettled then self.noteBare(owner, position: position)
+			settled(flow) then self.requireCovered(flow, owner: owner, position: position)
+		end 'state'
+
+		return layoutBlockOffsetFor(position)
+	end 'blockOffsetFor'
+
+	function requireCovered(flow DependenceFlow, owner ByteArray, position ElementIndex)
+		if flow.judges(owner) and not flow.dependsAt(owner, position: position) 'aPositionTheKeyErases'
+			panic("DescriptorReads.blockOffsetFor: lowering reads position {position} of '{String.from(owner)}''s descriptor, which the dependence scan did not count — two instances differing only there would share one descriptor blob")
+		end 'aPositionTheKeyErases'
+	end 'requireCovered'
+
+	function positionsReadBy(flow DependenceFlow, signatures ProgramSignatures, callee GenericInstanceId) returns ParameterPositions
+		if let known = try flow.positions.get(signatures.genericInstanceBaseName(callee)) 'aJudgedCallee'
+			return known
+		end 'aJudgedCallee'
+
+		let every = ParameterPositions.create()
+
+		for position in 0 upto signatures.genericInstanceArgCount(callee) 'eachArgument'
+			every.insert(position)
+		end 'eachArgument'
+
+		return every
+	end 'positionsReadBy'
+
+	export function requireForwardCovered(signatures ProgramSignatures, callee GenericInstanceId, base ElementIndex)
+		let flow = self.flowOf("requireForwardCovered")
+		let owner = try signatures.instanceParameterOwnerName(callee) otherwise panic("DescriptorReads.requireForwardCovered: instance {callee} forwards its caller's parameters and so is built on a type parameter")
+
+		if not flow.judges(owner) 'anUnsharedOwner'
+			return
+		end 'anUnsharedOwner'
+
+		let target = signatures.genericInstanceBaseName(callee)
+
+		for position in self.positionsReadBy(flow, signatures: signatures, callee: callee) 'eachPositionTheCalleeReads'
+			if not flow.dependsAt(owner, position: base + position) 'aPositionTheForwardLosesTrackOf'
+				panic("DescriptorReads.requireForwardCovered: '{String.from(owner)}' forwards its descriptor from position {base} to '{String.from(target)}', which reads position {position}, and '{String.from(owner)}' does not count position {base + position} as read — two instances differing only there would share one descriptor blob")
+			end 'aPositionTheForwardLosesTrackOf'
+		end 'eachPositionTheCalleeReads'
+	end 'requireForwardCovered'
+end 'DescriptorReads'
+
+function tagMayMentionAParameter(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.structRef or tag == ValueTypeTag.function
+end 'tagMayMentionAParameter'
+
+typealias RepresentativeByKey = Map with (ByteArray, GenericInstanceId)
+
+union RepresentativeKey
+	unjudged
+	keyed(key immutable ByteArray)
+end 'RepresentativeKey'
+
+type Representatives
+	let byKey as RepresentativeByKey
+
+	static function create() returns Self
+		return Self{byKey: RepresentativeByKey.create()}
+	end 'create'
+
+	function keyOf(flow DependenceFlow, signatures ProgramSignatures, instance GenericInstanceId, scope String) returns RepresentativeKey
+		if not flow.judges(signatures.genericInstanceBaseName(instance)) 'aBaseNothingJudges'
+			return RepresentativeKey.unjudged
+		end 'aBaseNothingJudges'
+
+		return RepresentativeKey.keyed(joinedKey(scope, tail: String.from(flow.keyOf(signatures, id: instance))))
+	end 'keyOf'
+
+	function standIn(flow DependenceFlow, signatures ProgramSignatures, instance GenericInstanceId, scope String) returns GenericInstanceId
+		match self.keyOf(flow, signatures: signatures, instance: instance, scope: scope) 'key'
+			unjudged then return instance
+			keyed(key) then return try self.byKey.get(key) otherwise instance
+		end 'key'
+	end 'standIn'
+
+	function establish(flow DependenceFlow, signatures ProgramSignatures, instance GenericInstanceId, scope String) returns GenericInstanceId
+		match self.keyOf(flow, signatures: signatures, instance: instance, scope: scope) 'key'
+			unjudged then return instance
+			keyed(key) then return self.firstOfKey(key, instance: instance)
+		end 'key'
+	end 'establish'
+
+	function firstOfKey(key ByteArray, instance GenericInstanceId) returns GenericInstanceId
+		if let known = try self.byKey.get(key) 'anEquivalentExists'
+			return known
+		end 'anEquivalentExists'
+
+		self.byKey.upsert(key, value: instance)
+		return instance
+	end 'firstOfKey'
+end 'Representatives'
+
+function requireSameDescriptorKey(descriptors DependenceFlow, signatures ProgramSignatures, first GenericInstanceId, second GenericInstanceId)
+	let base = signatures.genericInstanceBaseName(first)
+
+	if not descriptors.judges(base) 'anUnsharedBase'
+		panic("requireSameDescriptorKey: instances {first} and {second} of '{String.from(base)}' share one table, and the descriptor flow never judged '{String.from(base)}' — each of its instances keeps a descriptor of its own, so the table adapters cannot hand either the other's")
+	end 'anUnsharedBase'
+
+	if not descriptors.keyOf(signatures, id: first).equals(descriptors.keyOf(signatures, id: second)) 'theDescriptorsDiffer'
+		panic("requireSameDescriptorKey: instances {first} and {second} of '{String.from(base)}' share one table, and the descriptor flow keys them apart — the table's adapters would hand one the other's descriptor")
+	end 'theDescriptorsDiffer'
+end 'requireSameDescriptorKey'

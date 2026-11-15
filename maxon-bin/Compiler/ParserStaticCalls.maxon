@@ -1090,6 +1090,13 @@ extension Parser
 			end 'aFloatSlotTravelsAsItsBits' else 'aWord'
 				args.push(moved)
 			end 'aWord'
+
+			if payloadClassIsExistential(class) 'andItsWitnessHalf'
+				let field = try payloads.get(i) otherwise panic("parseEnumFromNameCase: payloadsAt returned fewer fields than its own count at {i}")
+				let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+				let argTok = self.tokenAt(try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values"))
+				args.push(self.widenedWitnessOf(self.existentialPayloadStore(field, declared: declared, value: moved, caseTok: memberTok, argTok: argTok), range: range))
+			end 'andItsWitnessHalf'
 		end 'moveIn'
 
 		return self.trackEnumFromNameResult(layout, result: self.emitRuntimeCallInto(result, callee: enumFromNameCaseSymbol(layout.name, caseName: caseName), args: args, range: range, argLabels: emptyArgLabels(args)))
@@ -1408,7 +1415,8 @@ extension Parser
 
 			if payloadClassIsExistential(class) 'andItsWitnessHalf'
 				let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
-				self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i as PayloadSlotIndex) + InterfaceWitnessHalfOffset, value: self.widenedWitnessOf(stored, interfaceName: interfaceNameOfType(declared, typeNames: self.artifact.typeNames), range: range), storageType: MaxonType.integer, range: range)
+				let argTok = self.tokenAt(try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args"))
+				self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i as PayloadSlotIndex) + InterfaceWitnessHalfOffset, value: self.widenedWitnessOf(self.existentialPayloadStore(field, declared: declared, value: stored, caseTok: caseTok, argTok: argTok), range: range), storageType: MaxonType.integer, range: range)
 			end 'andItsWitnessHalf'
 		end 'storeEach'
 
@@ -2098,7 +2106,7 @@ extension Parser
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break
-			existential then self.recordExistentialPayloadStore(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
+			existential then break
 		end 'c'
 
 		return value
@@ -2117,10 +2125,10 @@ extension Parser
 	// conforms is `SemanticCheck.checkExistentialFieldStores`' whole-program verdict for the same reason — a
 	// conformer's `implements` clause is recorded when its own file is parsed. A parameter carries no `with`
 	// claim of a record's type parameter, so the store names none.
-	function recordExistentialPayloadStore(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token)
+	function existentialPayloadStore(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token) returns ExistentialFieldStore
 		let site = freeze "'{String.from(field.name)}' of the message '{String.from(caseTok.value)}'".toByteArray()
-		self.recordExistentialStore(ExistentialFieldStore.create(value, subject: value, interfaceName: interfaceNameOfType(declared, typeNames: self.artifact.typeNames), claims: GenericInstanceIdArray.create(0), fieldSite: site, place: ExistentialStorePlace.messageArgument, line: argTok.line, column: argTok.column, filePath: self.job.path))
-	end 'recordExistentialPayloadStore'
+		return ExistentialFieldStore.create(value, subject: value, interfaceName: interfaceNameOfType(declared, typeNames: self.artifact.typeNames), claims: GenericInstanceIdArray.create(0), fieldSite: site, place: ExistentialStorePlace.messageArgument, line: argTok.line, column: argTok.column, filePath: self.job.path)
+	end 'existentialPayloadStore'
 
 	// ⚠ **THE TAG COMES OFF THE RESOLVED `declared`, NEVER OFF `field.declaredType`.** Read raw, a
 	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` would meet the
@@ -5097,7 +5105,7 @@ extension Parser
 				continue
 			end 'answersAlike'
 
-			throw SourceParseError.registryRefused(ErrorCode.interfaceHandleImplementersDisagree, explanation: "`{String.from(interfaceName)}.{String.from(member)}` cannot be sent through `{String.from(interfaceName)}.handle`: `{String.from(service)}` and `{String.from(representative)}` declare it with different parameter, return or `throws` types, so one request and one reply cannot serve both — send it through each service's own handle", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.interfaceHandleImplementersDisagree, explanation: "`{String.from(interfaceName)}.{String.from(member)}` cannot be sent through `{String.from(interfaceName)}.handle`: `{String.from(service)}` and `{String.from(representative)}` declare it with different parameter, return or `throws` types, so one request and one reply cannot serve both — send it through each service's own handle", line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 		end 'eachService'
 	end 'requireImplementersAnswerAlike'
 
@@ -5584,7 +5592,9 @@ extension Parser
 			let instance = try self.cloneableInstanceOf(base, memberTok: memberTok)
 			self.advance()
 			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(self.signatures.genericInstanceBoxCloneCallee(instance), args: argsOf(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: range)
+			let cloned = self.emitOwnedRuntimeResult(self.signatures.genericInstanceBoxCloneCallee(instance), args: argsOf(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: range)
+			self.emitOpaqueSlotCopies(cloned, paths: self.signatures.opaqueSlotPathsOf(instance), range: range)
+			return cloned
 		end 'aGenericBase'
 
 		try self.requireNoUniqueCause(self.signatures.uniqueCauseOf(base.layout.name), subject: String.from(base.layout.name), verb: "cloned", anchor: baseTok)
@@ -5598,6 +5608,24 @@ extension Parser
 
 		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: argsOf(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: range)
 	end 'emitSynthesizedStructClone'
+
+	function emitOpaqueSlotCopies(box ValueId, paths OpaqueSlotPathArray, range SourceRange)
+		for path in paths 'eachSlot'
+			var holder = box
+
+			for hop in path.hops 'eachNestedRecord'
+				holder = self.emitIndirectLoad(hop.declared, box: holder, offset: hop.offset, storageType: self.fieldStorageType(hop.declared), range: range)
+			end 'eachNestedRecord'
+
+			self.emitOpaqueSlotCopy(holder, declared: path.slotType, offset: path.slotOffset, range: range)
+		end 'eachSlot'
+	end 'emitOpaqueSlotCopies'
+
+	function emitOpaqueSlotCopy(box ValueId, declared MaxonType, offset ByteOffset, range SourceRange)
+		let held = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
+		let copied = self.emitRuntimeCall(CopyTypeParamName, args: argsOf(held), resultTag: self.tagOf(held), resultNameId: self.valueNameId(held), range: range)
+		self.emitIndirectStore(box, offset: offset, value: copied, storageType: self.fieldStorageType(declared), range: range)
+	end 'emitOpaqueSlotCopy'
 
 	// ⭐ **WHICH DECLARED UNION `<receiver>.clone()` CLONES, or `undeclared` for every other member and every
 	// other receiver.** The decision the enum dispatch's clone arm branches on, spelled once so the arm holds

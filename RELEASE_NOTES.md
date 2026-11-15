@@ -914,6 +914,26 @@ release's version as its heading when the release is cut.
 - `let a = r as isolated T` over a local `r` moves the value to `a`, as `let a = r` does, and reading `r`
   afterwards is E3102 (`use of moved value 'r'`).
   Fix: read the value through `a` instead of `r`.
+- A share door whose graph holds a value at an interface type is E3171 when a conformer the program converts to
+  that interface reaches a function value, an OS handle or a promise. The doors are `freeze`,
+  `SharedValue.create` and `publish`, a value key's `register` and a value key's `default`. The message names the
+  interface, the conformer and the field, and a note points at the conversion. These programs compiled and stopped
+  with exit code 96 at the share walk; exit code 96 is now a compiler bug. A `freeze` or publish refused for its
+  own graph is E3171 too, where it was E3217, which is now only for a message, a reply or a factory argument.
+  A door is judged for every cause in a program that spawns a service, and for a promise in every program. A
+  promise is judged by conversion as well, so a conformer holding one that the program never converts to the
+  interface leaves the door legal.
+  Fix: hold the part that cannot be shared in a service and keep its handle in the shared value, or give that
+  conformer a separate interface the shared value does not hold; expect E3171 and its wording where a script or
+  test matched E3217 or exit code 96 at a share door.
+- A program with a share door is E2015 where the generic instances the door must judge grow without end: a generic
+  type that names an instance of itself nesting its own type parameters deeper (`typealias Deeper = Box with (Cell
+  with T)` inside `type Box uses T`), or a conformer that binds an associated type an interface holds to such an
+  instance. One rule decides growth for these, for E3184 and for the widening and layout-descriptor E2015s: a
+  chain grows only when a cycle of instances passes a type argument that properly contains a type parameter, so a
+  generic whose methods reach the enclosing type again at the same or permuted arguments compiles where it was
+  E2015.
+  Fix: give that type argument a concrete type, or pass the value it wraps as a type parameter of its own.
 
 ## 0.5.0 — 2026-10-08
 

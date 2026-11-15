@@ -1478,24 +1478,29 @@ end 'bindsAssociatedAt'
 // A type has one `ConformanceDecl` per `implements` clause — its header's and each `extension T implements`'s
 // — so the first one for `typeName` need not be the one that binds `interfaceName`.
 export function conformanceDeclBindingType(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns (ConformanceDecl, RequirementType) throws MapError
+	let (decl, entry) = try conformanceDeclBindingEntry(conformances, typeName: typeName, interfaceName: interfaceName, position: position)
+	return (decl, entry.bindingTypeAt(position))
+end 'conformanceDeclBindingType'
+
+export function conformanceDeclBindingEntry(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns (ConformanceDecl, InterfaceConformance) throws MapError
 	for decl in conformances 'eachDeclaringType'
 		if not decl.typeName.equals(typeName) 'anotherType'
 			continue
 		end 'anotherType'
 
-		if let binding = try declAssociatedBindingType(decl, interfaceName: interfaceName, position: position) 'thisClauseBindsIt'
-			return (decl, binding)
+		if let entry = try declBindingEntry(decl, interfaceName: interfaceName, position: position) 'thisClauseBindsIt'
+			return (decl, entry)
 		end 'thisClauseBindsIt'
 	end 'eachDeclaringType'
 
 	throw MapError.keyNotFound
-end 'conformanceDeclBindingType'
+end 'conformanceDeclBindingEntry'
 
 // ⭐ **THE SAME READ WHEN THE CALLER ALREADY HOLDS THE DECLARATION**, which is what a WALK of the conformance
 // list holds. Split from the name-keyed door above rather than left inside it because the difference is a
 // COST, not a spelling: a walk that asked by name for each declaration it was already standing on would scan
 // the whole list per element — the quadratic this project's ladder exists to find.
-export function declAssociatedBindingType(decl ConformanceDecl, interfaceName ByteArray, position ElementIndex) returns RequirementType throws MapError
+export function declBindingEntry(decl ConformanceDecl, interfaceName ByteArray, position ElementIndex) returns InterfaceConformance throws MapError
 	for entry in decl.interfaces 'eachInterface'
 		if not entry.interfaceName.equals(interfaceName) 'otherInterface'
 			continue
@@ -1507,11 +1512,11 @@ export function declAssociatedBindingType(decl ConformanceDecl, interfaceName By
 			continue
 		end 'boundNothingAtThisPosition'
 
-		return try entry.withArgTypes.get(position) otherwise panic("declAssociatedBindingType: withArgTypes.get OOB at {position} — an InterfaceConformance's binding columns are parallel, and the guard above bounds the position by `withArgs`")
+		return entry
 	end 'eachInterface'
 
 	throw MapError.keyNotFound
-end 'declAssociatedBindingType'
+end 'declBindingEntry'
 
 // ⭐⭐ **THE SHADOW RENAME TABLE — bare name ⇒ the reserved name a LISTED STDLIB module's declaration of
 // that name is moved to.**
@@ -1775,6 +1780,59 @@ export function renumberedRequirements(requirements RequirementTypeArray, remap 
 	return renumbered
 end 'renumberedRequirements'
 
+export type ConformanceBindingSite
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(line LineNumber, column ColumnNumber) returns Self
+		return Self{line: line, column: column}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ConformanceBindingSite throws LibraryCacheDamage
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ConformanceBindingSite) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ConformanceBindingSite'
+
+export typealias ConformanceBindingSiteArray = Array with ConformanceBindingSite
+
+// @generated library-cache begin
+function cacheWriteConformanceBindingSiteArray(writer LibraryCacheWriter, value ConformanceBindingSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteConformanceBindingSiteArray'
+
+function cacheReadConformanceBindingSiteArray(reader LibraryCacheReader) returns ConformanceBindingSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = ConformanceBindingSiteArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ConformanceBindingSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadConformanceBindingSiteArray'
+
+// @generated library-cache end
+
 // ⭐ **ONE `I [with A, B]` ENTRY OF AN `implements` CLAUSE.** The interface NAME and this
 // conformance's POSITIONAL bindings for that interface's `uses` names, kept together because they mean
 // nothing apart: `withArgs[i]` binds `iface.associatedTypeNames[i]`. Two parallel columns on the decl
@@ -1788,19 +1846,28 @@ export type InterfaceConformance
 	export let withArgs as NameRoster
 	export let withArgSpellings as NameRoster
 	export let withArgTypes as RequirementTypeArray
+	export let withArgSites as ConformanceBindingSiteArray
 
-	export static function create(interfaceName ByteArray, withArgs NameRoster, withArgSpellings NameRoster, withArgTypes RequirementTypeArray) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings, withArgTypes: withArgTypes}
+	export static function create(interfaceName ByteArray, withArgs NameRoster, withArgSpellings NameRoster, withArgTypes RequirementTypeArray, withArgSites ConformanceBindingSiteArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings, withArgTypes: withArgTypes, withArgSites: withArgSites}
 	end 'create'
 
 	// A conformance that wrote no `with` clause at all — it binds nothing.
 	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: NameRoster.create(0), withArgSpellings: NameRoster.create(0), withArgTypes: RequirementTypeArray.create(0)}
+		return Self{interfaceName: interfaceName, withArgs: NameRoster.create(0), withArgSpellings: NameRoster.create(0), withArgTypes: RequirementTypeArray.create(0), withArgSites: ConformanceBindingSiteArray.create(0)}
 	end 'withoutBindings'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceConformance
-		return Self{interfaceName: self.interfaceName, withArgs: self.withArgs, withArgSpellings: self.withArgSpellings, withArgTypes: renumberedRequirements(self.withArgTypes, remap: remap)}
+		return Self{interfaceName: self.interfaceName, withArgs: self.withArgs, withArgSpellings: self.withArgSpellings, withArgTypes: renumberedRequirements(self.withArgTypes, remap: remap), withArgSites: self.withArgSites}
 	end 'withInstancesRenumbered'
+
+	export function bindingTypeAt(position ElementIndex) returns RequirementType
+		return try self.withArgTypes.get(position) otherwise panic("InterfaceConformance.bindingTypeAt: withArgTypes.get OOB at {position} — the binding columns are parallel, and a caller bounds the position by `withArgs`")
+	end 'bindingTypeAt'
+
+	export function bindingSiteAt(position ElementIndex) returns ConformanceBindingSite
+		return try self.withArgSites.get(position) otherwise panic("InterfaceConformance.bindingSiteAt: withArgSites.get OOB at {position} — the binding columns are parallel, and a caller bounds the position by `withArgs`")
+	end 'bindingSiteAt'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -1808,6 +1875,7 @@ export type InterfaceConformance
 		cacheWriteNameRoster(writer, value: self.withArgs)
 		cacheWriteNameRoster(writer, value: self.withArgSpellings)
 		cacheWriteRequirementTypeArray(writer, value: self.withArgTypes)
+		cacheWriteConformanceBindingSiteArray(writer, value: self.withArgSites)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns InterfaceConformance throws LibraryCacheDamage
@@ -1815,12 +1883,13 @@ export type InterfaceConformance
 		let f_withArgs = try cacheReadNameRoster(reader)
 		let f_withArgSpellings = try cacheReadNameRoster(reader)
 		let f_withArgTypes = try cacheReadRequirementTypeArray(reader)
+		let f_withArgSites = try cacheReadConformanceBindingSiteArray(reader)
 
-		return Self{interfaceName: f_interfaceName, withArgs: f_withArgs, withArgSpellings: f_withArgSpellings, withArgTypes: f_withArgTypes}
+		return Self{interfaceName: f_interfaceName, withArgs: f_withArgs, withArgSpellings: f_withArgSpellings, withArgTypes: f_withArgTypes, withArgSites: f_withArgSites}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(InterfaceConformance) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(InterfaceConformance) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

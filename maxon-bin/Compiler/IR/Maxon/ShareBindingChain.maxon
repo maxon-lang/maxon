@@ -1,0 +1,234 @@
+typealias DeclsByType = Map with (ByteArray, ConformanceDeclArray)
+
+type ChainPair
+	export let base as immutable ByteArray
+	export let interfaceName as immutable ByteArray
+
+	static function create(base ByteArray, interfaceName ByteArray) returns Self
+		return Self{base: base, interfaceName: interfaceName}
+	end 'create'
+end 'ChainPair'
+
+typealias ChainPairArray = Array with ChainPair
+
+function indexedDeclarations(conformances ConformanceDeclArray) returns DeclsByType
+	let byType = DeclsByType.create()
+
+	for decl in conformances 'eachDeclaration'
+		if let known = try byType.get(decl.typeName) 'knownType'
+			known.push(decl)
+			continue
+		end 'knownType'
+
+		let fresh = ConformanceDeclArray.create(1, zeroed: false)
+		fresh.push(decl)
+		byType.upsert(decl.typeName, value: fresh)
+	end 'eachDeclaration'
+
+	return byType
+end 'indexedDeclarations'
+
+type ChainBinding
+	let owner as immutable ByteArray
+	let row as GenericInstanceId
+	let heldName as immutable ByteArray
+	let site as ShareConversionSite
+
+	static function create(owner ByteArray, row GenericInstanceId, heldName ByteArray, site ShareConversionSite) returns Self
+		return Self{owner: owner, row: row, heldName: heldName, site: site}
+	end 'create'
+end 'ChainBinding'
+
+typealias ChainBindingArray = Array with ChainBinding
+
+function growingBindingMessage(conformer String, heldName String, row String) returns String
+	return unsupportedFeatureMessage("sharing is judged at every conformer an interface that holds an associated type reaches, and '{conformer}' binds the held `{heldName}` to '{row}', an instance whose type arguments nest its own type parameters deeper — so the conformers a share walk must judge are an unbounded chain of ever-deeper instances. {UnboundedChainCure}")
+end 'growingBindingMessage'
+
+type BindingChainWalk
+	let signatures as ProgramSignatures
+	let declsByType as DeclsByType
+	let pairs as ClonerSet
+	let queue as ChainPairArray
+	let rows as OpenRowLog
+	let bindings as ChainBindingArray
+
+	static function create(signatures ProgramSignatures, declsByType DeclsByType) returns Self
+		return Self{signatures: signatures, declsByType: declsByType, pairs: ClonerSet.create(), queue: ChainPairArray.create(0), rows: OpenRowLog.create(), bindings: ChainBindingArray.create(0)}
+	end 'create'
+
+	function enqueue(base ByteArray, interfaceName ByteArray)
+		let key = joinedKey(String.from(base), tail: String.from(interfaceName))
+
+		if self.pairs.contains(key) 'alreadyFollowed'
+			return
+		end 'alreadyFollowed'
+
+		self.pairs.insert(key)
+		self.queue.push(ChainPair.create(base, interfaceName: interfaceName))
+	end 'enqueue'
+
+	function drain()
+		var head = 0 as ElementIndex
+
+		while head < self.queue.count() 'eachPair'
+			let pair = try self.queue.get(head) otherwise panic("BindingChainWalk.drain: queue.get OOB at {head}")
+			head = head + 1
+
+			let decls = try self.declsByType.get(pair.base) otherwise continue
+
+			for decl in decls 'eachDeclaration'
+				self.followEntries(decl, interfaceName: pair.interfaceName)
+			end 'eachDeclaration'
+		end 'eachPair'
+	end 'drain'
+
+	function followEntries(decl ConformanceDecl, interfaceName ByteArray)
+		for entry in decl.interfaces 'eachEntry'
+			if entry.interfaceName.equals(interfaceName) 'theFollowedInterface'
+				self.followBindings(decl, entry: entry)
+			end 'theFollowedInterface'
+		end 'eachEntry'
+	end 'followEntries'
+
+	function followBindings(decl ConformanceDecl, entry InterfaceConformance)
+		for position in 0 upto entry.withArgTypes.count() 'eachBinding'
+			let held = try self.signatures.associatedTypeHeldAt(entry.interfaceName, position: position) otherwise continue
+
+			match self.signatures.declaredBindingOf(entry.bindingTypeAt(position)) 'declared'
+				nominal then self.followNominalBinding(decl, bindingType: entry.bindingTypeAt(position), held: held)
+				instance(row) then self.followBinding(decl, entry: entry, position: position, row: row, held: held)
+			end 'declared'
+		end 'eachBinding'
+	end 'followBindings'
+
+	function followNominalBinding(decl ConformanceDecl, bindingType RequirementType, held ByteArray)
+		if not self.signatures.interfaceHoldsAnAssociatedType(held) 'theChainEnds'
+			return
+		end 'theChainEnds'
+
+		match bindingType.identity 'identity'
+			nominal then self.enqueue(self.signatures.conformerNameOfRequirement(bindingType, readerFilePath: decl.filePath), interfaceName: held)
+			genericInstance or
+			typeParameter or
+			builtin or
+			void or
+			selfType then break
+		end 'identity'
+	end 'followNominalBinding'
+
+	function followBinding(decl ConformanceDecl, entry InterfaceConformance, position ElementIndex, row GenericInstanceId, held ByteArray)
+		let site = entry.bindingSiteAt(position)
+		self.bindings.push(ChainBinding.create(decl.typeName, row: row, heldName: held, site: ShareConversionSite.create(site.line, column: site.column, filePath: decl.filePath)))
+
+		if self.signatures.instanceIsBuiltOnATypeParameter(row) 'anOpenRow'
+			self.rows.note(decl.typeName, row: row)
+		end 'anOpenRow'
+
+		if self.signatures.interfaceHoldsAnAssociatedType(held) 'theChainContinues'
+			self.enqueue(self.signatures.genericInstanceBaseName(row), interfaceName: held)
+		end 'theChainContinues'
+	end 'followBinding'
+end 'BindingChainWalk'
+
+union BindingKeying
+	verdict
+	tables(descriptorPositions ParameterPositionsByBase)
+
+	function policy() returns MentionPolicy
+		return match self 'keying'
+			verdict gives MentionPolicy.shareReached(FunctionMentions.counted)
+			tables gives MentionPolicy.everyPosition(FunctionMentions.counted)
+		end 'keying'
+	end 'policy'
+
+	function seeding() returns BaseSeeding
+		return match self 'keying'
+			verdict gives BaseSeeding.shareReach
+			tables(positions) gives BaseSeeding.tables(positions)
+		end 'keying'
+	end 'seeding'
+end 'BindingKeying'
+
+union BindingDerivation
+	nothingToDerive
+	keyed(key immutable ByteArray)
+end 'BindingDerivation'
+
+type BindingChain
+	let declsByType as DeclsByType
+	let pairs as ClonerSet
+	let bindings as ChainBindingArray
+	let flow as DependenceFlow
+	let growing as GrowingRows
+
+	static function settle(signatures ProgramSignatures, conformances ConformanceDeclArray, roster ShareRoster, keying BindingKeying) returns Self
+		let walk = BindingChainWalk.create(signatures, declsByType: indexedDeclarations(conformances))
+
+		for interfaceName in roster.names() 'eachConvertedInterface'
+			if not signatures.interfaceHoldsAnAssociatedType(interfaceName) 'bindsNothingHeld'
+				continue
+			end 'bindsNothingHeld'
+
+			for conversion in roster.conversionsOf(interfaceName) 'eachConversion'
+				walk.enqueue(BindingChain.baseOfConformer(signatures, conformer: conversion.conformer), interfaceName: interfaceName)
+			end 'eachConversion'
+		end 'eachConvertedInterface'
+
+		walk.drain()
+		let flow = DependenceFlow.settledOver(signatures, policy: keying.policy(), rows: walk.rows, seeding: keying.seeding(), mentions: ParameterPositionsByBase.create())
+		return Self{declsByType: walk.declsByType, pairs: walk.pairs, bindings: walk.bindings, flow: flow, growing: flow.growingAmong(signatures, reachedRows: walk.rows)}
+	end 'settle'
+
+	function firstGrowing() returns ChainBinding throws AbsentError
+		for binding in self.bindings 'eachBinding'
+			if self.growing.contains(binding.row) 'aGrowingBinding'
+				return binding
+			end 'aGrowingBinding'
+		end 'eachBinding'
+
+		throw AbsentError.absent
+	end 'firstGrowing'
+
+	static function baseOfConformer(signatures ProgramSignatures, conformer ShareConformer) returns immutable ByteArray
+		return match conformer 'conformer'
+			named(name) gives name
+			instance(id) gives signatures.genericInstanceBaseName(id)
+		end 'conformer'
+	end 'baseOfConformer'
+
+	function grows(row GenericInstanceId) returns bool
+		return self.growing.contains(row)
+	end 'grows'
+
+	function derivationOf(signatures ProgramSignatures, interfaceName ByteArray, conformer ShareConformer) returns BindingDerivation
+		let base = BindingChain.baseOfConformer(signatures, conformer: conformer)
+
+		if not self.declares(base, interfaceName: interfaceName) 'noBindingsToDerive'
+			return BindingDerivation.nothingToDerive
+		end 'noBindingsToDerive'
+
+		if not self.pairs.contains(joinedKey(String.from(base), tail: String.from(interfaceName))) 'aPairReachedThroughATypeParameterBinding'
+			return BindingDerivation.keyed(joinedKey(String.from(interfaceName), tail: String.from(signatures.shareConformerKey(conformer))))
+		end 'aPairReachedThroughATypeParameterBinding'
+
+		return match conformer 'conformer'
+			named(name) gives BindingDerivation.keyed(joinedKey(String.from(interfaceName), tail: String.from(name)))
+			instance(id) gives BindingDerivation.keyed(joinedKey(String.from(interfaceName), tail: String.from(self.flow.keyOf(signatures, id: id))))
+		end 'conformer'
+	end 'derivationOf'
+
+	function declares(base ByteArray, interfaceName ByteArray) returns bool
+		let decls = try self.declsByType.get(base) otherwise return false
+
+		for decl in decls 'eachDeclaration'
+			for entry in decl.interfaces 'eachEntry'
+				if entry.interfaceName.equals(interfaceName) 'theInterface'
+					return true
+				end 'theInterface'
+			end 'eachEntry'
+		end 'eachDeclaration'
+
+		return false
+	end 'declares'
+end 'BindingChain'

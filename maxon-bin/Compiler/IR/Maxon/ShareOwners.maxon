@@ -1,0 +1,211 @@
+union ShareEntry
+	conversion(interfaceName immutable ByteArray, instance GenericInstanceId, site ShareConversionSite)
+	door(site ShareDoorSite, subject MaxonType)
+end 'ShareEntry'
+
+typealias ShareEntryArray = Array with ShareEntry
+typealias ShareEntriesByOwner = Map with (ByteArray, ShareEntryArray)
+
+type ResolvedConversion
+	let interfaceName as immutable ByteArray
+	let instance as GenericInstanceId
+	let site as ShareConversionSite
+
+	static function create(interfaceName ByteArray, instance GenericInstanceId, site ShareConversionSite) returns Self
+		return Self{interfaceName: interfaceName, instance: instance, site: site}
+	end 'create'
+end 'ResolvedConversion'
+
+typealias ResolvedConversionArray = Array with ResolvedConversion
+
+type ResolvedDoor
+	let site as ShareDoorSite
+	let subject as MaxonType
+
+	static function create(site ShareDoorSite, subject MaxonType) returns Self
+		return Self{site: site, subject: subject}
+	end 'create'
+end 'ResolvedDoor'
+
+typealias ResolvedDoorArray = Array with ResolvedDoor
+
+typealias AnchorByBase = Map with (ByteArray, immutable ByteArray)
+typealias BaseQueue = Array with immutable ByteArray
+
+type OwnerClosure
+	let project as Project
+	let signatures as ProgramSignatures
+	let entries as ShareEntriesByOwner
+	let flow as DependenceFlow
+	let relevant as AnchorByBase
+	let owners as GenericInstanceIdArray
+	let seenOwners as ClonerSet
+	let conversions as ResolvedConversionArray
+	let doors as ResolvedDoorArray
+
+	static function create(project Project, signatures ProgramSignatures, entries ShareEntriesByOwner) returns Self
+		let flow = DependenceFlow.create(signatures, policy: MentionPolicy.shareReached(FunctionMentions.counted), rows: signatures.openInstancesByOwner())
+		let closure = Self{project: project, signatures: signatures, entries: entries, flow: flow, relevant: AnchorByBase.create(), owners: GenericInstanceIdArray.create(0), seenOwners: ClonerSet.create(), conversions: ResolvedConversionArray.create(0), doors: ResolvedDoorArray.create(0)}
+		closure.settleRelevance()
+		closure.settleDependence()
+		return closure
+	end 'create'
+
+	function settleRelevance()
+		let queue = BaseQueue.create(0)
+
+		for (base, _) in self.entries 'eachEntryOwner'
+			self.relevant.upsert(base, value: base)
+			queue.push(base)
+		end 'eachEntryOwner'
+
+		var head = 0 as ElementIndex
+
+		while head < queue.count() 'eachBase'
+			let current = try queue.get(head) otherwise panic("OwnerClosure.settleRelevance: queue.get OOB at {head}")
+			head = head + 1
+			let anchor = try self.relevant.get(current) otherwise panic("OwnerClosure.settleRelevance: '{String.from(current)}' is queued only once it is relevant")
+
+			for owner in self.flow.denotersOf(current) 'eachDenoter'
+				if not self.relevant.contains(owner) 'notYetRelevant'
+					self.relevant.upsert(owner, value: anchor)
+					queue.push(owner)
+				end 'notYetRelevant'
+			end 'eachDenoter'
+		end 'eachBase'
+	end 'settleRelevance'
+
+	function settleDependence()
+		for (base, filed) in self.entries 'eachEntryOwner'
+			for entry in filed 'eachEntry'
+				self.noteEntryDependence(entry, base: base)
+			end 'eachEntry'
+		end 'eachEntryOwner'
+
+		self.flow.settle(self.signatures)
+	end 'settleDependence'
+
+	function noteEntryDependence(entry ShareEntry, base ByteArray)
+		match entry 'entry'
+			conversion(interfaceName, instance, _) then self.noteConversionDependence(interfaceName, instance: instance, base: base)
+			door(_, subject) then self.flow.seed(base, from: self.signatures.shareReachOfType(subject))
+		end 'entry'
+	end 'noteEntryDependence'
+
+	function noteConversionDependence(interfaceName ByteArray, instance GenericInstanceId, base ByteArray)
+		let conformerType = MaxonType.genericInstance(instance)
+		self.flow.seed(base, from: self.signatures.shareReachOfType(conformerType))
+
+		if self.signatures.interfaceHoldsAnAssociatedType(interfaceName) 'bindingsStandAtTheParameters'
+			self.flow.seed(base, from: self.signatures.typeMentionedParameters(conformerType, policy: self.flow.policy))
+		end 'bindingsStandAtTheParameters'
+	end 'noteConversionDependence'
+
+	function registerOwner(id GenericInstanceId, key immutable ByteArray)
+		self.seenOwners.insert(key)
+		self.owners.push(id)
+	end 'registerOwner'
+
+	function seedOwnerInstances()
+		for (base, _) in self.relevant 'eachRelevantBase'
+			for id in self.signatures.builtInstancesOfBase(base) 'eachBuilt'
+				let key = self.flow.keyOf(self.signatures, id: id)
+
+				if not self.seenOwners.contains(key) 'aNewRoot'
+					self.registerOwner(id, key: key)
+				end 'aNewRoot'
+			end 'eachBuilt'
+		end 'eachRelevantBase'
+	end 'seedOwnerInstances'
+
+	function run() throws CompileError
+		try self.requireFiniteInstantiation()
+		self.seedOwnerInstances()
+		var head = 0 as ElementIndex
+
+		while head < self.owners.count() 'eachOwnerInstance'
+			self.processOwner(head)
+			head = head + 1
+		end 'eachOwnerInstance'
+	end 'run'
+
+	function requireFiniteInstantiation() throws CompileError
+		let reached = OpenRowLog.create()
+
+		for (owner, rows) in self.flow.rows.byOwner 'eachOwner'
+			for row in rows 'eachDenotedInstance'
+				if self.relevant.contains(self.signatures.genericInstanceBaseName(row)) 'anInstanceTheVerdictReaches'
+					reached.file(owner, row: row)
+				end 'anInstanceTheVerdictReaches'
+			end 'eachDenotedInstance'
+		end 'eachOwner'
+
+		let growing = self.flow.growingAmong(self.signatures, reachedRows: reached)
+
+		if growing.isEmpty() 'everyChainIsFinite'
+			return
+		end 'everyChainIsFinite'
+
+		let row = try growing.ordered.get(0) otherwise panic("OwnerClosure.requireFiniteInstantiation: a non-empty growing set holds a first row")
+		let owner = try self.signatures.instanceParameterOwnerName(row) otherwise panic("OwnerClosure.requireFiniteInstantiation: '{String.from(self.signatures.instanceDisplayName(row))}' closes a growing cycle and so builds on a type parameter")
+		let anchor = self.anchorOf(owner)
+		reportPositioned(self.project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("sharing is judged at every instance the program builds of '{String.from(owner)}', and '{String.from(owner)}' names '{String.from(self.signatures.instanceDisplayName(row))}', an instance whose type arguments nest its own type parameters deeper — so the instances a share door must judge are an unbounded chain of ever-deeper instances. {UnboundedChainCure}"), line: anchor.line, column: anchor.column, filePath: anchor.filePath)
+		throw CompileError.compileError
+	end 'requireFiniteInstantiation'
+
+	function ownerAt(index ElementIndex) returns GenericInstanceId
+		return try self.owners.get(index) otherwise panic("OwnerClosure.ownerAt: owner instance {index} is outside the {self.owners.count()} this closure derived")
+	end 'ownerAt'
+
+	function processOwner(index ElementIndex)
+		let owner = self.ownerAt(index)
+		let base = self.signatures.genericInstanceBaseName(owner)
+
+		if let filed = try self.entries.get(base) 'ownsEntries'
+			for entry in filed 'eachEntry'
+				self.resolveEntry(entry, through: owner)
+			end 'eachEntry'
+		end 'ownsEntries'
+
+		if let rows = try self.flow.rows.byOwner.get(base) 'denotesInstances'
+			for row in rows 'eachDenotedInstance'
+				if self.relevant.contains(self.signatures.genericInstanceBaseName(row)) 'anInstanceTheVerdictReaches'
+					self.deriveOwner(genericInstanceIdOf(self.signatures.substituteThroughInstance(MaxonType.genericInstance(row), id: owner)))
+				end 'anInstanceTheVerdictReaches'
+			end 'eachDenotedInstance'
+		end 'denotesInstances'
+	end 'processOwner'
+
+	function resolveEntry(entry ShareEntry, through GenericInstanceId)
+		match entry 'entry'
+			conversion(interfaceName, instance, site) then self.conversions.push(ResolvedConversion.create(interfaceName, instance: genericInstanceIdOf(self.signatures.substituteThroughInstance(MaxonType.genericInstance(instance), id: through)), site: site))
+			door(site, subject) then self.doors.push(ResolvedDoor.create(site, subject: self.signatures.substituteThroughInstance(subject, id: through)))
+		end 'entry'
+	end 'resolveEntry'
+
+	function deriveOwner(resolved GenericInstanceId)
+		if not self.signatures.instanceArgsAreFullyConcrete(resolved) 'stillParametric'
+			panic("OwnerClosure.deriveOwner: '{String.from(self.signatures.instanceDisplayName(resolved))}' resolves an instance one of the owner instances denotes and still names a type parameter — a body spells its own owner's parameters, which a concrete owner instance fixes")
+		end 'stillParametric'
+
+		let key = self.flow.keyOf(self.signatures, id: resolved)
+
+		if self.seenOwners.contains(key) 'alreadyJudged'
+			return
+		end 'alreadyJudged'
+
+		self.registerOwner(resolved, key: key)
+	end 'deriveOwner'
+
+	function anchorOf(base ByteArray) returns ShareConversionSite
+		let owner = try self.relevant.get(base) otherwise panic("OwnerClosure.anchorOf: '{String.from(base)}' is a base the closure derived an instance of, and only a relevant base is")
+		let filed = try self.entries.get(owner) otherwise panic("OwnerClosure.anchorOf: '{String.from(owner)}' anchors a relevant base and owns an entry")
+
+		let first = try filed.get(0) otherwise panic("OwnerClosure.anchorOf: '{String.from(owner)}' owns no entry")
+
+		return match first 'entry'
+			conversion(_, _, site) gives site
+			door(site, _) gives ShareConversionSite.create(site.line, column: site.column, filePath: site.filePath)
+		end 'entry'
+	end 'anchorOf'
+end 'OwnerClosure'

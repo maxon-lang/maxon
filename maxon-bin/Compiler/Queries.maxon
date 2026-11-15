@@ -737,6 +737,7 @@ function closeDeclarationFold(signatures ProgramSignatures)
 
 	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
 	signatures.settleFunctionBackedEnumCases()
+	signatures.growthMemo.seal()
 end 'closeDeclarationFold'
 
 function declarationsFoldedUserFirst(project Project, handedOver DiscoveredTokenFacts) returns ProgramSignatures throws CompileError
@@ -913,6 +914,10 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 	let diagnosticsBefore = project.diagnostics.count()
 	let start = try libraryBaselineFor(project, partition: partition)
 	let signatures = start.signatures
+
+	// The baseline arrives sealed, and a growth answer memoized while the remainder folds would miss
+	// the remainder's declarations.
+	signatures.growthMemo.reopen()
 	try restoreDeclTokenStreams(project, signatures: signatures, streamed: start.streamed, remainder: start.remainder)
 
 	// Before the remainder folds: the deferred files declare generic function templates, and their
@@ -4675,7 +4680,7 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 		serviceReplyInstanceUnknown(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
 		spawnStartRequiresTry(explanation, _, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionRequiresTry, message: explanation, line: line, column: column, filePath: path)
 		genericArgumentCountRefused(code, explanation, line, column) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path)
-		registryRefused(code, explanation, line, column, note) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path).withNote(note)
+		registryRefused(code, explanation, line, column, notes) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path).withNotes(notes)
 		duplicateDeclaration(explanation, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: explanation, line: line, column: column, filePath: path)
 	end 'kind'
 end 'parseErrorDiagnostic'

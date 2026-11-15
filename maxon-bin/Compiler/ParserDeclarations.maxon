@@ -6302,7 +6302,7 @@ extension Parser
 		let types = RequirementTypeArray.create(0)
 
 		if self.at(TokenKind.leftParen) 'delimited'
-			_ = try self.parseConformanceWithArgs(interfaceName, spellings: NameRoster.create(0), types: types, owner: ConformanceOwner.unchecked)
+			_ = try self.parseConformanceWithArgs(interfaceName, spellings: NameRoster.create(0), types: types, sites: ConformanceBindingSiteArray.create(0), owner: ConformanceOwner.unchecked)
 			return types
 		end 'delimited'
 
@@ -7231,7 +7231,7 @@ extension Parser
 			end 'notARegistryCall'
 
 			let keyTok = self.tokenAt(i as ElementIndex)
-			throw SourceParseError.registryRefused(ErrorCode.registryReachedFromGlobalInitializer, explanation: registryReachedFromInitializerMessage(keyTok.value, member: self.tokenAt(i + 2).value, globalName: decl.name), line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.registryReachedFromGlobalInitializer, explanation: registryReachedFromInitializerMessage(keyTok.value, member: self.tokenAt(i + 2).value, globalName: decl.name), line: keyTok.line, column: keyTok.column, notes: PositionedNoteArray.create(0))
 		end 'eachToken'
 	end 'requireInitializerNamesNoRegistry'
 
@@ -7242,7 +7242,7 @@ extension Parser
 
 		let declaration = try self.signatures.winningDefaultOf(self.enclosingTypeName()) otherwise return
 		let key = String.from(self.enclosingTypeName())
-		throw SourceParseError.registryRefused(ErrorCode.registryKeyDeclaresARegistryMember, explanation: "`{key}` is a `default` key, so `{key}.{String.from(RegistryCurrentMemberName)}` and `{key}.{String.from(RegistryRegisterMemberName)}` are the registry's — its own static `{String.from(nameTok.value)}` would be hidden; rename it", line: nameTok.line, column: nameTok.column, note: DiagnosticNote.at("the `default` for `{key}`", line: declaration.keyLine, column: declaration.keyColumn, filePath: declaration.declFilePath))
+		throw SourceParseError.registryRefused(ErrorCode.registryKeyDeclaresARegistryMember, explanation: "`{key}` is a `default` key, so `{key}.{String.from(RegistryCurrentMemberName)}` and `{key}.{String.from(RegistryRegisterMemberName)}` are the registry's — its own static `{String.from(nameTok.value)}` would be hidden; rename it", line: nameTok.line, column: nameTok.column, notes: singleNote(PositionedNote.create("the `default` for `{key}`", line: declaration.keyLine, column: declaration.keyColumn, filePath: declaration.declFilePath)))
 	end 'requireNoRegistryMemberOnAKey'
 
 	function registryCallAt(index ElementIndex) returns bool
@@ -7262,7 +7262,7 @@ extension Parser
 		let keyTok = self.tokenAt(self.pos + 1)
 
 		if let kept = try self.signatures.keptDefaultBeside(declaration) 'declaredTwice'
-			throw SourceParseError.registryRefused(ErrorCode.registryDuplicateDefault, explanation: "two `default` declarations for `{String.from(declaration.key)}` in one program — delete one of them", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.at("the other `default` for `{String.from(declaration.key)}`", line: kept.keyLine, column: kept.keyColumn, filePath: kept.declFilePath))
+			throw SourceParseError.registryRefused(ErrorCode.registryDuplicateDefault, explanation: "two `default` declarations for `{String.from(declaration.key)}` in one program — delete one of them", line: keyTok.line, column: keyTok.column, notes: singleNote(PositionedNote.create("the other `default` for `{String.from(declaration.key)}`", line: kept.keyLine, column: kept.keyColumn, filePath: kept.declFilePath)))
 		end 'declaredTwice'
 
 		let returnType = try self.defaultKeyValueType(declaration, keyTok: keyTok)
@@ -7294,7 +7294,7 @@ extension Parser
 		let targetIndex = spawnTargetIndexIn(self.tokens, spawnIndex: declaration.exprStart)
 
 		if not tokenIsTheSpawnKeyword(spawnTok) or self.dottedChainLengthAt(targetIndex) == 0 or not self.chainCallFollowsAt(targetIndex) 'buildsNoService'
-			throw SourceParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` builds no service — `{String.from(declaration.key)}` is an interface, so its default must `spawn` a type that implements it", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` builds no service — `{String.from(declaration.key)}` is an interface, so its default must `spawn` a type that implements it", line: keyTok.line, column: keyTok.column, notes: PositionedNoteArray.create(0))
 		end 'buildsNoService'
 
 		let spawnedType = (try self.spawnedTypeAt(targetIndex, spawnTok: spawnTok)).typeName()
@@ -7303,7 +7303,7 @@ extension Parser
 			return
 		end 'implementsIt'
 
-		throw SourceParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` spawns `{String.from(spawnedType)}`, which does not implement `{String.from(declaration.key)}` — declare `type {String.from(spawnedType)} implements {String.from(declaration.key)}`, or spawn a type that does", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.none)
+		throw SourceParseError.registryRefused(ErrorCode.registryDefaultServiceDoesNotImplementKey, explanation: "the `default` for `{String.from(declaration.key)}` spawns `{String.from(spawnedType)}`, which does not implement `{String.from(declaration.key)}` — declare `type {String.from(spawnedType)} implements {String.from(declaration.key)}`, or spawn a type that does", line: keyTok.line, column: keyTok.column, notes: PositionedNoteArray.create(0))
 	end 'requireDefaultSpawnsAnImplementer'
 
 	function requireShareableRegistryValue(typeName ByteArray, anchor Token) throws SourceParseError
@@ -7315,7 +7315,7 @@ extension Parser
 			closed or
 			walkedBy or
 			walkedThroughWitness then return
-			refused(noun) then throw self.unshareableRegistryValueError(typeName, reason: "it is {noun}", anchor: anchor)
+			refused(noun) then throw self.shareRefusalError(String.from(typeName), door: ShareDoor.registryValue, reason: "it is {noun}", anchor: anchor)
 		end 'walk'
 	end 'requireShareableRegistryValue'
 
@@ -7341,7 +7341,7 @@ extension Parser
 			end 'aHandle'
 		end 'aNamedType'
 
-		throw self.unshareableRegistryValueError(self.displayTypeNameOf(tag, nameId: typeNameIdOf(element)).toByteArray(), reason: "it is neither a record, a `String`, a handle nor a scalar", anchor: baseTok)
+		throw self.shareRefusalError(self.displayTypeNameOf(tag, nameId: typeNameIdOf(element)), door: ShareDoor.registryValue, reason: "it is neither a record, a `String`, a handle nor a scalar", anchor: baseTok)
 	end 'requireShareableSharedValue'
 
 	function requireRegistryValueDeclared(typeName ByteArray, anchor Token) throws SourceParseError
@@ -7351,9 +7351,9 @@ extension Parser
 		end 'declared'
 	end 'requireRegistryValueDeclared'
 
-	function unshareableRegistryValueError(typeName ByteArray, reason String, anchor Token) returns SourceParseError
-		return SourceParseError.registryRefused(ErrorCode.registryValueNotShareable, explanation: "`{String.from(typeName)}` cannot be a registry value or a `SharedValue`: {reason} — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches", line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
-	end 'unshareableRegistryValueError'
+	function shareRefusalError(subject String, door ShareDoor, reason String, anchor Token) returns SourceParseError
+		return SourceParseError.registryRefused(ErrorCode.registryValueNotShareable, explanation: shareRefusalMessage(subject, door: door, reason: reason, route: ShareRefusalRoute.ownGraph), line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
+	end 'shareRefusalError'
 
 	function parseDefaultInitializer(declaration DefaultDeclaration, returnType MaxonType) throws SourceParseError
 		let name = defaultInitializerName(declaration.key)
@@ -7377,6 +7377,7 @@ extension Parser
 
 		try self.requireDefaultValueEnded(declaration.exprEnd)
 
+		self.recordShareDoor(ShareDoor.registryValue, subject: ShareSubject.declaredReturn, line: declaration.keyLine, column: declaration.keyColumn)
 		self.publishExistentialInstances(initializer)
 		initializer.valueMintedSole = self.mintedSoleColumn()
 		self.publishDebugLocals(initializer)
@@ -7429,7 +7430,7 @@ extension Parser
 			return try self.emitServiceRegistration(slot, handleType: valueType, given: given, replacement: replacement, argTok: argTok, range: range)
 		end 'aServiceRegister'
 
-		return try self.emitSharedValuePublish(slot, valueType: valueType, given: given, replacement: replacement, publishedTo: key, argTok: argTok, range: range)
+		return try self.emitSharedValuePublish(slot, valueType: valueType, given: given, replacement: replacement, publishedTo: key, shared: ShareDoor.registered(key), argTok: argTok, range: range)
 	end 'parseRegistryCall'
 
 	// Recorded before the `globalAddr` it keys: a site is filed under the op the next append creates,
@@ -7504,8 +7505,8 @@ extension Parser
 		return handle
 	end 'registryHandleOf'
 
-	function emitSharedValuePublish(holder ValueId, valueType MaxonType, given ValueId, replacement RegistryReplacement, publishedTo ByteArray, argTok Token, range SourceRange) returns ValueId throws SourceParseError
-		let published = try self.publishableValue(given, valueType: valueType, key: publishedTo, placeName: RegistryPublishMemberName, argTok: argTok)
+	function emitSharedValuePublish(holder ValueId, valueType MaxonType, given ValueId, replacement RegistryReplacement, publishedTo ByteArray, shared ShareDoor, argTok Token, range SourceRange) returns ValueId throws SourceParseError
+		let published = try self.publishableValue(given, valueType: valueType, key: publishedTo, placeName: RegistryPublishMemberName, shared: shared, argTok: argTok)
 
 		return match replacement 'replacement'
 			unconditional gives self.emitRuntimeCall(SharedValuePublishName, args: twoArgs(holder, second: published), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -7513,10 +7514,12 @@ extension Parser
 		end 'replacement'
 	end 'emitSharedValuePublish'
 
-	function publishableValue(given ValueId, valueType MaxonType, key ByteArray, placeName ByteArray, argTok Token) returns ValueId throws SourceParseError
+	function publishableValue(given ValueId, valueType MaxonType, key ByteArray, placeName ByteArray, shared ShareDoor, argTok Token) returns ValueId throws SourceParseError
 		try self.requireManagedValueMatches(valueType, isString: tagIsByteRecord(maxonTypeTag(valueType)), value: given, placeDoor: FunctionTypeDoor.payload, placeName: placeName, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, voice: SlotMismatchVoice.containerElementArgument, anchor: argTok)
 		try self.requirePublishedValueNamedOnce(given, key: key, argTok: argTok)
-		return try self.handOff(SoleHandedOffPosition, value: given, door: ThreadHandOffDoor.publish(key), anchor: argTok)
+		let handedOff = try self.handOff(SoleHandedOffPosition, value: given, door: ThreadHandOffDoor.publish(shared), anchor: argTok)
+		self.recordShareDoor(shared, subject: ShareSubject.value(given), line: argTok.line, column: argTok.column)
+		return handedOff
 	end 'publishableValue'
 
 	// ⚠ The ownership proof in `handOffTakeOf` reads a fresh-return mark that survives an
@@ -7599,7 +7602,7 @@ extension Parser
 		let replacement = try self.parseRegistryReplacement(func)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		try self.requireRegistryResultMatchesReplacement(replacement, resultUsed: resultUsed, memberTok: memberTok)
-		return try self.emitSharedValuePublish(holder, valueType: valueType, given: given, replacement: replacement, publishedTo: self.internedName(typeNameIdOf(valueType)), argTok: argTok, range: SourceRange.between(baseTok, last: rparenTok))
+		return try self.emitSharedValuePublish(holder, valueType: valueType, given: given, replacement: replacement, publishedTo: self.internedName(typeNameIdOf(valueType)), shared: ShareDoor.publish, argTok: argTok, range: SourceRange.between(baseTok, last: rparenTok))
 	end 'dispatchOnSharedValue'
 
 	function sharedValueElementType(giid GenericInstanceId) returns MaxonType
@@ -7621,7 +7624,7 @@ extension Parser
 		let range = SourceRange.between(typeTok, last: rparenTok)
 		let valueType = self.sharedValueElementType(giid)
 
-		let published = try self.publishableValue(given, valueType: valueType, key: typeTok.value, placeName: RegistryCreateMemberName, argTok: argTok)
+		let published = try self.publishableValue(given, valueType: valueType, key: typeTok.value, placeName: RegistryCreateMemberName, shared: ShareDoor.publish, argTok: argTok)
 
 		match self.signatures.registryValueKindOf(self.signatures.sharedValueElementOf(giid), readerFilePath: self.job.path) 'kind'
 			service then panic("parseSharedValueCreate: a `SharedValue` holds a value, and `registryValueKindOf` answers `service` for no value type")

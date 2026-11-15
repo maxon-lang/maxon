@@ -840,10 +840,10 @@ end 'isOpaqueElementCopyCallee'
 // shared generic body owns the value (a `push`/forward feed parameter left live on some path), but the
 // destructor lives in the enclosing instance's layout descriptor. NOT `__managed_`-prefixed (it is a single value,
 // not an array operation), but `__`-prefixed so `isCompilerInternalCallee` routes its call and the
-// print skip (`isRuntimeFunction`) hides its body. Installed under its OWN `usesDropTypeParam` bit
-// (`installDropTypeParamRuntime`), NOT `usesManagedMemory`: a bare opaque `T` FIELD reassignment
+// print skip (`isRuntimeFunction`) hides its body. Installed under its OWN `TypeParamEntry.drop` use
+// (`installTypeParamRuntime`), NOT `usesManagedMemory`: a bare opaque `T` FIELD reassignment
 // emits it in an ARRAY-FREE generic struct, so gating its install on the array floor would leave
-// that call unlinked. An opaque-array program sets the bit too
+// that call unlinked. An opaque-array program uses it too
 // (its move-out / feed drops route through it), so ONE install covers both, exactly once.
 export let DropTypeParamName = b"__drop_type_param"
 
@@ -878,13 +878,105 @@ export let ReleaseTypeParamName = b"__release_type_param"
 // where this frame is the value's only owner.
 export let ReclaimTypeParamName = b"__reclaim_type_param"
 
+export let CopyTypeParamName = b"__copy_type_param"
+
+export enum TypeParamEntry
+	drop
+	retain
+	release
+	reclaim
+	copy
+end 'TypeParamEntry'
+
+let TypeParamEntryRoster = TypeParamEntry.allCases
+
+export typealias TypeParamEntrySet = Set with TypeParamEntry
+
+export union TypeParamEntryCallee
+	entry(entry TypeParamEntry)
+	otherCallee
+end 'TypeParamEntryCallee'
+
+function typeParamEntryName(entry TypeParamEntry) returns immutable ByteArray
+	return match entry 'entry'
+		drop gives DropTypeParamName
+		retain gives RetainTypeParamName
+		release gives ReleaseTypeParamName
+		reclaim gives ReclaimTypeParamName
+		copy gives CopyTypeParamName
+	end 'entry'
+end 'typeParamEntryName'
+
+export function typeParamEntryWord(entry TypeParamEntry) returns ByteOffset
+	return match entry 'entry'
+		drop gives LAYOUT_OFFSET_DESTROY_FUNC
+		retain or
+		release or
+		reclaim gives LAYOUT_OFFSET_RETAIN_FUNC
+		copy gives LAYOUT_OFFSET_COPY_FUNC
+	end 'entry'
+end 'typeParamEntryWord'
+
+export function typeParamEntryAction(entry TypeParamEntry) returns RecordGatedAction
+	return match entry 'entry'
+		drop gives RecordGatedAction.callThroughWord
+		retain or
+		copy gives RecordGatedAction.retainThroughWord
+		release gives RecordGatedAction.destroyWhenRetainable
+		reclaim gives RecordGatedAction.destroyWhenUnretained
+	end 'entry'
+end 'typeParamEntryAction'
+
+function typeParamEntryReleases(entry TypeParamEntry) returns bool
+	return match entry 'entry'
+		drop or
+		release or
+		reclaim gives true
+		retain or
+		copy gives false
+	end 'entry'
+end 'typeParamEntryReleases'
+
+function typeParamEntryTakesAReference(entry TypeParamEntry) returns bool
+	return match entry 'entry'
+		retain or
+		copy gives true
+		drop or
+		release or
+		reclaim gives false
+	end 'entry'
+end 'typeParamEntryTakesAReference'
+
+export function typeParamEntryCalleeOf(callee ByteArray) returns TypeParamEntryCallee
+	for entry in TypeParamEntryRoster 'eachEntry'
+		if callee.equals(typeParamEntryName(entry)) 'thisEntry'
+			return TypeParamEntryCallee.entry(entry)
+		end 'thisEntry'
+	end 'eachEntry'
+
+	return TypeParamEntryCallee.otherCallee
+end 'typeParamEntryCalleeOf'
+
 export function dropsAnOpaqueTypeParamValue(callee ByteArray) returns bool
-	return callee.equals(DropTypeParamName) or callee.equals(ReleaseTypeParamName) or callee.equals(ReclaimTypeParamName)
+	return match typeParamEntryCalleeOf(callee) 'callee'
+		entry(entry) gives typeParamEntryReleases(entry)
+		otherCallee gives false
+	end 'callee'
 end 'dropsAnOpaqueTypeParamValue'
 
 export function isTypeParamOwnershipCallee(callee ByteArray) returns bool
-	return dropsAnOpaqueTypeParamValue(callee) or callee.equals(RetainTypeParamName)
+	return match typeParamEntryCalleeOf(callee) 'callee'
+		entry gives true
+		otherCallee gives false
+	end 'callee'
 end 'isTypeParamOwnershipCallee'
+
+export function takesAReferenceThroughTheTypeParamDescriptor(callee ByteArray) returns bool
+	return match typeParamEntryCalleeOf(callee) 'callee'
+		entry(entry) gives typeParamEntryTakesAReference(entry)
+		otherCallee gives false
+	end 'callee'
+end 'takesAReferenceThroughTheTypeParamDescriptor'
 
 // ⭐ **THE EXISTENTIAL'S DROP.** `__drop_existential(witness, value)` releases
 // the VALUE half of a fat pointer through the destructor its WITNESS table names
@@ -1352,50 +1444,16 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	verifyThrowingAccessorsMatchPredicate(module)
 end 'installManagedMemoryRuntime'
 
-// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED DROP** (`__drop_type_param`) —
-// its OWN install, gated on `usesDropTypeParam` rather than `usesManagedMemory`. Both an opaque-ARRAY program (a
-// `.pop()` move-out / a consumed feed left live) and an array-FREE bare-field reassign (`self.saved = next`)
-// set the bit through `recordCallUsage`, so this installs the ONE `__drop_type_param` for either — exactly
-// once, since the flag is a single bool and this is its sole install site. Appended already-lowered after the
-// pipeline, like the rest of the runtime floor.
-export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesDropTypeParam 'noDrop'
-		return
-	end 'noDrop'
-
-	buildRecordGatedAction(module, symbolName: DropTypeParamName, wordOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.callThroughWord)
-end 'installDropTypeParamRuntime'
-
-// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN** (`__retain_type_param`) — its own bit for
-// `installDropTypeParamRuntime`'s reason: a body that only STORES a borrowed opaque `T` (`MapIterator.current`
-// building its `(Key, Value)` entry) never drops one, and a body that only drops a consumed feed never stores
-// one, so neither bit implies the other.
-export function installRetainTypeParamRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesRetainTypeParam 'noRetain'
-		return
-	end 'noRetain'
-
-	buildRecordGatedAction(module, symbolName: RetainTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.retainThroughWord)
-end 'installRetainTypeParamRuntime'
-
-export function installReleaseTypeParamRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesReleaseTypeParam 'noRelease'
-		return
-	end 'noRelease'
-
-	buildRecordGatedAction(module, symbolName: ReleaseTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.destroyWhenRetainable)
-end 'installReleaseTypeParamRuntime'
-
-export function installReclaimTypeParamRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesReclaimTypeParam 'noReclaim'
-		return
-	end 'noReclaim'
-
-	buildRecordGatedAction(module, symbolName: ReclaimTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.destroyWhenUnretained)
-end 'installReclaimTypeParamRuntime'
+export function installTypeParamRuntime(module StdModule, usage RuntimeUsage)
+	for entry in TypeParamEntryRoster 'eachEntry'
+		if usage.typeParamEntries.contains(entry) 'entryReferenced'
+			buildRecordGatedAction(module, symbolName: typeParamEntryName(entry), wordOffset: typeParamEntryWord(entry), action: typeParamEntryAction(entry))
+		end 'entryReferenced'
+	end 'eachEntry'
+end 'installTypeParamRuntime'
 
 // ⭐ **INSTALL `__drop_existential`** — its own bit for
-// `installDropTypeParamRuntime`'s reason: an interface-typed FIELD drops through it in a program that
+// `installTypeParamRuntime`'s reason: an interface-typed FIELD drops through it in a program that
 // instantiates no generic at all, so gating it on the descriptor drop's bit would leave that call unlinked.
 export function installDropExistentialRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesDropExistential 'noDrop'
@@ -1464,7 +1522,7 @@ end 'verifyThrowingAccessorsMatchPredicate'
 // ⭐ **WHAT A RECORD-GATED ENTRY DOES ONCE THE WORD IS NON-ZERO** — the one thing its instances differ in. It
 // rides a union rather than a bool because the actions also differ in what they take and RETURN, and a bool
 // plus a second parameter would be one fact spelled twice.
-union RecordGatedAction
+export union RecordGatedAction
 	// CALL the loaded word on `value` with a `callIndirect` — `__drop_type_param`, `__drop_existential`
 	// (the destroy) and `__mm_share_existential` (the share walk). A void `(i64, i64) -> void`, so the taken
 	// path falls into the shared exit.
@@ -1479,7 +1537,7 @@ union RecordGatedAction
 	destroyWhenUnretained
 
 	// Take a SECOND owner of `value` through the loaded word with a `callIndirect` — `__retain_existential`,
-	// `__retain_type_param`, `__mm_clone_existential`.
+	// `__retain_type_param`, `__copy_type_param`, `__mm_clone_existential`.
 	// A `(i64, i64) -> i64` that ANSWERS WITH WHAT THE WORD HANDED BACK, which is the whole difference: the
 	// co-owner may be a DIFFERENT record from `value` (a `__str_clone` of an immortal `.rdata` literal, see
 	// `IrInterface.WitnessRetainFuncOffset`) and the caller must store what it was given, not what it gave.
@@ -1493,7 +1551,7 @@ end 'RecordGatedAction'
 // `destroyWhenUnretained`, which acts only on a zero word. `value` is a LIVE owner (or a live
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
-// **EIGHT ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+// **NINE ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
 //   • `__drop_type_param(descriptor, value)` — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
@@ -1515,13 +1573,15 @@ end 'RecordGatedAction'
 //     `retainFunc@64` and the destroying one `destroyFunc@40` (see `ReleaseTypeParamName`).
 //   • `__reclaim_type_param(descriptor, value)` — the same two words with the retain gate inverted:
 //     the feed drop guard's destroy of a value no store took (see `ReclaimTypeParamName`).
+//   • `__copy_type_param(descriptor, value) -> value'` — a generic type's `clone()` copying an
+//     opaque `T` slot. The record is the LAYOUT DESCRIPTOR and the word is `copyFunc@32`.
 //   • `__mm_share_existential(witness, value)` — a value held at an interface type walked before it crosses to
 //     another green thread, through the table's `shareWalkFunc@24`.
 //   • `__mm_clone_existential(witness, value) -> value'` — the DEEP COPY of an interface-typed field's value
 //     half, through the same table's `cloneFunc@40`.
 //
-// All eight are "a per-type fact nobody can name statically, read out of a record at run time", so
-// one emitter builds all eight: the element-destructor ABI (`emitElementDestructorCall`) and the
+// All nine are "a per-type fact nobody can name statically, read out of a record at run time", so
+// one emitter builds all nine: the element-destructor ABI (`emitElementDestructorCall`) and the
 // zero-means-nothing-to-do convention are then stated once and cannot drift between them.
 //
 // ⚠ **THE RETAIN'S TAKEN PATH RETURNS FROM `doact` RATHER THAN FALLING INTO `done`**, so the two

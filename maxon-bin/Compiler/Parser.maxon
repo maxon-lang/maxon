@@ -1953,7 +1953,7 @@ export union SourceParseError implements Error
 	// `spawn` is exactly the site where the fact is still present.
 	serviceReplyInstanceUnknown(explanation String, line LineNumber, column ColumnNumber)
 
-	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
+	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, notes PositionedNoteArray)
 	duplicateDeclaration(explanation String, line LineNumber, column ColumnNumber)
 
 	// These four render exactly as `unsupported`, `serviceNotASpawnTarget`, `serviceArgumentNotUnique`
@@ -6936,32 +6936,34 @@ end 'PlaceArgument'
 
 typealias PlaceArgumentArray = Array with PlaceArgument
 
-union PlaceArgumentColumn
-	unwritten
-	entries(places PlaceArgumentArray)
-end 'PlaceArgumentColumn'
+type AppendColumn uses Entry
+	typealias Entries = Array with Entry
 
-function withPlaceArgument(column PlaceArgumentColumn, place PlaceArgument) returns PlaceArgumentColumn
-	match column 'state'
-		unwritten then return PlaceArgumentColumn.entries(singlePlaceArgument(place))
-		entries(places) then places.push(place)
-	end 'state'
+	export var entries as Entries
+	var written as bool
 
-	return column
-end 'withPlaceArgument'
+	static function unwritten() returns Self
+		return Self{entries: Entries.create(0), written: false}
+	end 'unwritten'
 
-function singlePlaceArgument(place PlaceArgument) returns PlaceArgumentArray
-	let places = PlaceArgumentArray.create(1, zeroed: false)
-	places.push(place)
-	return places
-end 'singlePlaceArgument'
+	function add(entry Entry)
+		if not self.written 'theFirstWrite'
+			self.entries = Entries.create(1, zeroed: false)
+			self.written = true
+		end 'theFirstWrite'
 
-function placeArgumentsOf(column PlaceArgumentColumn) returns PlaceArgumentArray
-	return match column 'state'
-		unwritten gives PlaceArgumentArray.create(0)
-		entries(places) gives places
-	end 'state'
-end 'placeArgumentsOf'
+		self.entries.push(entry)
+	end 'add'
+
+	function isWritten() returns bool
+		return self.written
+	end 'isWritten'
+end 'AppendColumn'
+
+typealias DeferredArgumentBindingColumn = AppendColumn with DeferredArgumentBinding
+typealias PendingOverlapColumn = AppendColumn with PendingOverlap
+typealias ShareDoorSiteColumn = AppendColumn with ShareDoorSite
+typealias ReturnedValueStartColumn = AppendColumn with ReturnedValueStart
 
 enum ArgumentPassing
 	byValue
@@ -7023,46 +7025,6 @@ typealias PendingArgumentBindingArray = Array with PendingArgumentBinding
 function tokenStartsAt(token Token, range SourceRange) returns bool
 	return token.line == range.line and token.column == range.column
 end 'tokenStartsAt'
-
-union DeferredArgumentBindingColumn
-	unwritten
-	entries(bindings DeferredArgumentBindingArray)
-end 'DeferredArgumentBindingColumn'
-
-function withDeferredArgumentBinding(column DeferredArgumentBindingColumn, binding DeferredArgumentBinding) returns DeferredArgumentBindingColumn
-	match column 'state'
-		unwritten then return DeferredArgumentBindingColumn.entries(singleDeferredArgumentBinding(binding))
-		entries(bindings) then bindings.push(binding)
-	end 'state'
-
-	return column
-end 'withDeferredArgumentBinding'
-
-function singleDeferredArgumentBinding(binding DeferredArgumentBinding) returns DeferredArgumentBindingArray
-	let bindings = DeferredArgumentBindingArray.create(1, zeroed: false)
-	bindings.push(binding)
-	return bindings
-end 'singleDeferredArgumentBinding'
-
-union PendingOverlapColumn
-	unwritten
-	entries(overlaps PendingOverlapArray)
-end 'PendingOverlapColumn'
-
-function withPendingOverlap(column PendingOverlapColumn, overlap PendingOverlap) returns PendingOverlapColumn
-	match column 'state'
-		unwritten then return PendingOverlapColumn.entries(singlePendingOverlap(overlap))
-		entries(overlaps) then overlaps.push(overlap)
-	end 'state'
-
-	return column
-end 'withPendingOverlap'
-
-function singlePendingOverlap(overlap PendingOverlap) returns PendingOverlapArray
-	let overlaps = PendingOverlapArray.create(1, zeroed: false)
-	overlaps.push(overlap)
-	return overlaps
-end 'singlePendingOverlap'
 
 // ⭐ **THE NOUNS A BRACKETED LITERAL'S REFUSALS ARE COMPOSED FROM.** `[…]` spells TWO containers — an array,
 // whose one column is its ELEMENT, and a map, whose two are its KEY and its VALUE — and `literalColumnTypeFor`
@@ -9794,11 +9756,11 @@ let TestReportThrewCallee = b"__TestReport.threw"
 let HeapAnnotationName = b"heap"
 
 function methodAsFunctionValueAt(explanation String, memberTok Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.methodAsFunctionValue, explanation: explanation, line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.methodAsFunctionValue, explanation: explanation, line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 end 'methodAsFunctionValueAt'
 
 function castOfACast(asTok Token, targetName String) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.castOperandIsACast, explanation: "a cast cannot take another cast as its operand — cast directly to '{targetName}'", line: asTok.line, column: asTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.castOperandIsACast, explanation: "a cast cannot take another cast as its operand — cast directly to '{targetName}'", line: asTok.line, column: asTok.column, notes: PositionedNoteArray.create(0))
 end 'castOfACast'
 
 function methodAsFunctionValue(spelled String, memberTok Token) returns SourceParseError
@@ -9806,7 +9768,7 @@ function methodAsFunctionValue(spelled String, memberTok Token) returns SourcePa
 end 'methodAsFunctionValue'
 
 function methodAssigned(spelled String, memberTok Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: "'{spelled}' is a method, and a method cannot be assigned", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: "'{spelled}' is a method, and a method cannot be assigned", line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 end 'methodAssigned'
 
 union MethodKind
@@ -9824,7 +9786,7 @@ function methodReadRefusal(kind MethodKind, written String, memberTok Token) ret
 end 'methodReadRefusal'
 
 function missingStaticMember(explanation String, anchor Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.unknownStaticMember, explanation: explanation, line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.unknownStaticMember, explanation: explanation, line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
 end 'missingStaticMember'
 
 function undeclaredStaticMember(typeTok Token, memberTok Token) returns SourceParseError
@@ -9862,27 +9824,27 @@ function staticRequirementMessage(requirement String, reach StaticRequirementRea
 end 'staticRequirementMessage'
 
 function staticRequirementCalled(written String, typeTok Token, memberTok Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.semanticStaticRequirementNotDispatchable, explanation: staticRequirementMessage(written, reach: StaticRequirementReach.typeParameter(String.from(typeTok.value))), line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.semanticStaticRequirementNotDispatchable, explanation: staticRequirementMessage(written, reach: StaticRequirementReach.typeParameter(String.from(typeTok.value))), line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 end 'staticRequirementCalled'
 
 function instanceMethodCalledWithoutReceiver(typeName String, methodTok Token) returns SourceParseError
 	let method = String.from(methodTok.value)
 
-	return SourceParseError.registryRefused(ErrorCode.semanticInstanceMethodCalledWithoutReceiver, explanation: "'{method}' is an instance method of '{typeName}' and needs a receiver: call it on a value, such as 'value.{method}(...)', or make it `static`", line: methodTok.line, column: methodTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.semanticInstanceMethodCalledWithoutReceiver, explanation: "'{method}' is an instance method of '{typeName}' and needs a receiver: call it on a value, such as 'value.{method}(...)', or make it `static`", line: methodTok.line, column: methodTok.column, notes: PositionedNoteArray.create(0))
 end 'instanceMethodCalledWithoutReceiver'
 
 let FixedArrayCreateLengthName = b"length"
 
 function typeSizedCreateTakesALength(alias String, sized String, memberTok Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}' states its length in its type ({sized}), so '{String.from(CreateMethod)}' takes no length: write '{alias}.{String.from(CreateMethod)}()' or '{alias}.{String.from(CreateMethod)}({String.from(ManagedMemoryValueParamName)}: v)'", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}' states its length in its type ({sized}), so '{String.from(CreateMethod)}' takes no length: write '{alias}.{String.from(CreateMethod)}()' or '{alias}.{String.from(CreateMethod)}({String.from(ManagedMemoryValueParamName)}: v)'", line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 end 'typeSizedCreateTakesALength'
 
 function runtimeSizedCreateNeedsALength(alias String, memberTok Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}' states no length in its type, so '{String.from(CreateMethod)}' needs one: write '{alias}.{String.from(CreateMethod)}(n)'", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}' states no length in its type, so '{String.from(CreateMethod)}' needs one: write '{alias}.{String.from(CreateMethod)}(n)'", line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 end 'runtimeSizedCreateNeedsALength'
 
 function runtimeSizedCreateTakesALengthAndAValue(alias String, memberTok Token) returns SourceParseError
-	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}.{String.from(CreateMethod)}' takes a length and an optional '{String.from(ManagedMemoryValueParamName)}:': a fixed array never grows. Use 'Array.{String.from(CreateMethod)}(n, {String.from(ArrayCreateZeroedLabel)}: false)' for a growable buffer", line: memberTok.line, column: memberTok.column, note: DiagnosticNote.none)
+	return SourceParseError.registryRefused(ErrorCode.fixedArrayCreateLengthForm, explanation: "'{alias}.{String.from(CreateMethod)}' takes a length and an optional '{String.from(ManagedMemoryValueParamName)}:': a fixed array never grows. Use 'Array.{String.from(CreateMethod)}(n, {String.from(ArrayCreateZeroedLabel)}: false)' for a growable buffer", line: memberTok.line, column: memberTok.column, notes: PositionedNoteArray.create(0))
 end 'runtimeSizedCreateTakesALengthAndAValue'
 
 union CreateFill

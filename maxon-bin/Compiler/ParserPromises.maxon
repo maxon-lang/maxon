@@ -1124,7 +1124,7 @@ extension Parser
 			closed or
 			walkedBy or
 			walkedThroughWitness then return
-			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: handOffDoorBlame(door), noun: noun, anchor: anchor)
+			refused(noun) then throw self.unwalkableTransferGraphError(value, door: door, noun: noun, anchor: anchor)
 		end 'graph'
 	end 'requireTransferGraphWalkable'
 
@@ -1138,13 +1138,22 @@ extension Parser
 	end 'emitTransferGraphProof'
 
 	function transferWalkOfValue(value ValueId) returns TransferWalk
-		let subject = transferSubjectOf(self.tagOf(value), nameId: self.valueNameId(value), typeNames: self.artifact.typeNames)
+		let denoted = self.signatures.denotedShareSubject(maxonTypeOfTag(self.tagOf(value), nameId: self.valueNameId(value)), from: self.artifact.typeNames, inFunction: self.bodyFunction().name, readerFilePath: self.job.path)
+		let subject = transferSubjectOf(maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), typeNames: self.artifact.typeNames)
 		return self.signatures.transferWalkOf(subject, kind: TransferKind.share, readerFilePath: self.job.path)
 	end 'transferWalkOfValue'
 
 	// E3217 for a graph no per-type walk can be built for, at every door that refuses one.
-	function unwalkableTransferGraphError(value ValueId, blame String, noun String, anchor Token) returns SourceParseError
-		return SourceParseError.registryRefused(ErrorCode.semanticMessageNeedsACapability, explanation: serviceUnclosedRecordTransferMessage(blame, sourceClause: self.transferSourceClause(value), noun: noun), line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+	function unwalkableTransferGraphError(value ValueId, door ThreadHandOffDoor, noun String, anchor Token) returns SourceParseError
+		match door 'door'
+			publish(shared) then return self.shareRefusalError(self.displayTypeNameOf(self.tagOf(value), nameId: self.valueNameId(value)), door: shared, reason: "it is {noun}", anchor: anchor)
+			message or
+			spawnFactory or
+			coroutine or
+			closureCapture then break
+		end 'door'
+
+		return SourceParseError.registryRefused(ErrorCode.semanticMessageNeedsACapability, explanation: serviceUnclosedRecordTransferMessage(handOffDoorBlame(door), sourceClause: self.transferSourceClause(value), noun: noun), line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
 	end 'unwalkableTransferGraphError'
 
 	// ⭐ **DID THIS PARSE MINT `value` AS A STRING LITERAL?** — `knownLiteralBytes`'s criterion asked as a
@@ -1944,10 +1953,10 @@ extension Parser
 	// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
 	// `parseCallArgs`' reason: an argument is parsed inside an expression that already seeded `currentBlock`.
 	function parseIndirectCallArgs(func IrFunction, governing TypeNameId, args ValueIdArray, names NameRoster, argRanges SourceRangeArray, argAnchors TokenIndexArray, anchor Token, calleeName ByteArray) returns PlaceArgumentArray throws SourceParseError
-		var places = PlaceArgumentColumn.unwritten
+		let places = PlaceArgumentArray.create(0)
 
 		if self.at(TokenKind.rightParen) 'noArgs'
-			return placeArgumentsOf(places)
+			return places
 		end 'noArgs'
 
 		let byRefPositions = self.indirectByRefPositionsOf(governing)
@@ -1985,7 +1994,7 @@ extension Parser
 
 				try self.requireNonStorageIsNotWritten(func, valueStart: valueStart, parameter: WrittenParameter.positional(column), callAnchor: anchor)
 				try self.requireTheHandedCellHasTheFunctionTypesFormal(governing, column: column, storage: handedPlace, range: SourceRange.ofToken(valueTok))
-				places = withPlaceArgument(places, place: PlaceArgument.create(column, value: value, storage: handedPlace, anchor: valueTok, source: PlaceSource.written(valueStart, position: column)))
+				places.push(PlaceArgument.create(column, value: value, storage: handedPlace, anchor: valueTok, source: PlaceSource.written(valueStart, position: column)))
 				self.noteSpanMayWriteItsBinding(valueStart)
 			end 'bindsAfterTheCalleeIsKnown'
 
@@ -1998,7 +2007,7 @@ extension Parser
 
 		self.settleCallLends(firstLend)
 
-		return placeArgumentsOf(places)
+		return places
 	end 'parseIndirectCallArgs'
 
 	function indirectByRefPositionsOf(governing TypeNameId) returns ParamPositionMask

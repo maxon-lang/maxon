@@ -638,6 +638,204 @@ end 'cacheTableAgreesExistentialStorePlace'
 
 // @generated library-cache end
 
+export union ShareDoor
+	freeze
+	publish
+	registered(key immutable ByteArray)
+	registryValue
+end 'ShareDoor'
+
+// @generated library-cache begin
+function cacheWriteShareDoor(writer LibraryCacheWriter, value ShareDoor)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		freeze then break
+		publish then break
+		registered(a0) then cacheWriteShareDoorRegistered(writer, a0: a0)
+		registryValue then break
+	end 'payload'
+end 'cacheWriteShareDoor'
+
+function cacheWriteShareDoorRegistered(writer LibraryCacheWriter, a0 immutable ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteShareDoorRegistered'
+
+function cacheReadShareDoor(reader LibraryCacheReader) returns ShareDoor throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ShareDoor.freeze
+		1 gives ShareDoor.publish
+		2 gives try cacheReadShareDoorRegistered(reader)
+		3 gives ShareDoor.registryValue
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadShareDoor'
+
+function cacheReadShareDoorRegistered(reader LibraryCacheReader) returns ShareDoor throws LibraryCacheDamage
+	let a0 = freeze try reader.bytes()
+
+	return ShareDoor.registered(a0)
+end 'cacheReadShareDoorRegistered'
+
+// @generated library-cache end
+
+export union ShareSubject
+	value(value ValueId)
+	declaredReturn
+end 'ShareSubject'
+
+// @generated library-cache begin
+function cacheWriteShareSubject(writer LibraryCacheWriter, value ShareSubject)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		value(a0) then cacheWriteShareSubjectValue(writer, a0: a0)
+		declaredReturn then break
+	end 'payload'
+end 'cacheWriteShareSubject'
+
+function cacheWriteShareSubjectValue(writer LibraryCacheWriter, a0 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteShareSubjectValue'
+
+function cacheReadShareSubject(reader LibraryCacheReader) returns ShareSubject throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadShareSubjectValue(reader)
+		1 gives ShareSubject.declaredReturn
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadShareSubject'
+
+function cacheReadShareSubjectValue(reader LibraryCacheReader) returns ShareSubject throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+
+	return ShareSubject.value(a0)
+end 'cacheReadShareSubjectValue'
+
+// @generated library-cache end
+
+export type ShareDoorSite
+	export let door as ShareDoor
+	export let subject as ShareSubject
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(door ShareDoor, subject ShareSubject, line LineNumber, column ColumnNumber, filePath FilePath) returns Self
+		return Self{door: door, subject: subject, line: line, column: column, filePath: filePath}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteShareDoor(writer, value: self.door)
+		cacheWriteShareSubject(writer, value: self.subject)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.filePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ShareDoorSite throws LibraryCacheDamage
+		let f_door = try cacheReadShareDoor(reader)
+		let f_subject = try cacheReadShareSubject(reader)
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+
+		return Self{door: f_door, subject: f_subject, line: f_line, column: f_column, filePath: f_filePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ShareDoorSite) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ShareDoorSite'
+
+export typealias ShareDoorSiteArray = Array with ShareDoorSite
+
+// @generated library-cache begin
+function cacheWriteShareDoorSiteArray(writer LibraryCacheWriter, value ShareDoorSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteShareDoorSiteArray'
+
+function cacheReadShareDoorSiteArray(reader LibraryCacheReader) returns ShareDoorSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = ShareDoorSiteArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ShareDoorSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadShareDoorSiteArray'
+
+// @generated library-cache end
+
+export type ReturnedValueStart
+	export let value as ValueId
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(value ValueId, line LineNumber, column ColumnNumber) returns Self
+		return Self{value: value, line: line, column: column}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.value as CacheUnsigned)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ReturnedValueStart throws LibraryCacheDamage
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{value: f_value, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(ReturnedValueStart) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ReturnedValueStart'
+
+export typealias ReturnedValueStartArray = Array with ReturnedValueStart
+
+// @generated library-cache begin
+function cacheWriteReturnedValueStartArray(writer LibraryCacheWriter, value ReturnedValueStartArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteReturnedValueStartArray'
+
+function cacheReadReturnedValueStartArray(reader LibraryCacheReader) returns ReturnedValueStartArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = ReturnedValueStartArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ReturnedValueStart.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadReturnedValueStartArray'
+
+// @generated library-cache end
+
 export typealias ExistentialFieldStoreArray = Array with ExistentialFieldStore
 
 // @generated library-cache begin
@@ -1463,8 +1661,12 @@ export type FunctionPlaceholders
 
 	export var noTypeSites as DeclaredTypeSites
 
+	export var noShareDoorSites as ShareDoorSiteArray
+
+	export var noReturnedValueStarts as ReturnedValueStartArray
+
 	export static function create() returns FunctionPlaceholders
-		return Self{paramGuards: RangeCheckParamGuardArray.create(0), inlineSites: InlineSiteArray.create(0), mintedSole: BoolArray.create(0), noCapabilityNotes: CapabilityNotes.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(0), noPendingOverlaps: PendingOverlapArray.create(0), noTypeSites: DeclaredTypeSites.create()}
+		return Self{paramGuards: RangeCheckParamGuardArray.create(0), inlineSites: InlineSiteArray.create(0), mintedSole: BoolArray.create(0), noCapabilityNotes: CapabilityNotes.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(0), noPendingOverlaps: PendingOverlapArray.create(0), noTypeSites: DeclaredTypeSites.create(), noShareDoorSites: ShareDoorSiteArray.create(0), noReturnedValueStarts: ReturnedValueStartArray.create(0)}
 	end 'create'
 end 'FunctionPlaceholders'
 
@@ -2129,9 +2331,10 @@ export type IrFunction
 	export var deferredArgumentBindings as DeferredArgumentBindingArray
 
 	// Every store this function makes into an interface-typed field — see `ExistentialFieldStore`.
-	// Handed over at the function's end by the parser (`Parser.publishExistentialInstances`) and
-	// appended to by `ModuleInit`.
+	// Handed over at the function's end by the parser (`Parser.publishExistentialInstances`).
 	export var existentialFieldStores as ExistentialFieldStoreArray
+	export var shareDoorSites as ShareDoorSiteArray
+	export var returnedValueStarts as ReturnedValueStartArray
 
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
@@ -2358,6 +2561,8 @@ export type IrFunction
 			literalCastArguments: placeholders.noLiteralCastArguments,
 			deferredArgumentBindings: DeferredArgumentBindingArray.create(0),
 			existentialFieldStores: ExistentialFieldStoreArray.create(0),
+			shareDoorSites: placeholders.noShareDoorSites,
+			returnedValueStarts: placeholders.noReturnedValueStarts,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -2455,6 +2660,8 @@ export type IrFunction
 			literalCastArguments: LiteralCastMap.create(),
 			deferredArgumentBindings: DeferredArgumentBindingArray.create(0),
 			existentialFieldStores: ExistentialFieldStoreArray.create(0),
+			shareDoorSites: ShareDoorSiteArray.create(0),
+			returnedValueStarts: ReturnedValueStartArray.create(0),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -2543,6 +2750,8 @@ export type IrFunction
 			literalCastArguments: src.literalCastArguments,
 			deferredArgumentBindings: src.deferredArgumentBindings,
 			existentialFieldStores: src.existentialFieldStores,
+			shareDoorSites: src.shareDoorSites,
+			returnedValueStarts: src.returnedValueStarts,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,
@@ -2772,6 +2981,7 @@ export type IrFunction
 		self.valueNameIds = TypeNameIdArray.create(0)
 		self.valueBrandIds = TypeNameIdArray.create(0)
 		self.valueCapabilities = ValueCapabilityArray.create(0)
+
 		// One instance shared by every function: a note written to it after this lands in all of them.
 		self.capabilityNotes = emptyNotes
 		self.valueMintedSole = BoolArray.create(0)
@@ -2783,6 +2993,8 @@ export type IrFunction
 		self.pendingOverlaps = PendingOverlapArray.create(0)
 		self.deferredArgumentBindings = DeferredArgumentBindingArray.create(0)
 		self.existentialFieldStores = ExistentialFieldStoreArray.create(0)
+		self.shareDoorSites = ShareDoorSiteArray.create(0)
+		self.returnedValueStarts = ReturnedValueStartArray.create(0)
 		self.ownership = ColumnOwnership.nothing()
 
 		// No Std or backend pass reads `scope`. It is replaced rather than reset because `shallowCopy`
@@ -2831,6 +3043,8 @@ export type IrFunction
 		cacheWriteLiteralCastMap(writer, value: self.literalCastArguments)
 		cacheWriteDeferredArgumentBindingArray(writer, value: self.deferredArgumentBindings)
 		cacheWriteExistentialFieldStoreArray(writer, value: self.existentialFieldStores)
+		cacheWriteShareDoorSiteArray(writer, value: self.shareDoorSites)
+		cacheWriteReturnedValueStartArray(writer, value: self.returnedValueStarts)
 		cacheWriteThrowsClause(writer, value: self.throwsTypeName)
 		self.scope.cacheWrite(writer)
 		cacheWriteStdReturnType(writer, value: self.returnType)
@@ -2903,6 +3117,8 @@ export type IrFunction
 		let f_literalCastArguments = try cacheReadLiteralCastMap(reader)
 		let f_deferredArgumentBindings = try cacheReadDeferredArgumentBindingArray(reader)
 		let f_existentialFieldStores = try cacheReadExistentialFieldStoreArray(reader)
+		let f_shareDoorSites = try cacheReadShareDoorSiteArray(reader)
+		let f_returnedValueStarts = try cacheReadReturnedValueStartArray(reader)
 		let f_throwsTypeName = try cacheReadThrowsClause(reader)
 		let f_scope = try Scope.cacheRead(reader)
 		let f_returnType = try cacheReadStdReturnType(reader)
@@ -2938,11 +3154,11 @@ export type IrFunction
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 		let f_debugLocalSpans = try DebugSpanRows.cacheRead(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, shareDoorSites: f_shareDoorSites, returnedValueStarts: f_returnedValueStarts, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize560
-		return sizeof(IrFunction) as CacheSize560
+	static function cacheLayoutBytes() returns CacheSize576
+		return sizeof(IrFunction) as CacheSize576
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

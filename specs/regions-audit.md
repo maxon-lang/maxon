@@ -541,5 +541,53 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3217: <fragment>:21:13: a `freeze` is a `Holder` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim. Sharing hands the graph to every green thread, and this compiler marks each record in it shared at run time — but it can only mark a graph whose every type has a per-type walk, and this one does not. Share the scalars the value is built from, or keep it on this side and share what is needed of it
+error E3171: <fragment>:21:13: `Holder` cannot be frozen: it is a `Holder` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: error.a-promise-held-by-a-conformer-is-refused-without-a-service -->
+No service runs, and a `freeze` of a record whose interface-typed field holds a conformer that holds a promise is still refused: a promise owns one green thread whichever way the program shares it.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyPromise = Promise with Tally
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Pending implements Shape
+	export var pending as TallyPromise
+
+	static function around(pending TallyPromise) returns Self
+		return Self{pending: pending}
+	end 'around'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Pending'
+
+type Holder
+	export let shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function make() returns Tally
+	sleep(1)
+	return 4
+end 'make'
+
+function main() returns ExitCode
+	let pending = async make()
+	let held = freeze Holder.create(Pending.around(pending))
+	print("{held.shape.area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:36:13: `Holder` cannot be frozen: its `shape` is a `Shape`, and `Pending` stands at `Shape` but no share walk can mark it: its `pending` is a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:36:34: `Pending` is converted to `Shape` here
 ```

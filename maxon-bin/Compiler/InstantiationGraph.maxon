@@ -1,0 +1,586 @@
+let UnboundedChainCure = "Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own"
+
+export type InstantiationEdge
+	export let ownerPosition as ElementIndex
+	export let targetPosition as ElementIndex
+	export let expansive as bool
+
+	export static function create(ownerPosition ElementIndex, targetPosition ElementIndex, expansive bool) returns Self
+		return Self{ownerPosition: ownerPosition, targetPosition: targetPosition, expansive: expansive}
+	end 'create'
+end 'InstantiationEdge'
+
+export typealias InstantiationEdgeArray = Array with InstantiationEdge
+typealias ParameterPositionsByBase = Map with (ByteArray, ParameterPositions)
+
+export type MentionPolicy
+	let shareReachOnly as bool
+	export let functions as FunctionMentions
+	let reach as ParameterPositionsByBase
+
+	export static function everyPosition(functions FunctionMentions) returns Self
+		return Self{shareReachOnly: false, functions: functions, reach: ParameterPositionsByBase.create()}
+	end 'everyPosition'
+
+	export static function shareReached(functions FunctionMentions) returns Self
+		return Self{shareReachOnly: true, functions: functions, reach: ParameterPositionsByBase.create()}
+	end 'shareReached'
+
+	export function keeps(signatures ProgramSignatures, base ByteArray, position ElementIndex) returns bool
+		if not self.shareReachOnly or not signatures.structDeclaresTypeParams(base) 'everyArgumentCounts'
+			return true
+		end 'everyArgumentCounts'
+
+		return self.reachOf(signatures, base: base).contains(position)
+	end 'keeps'
+
+	function reachOf(signatures ProgramSignatures, base ByteArray) returns ParameterPositions
+		if not self.reach.contains(base) 'aBaseNotYetReached'
+			self.reach.upsert(base, value: signatures.shareReachOfBase(base))
+		end 'aBaseNotYetReached'
+
+		return positionsOfBase(self.reach, base: base)
+	end 'reachOf'
+end 'MentionPolicy'
+
+function positionsOfBase(positions ParameterPositionsByBase, base ByteArray) returns ParameterPositions
+	if let known = try positions.get(base) 'knownBase'
+		return known
+	end 'knownBase'
+
+	let fresh = ParameterPositions.create()
+	positions.upsert(base, value: fresh)
+	return fresh
+end 'positionsOfBase'
+
+function joinedKey(head String, tail String) returns immutable ByteArray
+	return freeze "{head}#{tail}".toByteArray()
+end 'joinedKey'
+
+function positionsHold(positions ParameterPositionsByBase, base ByteArray, position ElementIndex) returns bool
+	let known = try positions.get(base) otherwise return false
+	return known.contains(position)
+end 'positionsHold'
+
+union TargetFilter
+	every
+	dependent(positions ParameterPositionsByBase)
+end 'TargetFilter'
+
+type GrowingRows
+	let ordered as GenericInstanceIdArray
+	let members as GrowingRowSet
+
+	static function create() returns Self
+		return Self{ordered: GenericInstanceIdArray.create(0), members: GrowingRowSet.create()}
+	end 'create'
+
+	function note(row GenericInstanceId)
+		if self.members.contains(row) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.members.insert(row)
+		self.ordered.push(row)
+	end 'note'
+
+	function contains(row GenericInstanceId) returns bool
+		return self.members.contains(row)
+	end 'contains'
+
+	function isEmpty() returns bool
+		return self.ordered.isEmpty()
+	end 'isEmpty'
+end 'GrowingRows'
+
+typealias GrowingRowSet = Set with GenericInstanceId
+typealias GrowingRowsByOwner = Map with (ByteArray, GrowingRows)
+
+type GrowthMemo
+	var heldByBase as ParameterPositionsByBase
+	var growingByOwner as GrowingRowsByOwner
+	var sealed as bool
+
+	static function create() returns Self
+		return Self{heldByBase: ParameterPositionsByBase.create(), growingByOwner: GrowingRowsByOwner.create(), sealed: false}
+	end 'create'
+
+	function seal()
+		self.sealed = true
+	end 'seal'
+
+	function clear()
+		self.heldByBase = ParameterPositionsByBase.create()
+		self.growingByOwner = GrowingRowsByOwner.create()
+	end 'clear'
+
+	function reopen()
+		self.clear()
+		self.sealed = false
+	end 'reopen'
+end 'GrowthMemo'
+
+export type OpenRowLog
+	export let byOwner as OpenInstancesByOwner
+	let seen as ClonerSet
+
+	export static function create() returns Self
+		return Self{byOwner: OpenInstancesByOwner.create(), seen: ClonerSet.create()}
+	end 'create'
+
+	export function file(owner ByteArray, row GenericInstanceId)
+		if let filed = try self.byOwner.get(owner) 'knownOwner'
+			filed.push(row)
+			return
+		end 'knownOwner'
+
+		let fresh = GenericInstanceIdArray.create(1, zeroed: false)
+		fresh.push(row)
+		self.byOwner.upsert(owner, value: fresh)
+	end 'file'
+
+	export function note(owner ByteArray, row GenericInstanceId)
+		let key = joinedKey(String.from(owner), tail: "{row}")
+
+		if self.seen.contains(key) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.seen.insert(key)
+		self.file(owner, row: row)
+	end 'note'
+
+	export function holds(owner ByteArray, row GenericInstanceId) returns bool
+		return self.seen.contains(joinedKey(String.from(owner), tail: "{row}"))
+	end 'holds'
+end 'OpenRowLog'
+
+typealias DenotersByBase = Map with (ByteArray, NameRoster)
+typealias DependentPositionArray = Array with ElementIndex
+
+union BaseSeeding
+	descriptorReads
+	shareReach
+	tables(descriptorPositions ParameterPositionsByBase)
+end 'BaseSeeding'
+
+type DependenceFlow
+	let policy as MentionPolicy
+	let rows as OpenRowLog
+	let denoters as DenotersByBase
+	let positions as ParameterPositionsByBase
+	let seeded as ClonerSet
+
+	static function create(signatures ProgramSignatures, policy MentionPolicy, rows OpenRowLog) returns Self
+		let flow = Self{policy: policy, rows: rows, denoters: DenotersByBase.create(), positions: ParameterPositionsByBase.create(), seeded: ClonerSet.create()}
+		flow.indexDenoters(signatures)
+		return flow
+	end 'create'
+
+	static function settledOver(signatures ProgramSignatures, policy MentionPolicy, rows OpenRowLog, seeding BaseSeeding, mentions ParameterPositionsByBase) returns Self
+		let flow = Self.create(signatures, policy: policy, rows: rows)
+
+		for (owner, positions) in mentions 'eachMentionedBase'
+			flow.seedBase(signatures, base: owner, seeding: seeding)
+			flow.seed(owner, from: positions)
+		end 'eachMentionedBase'
+
+		flow.seedRowBases(signatures, seeding: seeding)
+		flow.settle(signatures)
+		return flow
+	end 'settledOver'
+
+	function seedRowBases(signatures ProgramSignatures, seeding BaseSeeding)
+		for (owner, ids) in self.rows.byOwner 'eachOwner'
+			self.seedBase(signatures, base: owner, seeding: seeding)
+
+			for id in ids 'eachRow'
+				self.seedBase(signatures, base: signatures.genericInstanceBaseName(id), seeding: seeding)
+			end 'eachRow'
+		end 'eachOwner'
+	end 'seedRowBases'
+
+	function seedBase(signatures ProgramSignatures, base ByteArray, seeding BaseSeeding)
+		if self.seeded.contains(base) 'alreadySeeded'
+			return
+		end 'alreadySeeded'
+
+		self.seeded.insert(base)
+
+		match seeding 'seeding'
+			descriptorReads then self.seedHeldAndConstrained(signatures, base: base)
+			shareReach then self.seed(base, from: signatures.shareReachOfBase(base))
+			tables(descriptorPositions) then self.seedTableKey(signatures, base: base, descriptorPositions: descriptorPositions)
+		end 'seeding'
+	end 'seedBase'
+
+	function seedHeldAndConstrained(signatures ProgramSignatures, base ByteArray)
+		self.seed(base, from: signatures.heldPositionsOfBase(base))
+		self.seed(base, from: signatures.constrainedPositionsOfBase(base))
+	end 'seedHeldAndConstrained'
+
+	function seedTableKey(signatures ProgramSignatures, base ByteArray, descriptorPositions ParameterPositionsByBase)
+		if let read = try descriptorPositions.get(base) 'aBaseTheDescriptorsJudged'
+			self.seed(base, from: signatures.shareReachOfBase(base))
+			self.seed(base, from: read)
+			self.seedHeldAndConstrained(signatures, base: base)
+			return
+		end 'aBaseTheDescriptorsJudged'
+
+		self.seedEveryPosition(signatures, base: base)
+	end 'seedTableKey'
+
+	function seedEveryPosition(signatures ProgramSignatures, base ByteArray)
+		let own = self.positionsOf(base)
+
+		for position in 0 upto signatures.structTypeParamsOf(base).count() 'eachPosition'
+			own.insert(position)
+		end 'eachPosition'
+	end 'seedEveryPosition'
+
+	function growingAmong(signatures ProgramSignatures, reachedRows OpenRowLog) returns GrowingRows
+		let graph = InstantiationGraph.create(signatures, policy: self.policy)
+
+		for (owner, ids) in reachedRows.byOwner 'eachOwner'
+			for id in ids 'eachRow'
+				graph.addRow(owner, row: id, only: TargetFilter.dependent(self.positions))
+			end 'eachRow'
+		end 'eachOwner'
+
+		return graph.growingRows()
+	end 'growingAmong'
+
+	function dependsAt(base ByteArray, position ElementIndex) returns bool
+		return positionsHold(self.positions, base: base, position: position)
+	end 'dependsAt'
+
+	function indexDenoters(signatures ProgramSignatures)
+		for (owner, ids) in self.rows.byOwner 'eachOwner'
+			for id in ids 'eachRow'
+				let denotersOfTarget = self.denotersOf(signatures.genericInstanceBaseName(id))
+
+				if denotersOfTarget.count() > 0 and (try denotersOfTarget.get(denotersOfTarget.count() - 1) otherwise panic("DependenceFlow.indexDenoters: denoters.get OOB at the last position")).equals(owner) 'alreadyNoted'
+					continue
+				end 'alreadyNoted'
+
+				denotersOfTarget.push(owner)
+			end 'eachRow'
+		end 'eachOwner'
+	end 'indexDenoters'
+
+	function denotersOf(base ByteArray) returns NameRoster
+		if let known = try self.denoters.get(base) 'knownBase'
+			return known
+		end 'knownBase'
+
+		let fresh = NameRoster.create(0)
+		self.denoters.upsert(base, value: fresh)
+		return fresh
+	end 'denotersOf'
+
+	function judges(base ByteArray) returns bool
+		return self.positions.contains(base)
+	end 'judges'
+
+	function positionsOf(base ByteArray) returns ParameterPositions
+		return positionsOfBase(self.positions, base: base)
+	end 'positionsOf'
+
+	function seed(base ByteArray, from ParameterPositions)
+		let own = self.positionsOf(base)
+
+		for position in from 'eachPosition'
+			own.insert(position)
+		end 'eachPosition'
+	end 'seed'
+
+	function settle(signatures ProgramSignatures)
+		let queue = NameRoster.create(0)
+		let queued = ClonerSet.create()
+
+		for (owner, _) in self.rows.byOwner 'eachOwner'
+			queue.push(owner)
+			queued.insert(owner)
+		end 'eachOwner'
+
+		var head = 0 as ElementIndex
+
+		while head < queue.count() 'eachBase'
+			let current = try queue.get(head) otherwise panic("DependenceFlow.settle: queue.get OOB at {head}")
+			head = head + 1
+			_ = queued.remove(current)
+
+			if not self.flowInto(signatures, base: current) 'nothingGrew'
+				continue
+			end 'nothingGrew'
+
+			for owner in self.denotersOf(current) 'eachDenoter'
+				if not queued.contains(owner) 'notQueued'
+					queued.insert(owner)
+					queue.push(owner)
+				end 'notQueued'
+			end 'eachDenoter'
+		end 'eachBase'
+	end 'settle'
+
+	function flowInto(signatures ProgramSignatures, base ByteArray) returns bool
+		let ids = try self.rows.byOwner.get(base) otherwise return false
+		let own = self.positionsOf(base)
+		var grew = false
+
+		for id in ids 'eachRow'
+			let target = signatures.genericInstanceBaseName(id)
+
+			for position in self.listed(self.positionsOf(target)) 'eachDependentPosition'
+				for mentioned in signatures.typeMentionedParameters(signatures.substitutedInstanceArg(id, position: position), policy: self.policy) 'eachMentionedParameter'
+					if not own.contains(mentioned) 'aNewDependence'
+						own.insert(mentioned)
+						grew = true
+					end 'aNewDependence'
+				end 'eachMentionedParameter'
+			end 'eachDependentPosition'
+		end 'eachRow'
+
+		return grew
+	end 'flowInto'
+
+	function listed(dependent ParameterPositions) returns DependentPositionArray
+		let ordered = DependentPositionArray.create(dependent.count(), zeroed: false)
+
+		for position in dependent 'eachPosition'
+			ordered.push(position)
+		end 'eachPosition'
+
+		return ordered
+	end 'listed'
+
+	function keyOf(signatures ProgramSignatures, id GenericInstanceId) returns immutable ByteArray
+		return freeze self.keyOverPositions(signatures, id: id, dependent: self.positionsOf(signatures.genericInstanceBaseName(id)), nested: false).toByteArray()
+	end 'keyOf'
+
+	function canonicalKey(signatures ProgramSignatures, type MaxonType) returns String
+		if maxonTypeTag(type) != ValueTypeTag.genericInstance 'aPlainType'
+			return "{maxonTypeTag(type).name}#{typeNameIdOf(type)}"
+		end 'aPlainType'
+
+		return self.keyOverPositions(signatures, id: genericInstanceIdOf(type), dependent: ParameterPositions.create(), nested: true)
+	end 'canonicalKey'
+
+	function keyOverPositions(signatures ProgramSignatures, id GenericInstanceId, dependent ParameterPositions, nested bool) returns String
+		let base = signatures.genericInstanceBaseName(id)
+		var key = "{String.from(base)}<"
+
+		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
+			let kept = self.policy.keeps(signatures, base: base, position: position) if nested else dependent.contains(position)
+
+			if kept 'aJudgedArgument'
+				key.append(self.canonicalKey(signatures, type: signatures.denotedArg(id, position: position)))
+			end 'aJudgedArgument' else 'anErasedArgument'
+				key.append("_")
+			end 'anErasedArgument'
+
+			key.append(",")
+		end 'eachArg'
+
+		key.append(">")
+		return key
+	end 'keyOverPositions'
+end 'DependenceFlow'
+
+type InstantiationArc
+	export let target as ElementIndex
+	export let expansive as bool
+	export let row as GenericInstanceId
+
+	static function create(target ElementIndex, expansive bool, row GenericInstanceId) returns Self
+		return Self{target: target, expansive: expansive, row: row}
+	end 'create'
+end 'InstantiationArc'
+
+typealias InstantiationArcArray = Array with InstantiationArc
+
+type InstantiationNode
+	export let arcs as InstantiationArcArray
+	export var visited as bool
+	export var onStack as bool
+	export var order as ElementIndex
+	export var low as ElementIndex
+	export var cursor as ElementIndex
+	export var component as ElementIndex
+
+	static function create() returns Self
+		return Self{arcs: InstantiationArcArray.create(0), visited: false, onStack: false, order: 0, low: 0, cursor: 0, component: 0}
+	end 'create'
+
+	export function reset()
+		self.visited = false
+		self.onStack = false
+		self.cursor = 0
+	end 'reset'
+end 'InstantiationNode'
+
+typealias InstantiationNodeArray = Array with InstantiationNode
+typealias NodeIndexArray = Array with ElementIndex
+typealias NodesOfPositions = Map with (ElementIndex, ElementIndex)
+typealias NodesByBase = Map with (ByteArray, NodesOfPositions)
+
+type InstantiationGraph
+	let signatures as ProgramSignatures
+	let policy as MentionPolicy
+	let nodes as InstantiationNodeArray
+	let nodesByBase as NodesByBase
+	var counter as ElementIndex
+	var components as ElementIndex
+
+	static function create(signatures ProgramSignatures, policy MentionPolicy) returns Self
+		return Self{signatures: signatures, policy: policy, nodes: InstantiationNodeArray.create(0), nodesByBase: NodesByBase.create(), counter: 0, components: 0}
+	end 'create'
+
+	function addRow(owner ByteArray, row GenericInstanceId, only TargetFilter)
+		let targetBase = self.signatures.genericInstanceBaseName(row)
+
+		for edge in self.signatures.instantiationEdgesOf(row, policy: self.policy) 'eachEdge'
+			if not self.keeps(only, base: targetBase, position: edge.targetPosition) 'filteredOut'
+				continue
+			end 'filteredOut'
+
+			let source = self.nodeOf(owner, position: edge.ownerPosition)
+			let destination = self.nodeOf(targetBase, position: edge.targetPosition)
+			self.nodeAt(source).arcs.push(InstantiationArc.create(destination, expansive: edge.expansive, row: row))
+		end 'eachEdge'
+	end 'addRow'
+
+	function keeps(only TargetFilter, base ByteArray, position ElementIndex) returns bool
+		return match only 'only'
+			every gives true
+			dependent(positions) gives positionsHold(positions, base: base, position: position)
+		end 'only'
+	end 'keeps'
+
+	function nodeAt(index ElementIndex) returns InstantiationNode
+		return try self.nodes.get(index) otherwise panic("InstantiationGraph.nodeAt: node {index} is outside the {self.nodes.count()} this graph holds")
+	end 'nodeAt'
+
+	function nodeOf(base ByteArray, position ElementIndex) returns ElementIndex
+		let ofBase = self.nodesOfBase(base)
+
+		if let known = try ofBase.get(position) 'knownNode'
+			return known
+		end 'knownNode'
+
+		let index = self.nodes.count() as ElementIndex
+		self.nodes.push(InstantiationNode.create())
+		ofBase.upsert(position, value: index)
+		return index
+	end 'nodeOf'
+
+	function nodesOfBase(base ByteArray) returns NodesOfPositions
+		if let known = try self.nodesByBase.get(base) 'knownBase'
+			return known
+		end 'knownBase'
+
+		let fresh = NodesOfPositions.create()
+		self.nodesByBase.upsert(base, value: fresh)
+		return fresh
+	end 'nodesOfBase'
+
+	function growingRows() returns GrowingRows
+		self.settleComponents()
+		let growing = GrowingRows.create()
+
+		for node in self.nodes 'eachNode'
+			for arc in node.arcs 'eachArc'
+				if arc.expansive and self.nodeAt(arc.target).component == node.component 'closesACycle'
+					growing.note(arc.row)
+				end 'closesACycle'
+			end 'eachArc'
+		end 'eachNode'
+
+		return growing
+	end 'growingRows'
+
+	function settleComponents()
+		self.counter = 0
+		self.components = 0
+
+		for node in self.nodes 'eachNode'
+			node.reset()
+		end 'eachNode'
+
+		let pending = NodeIndexArray.create(0)
+		let frames = NodeIndexArray.create(0)
+
+		for root in 0 upto self.nodes.count() 'eachRoot'
+			if not self.nodeAt(root).visited 'notYetVisited'
+				self.enter(root, frames: frames, pending: pending)
+				self.walk(frames, pending: pending)
+			end 'notYetVisited'
+		end 'eachRoot'
+	end 'settleComponents'
+
+	function enter(index ElementIndex, frames NodeIndexArray, pending NodeIndexArray)
+		let node = self.nodeAt(index)
+		self.counter = self.counter + 1
+		node.order = self.counter
+		node.low = self.counter
+		node.visited = true
+		node.onStack = true
+		pending.push(index)
+		frames.push(index)
+	end 'enter'
+
+	function walk(frames NodeIndexArray, pending NodeIndexArray)
+		while frames.count() > 0 'eachFrame'
+			let index = try frames.last() otherwise panic("InstantiationGraph.walk: the frame stack is non-empty")
+			let node = self.nodeAt(index)
+
+			if node.cursor < node.arcs.count() 'anArcLeft'
+				self.followArc(node, frames: frames, pending: pending)
+				continue
+			end 'anArcLeft'
+
+			_ = try frames.pop() otherwise panic("InstantiationGraph.walk: the frame stack is non-empty")
+
+			if node.low == node.order 'aComponentRoot'
+				self.closeComponent(index, pending: pending)
+			end 'aComponentRoot'
+
+			if frames.count() > 0 'aParentFrame'
+				let parent = self.nodeAt(try frames.last() otherwise panic("InstantiationGraph.walk: the frame stack is non-empty"))
+
+				if node.low < parent.low 'aLowerReach'
+					parent.low = node.low
+				end 'aLowerReach'
+			end 'aParentFrame'
+		end 'eachFrame'
+	end 'walk'
+
+	function followArc(node InstantiationNode, frames NodeIndexArray, pending NodeIndexArray)
+		let arc = try node.arcs.get(node.cursor) otherwise panic("InstantiationGraph.followArc: arcs.get OOB at {node.cursor}")
+		node.cursor = node.cursor + 1
+		let target = self.nodeAt(arc.target)
+
+		if not target.visited 'notYetVisited'
+			self.enter(arc.target, frames: frames, pending: pending)
+			return
+		end 'notYetVisited'
+
+		if target.onStack and target.order < node.low 'aLowerReach'
+			node.low = target.order
+		end 'aLowerReach'
+	end 'followArc'
+
+	function closeComponent(root ElementIndex, pending NodeIndexArray)
+		var closed = false
+
+		while not closed 'eachMember'
+			let member = try pending.pop() otherwise panic("InstantiationGraph.closeComponent: the component's root is on the pending stack")
+			let node = self.nodeAt(member)
+			node.onStack = false
+			node.component = self.components
+			closed = member == root
+		end 'eachMember'
+
+		self.components = self.components + 1
+	end 'closeComponent'
+end 'InstantiationGraph'

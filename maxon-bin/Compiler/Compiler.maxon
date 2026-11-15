@@ -1615,6 +1615,7 @@ function prepareLowering(project Project, module MaxonModule) returns LoweredPro
 	// typed by a generic INSTANCE has no identity outside this index (`canonicalInstanceName`), and rendering
 	// one without it spelled `Array with Integer` and `Array with String` as the same word.
 	let signatures = try queryProgramSignatures(project)
+	signatures.descriptorReads = DescriptorReads.create()
 	checkGenericSpellings(project, signatures: signatures)
 	dropExplainedParseConsequences(project, signatures: signatures, stage: ConsequenceDropStage.beforeTypeResolution)
 
@@ -1841,6 +1842,10 @@ function prepareLowering(project Project, module MaxonModule) returns LoweredPro
 
 	try requireStillWanted(project)
 	let scanProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
+
+	project.shareReachedInterfaces = try requireShareDoorsWalkable(project, module: module, signatures: signatures) otherwise (failure) 'shareDoorRefused'
+		try refuseUnlessAbandoned(project, failure: failure)
+	end 'shareDoorRefused'
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT. A `return 42` program allocates nothing,
 	// so it gets no allocator, no `.data` slots and no leak check. That is not an optimization, it is
@@ -2615,17 +2620,7 @@ function afterPipeline(project Project, lowered LoweredProgram) returns BackendB
 	// way, keyed on its own `usesList` bit.
 	installListRuntime(pipeline.stdModule, usage: usage)
 
-	// The single-value descriptor-gated drop (`__drop_type_param`) — installed on
-	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesManagedMemory`, so a bare opaque `T` field reassignment in an
-	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the
-	// one `__drop_type_param` for either case, exactly once (its sole install site).
-	installDropTypeParamRuntime(pipeline.stdModule, usage: usage)
-
-	// Its co-ownership twin (`__retain_type_param`), on its own bit for the same reason: a shared
-	// body that only STORES a borrowed opaque `T` never drops one.
-	installRetainTypeParamRuntime(pipeline.stdModule, usage: usage)
-	installReleaseTypeParamRuntime(pipeline.stdModule, usage: usage)
-	installReclaimTypeParamRuntime(pipeline.stdModule, usage: usage)
+	installTypeParamRuntime(pipeline.stdModule, usage: usage)
 
 	// The existential's drop (`__drop_existential`) — its sibling above's exact
 	// arrangement: the same emitter, its own bit, so a program with an interface-typed field but no generic

@@ -487,10 +487,9 @@ export let MmShareBoxName = b"__mm_share_box"
 export let MmShareExistentialName = b"__mm_share_existential"
 
 // ⭐⭐ **`__mm_walk_unwalkable(value)` — WHAT A WITNESS TABLE'S WALK WORD NAMES FOR A CONFORMER NO WALK CAN BE
-// BUILT FOR** (a generic conformer, whose shared table names no instance; a record reaching an OS handle; a
-// promise). A value held at an interface type is walked through whatever conformer it holds at run time, so
-// the compile-time refusal the concrete doors make cannot be made about it; the abort is that refusal's
-// run-time form, taken before anything crosses. A zero word would read as a conformer that owns nothing.
+// BUILT FOR** (a record reaching a function value, an OS handle or a promise). E3171 refuses every
+// share door that can reach such a conformer, so the abort traps one that verdict missed: a compiler
+// bug, like `__mm_clone_uncloneable`. A zero word would read as a conformer that owns nothing.
 export let MmWalkUnwalkableName = b"__mm_walk_unwalkable"
 
 // ⭐⭐ **`__mm_clone_existential(witness, value) -> value'` — THE DEEP COPY OF A VALUE HELD AT AN INTERFACE
@@ -3552,7 +3551,7 @@ function declareDictionaryDropNeeds(usage RuntimeUsage, source CascadeFieldSourc
 end 'declareDictionaryDropNeeds'
 
 // The runtime bits ONE released field's drop needs. `recordCallUsage` closes each family over what its own
-// body calls, and it is what turns on `usesDropTypeParam` for the bare-parameter slot.
+// body calls, and it is what turns on `TypeParamEntry.drop`'s use for the bare-parameter slot.
 function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
 	match kind 'kind'
 		direct(callee) then recordCallUsage(callee, usage: usage)
@@ -4867,6 +4866,13 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 	module.functions.push(func)
 end 'emitFieldCascadeCloner'
 
+function requireVerdictSeesWalk(signatures ProgramSignatures, conformer ShareConformer, caseIndex ElementIndex, index ElementIndex, action CascadeAction)
+	match action 'action'
+		shareWalk then signatures.requireVerdictSeesWalkedSlot(conformer, caseIndex: caseIndex, index: index)
+		clone then break
+	end 'action'
+end 'requireVerdictSeesWalk'
+
 // ⭐⭐ **WHICH FIELDS OF DECLARED STRUCT `layout` A CASCADE VISITS, AND HOW — ONE DERIVATION FOR EVERY
 // ACTION.** Resolved through the shared `managedFieldCascadeStrategy` over `project.typeNames`, the ONE
 // interner that layout's field-type ids live in. Written once because the LIST is the thing that must not
@@ -4881,6 +4887,7 @@ function structManagedFieldCascades(layout StructLayout, typeNames TypeNameInter
 		end 'scalar'
 
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structManagedFieldCascades: fieldTypes.get OOB at {i}")
+		requireVerdictSeesWalk(signatures, conformer: ShareConformer.named(layout.name), caseIndex: ProductSlotCase, index: i as ElementIndex, action: action)
 		specs.push(ManagedFieldCascade.create(layout.offsetOfField(i), strategy: slotCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, capability: layout.fieldTypeSites.capabilityAt(i), action: action)))
 	end 'eachField'
 
@@ -4897,6 +4904,7 @@ function instanceManagedFieldCascades(id GenericInstanceId, signatures ProgramSi
 			continue
 		end 'scalar'
 
+		requireVerdictSeesWalk(signatures, conformer: ShareConformer.instance(id), caseIndex: ProductSlotCase, index: i as ElementIndex, action: action)
 		specs.push(ManagedFieldCascade.create(signatures.genericInstanceFieldOffset(id, index: i), strategy: signatures.genericInstanceFieldCascadeStrategy(id, index: i, action: action)))
 	end 'eachField'
 
@@ -5031,6 +5039,7 @@ function emitManagedFieldCascades(module StdModule, func IrFunction, start Casca
 			continue
 		end 'scalar'
 
+		requireVerdictSeesWalk(signatures, conformer: ShareConformer.named(layout.name), caseIndex: ci as ElementIndex, index: fi as ElementIndex, action: action)
 		let strategy = slotCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, capability: field.capability, action: action)
 		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi as PayloadSlotIndex), strategy: strategy, action: action, ids: ids)
 	end 'eachField'

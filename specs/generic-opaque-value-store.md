@@ -7642,3 +7642,98 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:21:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```
+
+<!-- test: a-generic-type-reaching-itself-with-its-parameters-permuted-runs -->
+A generic type whose methods reach itself with its two parameters swapped has two instances at every entry, and composing its layout descriptor ends.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses A, B
+	typealias AArray = Array with A
+	typealias BArray = Array with B
+	typealias Flipped = Pair with (B, A)
+
+	var firsts as AArray
+	var seconds as BArray
+
+	static function create() returns Self
+		return Self{firsts: AArray.create(0), seconds: BArray.create(0)}
+	end 'create'
+
+	function depth(n Integer) returns Integer
+		if n == 0 'done'
+			return 0
+		end 'done'
+
+		let d = Flipped.create()
+		return d.depth(n - 1) + 1
+	end 'depth'
+end 'Pair'
+
+typealias IntStrPair = Pair with (Integer, String)
+
+function main() returns ExitCode
+	let p = IntStrPair.create()
+	print("{p.depth(3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: a-generic-type-reaching-itself-with-a-parameter-fixed-runs -->
+A generic type whose methods reach itself keeping its first parameter and wrapping the second once names a finite set of instances; the wrapped argument feeds nothing back, so composing its layout descriptor ends.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell uses T
+	typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(0)}
+	end 'create'
+end 'Cell'
+
+type Fix uses X, Y
+	typealias XArray = Array with X
+	typealias YArray = Array with Y
+	typealias CX = Cell with X
+	typealias Settled = Fix with (X, CX)
+	var xs as XArray
+	var ys as YArray
+
+	static function create() returns Self
+		return Self{xs: XArray.create(0), ys: YArray.create(0)}
+	end 'create'
+
+	function depth(n Integer) returns Integer
+		if n == 0 'done'
+			return 0
+		end 'done'
+
+		let d = Settled.create()
+		return d.depth(n - 1) + 1
+	end 'depth'
+end 'Fix'
+
+typealias Entry = Fix with (Integer, String)
+
+function main() returns ExitCode
+	let p = Entry.create()
+	print("{p.depth(3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```

@@ -1799,7 +1799,7 @@ extension ProgramSignatures
 	// stands at, exactly as `genericInstanceFieldOpaqueBlockOffset` gives for an instance's slot.
 	// Precondition: `structFieldIsOpaque`.
 	export function structFieldOpaqueBlockOffset(structName ByteArray, index FieldIndex) returns ByteOffset
-		return layoutBlockOffsetFor(self.opaqueTypeParamPosition(self.structFieldDeclaredType(structName, index: index)))
+		return self.descriptorBlockOffsetOf(self.structFieldDeclaredType(structName, index: index))
 	end 'structFieldOpaqueBlockOffset'
 
 	// ⭐⭐ **WHICH DECLARATION'S `uses` LIST A DECLARED RECORD'S OPAQUE SLOTS INDEX INTO, OR THAT IT
@@ -3506,22 +3506,22 @@ extension ProgramSignatures
 		end 'subject'
 	end 'transferWalkOf'
 
-	function instanceGraphHoldsAPromise(id GenericInstanceId) returns bool
-		return self.typeReachesAPromise(MaxonType.genericInstance(id), visited: ClonerSet.create())
+	function instanceGraphHoldsAPromise(id GenericInstanceId, atInterfaces PromiseWalkAtInterfaces) returns bool
+		return self.typeReachesAPromise(MaxonType.genericInstance(id), visited: ClonerSet.create(), atInterfaces: atInterfaces)
 	end 'instanceGraphHoldsAPromise'
 
-	function aggregateGraphHoldsAPromise(name ByteArray) returns bool
-		return self.aggregateReachesAPromise(name, visited: ClonerSet.create())
+	function aggregateGraphHoldsAPromise(name ByteArray, atInterfaces PromiseWalkAtInterfaces) returns bool
+		return self.aggregateReachesAPromise(name, visited: ClonerSet.create(), atInterfaces: atInterfaces)
 	end 'aggregateGraphHoldsAPromise'
 
 	function typeHoldsAPromise(type MaxonType) returns bool
-		return self.typeReachesAPromise(type, visited: ClonerSet.create())
+		return self.typeReachesAPromise(type, visited: ClonerSet.create(), atInterfaces: PromiseWalkAtInterfaces.declaredConformers)
 	end 'typeHoldsAPromise'
 
 	function transferSubjectHoldsAPromise(subject TransferSubject) returns bool
 		return match subject 'subject'
-			instance(id) gives self.instanceGraphHoldsAPromise(id)
-			aggregate(name) gives self.aggregateGraphHoldsAPromise(name)
+			instance(id) gives self.instanceGraphHoldsAPromise(id, atInterfaces: PromiseWalkAtInterfaces.declaredConformers)
+			aggregate(name) gives self.aggregateGraphHoldsAPromise(name, atInterfaces: PromiseWalkAtInterfaces.declaredConformers)
 			byteRecord or
 			existential or
 			opaqueParameter or
@@ -3582,7 +3582,7 @@ extension ProgramSignatures
 		return false
 	end 'aggregateNamesTheBareBase'
 
-	function typeReachesAPromise(type MaxonType, visited ClonerSet) returns bool
+	function typeReachesAPromise(type MaxonType, visited ClonerSet, atInterfaces PromiseWalkAtInterfaces) returns bool
 		if self.typeIsAGreenThreadHandle(type, from: self.typeNames) 'aPromise'
 			return true
 		end 'aPromise'
@@ -3598,11 +3598,14 @@ extension ProgramSignatures
 		end 'noPromiseInBytes'
 
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.instanceReachesAPromise(genericInstanceIdOf(type), visited: visited)
+			return self.instanceReachesAPromise(genericInstanceIdOf(type), visited: visited, atInterfaces: atInterfaces)
 		end 'instance'
 
 		if tag == ValueTypeTag.interfaceRef 'anExistential'
-			return self.anyConformerReachesAPromise(self.nameOfId(typeNameIdOf(type)), visited: visited)
+			return match atInterfaces 'atInterfaces'
+				declaredConformers gives self.anyConformerReachesAPromise(self.nameOfId(typeNameIdOf(type)), visited: visited)
+				leftToTheRoster gives false
+			end 'atInterfaces'
 		end 'anExistential'
 
 		if not tagMayNameAggregate(tag) 'notAnAggregate'
@@ -3622,13 +3625,13 @@ extension ProgramSignatures
 				return false
 			end 'alreadyInFlight'
 
-			return self.instanceReachesAPromise(live, visited: visited)
+			return self.instanceReachesAPromise(live, visited: visited, atInterfaces: atInterfaces)
 		end 'genericAlias'
 
-		return self.aggregateReachesAPromise(name, visited: visited)
+		return self.aggregateReachesAPromise(name, visited: visited, atInterfaces: atInterfaces)
 	end 'typeReachesAPromise'
 
-	function aggregateReachesAPromise(name ByteArray, visited ClonerSet) returns bool
+	function aggregateReachesAPromise(name ByteArray, visited ClonerSet, atInterfaces PromiseWalkAtInterfaces) returns bool
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
 			managedDirectory or
@@ -3646,22 +3649,22 @@ extension ProgramSignatures
 		end 'alreadyInFlight'
 
 		if self.containsStructInAnyFile(name) 'struct'
-			return self.structFieldsReachAPromise(name, visited: visited)
+			return self.slotsReachAPromise(self.shareSlotsOf(ShareConformer.named(name)), visited: visited, atInterfaces: atInterfaces)
 		end 'struct'
 
 		match self.enumInAnyFile(name) 'union'
-			declared(layout) then return self.unionPayloadsReachAPromise(layout, visited: visited)
+			declared then return self.slotsReachAPromise(self.shareSlotsOf(ShareConformer.named(name)), visited: visited, atInterfaces: atInterfaces)
 			undeclared then return false
 		end 'union'
 	end 'aggregateReachesAPromise'
 
-	function instanceReachesAPromise(id GenericInstanceId, visited ClonerSet) returns bool
+	function instanceReachesAPromise(id GenericInstanceId, visited ClonerSet, atInterfaces PromiseWalkAtInterfaces) returns bool
 		if self.instanceIsPromiseHandle(id) 'aPromise'
 			return true
 		end 'aPromise'
 
 		if self.isElementBearingRecordInstance(id) 'anElementRecord'
-			return self.typeReachesAPromise(self.containerElementType(id), visited: visited)
+			return self.typeReachesAPromise(self.containerElementType(id), visited: visited, atInterfaces: atInterfaces)
 		end 'anElementRecord'
 
 		if not self.genericInstanceHasBaseLayout(id) 'noFieldsToRead'
@@ -3672,44 +3675,18 @@ extension ProgramSignatures
 			return false
 		end 'alreadyInFlight'
 
-		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if self.typeReachesAPromise(self.substituteInstanceFieldType(id, index: i), visited: visited) 'aPromiseField'
-				return true
-			end 'aPromiseField'
-		end 'eachField'
-
-		return false
+		return self.slotsReachAPromise(self.shareSlotsOf(ShareConformer.instance(id)), visited: visited, atInterfaces: atInterfaces)
 	end 'instanceReachesAPromise'
 
-	function structFieldsReachAPromise(structName ByteArray, visited ClonerSet) returns bool
-		let layout = self.structLayoutOf(structName)
-
-		for i in 0 upto layout.fieldCount() 'eachField'
-			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structFieldsReachAPromise: fieldTypes.get OOB at {i}")
-
-			if self.typeReachesAPromise(fieldType, visited: visited) 'aPromiseField'
+	function slotsReachAPromise(slots ShareSlotArray, visited ClonerSet, atInterfaces PromiseWalkAtInterfaces) returns bool
+		for slot in slots 'eachSlot'
+			if self.typeReachesAPromise(slot.slotType, visited: visited, atInterfaces: atInterfaces) 'aPromiseSlot'
 				return true
-			end 'aPromiseField'
-		end 'eachField'
+			end 'aPromiseSlot'
+		end 'eachSlot'
 
 		return false
-	end 'structFieldsReachAPromise'
-
-	function unionPayloadsReachAPromise(layout EnumLayout, visited ClonerSet) returns bool
-		for ci in 0 upto layout.caseCount() 'eachCase'
-			let payloads = layout.payloadsAt(ci)
-
-			for fi in 0 upto payloads.count() 'eachPayload'
-				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsReachAPromise: payloadsAt count disagrees with get at {fi}")
-
-				if self.typeReachesAPromise(field.declaredType, visited: visited) 'aPromisePayload'
-					return true
-				end 'aPromisePayload'
-			end 'eachPayload'
-		end 'eachCase'
-
-		return false
-	end 'unionPayloadsReachAPromise'
+	end 'slotsReachAPromise'
 
 	function anyConformerReachesAPromise(interfaceName ByteArray, visited ClonerSet) returns bool
 		if not self.cloneWalkMayDescendInto(interfaceName, visited: visited) 'alreadyInFlight'
@@ -3717,13 +3694,731 @@ extension ProgramSignatures
 		end 'alreadyInFlight'
 
 		for conformer in self.witnessConformersOf(interfaceName) 'eachConformer'
-			if self.aggregateReachesAPromise(conformer, visited: visited) 'aPromiseConformer'
+			if self.aggregateReachesAPromise(conformer, visited: visited, atInterfaces: PromiseWalkAtInterfaces.declaredConformers) 'aPromiseConformer'
 				return true
 			end 'aPromiseConformer'
 		end 'eachConformer'
 
 		return false
 	end 'anyConformerReachesAPromise'
+
+	export function shareConformerOfValue(tag ValueTypeTag, nameId TypeNameId, inFunction ByteArray, idsFrom TypeNameInterner, readerFilePath FilePath) returns ShareConformer
+		let denoted = self.denotedShareSubject(maxonTypeOfTag(tag, nameId: nameId), from: idsFrom, inFunction: inFunction, readerFilePath: readerFilePath)
+
+		if maxonTypeTag(denoted) == ValueTypeTag.genericInstance 'anInstance'
+			return ShareConformer.instance(genericInstanceIdOf(denoted))
+		end 'anInstance'
+
+		return ShareConformer.named(freeze self.conformerNameOfType(denoted, idsFrom: idsFrom, readerFilePath: readerFilePath).toByteArray())
+	end 'shareConformerOfValue'
+
+	function ownInstanceOfGenericBase(base ByteArray, inFunction ByteArray) returns GenericInstanceId
+		let enclosing = match self.functionDeclaringType(inFunction) 'declaring'
+			method(typeName) gives typeName
+			freeFunction or
+			undeclared panic("ProgramSignatures.ownInstanceOfGenericBase: '{String.from(inFunction)}' is a method of no type and holds a value of the generic base '{String.from(base)}' — a generic base stands for the instance over its own parameters only inside its own body")
+		end 'declaring'
+
+		if not enclosing.equals(base) 'anotherTypesBody'
+			panic("ProgramSignatures.ownInstanceOfGenericBase: '{String.from(inFunction)}' is a method of '{String.from(enclosing)}' and holds a value of the generic base '{String.from(base)}' — a generic base stands for the instance over its own parameters only inside its own body")
+		end 'anotherTypesBody'
+
+		return self.ownRecordSelfInstance(base)
+	end 'ownInstanceOfGenericBase'
+
+	export function shareConformerKey(conformer ShareConformer) returns immutable ByteArray
+		return match conformer 'conformer'
+			named(name) gives name
+			instance(id) gives self.mangleGenericInstance(id)
+		end 'conformer'
+	end 'shareConformerKey'
+
+	export function shareConformerDisplay(conformer ShareConformer) returns String
+		return match conformer 'conformer'
+			named(name) gives self.aggregateSourceDisplay(name)
+			instance(id) gives String.from(self.instanceDisplayName(id))
+		end 'conformer'
+	end 'shareConformerDisplay'
+
+	function aggregateSourceDisplay(name ByteArray) returns String
+		if not isTupleTypeName(name) 'aDeclaredName'
+			return String.from(name)
+		end 'aDeclaredName'
+
+		return self.typeDisplayName(MaxonType.structRef(self.typeNames.intern(self.canonicalNameOfStruct(name))))
+	end 'aggregateSourceDisplay'
+
+	export function shareNodeOfConformer(conformer ShareConformer) returns ShareNode
+		return match conformer 'conformer'
+			named(name) gives self.shareNodeOfAggregate(self.denotedAggregateName(name))
+			instance(id) gives self.shareNodeOfInstance(id)
+		end 'conformer'
+	end 'shareNodeOfConformer'
+
+	export function shareNodeOfSlot(slotType MaxonType, from TypeNameInterner) returns ShareNode
+		let tag = maxonTypeTag(slotType)
+
+		if tag == ValueTypeTag.interfaceRef 'anExistential'
+			return ShareNode.existential(foreignNameOf(from, id: typeNameIdOf(slotType)))
+		end 'anExistential'
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.shareNodeOfInstance(genericInstanceIdOf(slotType))
+		end 'anInstance'
+
+		if not tagMayNameAggregate(tag) 'notAnAggregate'
+			return ShareNode.leaf
+		end 'notAnAggregate'
+
+		let name = self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(slotType)))
+
+		if self.isFunctionAliasInAnyFile(name) 'aFunctionValue'
+			return ShareNode.leaf
+		end 'aFunctionValue'
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			let live = try self.liveGenericAliasInstance(name) otherwise panic("ProgramSignatures.shareNodeOfSlot: the slot names the contested generic alias '{String.from(name)}' — a slot type is read through its declaring file's `declaredSlotType` and a door subject through `denotedShareSubject`, and both denote a contested spelling as the instance that file means, so only an uncontested alias is left named")
+			return self.shareNodeOfInstance(live)
+		end 'genericAlias'
+
+		return self.shareNodeOfAggregate(name)
+	end 'shareNodeOfSlot'
+
+	function shareNodeOfAggregate(name ByteArray) returns ShareNode
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedFile or
+			managedDirectory or
+			managedSocket or
+			managedPages or
+			managedHandle or
+			managedPin or
+			serviceHandle then return ShareNode.leaf
+
+			userDeclared then break
+		end 'compilerOwned'
+
+		if self.containsStructInAnyFile(name) 'aStruct'
+			return ShareNode.composite(ShareConformer.named(name))
+		end 'aStruct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared then return ShareNode.composite(ShareConformer.named(name))
+			undeclared then return ShareNode.leaf
+		end 'union'
+	end 'shareNodeOfAggregate'
+
+	export function shareSlotsOf(composite ShareConformer) returns ShareSlotArray
+		return match composite 'composite'
+			named(name) gives self.shareSlotsOfAggregate(name)
+			instance(id) gives self.shareSlotsOfInstance(id)
+		end 'composite'
+	end 'shareSlotsOf'
+
+	function shareSlotsOfAggregate(name ByteArray) returns ShareSlotArray
+		if self.containsStructInAnyFile(name) 'aStruct'
+			let layout = self.structLayoutOf(name)
+			let slots = ShareSlotArray.create(0)
+
+			for i in 0 upto layout.fieldCount() 'eachField'
+				if self.structFieldOwesDrop(name, index: i) 'aManagedField'
+					slots.push(ShareSlot.create(self.fieldLabelOf(layout, index: i), slotType: self.fieldTypeOf(layout, index: i, into: self.typeNames), caseIndex: ProductSlotCase, index: i))
+				end 'aManagedField'
+			end 'eachField'
+
+			return slots
+		end 'aStruct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared(layout) then return self.shareSlotsOfUnion(layout)
+			undeclared then panic("ProgramSignatures.shareSlotsOfAggregate: '{String.from(name)}' is neither a struct nor a union, and `shareNodeOfAggregate` answers a composite only for one of them")
+		end 'union'
+	end 'shareSlotsOfAggregate'
+
+	export function requireVerdictSeesWalkedSlot(conformer ShareConformer, caseIndex ElementIndex, index ElementIndex)
+		for slot in self.shareSlotsOf(conformer) 'eachSlot'
+			if slot.caseIndex == caseIndex and slot.index == index 'theVerdictSeesIt'
+				return
+			end 'theVerdictSeesIt'
+		end 'eachSlot'
+
+		panic("ProgramSignatures.requireVerdictSeesWalkedSlot: the share-walk cascade of '{self.shareConformerDisplay(conformer)}' visits slot {index} of case {caseIndex}, which the share verdict's slot enumeration (`shareSlotsOf`) lacks — the verdict would judge a graph smaller than the one the walk marks")
+	end 'requireVerdictSeesWalkedSlot'
+
+	function fieldLabelOf(layout StructLayout, index FieldIndex) returns ShareSlotLabel
+		if isTupleTypeName(self.canonicalNameOfStruct(layout.name)) 'aTupleElement'
+			return ShareSlotLabel.tupleElement(index as ElementIndex)
+		end 'aTupleElement'
+
+		return ShareSlotLabel.field(layout.fieldNameAt(index))
+	end 'fieldLabelOf'
+
+	function shareSlotsOfUnion(layout EnumLayout) returns ShareSlotArray
+		let slots = ShareSlotArray.create(0)
+
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for fi in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.shareSlotsOfUnion: payloadsAt count disagrees with get at {fi}")
+
+				let payloadType = self.payloadTypeOf(field, layout: layout, into: self.typeNames)
+
+				if self.typeOwesDrop(payloadType, from: self.typeNames) 'aManagedPayload'
+					slots.push(ShareSlot.create(ShareSlotLabel.field(field.name), slotType: payloadType, caseIndex: ci as ElementIndex, index: fi))
+				end 'aManagedPayload'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return slots
+	end 'shareSlotsOfUnion'
+
+	function shareNodeOfInstance(id GenericInstanceId) returns ShareNode
+		if self.instanceIsPromiseHandle(id) 'aPromise'
+			return ShareNode.leaf
+		end 'aPromise'
+
+		if self.isElementBearingRecordInstance(id) or self.genericInstanceHasBaseLayout(id) 'aRecordWithSlots'
+			return ShareNode.composite(ShareConformer.instance(id))
+		end 'aRecordWithSlots'
+
+		return ShareNode.leaf
+	end 'shareNodeOfInstance'
+
+	function shareSlotsOfInstance(id GenericInstanceId) returns ShareSlotArray
+		let slots = ShareSlotArray.create(0)
+
+		if self.isElementBearingRecordInstance(id) 'anElementRecord'
+			slots.push(ShareSlot.create(ShareSlotLabel.element, slotType: self.containerElementType(id), caseIndex: ProductSlotCase, index: 0))
+			return slots
+		end 'anElementRecord'
+
+		let layout = self.baseLayoutOf(id)
+
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			let fieldType = self.substituteInstanceFieldType(id, index: i)
+
+			if self.typeOwesDrop(fieldType, from: self.typeNames) or maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'aManagedOrOpaqueField'
+				slots.push(ShareSlot.create(self.fieldLabelOf(layout, index: i), slotType: fieldType, caseIndex: ProductSlotCase, index: i))
+			end 'aManagedOrOpaqueField'
+		end 'eachField'
+
+		return slots
+	end 'shareSlotsOfInstance'
+
+	function unwalkableCauseOfConformer(conformer ShareConformer, kind TransferKind) returns UnwalkableCause
+		return try self.findUnwalkableCauseOfConformer(conformer, kind: kind) otherwise panic("ProgramSignatures.unwalkableCauseOfConformer: '{self.shareConformerDisplay(conformer)}' has no per-type walk and nothing in its graph is an OS handle or a generic instance with no base struct — the refusal has no cause to name")
+	end 'unwalkableCauseOfConformer'
+
+	function findUnwalkableCauseOfConformer(conformer ShareConformer, kind TransferKind) returns UnwalkableCause throws AbsentError
+		match self.shareNodeOfConformer(conformer) 'node'
+			leaf then return try self.unwalkableCauseOfLeafConformer(conformer, kind: kind)
+			composite(composite) then return try self.unwalkableCauseWithin(composite, visited: ClonerSet.create(), kind: kind)
+			existential then panic("ProgramSignatures.findUnwalkableCauseOfConformer: a conformer is a concrete type and never denotes an interface")
+		end 'node'
+	end 'findUnwalkableCauseOfConformer'
+
+	function unwalkableCauseOfLeaf(slotType MaxonType, kind TransferKind) returns UnwalkableCause
+		return try self.unwalkableCauseOfLeafSlot(slotType, kind: kind) otherwise panic("ProgramSignatures.unwalkableCauseOfLeaf: a slot refused by the share walk is neither a promise, a function value, an OS handle nor a generic instance with no base struct")
+	end 'unwalkableCauseOfLeaf'
+
+	function unwalkableCauseOfSlot(slotType MaxonType, visited ClonerSet, kind TransferKind) returns UnwalkableCause throws AbsentError
+		match self.shareNodeOfSlot(slotType, from: self.typeNames) 'node'
+			leaf then return try self.unwalkableCauseOfLeafSlot(slotType, kind: kind)
+			existential then throw AbsentError.absent
+			composite(composite) then return try self.unwalkableCauseWithin(composite, visited: visited, kind: kind)
+		end 'node'
+	end 'unwalkableCauseOfSlot'
+
+	function unwalkableCauseWithin(composite ShareConformer, visited ClonerSet, kind TransferKind) returns UnwalkableCause throws AbsentError
+		if not self.cloneWalkMayDescendInto(self.shareConformerKey(composite), visited: visited) 'alreadyInFlight'
+			throw AbsentError.absent
+		end 'alreadyInFlight'
+
+		for slot in self.shareSlotsOf(composite) 'eachSlot'
+			if let cause = try self.unwalkableCauseOfSlot(slot.slotType, visited: visited, kind: kind) 'aCauseBelow'
+				return cause
+			end 'aCauseBelow'
+		end 'eachSlot'
+
+		throw AbsentError.absent
+	end 'unwalkableCauseWithin'
+
+	function unwalkableCauseOfLeafConformer(conformer ShareConformer, kind TransferKind) returns UnwalkableCause throws AbsentError
+		match conformer 'conformer'
+			named(name) then return try self.osHandleCauseOf(name, kind: kind)
+			instance then return UnwalkableCause.baselessInstance
+		end 'conformer'
+	end 'unwalkableCauseOfLeafConformer'
+
+	function unwalkableCauseOfLeafSlot(slotType MaxonType, kind TransferKind) returns UnwalkableCause throws AbsentError
+		let tag = maxonTypeTag(slotType)
+
+		if tag == ValueTypeTag.typeParameter 'anOpaqueSlot'
+			return UnwalkableCause.opaqueSlot
+		end 'anOpaqueSlot'
+
+		if tag == ValueTypeTag.genericInstance 'aLeafInstance'
+			if self.instanceIsPromiseHandle(genericInstanceIdOf(slotType)) 'aPromise'
+				throw AbsentError.absent
+			end 'aPromise'
+
+			return UnwalkableCause.baselessInstance
+		end 'aLeafInstance'
+
+		if not tagMayNameAggregate(tag) 'notAnAggregate'
+			throw AbsentError.absent
+		end 'notAnAggregate'
+
+		return try self.osHandleCauseOf(self.denotedSlotAggregateName(slotType), kind: kind)
+	end 'unwalkableCauseOfLeafSlot'
+
+	function socketCause(kind TransferKind) returns UnwalkableCause throws AbsentError
+		match kind 'kind'
+			send then throw AbsentError.absent
+			share then return UnwalkableCause.osHandle
+		end 'kind'
+	end 'socketCause'
+
+	function osHandleCauseOf(name ByteArray, kind TransferKind) returns UnwalkableCause throws AbsentError
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedSocket then return try self.socketCause(kind)
+			managedFile or
+			managedDirectory or
+			managedPages or
+			managedHandle or
+			managedPin then return UnwalkableCause.osHandle
+			serviceHandle or
+			userDeclared then throw AbsentError.absent
+		end 'compilerOwned'
+	end 'osHandleCauseOf'
+
+	export function shareConformerIsLibrary(conformer ShareConformer) returns bool
+		return match conformer 'conformer'
+			named(name) gives self.aggregateIsLibrary(name)
+			instance(id) gives self.instanceIsLibrary(id)
+		end 'conformer'
+	end 'shareConformerIsLibrary'
+
+	function aggregateIsLibrary(name ByteArray) returns bool
+		if isTupleTypeName(self.canonicalNameOfStruct(name)) 'aTuple'
+			return false
+		end 'aTuple'
+
+		if self.containsStructInAnyFile(name) 'aStruct'
+			return self.declaredInTheLibrary(self.structLayoutOf(name).declFilePath)
+		end 'aStruct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared(layout) then return self.declaredInTheLibrary(layout.declFilePath)
+			undeclared then return false
+		end 'union'
+	end 'aggregateIsLibrary'
+
+	function instanceIsLibrary(id GenericInstanceId) returns bool
+		if not self.genericInstanceHasBaseLayout(id) 'aSynthesizedContainer'
+			return true
+		end 'aSynthesizedContainer'
+
+		return self.declaredInTheLibrary(self.baseLayoutOf(id).declFilePath)
+	end 'instanceIsLibrary'
+
+	export function declaredInTheLibrary(declFilePath FilePath) returns bool
+		return self.declaredInTheStdlib(declFilePath) or self.declaredInTheRuntimeTier(declFilePath)
+	end 'declaredInTheLibrary'
+
+	export function shareConformerHoldRole(conformer ShareConformer, heldKey ByteArray) returns ShareHoldRole
+		return match conformer 'conformer'
+			named gives ShareHoldRole.inItsOwnFields
+			instance(id) gives self.instanceHoldRole(id, heldKey: heldKey)
+		end 'conformer'
+	end 'shareConformerHoldRole'
+
+	function instanceHoldRole(id GenericInstanceId, heldKey ByteArray) returns ShareHoldRole
+		let parameterNames = self.structTypeParamsOf(self.genericInstanceBaseName(id))
+
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			if self.typeHoldsShareKey(self.denotedArg(id, position: position), heldKey: heldKey) 'theHoldingArgument'
+				let parameterName = try parameterNames.get(position) otherwise panic("ProgramSignatures.instanceHoldRole: '{String.from(self.genericInstanceBaseName(id))}' has no declared parameter at position {position}, and an instance's arguments are as many as its declared parameters")
+				return ShareHoldRole.viaArguments("{String.from(parameterName).toLower()}s")
+			end 'theHoldingArgument'
+		end 'eachArgument'
+
+		return ShareHoldRole.inItsOwnFields
+	end 'instanceHoldRole'
+
+	function typeHoldsShareKey(type MaxonType, heldKey ByteArray) returns bool
+		match self.shareNodeOfSlot(type, from: self.typeNames) 'node'
+			leaf then return false
+			existential(name) then return name.equals(heldKey)
+			composite(composite) then return self.compositeHoldsShareKey(composite, heldKey: heldKey)
+		end 'node'
+	end 'typeHoldsShareKey'
+
+	function compositeHoldsShareKey(composite ShareConformer, heldKey ByteArray) returns bool
+		if self.shareConformerKey(composite).equals(heldKey) 'theHeldType'
+			return true
+		end 'theHeldType'
+
+		match composite 'composite'
+			named then return false
+			instance(id) then return self.instanceArgsHoldShareKey(id, heldKey: heldKey)
+		end 'composite'
+	end 'compositeHoldsShareKey'
+
+	function instanceArgsHoldShareKey(id GenericInstanceId, heldKey ByteArray) returns bool
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			if self.typeHoldsShareKey(self.denotedArg(id, position: position), heldKey: heldKey) 'anArgumentHoldsIt'
+				return true
+			end 'anArgumentHoldsIt'
+		end 'eachArgument'
+
+		return false
+	end 'instanceArgsHoldShareKey'
+
+	export function shareWalkRefusalOf(conformer ShareConformer, judgement ShareJudgement) returns ShareWalkRefusal
+		match self.shareNodeOfConformer(conformer) 'node'
+			composite(composite) then return self.refusalOfSlots(self.shareSlotsOf(composite), conformer: conformer, judgement: judgement)
+			leaf or
+			existential then break
+		end 'node'
+
+		return self.refusalOfTheWholeConformer(conformer, slots: ShareSlotArray.create(0), judgement: judgement)
+	end 'shareWalkRefusalOf'
+
+	function refusalOfSlots(slots ShareSlotArray, conformer ShareConformer, judgement ShareJudgement) returns ShareWalkRefusal
+		for slot in slots 'eachSlot'
+			match self.leafSlotShareRefusalOf(slot.slotType, judgement: judgement) 'refusal'
+				walkable then break
+				refused(noun) then return ShareWalkRefusal.field(slot.label, noun: noun)
+			end 'refusal'
+		end 'eachSlot'
+
+		return self.refusalOfTheWholeConformer(conformer, slots: slots, judgement: judgement)
+	end 'refusalOfSlots'
+
+	function compositeSlotHasNoShareWalk(slotType MaxonType, judgement ShareJudgement) returns bool
+		return match self.shareNodeOfSlot(slotType, from: self.typeNames) 'node'
+			composite(composite) gives not self.conformerHasAShareWalk(composite, judgement: judgement)
+			leaf or
+			existential gives false
+		end 'node'
+	end 'compositeSlotHasNoShareWalk'
+
+	function leafSlotShareRefusalOf(slotType MaxonType, judgement ShareJudgement) returns SlotShareRefusal
+		return match self.shareNodeOfSlot(slotType, from: self.typeNames) 'node'
+			leaf gives self.slotShareRefusalOf(slotType, judgement: judgement)
+			existential or
+			composite gives SlotShareRefusal.walkable
+		end 'node'
+	end 'leafSlotShareRefusalOf'
+
+	function refusalOfTheWholeConformer(conformer ShareConformer, slots ShareSlotArray, judgement ShareJudgement) returns ShareWalkRefusal
+		for slot in slots 'eachSlot'
+			if self.compositeSlotHasNoShareWalk(slot.slotType, judgement: judgement) 'aNestedNodeBearsIt'
+				return ShareWalkRefusal.none
+			end 'aNestedNodeBearsIt'
+		end 'eachSlot'
+
+		if self.conformerReachesAPromise(conformer) 'aPromise'
+			return ShareWalkRefusal.itself(PromiseSharedNoun)
+		end 'aPromise'
+
+		if self.conformerLacksAShareWalkOf(conformer, judgement: judgement) 'noPerTypeWalk'
+			return ShareWalkRefusal.itself(unwalkableCauseNoun(self.unwalkableCauseOfConformer(conformer, kind: TransferKind.share), kind: TransferKind.share))
+		end 'noPerTypeWalk'
+
+		return ShareWalkRefusal.none
+	end 'refusalOfTheWholeConformer'
+
+	export function conformerHasAShareWalk(conformer ShareConformer, judgement ShareJudgement) returns bool
+		return not self.conformerLacksAShareWalkOf(conformer, judgement: judgement) and not self.conformerReachesAPromise(conformer)
+	end 'conformerHasAShareWalk'
+
+	function conformerLacksAShareWalkOf(conformer ShareConformer, judgement ShareJudgement) returns bool
+		return match judgement 'judgement'
+			notJudged panic("ProgramSignatures.conformerLacksAShareWalkOf: a verdict is asked only of a program with a live share door")
+			promisesOnly gives false
+			everyCause gives self.conformerCascadeIsUnsupported(conformer, action: CascadeAction.shareWalk)
+		end 'judgement'
+	end 'conformerLacksAShareWalkOf'
+
+	function conformerCascadeIsUnsupported(conformer ShareConformer, action CascadeAction) returns bool
+		return self.cascadeCalleeFor(self.shareConformerKey(conformer), table: self.witnessTableOf(conformer), action: action).names(cascadeUnsupportedEntry(action))
+	end 'conformerCascadeIsUnsupported'
+
+	function conformerReachesAPromise(conformer ShareConformer) returns bool
+		return match conformer 'conformer'
+			named(name) gives self.aggregateGraphHoldsAPromise(self.denotedAggregateName(name), atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster)
+			instance(id) gives self.instanceGraphHoldsAPromise(id, atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster)
+		end 'conformer'
+	end 'conformerReachesAPromise'
+
+	function slotShareRefusalOf(slotType MaxonType, judgement ShareJudgement) returns SlotShareRefusal
+		if self.typeReachesAPromise(slotType, visited: ClonerSet.create(), atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster) 'aPromise'
+			return SlotShareRefusal.refused(PromiseSharedNoun)
+		end 'aPromise'
+
+		if judgement == ShareJudgement.promisesOnly or self.typeSupportsDeepClone(slotType, visited: ClonerSet.create(), purpose: GraphCascadePurpose.shareWalk) 'walkable'
+			return SlotShareRefusal.walkable
+		end 'walkable'
+
+		if self.typeSupportsDeepClone(slotType, visited: ClonerSet.create(), purpose: GraphCascadePurpose.shareWalkPastFunctionValues) 'onlyAFunctionValueBlocksIt'
+			return SlotShareRefusal.refused(FunctionValueCrossingNoun)
+		end 'onlyAFunctionValueBlocksIt'
+
+		return SlotShareRefusal.refused(unwalkableCauseNoun(self.unwalkableCauseOfLeaf(slotType, kind: TransferKind.share), kind: TransferKind.share))
+	end 'slotShareRefusalOf'
+
+	export function builtInstancesOfBase(base ByteArray) returns GenericInstanceIdArray
+		let built = GenericInstanceIdArray.create(0)
+		let baseId = try self.typeNames.idOf(base) otherwise return built
+		let rows = try self.rowsOfBase(baseId) otherwise return built
+
+		for id in rows 'eachRow'
+			if self.rowIsSpeculative(id) or not self.instanceArgsAreFullyConcrete(id) or self.instantiationChainViolatesItsWhereClause(id) 'notAnInstanceTheProgramBuilds'
+				continue
+			end 'notAnInstanceTheProgramBuilds'
+
+			built.push(id)
+		end 'eachRow'
+
+		return built
+	end 'builtInstancesOfBase'
+
+	export function openInstancesByOwner() returns OpenRowLog
+		let log = OpenRowLog.create()
+
+		for position in 0 upto self.rowCount() 'eachRow'
+			let id = self.rowIdAt(position)
+
+			if self.rowIsSpeculative(id) or self.instanceArgsAreFullyConcrete(id) 'notAnOpenInstance'
+				continue
+			end 'notAnOpenInstance'
+
+			log.file(try self.instanceParameterOwnerName(id) otherwise panic("ProgramSignatures.openInstancesByOwner: instance {id} is built on a type parameter and names the declaration that owns it — `recordStruct` files every declared parameter as the sweep folds"), row: id)
+		end 'eachRow'
+
+		return log
+	end 'openInstancesByOwner'
+
+	export function descriptorReadsForLowering() returns DescriptorReads
+		if self.descriptorReads.isSettled() 'aLoweringAlreadyRan'
+			panic("ProgramSignatures.descriptorReadsForLowering: the descriptor-read log is already settled — `prepareLowering` starts a fresh log for each lowering, so a second lowering on one log reached here without it")
+		end 'aLoweringAlreadyRan'
+
+		return self.descriptorReads
+	end 'descriptorReadsForLowering'
+
+	export function descriptorBlockOffsetOf(typeParameter MaxonType) returns ByteOffset
+		return self.descriptorReads.blockOffsetFor(try self.openTypeOwnerName(typeParameter) otherwise panic("ProgramSignatures.descriptorBlockOffsetOf: a type parameter names the declaration that owns it"), position: self.opaqueTypeParamPosition(typeParameter))
+	end 'descriptorBlockOffsetOf'
+
+	export function shareReachOfType(openType MaxonType) returns ParameterPositions
+		let reached = ParameterPositions.create()
+		self.collectShareReach(openType, standingIn: ClonerSet.create(), into: reached)
+		return reached
+	end 'shareReachOfType'
+
+	export function shareReachOfBase(base ByteArray) returns ParameterPositions
+		if not self.structDeclaresTypeParams(base) 'noParametersToReach'
+			return ParameterPositions.create()
+		end 'noParametersToReach'
+
+		return self.shareReachOfType(MaxonType.genericInstance(self.ownRecordSelfInstance(base)))
+	end 'shareReachOfBase'
+
+	function collectShareReach(slotType MaxonType, standingIn ClonerSet, into ParameterPositions)
+		if maxonTypeTag(slotType) == ValueTypeTag.typeParameter 'anOpaqueSlot'
+			into.insert(self.opaqueTypeParamPosition(slotType))
+			return
+		end 'anOpaqueSlot'
+
+		match self.shareNodeOfSlot(slotType, from: self.typeNames) 'node'
+			leaf or
+			existential then break
+			composite(composite) then self.collectCompositeShareReach(composite, standingIn: standingIn, into: into)
+		end 'node'
+	end 'collectShareReach'
+
+	function collectCompositeShareReach(composite ShareConformer, standingIn ClonerSet, into ParameterPositions)
+		let key = self.shareConformerKey(composite)
+
+		if standingIn.contains(key) 'alreadyReached'
+			return
+		end 'alreadyReached'
+
+		standingIn.insert(key)
+
+		for slot in self.shareSlotsOf(composite) 'eachSlot'
+			self.collectShareReach(slot.slotType, standingIn: standingIn, into: into)
+		end 'eachSlot'
+	end 'collectCompositeShareReach'
+
+	export function noteOpenTypeFacts(t MaxonType, into DescriptorReads)
+		let resolved = self.typeArgumentType(t)
+		let tag = maxonTypeTag(resolved)
+
+		if tag == ValueTypeTag.typeParameter 'aBareParameter'
+			into.noteBare(try self.openTypeOwnerName(resolved) otherwise panic("ProgramSignatures.noteOpenTypeFacts: a type parameter names the declaration that owns it — `recordStruct` files every declared parameter as the sweep folds"), position: self.opaqueTypeParamPosition(resolved))
+			return
+		end 'aBareParameter'
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			let id = genericInstanceIdOf(resolved)
+
+			if self.instanceIsBuiltOnATypeParameter(id) 'anOpenRow'
+				into.noteRow(try self.instanceParameterOwnerName(id) otherwise panic("ProgramSignatures.noteOpenTypeFacts: an instance built on a type parameter names the declaration that owns it"), row: id)
+			end 'anOpenRow'
+
+			return
+		end 'anInstance'
+
+		let components = try self.aggregateComponentsOf(resolved, functions: FunctionMentions.ignored) otherwise return
+
+		for component in components 'eachComponent'
+			self.noteOpenTypeFacts(component, into: into)
+		end 'eachComponent'
+	end 'noteOpenTypeFacts'
+
+	export function constrainedPositionsOfBase(base ByteArray) returns ParameterPositions
+		let constrained = ParameterPositions.create()
+
+		for constraint in self.structWhereConstraints(base) 'eachConstraint'
+			constrained.insert(constraint.typeParamIndex)
+		end 'eachConstraint'
+
+		return constrained
+	end 'constrainedPositionsOfBase'
+
+	export function typeMentionedParameters(openType MaxonType, policy MentionPolicy) returns ParameterPositions
+		let mentioned = ParameterPositions.create()
+		self.collectMentionedParameters(openType, into: mentioned, policy: policy)
+		return mentioned
+	end 'typeMentionedParameters'
+
+	function collectMentionedParameters(t MaxonType, into ParameterPositions, policy MentionPolicy)
+		let resolved = self.typeArgumentType(t)
+		let tag = maxonTypeTag(resolved)
+
+		if tag == ValueTypeTag.typeParameter 'theParameterItself'
+			into.insert(self.opaqueTypeParamPosition(resolved))
+			return
+		end 'theParameterItself'
+
+		if tag == ValueTypeTag.genericInstance 'aNestedInstance'
+			let id = genericInstanceIdOf(resolved)
+			let base = self.genericInstanceBaseName(id)
+
+			for position in 0 upto self.genericInstanceArgCount(id) 'eachArg'
+				if policy.keeps(self, base: base, position: position) 'theArgumentIsFollowed'
+					self.collectMentionedParameters(self.substitutedInstanceArg(id, position: position), into: into, policy: policy)
+				end 'theArgumentIsFollowed'
+			end 'eachArg'
+
+			return
+		end 'aNestedInstance'
+
+		let components = try self.aggregateComponentsOf(resolved, functions: policy.functions) otherwise return
+
+		for component in components 'eachComponent'
+			self.collectMentionedParameters(component, into: into, policy: policy)
+		end 'eachComponent'
+	end 'collectMentionedParameters'
+
+	export function denotedShareSubject(subject MaxonType, from TypeNameInterner, inFunction ByteArray, readerFilePath FilePath) returns MaxonType
+		let tag = maxonTypeTag(subject)
+
+		if tag == ValueTypeTag.named 'aSpelling'
+			let name = foreignNameOf(from, id: typeNameIdOf(subject))
+
+			if self.isGenericAliasInAnyFile(name) 'aGenericAlias'
+				return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: readerFilePath))
+			end 'aGenericAlias'
+
+			return subject
+		end 'aSpelling'
+
+		if tag != ValueTypeTag.structRef 'notABareRecord'
+			return subject
+		end 'notABareRecord'
+
+		let name = freeze self.conformerNameOfType(subject, idsFrom: from, readerFilePath: readerFilePath).toByteArray()
+
+		if not self.structDeclaresTypeParams(name) 'aPlainRecord'
+			return subject
+		end 'aPlainRecord'
+
+		return MaxonType.genericInstance(self.ownInstanceOfGenericBase(name, inFunction: inFunction))
+	end 'denotedShareSubject'
+
+	export function openTypeOwnerName(openType MaxonType) returns immutable ByteArray throws MapError
+		return self.typeParamDeclaringTypeName(try self.firstTypeParameterIn(openType))
+	end 'openTypeOwnerName'
+
+	export function resolveBindingThrough(binding RequirementType, owner WitnessTableInstance) returns RequirementType
+		match owner 'owner'
+			shared then return binding
+			perInstance(through) then return self.resolvedBindingOf(binding, through: through)
+		end 'owner'
+	end 'resolveBindingThrough'
+
+	function resolvedBindingOf(binding RequirementType, through GenericInstanceId) returns RequirementType
+		return match binding.identity 'identity'
+			genericInstance(id) gives RequirementType.create(RequirementTypeIdentity.genericInstance(genericInstanceIdOf(self.substituteThroughInstance(MaxonType.genericInstance(id), id: through))), brand: binding.brand)
+			typeParameter(token) gives self.instanceArgTypeRequirement(self.substituteThroughInstance(MaxonType.typeParameter(token), id: through))
+			nominal or
+			builtin gives binding
+			void or
+			selfType panic("ProgramSignatures.resolvedBindingOf: a conformance binds an associated type to a declared type, never to `void` or `Self`")
+		end 'identity'
+	end 'resolvedBindingOf'
+
+	export function witnessTableOf(conformer ShareConformer) returns WitnessTableInstance
+		return match conformer 'conformer'
+			named gives WitnessTableInstance.shared
+			instance(id) gives WitnessTableInstance.perInstance(id)
+		end 'conformer'
+	end 'witnessTableOf'
+
+	export function cascadeCalleeFor(typeName ByteArray, table WitnessTableInstance, action CascadeAction) returns OwnershipCallee
+		return match table 'table'
+			shared gives self.existentialCascadeCallee(typeName, action: action)
+			perInstance(gid) gives self.instanceExistentialCascadeCallee(gid, action: action)
+		end 'table'
+	end 'cascadeCalleeFor'
+
+	export function declaredBindingOf(declared RequirementType) returns BindingDeclaration
+		return match declared.identity 'identity'
+			genericInstance(row) gives BindingDeclaration.instance(row)
+			typeParameter or
+			nominal or
+			builtin or
+			void or
+			selfType gives BindingDeclaration.nominal
+		end 'identity'
+	end 'declaredBindingOf'
+
+	export function heldBindingAt(conformer ShareConformer, interfaceName ByteArray, position ElementIndex, conformances ConformanceDeclArray) returns HeldBinding
+		let held = try self.associatedTypeHeldAt(interfaceName, position: position) otherwise return HeldBinding.none
+
+		let declaring = match conformer 'conformer'
+			named(name) gives name
+			instance(id) gives self.genericInstanceBaseName(id)
+		end 'conformer'
+
+		let (decl, entry) = try conformanceDeclBindingEntry(conformances, typeName: declaring, interfaceName: interfaceName, position: position) otherwise return HeldBinding.none
+		let site = entry.bindingSiteAt(position)
+		let bound = self.resolveBindingThrough(entry.bindingTypeAt(position), owner: self.witnessTableOf(conformer))
+
+		return match bound.identity 'identity'
+			nominal gives HeldBinding.binds(held, conformer: ShareConformer.named(self.conformerNameOfRequirement(bound, readerFilePath: decl.filePath)), declaredAs: BindingDeclaration.nominal, line: site.line, column: site.column, filePath: decl.filePath)
+			genericInstance(id) gives HeldBinding.binds(held, conformer: ShareConformer.instance(id), declaredAs: self.declaredBindingOf(entry.bindingTypeAt(position)), line: site.line, column: site.column, filePath: decl.filePath)
+			builtin gives HeldBinding.none
+			typeParameter panic("ProgramSignatures.heldBindingAt: '{String.from(declaring)}' binds `{String.from(interfaceName)}` at {position} to a type parameter that its own instance does not resolve")
+			void or
+			selfType panic("ProgramSignatures.heldBindingAt: a conformance binds an associated type to a declared type, never to `void` or `Self`")
+		end 'identity'
+	end 'heldBindingAt'
 
 	function existentialTransferWalk(interfaceName ByteArray, kind TransferKind) returns TransferWalk
 		if kind == TransferKind.share 'walkedThroughItsWitness'
@@ -3760,12 +4455,12 @@ extension ProgramSignatures
 	function instanceTransferWalk(id GenericInstanceId, kind TransferKind) returns TransferWalk
 		let display = String.from(self.instanceDisplayName(id))
 
-		if kind == TransferKind.share and self.instanceGraphHoldsAPromise(id) 'aSharedPromise'
+		if kind == TransferKind.share and self.instanceGraphHoldsAPromise(id, atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster) 'aSharedPromise'
 			return TransferWalk.refused("a `{display}` whose graph reaches {PromiseSharedNoun}")
 		end 'aSharedPromise'
 
 		if not self.instanceSupportsTransfer(id, kind: kind) 'someNestedTypeHasNoWalk'
-			return unwalkableTransfer(display, kind: kind, onlyFunctionValuesBlockIt: self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: transferPurposeOf(kind, pastFunctionValues: true)))
+			return unwalkableTransfer(display, kind: kind, blocker: self.instanceTransferBlocker(id, kind: kind))
 		end 'someNestedTypeHasNoWalk'
 
 		match kind 'kind'
@@ -3809,7 +4504,7 @@ extension ProgramSignatures
 			return TransferWalk.closed
 		end 'aWordRecord'
 
-		if kind == TransferKind.share and self.aggregateGraphHoldsAPromise(name) 'aSharedPromise'
+		if kind == TransferKind.share and self.aggregateGraphHoldsAPromise(name, atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster) 'aSharedPromise'
 			return TransferWalk.refused("a `{String.from(name)}` whose graph reaches {PromiseSharedNoun}")
 		end 'aSharedPromise'
 
@@ -3825,13 +4520,29 @@ extension ProgramSignatures
 	function socketTransferWalk(display String, kind TransferKind) returns TransferWalk
 		return match kind 'kind'
 			send gives TransferWalk.closed
-			share gives transferWalkFrom(ManagedCascadeStrategy.unsupported, display: display)
+			share gives unwalkableTransfer(display, kind: kind, blocker: TransferBlocker.cause(UnwalkableCause.osHandle))
 		end 'kind'
 	end 'socketTransferWalk'
 
+	function instanceTransferBlocker(id GenericInstanceId, kind TransferKind) returns TransferBlocker
+		if self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: transferPurposeOf(kind, pastFunctionValues: true)) 'onlyAFunctionValueBlocksIt'
+			return TransferBlocker.onlyFunctionValues
+		end 'onlyAFunctionValueBlocksIt'
+
+		return TransferBlocker.cause(self.unwalkableCauseOfConformer(ShareConformer.instance(id), kind: kind))
+	end 'instanceTransferBlocker'
+
+	function aggregateTransferBlocker(name ByteArray, kind TransferKind) returns TransferBlocker
+		if self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: transferPurposeOf(kind, pastFunctionValues: true)) 'onlyAFunctionValueBlocksIt'
+			return TransferBlocker.onlyFunctionValues
+		end 'onlyAFunctionValueBlocksIt'
+
+		return TransferBlocker.cause(self.unwalkableCauseOfConformer(ShareConformer.named(name), kind: kind))
+	end 'aggregateTransferBlocker'
+
 	function declaredAggregateTransferWalk(name ByteArray, kind TransferKind) returns TransferWalk
 		if not self.aggregateSupportsTransfer(name, kind: kind) 'someNestedTypeHasNoWalk'
-			return unwalkableTransfer(String.from(name), kind: kind, onlyFunctionValuesBlockIt: self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: transferPurposeOf(kind, pastFunctionValues: true)))
+			return unwalkableTransfer(String.from(name), kind: kind, blocker: self.aggregateTransferBlocker(name, kind: kind))
 		end 'someNestedTypeHasNoWalk'
 
 		match kind 'kind'
@@ -6189,6 +6900,8 @@ extension ProgramSignatures
 			_ = self.uniqueTypeAnswers.remove(try self.journal.uniqueTypeNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: uniqueTypeNames.get OOB at {position}"))
 		end 'eachUniqueTypeAnswer'
 
+		self.growthMemo.clear()
+		self.descriptorReads = DescriptorReads.create()
 		self.restoreScalarsTo(mark)
 	end 'rewindJournaledWrites'
 
@@ -6208,6 +6921,8 @@ extension ProgramSignatures
 		self.uniqueTypeAnswers = DeepCloneAnswerMap.create()
 		self.deepCloneAnswers = DeepCloneAnswerMap.create()
 		self.shareWalkAnswers = DeepCloneAnswerMap.create()
+		self.growthMemo.clear()
+		self.descriptorReads = DescriptorReads.create()
 		self.restoreScalarsTo(self.baselineBandMark())
 	end 'resetOverlayTables'
 

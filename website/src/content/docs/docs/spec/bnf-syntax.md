@@ -524,7 +524,7 @@ default_decl  = 'default' IDENTIFIER '=' expression NEWLINE
 ```
 
 The IDENTIFIER is the key. An interface key's expression is a `spawn_expr` (§6.7) of a type that
-implements it (E3170); any other key is a type the expression builds whose graph a share walk can mark (E3171). The key gains the
+implements it (E3170); any other key is a type the expression builds whose graph a share walk can mark, through every conformer the program converts to an interface the graph holds (E3171). The key gains the
 statics `current()` and `register(value)` / `register(value, replacing: old)`. `default` is also a `match`
 keyword (§5.7); at the start of a top-level declaration it begins this production. Two
 declarations for one key in the program's files, or two in the standard library, are E3169.

@@ -158,13 +158,6 @@ function addressRootOf(module StdModule, defs StdValueDefs, arith StdArithOperan
 	return AddressRoot.create(current, offset: offset)
 end 'addressRootOf'
 
-enum DescriptorAction
-	retain
-	drop
-	release
-	reclaim
-end 'DescriptorAction'
-
 union DescriptorOutcome
 	inert
 	direct(name immutable ByteArray)
@@ -172,7 +165,7 @@ end 'DescriptorOutcome'
 
 union TableUseKind
 	witnessSlot
-	descriptorAction(action DescriptorAction)
+	descriptorAction(action TypeParamEntry)
 end 'TableUseKind'
 
 type TableUse
@@ -262,7 +255,7 @@ type TableCallProbe
 		end 'anAllocation'
 
 		if isDescriptorCall(self.call) 'aDescriptorCall'
-			return self.noteDescriptorCall(module, func: func, action: descriptorActionOf(self.call.callee))
+			return self.noteDescriptorCall(module, func: func, action: descriptorEntryOf(self.call.callee))
 		end 'aDescriptorCall'
 
 		return false
@@ -300,7 +293,7 @@ type TableCallProbe
 		return true
 	end 'noteWitnessDispatch'
 
-	function noteDescriptorCall(module StdModule, func IrFunction, action DescriptorAction) returns bool
+	function noteDescriptorCall(module StdModule, func IrFunction, action TypeParamEntry) returns bool
 		let descriptor = self.call.firstArg
 		var root = AddressRoot.create(descriptor, offset: 0)
 
@@ -371,7 +364,7 @@ function witnessSlotServes(word RdataWord, byName FunctionNameIndex) returns boo
 	end 'word'
 end 'witnessSlotServes'
 
-function descriptorActionResolves(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, action DescriptorAction, descriptor ValueId, baseOffset ByteOffset) returns bool
+function descriptorActionResolves(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, action TypeParamEntry, descriptor ValueId, baseOffset ByteOffset) returns bool
 	let outcome = try resolveDescriptorAction(project, module: module, defs: defs, arith: arith, slots: slots, action: action, descriptor: descriptor, baseOffset: baseOffset) otherwise return false
 
 	match outcome 'outcome'
@@ -382,17 +375,20 @@ end 'descriptorActionResolves'
 
 // Each outcome must be what the runtime's `buildRecordGatedAction` entry does with these two words;
 // a divergence miscompiles every spliced copy silently.
-function resolveDescriptorAction(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, action DescriptorAction, descriptor ValueId, baseOffset ByteOffset) returns DescriptorOutcome throws AbsentError
-	let retainWord = resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: descriptor, kind: RdataPayloadKind.layoutDescriptor, wordOffset: baseOffset + LAYOUT_OFFSET_RETAIN_FUNC)
-	let destroyWord = resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: descriptor, kind: RdataPayloadKind.layoutDescriptor, wordOffset: baseOffset + LAYOUT_OFFSET_DESTROY_FUNC)
+function resolveDescriptorAction(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, action TypeParamEntry, descriptor ValueId, baseOffset ByteOffset) returns DescriptorOutcome throws AbsentError
+	let word = resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: descriptor, kind: RdataPayloadKind.layoutDescriptor, wordOffset: baseOffset + typeParamEntryWord(action))
 
-	match action 'action'
-		retain then return try outcomeOfWord(retainWord)
-		drop then return try outcomeOfWord(destroyWord)
-		release then return try releaseOutcome(retainWord, destroyWord: destroyWord)
-		reclaim then return try reclaimOutcome(retainWord, destroyWord: destroyWord)
-	end 'action'
+	match typeParamEntryAction(action) 'gated'
+		callThroughWord or
+		retainThroughWord then return try outcomeOfWord(word)
+		destroyWhenRetainable then return try releaseOutcome(word, destroyWord: descriptorDestroyWord(project, module: module, defs: defs, arith: arith, slots: slots, descriptor: descriptor, baseOffset: baseOffset))
+		destroyWhenUnretained then return try reclaimOutcome(word, destroyWord: descriptorDestroyWord(project, module: module, defs: defs, arith: arith, slots: slots, descriptor: descriptor, baseOffset: baseOffset))
+	end 'gated'
 end 'resolveDescriptorAction'
+
+function descriptorDestroyWord(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, descriptor ValueId, baseOffset ByteOffset) returns RdataWord
+	return resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: descriptor, kind: RdataPayloadKind.layoutDescriptor, wordOffset: baseOffset + LAYOUT_OFFSET_DESTROY_FUNC)
+end 'descriptorDestroyWord'
 
 function outcomeOfWord(word RdataWord) returns DescriptorOutcome throws AbsentError
 	match word 'word'
@@ -493,25 +489,12 @@ function isDescriptorCall(call StdCallOperands) returns bool
 	return call.namesACallee() and not call.throwsToAFlag() and call.argCount == DescriptorActionArity and isTypeParamOwnershipCallee(call.callee)
 end 'isDescriptorCall'
 
-function descriptorActionOf(callee ByteArray) returns DescriptorAction
-	if callee.equals(RetainTypeParamName) 'aRetain'
-		return DescriptorAction.retain
-	end 'aRetain'
-
-	if callee.equals(DropTypeParamName) 'aDrop'
-		return DescriptorAction.drop
-	end 'aDrop'
-
-	if callee.equals(ReleaseTypeParamName) 'aRelease'
-		return DescriptorAction.release
-	end 'aRelease'
-
-	if callee.equals(ReclaimTypeParamName) 'aReclaim'
-		return DescriptorAction.reclaim
-	end 'aReclaim'
-
-	panic("descriptorActionOf: '{String.from(callee)}' is not a descriptor-gated ownership callee")
-end 'descriptorActionOf'
+function descriptorEntryOf(callee ByteArray) returns TypeParamEntry
+	return match typeParamEntryCalleeOf(callee) 'callee'
+		entry(entry) gives entry
+		otherCallee panic("descriptorEntryOf: '{String.from(callee)}' is not a descriptor-gated ownership callee — `isDescriptorCall` admits only a `TypeParamEntry`")
+	end 'callee'
+end 'descriptorEntryOf'
 
 function devirtualizeWitnessDispatch(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex, witness StdWitnessOperands, opIdx ElementIndex) returns bool
 	var target = EmptySourceText
@@ -539,7 +522,7 @@ function devirtualizeWitnessDispatch(project Project, module StdModule, defs Std
 end 'devirtualizeWitnessDispatch'
 
 function devirtualizeDescriptorCall(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, call StdCallOperands, opIdx ElementIndex) returns bool
-	let outcome = try resolveDescriptorAction(project, module: module, defs: defs, arith: arith, slots: slots, action: descriptorActionOf(call.callee), descriptor: call.firstArg, baseOffset: 0) otherwise return false
+	let outcome = try resolveDescriptorAction(project, module: module, defs: defs, arith: arith, slots: slots, action: descriptorEntryOf(call.callee), descriptor: call.firstArg, baseOffset: 0) otherwise return false
 	try module.ops.set(opIdx, value: descriptorReplacement(outcome, call: call)) otherwise panic("devirtualizeDescriptorCall: ops.set({opIdx}) OOB")
 	return true
 end 'devirtualizeDescriptorCall'

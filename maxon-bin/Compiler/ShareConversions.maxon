@@ -1,0 +1,193 @@
+export type ShareConversionSite
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(line LineNumber, column ColumnNumber, filePath FilePath) returns Self
+		return Self{line: line, column: column, filePath: filePath}
+	end 'create'
+end 'ShareConversionSite'
+
+export type ShareConversion
+	export let conformer as ShareConformer
+	export let site as ShareConversionSite
+
+	export static function create(conformer ShareConformer, site ShareConversionSite) returns Self
+		return Self{conformer: conformer, site: site}
+	end 'create'
+end 'ShareConversion'
+
+export typealias ShareConversionArray = Array with ShareConversion
+
+type InterfaceConversions
+	let conversions as ShareConversionArray
+	let seen as ClonerSet
+
+	static function create() returns Self
+		return Self{conversions: ShareConversionArray.create(0), seen: ClonerSet.create()}
+	end 'create'
+end 'InterfaceConversions'
+
+typealias ConversionsByInterface = Map with (ByteArray, InterfaceConversions)
+
+export enum ShareJudgement
+	notJudged
+	promisesOnly
+	everyCause
+end 'ShareJudgement'
+
+export type ShareRoster
+	let rows as ConversionsByInterface
+	let interfaceNames as NameRoster
+
+	export static function create() returns Self
+		return Self{rows: ConversionsByInterface.create(), interfaceNames: NameRoster.create(0)}
+	end 'create'
+
+	export function note(interfaceName ByteArray, conformer ShareConformer, key ByteArray, site ShareConversionSite) returns bool
+		let row = self.rowOf(interfaceName)
+
+		if row.seen.contains(key) 'alreadyConverted'
+			return false
+		end 'alreadyConverted'
+
+		row.seen.insert(key)
+		row.conversions.push(ShareConversion.create(conformer, site: site))
+		return true
+	end 'note'
+
+	function rowOf(interfaceName ByteArray) returns InterfaceConversions
+		if let held = try self.rows.get(interfaceName) 'known'
+			return held
+		end 'known'
+
+		let fresh = InterfaceConversions.create()
+		self.rows.upsert(interfaceName, value: fresh)
+		self.interfaceNames.push(interfaceName)
+		return fresh
+	end 'rowOf'
+
+	export function records(interfaceName ByteArray, key ByteArray) returns bool
+		let row = try self.rows.get(interfaceName) otherwise return false
+		return row.seen.contains(key)
+	end 'records'
+
+	export function names() returns NameRoster
+		return self.interfaceNames
+	end 'names'
+
+	export function conversionsOf(interfaceName ByteArray) returns ShareConversionArray
+		let row = try self.rows.get(interfaceName) otherwise return ShareConversionArray.create(0)
+		return row.conversions
+	end 'conversionsOf'
+end 'ShareRoster'
+
+export type ShareConversionLog
+	export let judgement as ShareJudgement
+	export let roster as ShareRoster
+	let returnStarts as ReturnedValueStartsByFunction
+
+	export static function create(judgement ShareJudgement) returns Self
+		return Self{judgement: judgement, roster: ShareRoster.create(), returnStarts: ReturnedValueStartsByFunction.create()}
+	end 'create'
+
+	export function judging() returns bool
+		return match self.judgement 'judgement'
+			notJudged gives false
+			promisesOnly or
+			everyCause gives true
+		end 'judgement'
+	end 'judging'
+
+	function returnStartsOf(func IrFunction) returns ReturnedValueStartIndex
+		if let known = try self.returnStarts.get(func.name) 'indexed'
+			return known
+		end 'indexed'
+
+		let fresh = ReturnedValueStartIndex.of(func)
+		self.returnStarts.upsert(func.name, value: fresh)
+		return fresh
+	end 'returnStartsOf'
+
+	export function returnedValueStart(func IrFunction, value ValueId) returns ReturnedValueStart throws AbsentError
+		return try self.returnStartsOf(func).startOf(value)
+	end 'returnedValueStart'
+end 'ShareConversionLog'
+
+function openShareConversionLog(project Project, module MaxonModule) returns ShareConversionLog
+	for func in module.functions 'eachFunc'
+		if func.shareDoorSites.count() > 0 and not project.libraryFacts.bodyIsSwept(func.name) 'aLiveDoor'
+			return ShareConversionLog.create(ShareJudgement.everyCause if programSignaturesIn(project, asker: "openShareConversionLog").spawnsAnyService() else ShareJudgement.promisesOnly)
+		end 'aLiveDoor'
+	end 'eachFunc'
+
+	return ShareConversionLog.create(ShareJudgement.notJudged)
+end 'openShareConversionLog'
+
+function shareConversionTagOf(func IrFunction, value ValueId) returns ValueTypeTag
+	return try func.valueTags.get(value) otherwise panic("noteShareConversion: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value is minted with its type columns")
+end 'shareConversionTagOf'
+
+function noteShareConversion(project Project, func IrFunction, value ValueId, interfaceName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath)
+	let tag = shareConversionTagOf(func, value: value)
+
+	if not project.shareConversions.judging() or tag == ValueTypeTag.interfaceRef 'nothingWillJudgeIt'
+		return
+	end 'nothingWillJudgeIt'
+
+	let nameId = try func.valueNameIds.get(value) otherwise panic("noteShareConversion: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+
+	match tag 'tag'
+		unresolved or
+		void or
+		function or
+		typeParameter then panic("noteShareConversion: v{value} of function '{String.from(func.name)}' is widened to `{String.from(interfaceName)}` as a `{typeTagName(tag)}`, which no conformance claims — the widening verdict answers `widens` only for a concrete conformer")
+		interfaceRef then panic("noteShareConversion: v{value} of function '{String.from(func.name)}' is already held at an interface — the check above returns for it")
+		boolean or
+		integer or
+		float or
+		named or
+		exitCode or
+		structRef or
+		string or
+		genericInstance or
+		character or
+		cstring then break
+	end 'tag'
+
+	let signatures = programSignaturesIn(project, asker: "noteShareConversion")
+	let conformer = signatures.shareConformerOfValue(tag, nameId: nameId, inFunction: func.name, idsFrom: project.typeNames, readerFilePath: filePath)
+	_ = project.shareConversions.roster.note(interfaceName, conformer: conformer, key: signatures.shareConformerKey(conformer), site: ShareConversionSite.create(line, column: column, filePath: filePath))
+end 'noteShareConversion'
+
+typealias ReturnedValueStartsByValue = Map with (ValueId, ReturnedValueStart)
+typealias ReturnedValueStartsByFunction = Map with (ByteArray, ReturnedValueStartIndex)
+
+type ReturnedValueStartIndex
+	let byValue as ReturnedValueStartsByValue
+
+	static function of(func IrFunction) returns Self
+		let index = Self{byValue: ReturnedValueStartsByValue.create()}
+
+		for start in func.returnedValueStarts 'eachStart'
+			if not index.byValue.contains(start.value) 'theValuesFirstReturn'
+				index.byValue.upsert(start.value, value: start)
+			end 'theValuesFirstReturn'
+		end 'eachStart'
+
+		return index
+	end 'of'
+
+	function startOf(value ValueId) returns ReturnedValueStart throws AbsentError
+		return try self.byValue.get(value) otherwise throw AbsentError.absent
+	end 'startOf'
+end 'ReturnedValueStartIndex'
+
+function noteShareConversionAtReturn(project Project, func IrFunction, value ValueId, interfaceName ByteArray, retRange SourceRange)
+	if not project.shareConversions.judging() or shareConversionTagOf(func, value: value) == ValueTypeTag.interfaceRef 'nothingWillJudgeIt'
+		return
+	end 'nothingWillJudgeIt'
+
+	let start = try project.shareConversions.returnedValueStart(func, value: value) otherwise panic("noteShareConversionAtReturn: the `return` of '{String.from(func.name)}' at {retRange.line}:{retRange.column} returns v{value} to `{String.from(interfaceName)}`, and `Parser.recordReturnedValueStart` records the value each `return` hands to its exit for every function declared at an interface")
+	noteShareConversion(project, func: func, value: value, interfaceName: interfaceName, line: start.line, column: start.column, filePath: func.sourceFilePath)
+end 'noteShareConversionAtReturn'
