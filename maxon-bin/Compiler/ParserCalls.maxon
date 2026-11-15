@@ -6976,8 +6976,13 @@ extension Parser
 		let receiver = try self.requireReceiverValue(anchor)
 		self.noteOperandRead(self.receiverRootBinding(), at: self.pos)
 
-		if self.job.recordsEditorFacts and self.bodyState.scope.contains(SelfParamName) 'theMethodItself'
-			self.noteEditorBinding(self.bodyState.scope.getInfo(SelfParamName), line: anchor.line, column: anchor.column)
+		if self.bodyState.scope.contains(SelfParamName) 'theMethodItself'
+			let method = self.bodyState.scope.getInfo(SelfParamName)
+			self.noteHeaderRead(method.moveStateValue(), nameTok: anchor)
+
+			if self.job.recordsEditorFacts 'anEditedDocument'
+				self.noteEditorBinding(method, line: anchor.line, column: anchor.column)
+			end 'anEditedDocument'
 		end 'theMethodItself'
 
 		return receiver

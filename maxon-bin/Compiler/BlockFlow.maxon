@@ -31,6 +31,10 @@ type BlockFlow
 			for (opIter, opIdx) in block.bodyOps().withIterator() 'eachOp'
 				opPositions.upsert(opIdx, value: keyOf(blockIter.index(), low: opIter.index()))
 			end 'eachOp'
+
+			if block.hasTerminatorOp() 'endsInAnOp'
+				opPositions.upsert(block.terminatorIndex(), value: keyOf(blockIter.index(), low: block.bodyOps().count()))
+			end 'endsInAnOp'
 		end 'eachBlock'
 
 		return Self{func: func, blockIndex: blockIndex, successors: successors, opPositions: opPositions, reachFrom: BlockReachMemo.create()}

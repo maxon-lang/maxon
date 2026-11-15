@@ -879,6 +879,9 @@ release's version as its heading when the release is cut.
   items.withIterator()`) is held by the loop until it ends, so sending it as a service message or `spawn`
   factory argument inside the loop is E3200, whether or not a `break` follows the send.
   Fix: send it after the loop, or send a `.clone()`.
+- `let a = r as isolated T` over a local `r` moves the value to `a`, as `let a = r` does, and reading `r`
+  afterwards is E3102 (`use of moved value 'r'`).
+  Fix: read the value through `a` instead of `r`.
 
 ## 0.5.0 — 2026-10-08
 

@@ -8710,7 +8710,7 @@ extension Parser
 	// sound over-approximation: `localBindingNamed`'s `scope.contains`, and `poisonMoveSource`'s own
 	// owned-set match, keep the authority.
 	function rhsRootName(startPos ElementIndex) returns immutable ByteArray throws AbsentError
-		let hi = self.pos
+		let hi = self.rhsValueEnd(startPos)
 		var lo = startPos
 		var openParens = 0 as Count
 
@@ -8761,6 +8761,15 @@ extension Parser
 		return SelfParamName if namesAConsumedReceiver else tok.value
 	end 'rhsRootName'
 
+	// The span's end before a trailing `as isolated T`: read with it, `let a = r as isolated T` is no
+	// bare local, `r` is never moved and two bindings own one value.
+	function rhsValueEnd(startPos ElementIndex) returns ElementIndex
+		return match self.statement.lastCapabilityAnnotation 'recorded'
+			nothingRecorded gives self.pos
+			recorded(first, pastEnd) gives first if first >= startPos and pastEnd == self.pos else self.pos
+		end 'recorded'
+	end 'rhsValueEnd'
+
 	function rhsRootLocalName(startPos ElementIndex) returns SourceBinding
 		let name = try self.rhsRootName(startPos) otherwise return SourceBinding.none
 		return self.localBindingNamed(name)
@@ -8784,9 +8793,10 @@ extension Parser
 	// the chain grammar `rhsRootName` owns. Spans here are a handful of tokens, so the scan is
 	// cheaper than carrying a second return value out of that walk.
 	function rhsSpanReadsAField(startPos ElementIndex) returns bool
+		let valueEnd = self.rhsValueEnd(startPos)
 		var i = startPos
 
-		while i < self.pos 'eachToken'
+		while i < valueEnd 'eachToken'
 			if self.kindAt(i) == TokenKind.dot 'fieldStep'
 				return true
 			end 'fieldStep'

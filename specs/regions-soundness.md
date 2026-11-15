@@ -9336,3 +9336,58 @@ end 'main'
 ```maxoncstderr
 error E3205: <fragment>:44:21: cannot call 'waits' inside 'the isolated value'; it may wait (it awaits a reply from 'S' at line 38). Call it before or after the block
 ```
+
+<!-- test: an-isolated-local-rebound-as-isolated-is-read-through-the-new-name -->
+`let a = r as isolated Box` hands the region `r` holds to `a`, as `let a = r` does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias NumArray = Array with Num
+
+type Box
+	var items as NumArray
+
+	static function create() returns Self
+		return Self{items: NumArray.create(0)}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let r = Box.create() as isolated Box
+	let a = r as isolated Box
+	print("{a.items.count()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+0
+```
+```exitcode
+0
+```
+
+<!-- test: an-isolated-local-read-through-its-source-after-an-isolated-rebind-is-refused -->
+The source of the rebind no longer holds the region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias NumArray = Array with Num
+
+type Box
+	var items as NumArray
+
+	static function create() returns Self
+		return Self{items: NumArray.create(0)}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let r = Box.create() as isolated Box
+	let a = r as isolated Box
+	print("{a.items.count()} {r.items.count()}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:28: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```

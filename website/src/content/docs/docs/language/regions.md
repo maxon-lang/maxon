@@ -50,7 +50,7 @@ operator over a parenthesized operand (`specs/regions-syntax.md`).
 | `immutable T` | frozen data; the same positions, and a type argument (`Array with immutable Box`) |
 | `mutable T` | on a parameter or function-type parameter, write access to what the caller passed (see [Parameter Passing](/docs/language/functions/#parameter-passing)) |
 | `function f(immutable self)`, `function f(mutable self)` | the receiver's capability, written as the first parameter |
-| `let x = e as isolated T` | a local that is a region of its own; `as isolated T` is the whole initializer |
+| `let x = e as isolated T` | a local that is a region of its own; `as isolated T` is the whole initializer. From a local `r`, the value moves to `x` and reading `r` afterwards is **E3102** |
 | `type T is unique` | values that move and are never copied or aliased (see [Unique Types](#unique-types)) |
 | `where T is isolated`, `where T is sendable` | bounds on a generic type's parameter (see [Region Bounds](#region-bounds)) |
 | `modify x 'label' … end 'label'` | opens an `isolated` value for several statements |
@@ -429,7 +429,8 @@ The cases are in `specs/regions-unique.md`.
 
 A `destruct self` statement ends the life of the value a method is called on. A method that contains one is a
 **finalizer**, and it takes `consuming self`: a call to it moves the receiver, and reading the receiver
-afterwards is **E3102**. A type with at least one finalizer is **linear**, and a linear type is `unique`: never
+afterwards is **E3102**. A `destruct self`, or any other move of the receiver, inside a loop is **E3102** too:
+the next lap reads a receiver the previous lap moved. A type with at least one finalizer is **linear**, and a linear type is `unique`: never
 cloned, frozen or aliased (**E3214**).
 
 ```maxon

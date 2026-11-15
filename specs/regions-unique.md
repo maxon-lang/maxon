@@ -2133,3 +2133,246 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-unique-parameter-discarded-with-let-underscore-runs -->
+A function that discards a unique parameter with `let _ = a` takes nothing from its caller.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function keepX(a Tk)
+	let _ = a
+end 'keepX'
+
+function main() returns ExitCode
+	let a = Tk.create(7)
+	keepX(a)
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: the-caller-keeps-a-unique-value-its-callee-discards -->
+The discard moves nothing out of the caller, so the caller still reads the value it passed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function keepX(a Tk)
+	let _ = a
+end 'keepX'
+
+function main() returns ExitCode
+	let a = Tk.create(7)
+	keepX(a)
+	print("{a.n}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-parameter-discarded-in-a-branch-runs -->
+A discard that ends a branch is judged like one that ends the function.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function discardWhen(a Tk, flag bool)
+	if flag 'whether'
+		let _ = a
+	end 'whether'
+end 'discardWhen'
+
+function main() returns ExitCode
+	let a = Tk.create(7)
+	discardWhen(a, flag: true)
+	print("{a.n}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-parameter-assigned-to-the-discard-runs -->
+`_ = a` discards a unique parameter as `let _ = a` does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function dropIt(a Tk)
+	_ = a
+end 'dropIt'
+
+function main() returns ExitCode
+	let a = Tk.create(7)
+	dropIt(a)
+	print("{a.n}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-parameter-read-after-its-discard-is-refused -->
+The discard ends the function's use of the parameter.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function keepX(a Tk) returns Num
+	let _ = a
+
+	return a.n
+end 'keepX'
+
+function main() returns ExitCode
+	let a = Tk.create(7)
+	let n = keepX(a)
+	print("{n}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:15:9: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-unique-parameter-discarded-in-a-loop-is-refused -->
+The second lap discards a parameter the first lap already discarded.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function discardTwice(a Tk)
+	var i = 2 as Num
+
+	while i != 0 'laps'
+		let _ = a
+		i = i - 1
+	end 'laps'
+end 'discardTwice'
+
+function main() returns ExitCode
+	let a = Tk.create(7)
+	discardTwice(a)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:11: use of moved value 'a': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-unique-value-rebound-as-isolated-reads-through-the-new-name -->
+`as isolated` on a bare local hands the value to the new name, as a plain rebind does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function main() returns ExitCode
+	let r = Tk.create(5) as isolated Tk
+	let a = r as isolated Tk
+	print("{a.n}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+5
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-value-read-through-its-source-after-an-isolated-rebind-is-refused -->
+The source of an `as isolated` rebind no longer holds the value.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function main() returns ExitCode
+	let r = Tk.create(5) as isolated Tk
+	let a = r as isolated Tk
+	print("{a.n} {r.n}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:15:16: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```

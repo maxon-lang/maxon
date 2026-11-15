@@ -6769,7 +6769,7 @@ extension Parser
 			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "`destruct self` is written in a method that takes `consuming self`: only a finalizer ends the life of the value it is called on", line: destructTok.line, column: destructTok.column)
 		end 'notAFinalizer'
 
-		let held = (self.bodyState.scope.getInfo(SelfParamName)).boundValue
+		let held = try self.readReceiverValue(selfTok)
 		try self.requireNotMovedSinceItWasRead(held, range: SourceRange.ofToken(selfTok))
 
 		if not self.hasLiveOwner(held) 'noOwnerToEnd'

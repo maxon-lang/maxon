@@ -5446,3 +5446,366 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:39:10: use of moved value 'm': it was moved in an earlier iteration of this loop
 ```
+
+<!-- test: a-linear-value-rebound-as-isolated-is-consumed-through-the-new-name -->
+`as isolated` on a bare local hands the linear value to the new name, whose finalizer consumes it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	let a = r as isolated Resp
+	a.fin()
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: the-source-of-an-isolated-rebind-of-a-linear-value-is-refused -->
+The rebind moved the value, so its source cannot be finalized too.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	let a = r as isolated Resp
+	r.fin()
+	a.fin()
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-union-holding-a-linear-value-rebound-as-isolated-is-consumed-by-its-match -->
+The rebound union is consumed by the `match` over it, in the arm that binds the linear payload.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Wrapped
+	empty
+	filled(resp Resp)
+end 'Wrapped'
+
+function main() returns ExitCode
+	let r = Wrapped.filled(Resp.create(0)) as isolated Wrapped
+	let a = r as isolated Wrapped
+
+	match a 'which'
+		empty then print("empty\n")
+		filled(held) then held.fin()
+	end 'which'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-linear-parameter-discarded-with-let-underscore-is-refused -->
+A function that takes a linear value must consume it, and a discard does not.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function drop(r Resp)
+	let _ = r
+end 'drop'
+
+function main() returns ExitCode
+	let r = Resp.create(0)
+	drop(r)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:16:10: this drops '_', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: destruct-self-in-a-loop-is-refused-on-the-next-lap -->
+The lap after the first reaches `destruct self` with the value already destructed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self)
+		var i = 2 as Num
+
+		while i != 0 'w1'
+			destruct self
+			i = 0
+		end 'w1'
+	end 'f'
+end 'Fz'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:15:13: use of moved value 'self': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: destruct-self-in-a-for-loop-is-refused-on-the-next-lap -->
+A `for` loop repeats the body as a `while` does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self)
+		for i in 0 upto 2 'laps'
+			destruct self
+			print("{i}\n")
+		end 'laps'
+	end 'f'
+end 'Fz'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:13: use of moved value 'self': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: destruct-self-in-a-nested-loop-is-refused-on-the-next-lap -->
+The inner loop repeats the body, whatever the outer loop does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self)
+		var i = 2 as Num
+
+		while i != 0 'outer'
+			var j = 2 as Num
+
+			while j != 0 'inner'
+				destruct self
+				j = 0
+			end 'inner'
+
+			i = 0
+		end 'outer'
+	end 'f'
+end 'Fz'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:18:14: use of moved value 'self': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: destruct-self-before-a-return-in-a-loop-runs -->
+A `destruct self` that leaves the function repeats nothing, and the path past the loop destructs the value too.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self)
+		var i = 2 as Num
+
+		while i != 0 'w1'
+			if i == 1 'last'
+				destruct self
+				return
+			end 'last'
+
+			i = i - 1
+		end 'w1'
+
+		destruct self
+	end 'f'
+end 'Fz'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-consuming-receiver-handed-on-in-a-loop-is-refused-on-the-next-lap -->
+Every way of moving the receiver out reads it first, so a loop that moves it is judged by its next lap.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+
+	function f(consuming self)
+		var i = 2 as Num
+
+		while i != 0 'w1'
+			sink(self)
+			i = i - 1
+		end 'w1'
+	end 'f'
+end 'Fz'
+
+function sink(z Fz)
+	z.fin()
+end 'sink'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:9: use of moved value 'self': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-linear-value-rebound-as-isolated-in-a-branch-and-a-loop-is-consumed -->
+The rebind is judged where it is written: on one arm of an `if`, and once per lap of a loop.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function pick(flag bool)
+	let r = Resp.create(0) as isolated Resp
+
+	if flag 'whether'
+		let a = r as isolated Resp
+		a.fin()
+	end 'whether' else 'otherwise'
+		r.fin()
+	end 'otherwise'
+end 'pick'
+
+function laps()
+	var i = 0 as Num
+
+	while i != 2 'each'
+		let r = Resp.create(i) as isolated Resp
+		let a = r as isolated Resp
+		a.fin()
+		i = i + 1
+	end 'each'
+end 'laps'
+
+function main() returns ExitCode
+	pick(true)
+	pick(false)
+	laps()
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
