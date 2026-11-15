@@ -3777,7 +3777,62 @@ b replaced
 ```
 
 <!-- test: view-alias-source-reassigned-on-one-path -->
-After the `if`, `h` still holds the record `h2` views, so the hold on `h2.f` keeps the old string alive across the write of `h.f`.
+On the path that skips the `if`, `h` still holds the record `h2` views, so the hold on `h2.f` keeps the old string alive across the write of `h.f`.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Holder
+	export var f as String
+	export var g as String
+
+	static function create() returns Self
+		return Self{f: "a", g: "b"}
+	end 'create'
+end 'Holder'
+
+type PA
+	export var first as String
+	export var second as Tally
+
+	static function build(first String, second Tally) returns Self
+		return Self{first: first, second: second}
+	end 'build'
+end 'PA'
+
+function put(text mutable String) returns Tally
+	text = "replaced"
+
+	return 1
+end 'put'
+
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
+	let n = "x".count()
+
+	if n > 5 'rebind'
+		h = Holder.create()
+	end 'rebind'
+
+	let p = PA.build(h2.f, second: put(h.f))
+	print("{p.first} {h.f}\n")
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
+end 'main'
+```
+```stdout
+a replaced
+```
+```exitcode
+0
+```
+
+<!-- test: error.let-alias-of-a-var-rebound-on-one-path-is-moved-after-the-branch -->
+`let h2 = h` moves `h`, so rebinding `h` in only one branch leaves it moved on the path that skipped the branch.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3820,11 +3875,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-a replaced
-```
-```exitcode
-0
+```maxoncstderr
+error E3102: <fragment>:37:37: use of moved value 'h': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: let-alias-source-rebound-to-the-alias -->
