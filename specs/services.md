@@ -15467,6 +15467,94 @@ end 'main'
 error E3200: <fragment>:28:27: 'items' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
+<!-- test: error.an-isolated-local-the-loop-iterates-is-not-sent-inside-the-loop -->
+The `for` opens `items` for the whole loop, so the `break` after the send does not help: the send would hand the service a region the loop still reads, and `x` is read from it afterwards.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Summer
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(words isolated Words) returns Integer
+		for word in words 'each'
+			self.total = self.total + (word.byteLength() as Integer)
+		end 'each'
+
+		return self.total
+	end 'add'
+end 'Summer'
+
+function main() returns ExitCode
+	let h = spawn Summer.create()
+	let items = Words.create(0) as isolated Words
+
+	modify items 'fill'
+		items.push("first padded out long enough to heap allocate {1}")
+		items.push("second padded out long enough to heap allocate {2}")
+	end 'fill'
+
+	for x in items 'each'
+		let r = try await h.add(items) otherwise 0
+		print("{r} {x}\n")
+		break
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:31:27: 'items' is iterated by an enclosing `for`, which opens it for the whole loop, so it cannot be sent from inside the loop; send it after the loop, or send a copy
+```
+
+<!-- test: error.an-isolated-local-the-loop-iterates-with-an-iterator-is-not-sent-inside-the-loop -->
+`items.withIterator()` makes the loop read `items` the same way, so the send is refused the same way.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Summer
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(words isolated Words) returns Integer
+		for word in words 'each'
+			self.total = self.total + (word.byteLength() as Integer)
+		end 'each'
+
+		return self.total
+	end 'add'
+end 'Summer'
+
+function main() returns ExitCode
+	let h = spawn Summer.create()
+	let items = Words.create(0) as isolated Words
+
+	modify items 'fill'
+		items.push("first padded out long enough to heap allocate {1}")
+		items.push("second padded out long enough to heap allocate {2}")
+	end 'fill'
+
+	for (it, x) in items.withIterator() 'each'
+		let r = try await h.add(items) otherwise 0
+		print("{r} {x} {it.index()}\n")
+		break
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:31:27: 'items' is iterated by an enclosing `for`, which opens it for the whole loop, so it cannot be sent from inside the loop; send it after the loop, or send a copy
+```
+
 <!-- test: services.a-var-the-loop-iterated-is-sent-after-the-loop -->
 Once the loop has ended it holds nothing, so the `var` is the record's only owner again and the send moves it.
 ```maxon

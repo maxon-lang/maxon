@@ -881,6 +881,10 @@ extension Parser
 			return HandOffTake.sharedReadOnly
 		end 'nothingCanWriteIt'
 
+		if self.valueIsAnOwnedIsolatedLocal(value) 'anOwnedRegion'
+			try self.requireIsolatedLocalIsNotIterated(value, anchor: anchor)
+		end 'anOwnedRegion'
+
 		if not self.valueIsSolelyOwnedHere(value) and not self.valueIsAnOwnedIsolatedLocal(value) 'aSecondOwnerMayExist'
 			return self.unprovenOwnerTakeOf(argument)
 		end 'aSecondOwnerMayExist'
@@ -888,6 +892,12 @@ extension Parser
 		try self.requireHandedOffGraphWalkable(value, door: door, anchor: anchor)
 		return HandOffTake.movedOut(true)
 	end 'greenThreadTakeOf'
+
+	function requireIsolatedLocalIsNotIterated(value ValueId, anchor Token) throws SourceParseError
+		let holder = try self.enclosingLoopHolderNameOf(value) otherwise return
+
+		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: iteratedIsolatedSendRefusal(String.from(holder)), line: anchor.line, column: anchor.column)
+	end 'requireIsolatedLocalIsNotIterated'
 
 	function unprovenOwnerTakeOf(argument HandedOffArgument) returns HandOffTake
 		if self.ownedValueLeavesThisFrame(argument.value) 'thisFramesToGive'

@@ -1776,19 +1776,37 @@ extension Parser
 		return self.soleLoopVariableName(nameToks).value
 	end 'loopVariableOwnerName'
 
-	function forSourceBareBinding(sourceStart ElementIndex) returns VarInfo throws AbsentError
+	function forSourceBindingAt(sourceStart ElementIndex) returns VarInfo throws AbsentError
 		let nameTok = self.tokenAt(sourceStart)
 
-		if not tokenCanBeAName(nameTok) or self.kindAt(sourceStart + 1) != TokenKind.charLiteral 'notJustAName'
-			throw AbsentError.absent
-		end 'notJustAName'
-
-		if not self.bodyState.scope.contains(nameTok.value) 'notABinding'
+		if not tokenCanBeAName(nameTok) or not self.bodyState.scope.contains(nameTok.value) 'notABinding'
 			throw AbsentError.absent
 		end 'notABinding'
 
 		return self.bodyState.scope.getInfo(nameTok.value)
+	end 'forSourceBindingAt'
+
+	function forSourceBareBinding(sourceStart ElementIndex) returns VarInfo throws AbsentError
+		if self.kindAt(sourceStart + 1) != TokenKind.charLiteral 'notJustAName'
+			throw AbsentError.absent
+		end 'notJustAName'
+
+		return try self.forSourceBindingAt(sourceStart)
 	end 'forSourceBareBinding'
+
+	function forSourceIsWithIteratorCall(sourceStart ElementIndex) returns bool
+		let methodTok = self.tokenAt(sourceStart + 2)
+
+		return self.kindAt(sourceStart + 1) == TokenKind.dot and tokenCanBeAName(methodTok) and methodTok.value.equals(WithIteratorMethodName) and self.kindAt(sourceStart + 3) == TokenKind.leftParen and self.kindAt(sourceStart + 4) == TokenKind.rightParen and self.kindAt(sourceStart + 5) == TokenKind.charLiteral
+	end 'forSourceIsWithIteratorCall'
+
+	function forSourceIteratedBinding(sourceStart ElementIndex) returns VarInfo throws AbsentError
+		if self.forSourceIsWithIteratorCall(sourceStart) 'throughItsIterator'
+			return try self.forSourceBindingAt(sourceStart)
+		end 'throughItsIterator'
+
+		return try self.forSourceBareBinding(sourceStart)
+	end 'forSourceIteratedBinding'
 
 	function forSourceIsHeldByItsName(sourceStart ElementIndex) returns bool
 		let info = try self.forSourceBareBinding(sourceStart) otherwise return false
@@ -1796,22 +1814,27 @@ extension Parser
 	end 'forSourceIsHeldByItsName'
 
 	function noteLoopHeldBinding(sourceStart ElementIndex)
-		let info = try self.forSourceBareBinding(sourceStart) otherwise return
+		let info = try self.forSourceIteratedBinding(sourceStart) otherwise return
 		self.bodyState.loopHeldBindings.push(info.name)
 	end 'noteLoopHeldBinding'
 
-	function valueIsHeldByAnEnclosingLoop(value ValueId) returns bool
+	function enclosingLoopHolderNameOf(value ValueId) returns immutable ByteArray throws AbsentError
 		if self.bodyState.loopHeldBindings.isEmpty() 'noLoopHoldsABinding'
-			return false
+			throw AbsentError.absent
 		end 'noLoopHoldsABinding'
 
 		for binding in self.bodyState.ownedBindings 'eachBinding'
 			if binding.boundValue == value and self.bodyState.loopHeldBindings.contains(binding.name) 'itsLoopHoldsIt'
-				return true
+				return binding.name
 			end 'itsLoopHoldsIt'
 		end 'eachBinding'
 
-		return false
+		throw AbsentError.absent
+	end 'enclosingLoopHolderNameOf'
+
+	function valueIsHeldByAnEnclosingLoop(value ValueId) returns bool
+		try self.enclosingLoopHolderNameOf(value) otherwise return false
+		return true
 	end 'valueIsHeldByAnEnclosingLoop'
 
 	function drainedSourceValue(sourceStart ElementIndex, walked ValueId) returns ValueId

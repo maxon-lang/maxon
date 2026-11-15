@@ -5621,7 +5621,9 @@ either side could write, because the two green threads may run at the same time 
 - An `isolated` argument must be a value no other name reaches: a fresh call result or an `isolated` local. A
   value read out of a field or an element of a `var`, the source of an enclosing `for` loop, or an element a
   member hands back out of a field's container (`return self.queue.pop()`) is still held by its container, so
-  it is not `isolated` (**E3200**); send a `.clone()`.
+  it is not `isolated` (**E3200**); send a `.clone()`. An `isolated` local that an enclosing `for` iterates
+  (`for x in items` or `for (it, x) in items.withIterator()`) is held by the loop until it ends, so a message
+  or factory argument of it inside the loop is **E3200** as well; send it after the loop.
 - An `immutable` argument must be frozen data: `freeze x.clone()`, a constant, a module-level `let`, or a
   `SharedValue` or registry read. It is **shared**: its graph is marked shared, so every count on it steps
   atomically, and neither side may write it. A mutable argument at an `immutable` parameter is **E3207**.

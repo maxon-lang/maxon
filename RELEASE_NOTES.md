@@ -875,6 +875,10 @@ release's version as its heading when the release is cut.
   fresh, and a `push` on it compiled and crashed on the image data.
   Fix: write a copy (`get(false).clone()`) where the caller must write, or declare the result `returns immutable`
   when every path is frozen.
+- An `isolated` local that an enclosing `for` iterates (`for x in items`, or `for (it, x) in
+  items.withIterator()`) is held by the loop until it ends, so sending it as a service message or `spawn`
+  factory argument inside the loop is E3200, whether or not a `break` follows the send.
+  Fix: send it after the loop, or send a `.clone()`.
 
 ## 0.5.0 — 2026-10-08
 
