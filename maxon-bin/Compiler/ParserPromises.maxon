@@ -3023,10 +3023,9 @@ extension Parser
 	// extra: the name is looked up in the parameter list by the caller, and a keyword naming no parameter is
 	// dropped exactly as an unrelated identifier is.
 	//
-	// ⚠ It over-detects a GROUPING paren whose whole contents are one name — `(x)` reads as an argument. The
-	// edge it records then carries whatever name preceded the paren, which no function wears, so
-	// `noteForwardCall` drops it and only the parameter's own `forwarded` bit is set. Harmless: a forwarded
-	// bit with no live edge never widens anything.
+	// ⚠ It over-detects a GROUPING paren whose whole contents are one name — `(x)` reads as an argument. Its
+	// callee is then whatever name preceded the paren, which no function wears, so no by-reference question
+	// asked under that name answers yes.
 	function bareCallArgumentAt(index ElementIndex, braceStack BoolArray) returns bool
 		if not self.callArgumentStartsAt(index, braceStack: braceStack) 'notAnArgumentPosition'
 			return false
@@ -3068,11 +3067,11 @@ extension Parser
 		return self.tokenAt(index - 1).value
 	end 'calleeNameOpeningAt'
 
-	// ⭐⭐ **THE FORWARDING EDGE THE BRACKET AT `index` STATES, SHAPE AND ALL.** The name is
+	// ⭐⭐ **THE CALL THE BRACKET AT `index` OPENS, SHAPE AND ALL.** The name is
 	// `calleeNameOpeningAt`'s — it is the same name, and asking it twice is how the two would come apart — and
 	// the SHAPE is read off the one or two tokens before it, which is a hard partition of what the call can
-	// name (see `ForwardCall`). An absent name means the bracket opened no call at all, which
-	// `noteForwardCall` drops; the shape of a non-call is never read.
+	// name (see `ForwardCall`). An absent name means the bracket opened no call at all; the shape of a
+	// non-call is never read.
 	//
 	// ⭐ **`self.f(` AND `Self.f(` ARE THE NARROWEST SHAPE, AND BOTH KEYWORDS MEAN THE ENCLOSING TYPE** — the
 	// instance receiver and the static one name the same declaration space, so `Self.create(…)` is as

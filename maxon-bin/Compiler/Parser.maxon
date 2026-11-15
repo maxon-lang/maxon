@@ -10309,16 +10309,9 @@ type Parser
 	var sweptImplementsClauses as AliasImplementsClauseArray
 	var refusedInstances as RefusedInstanceMap
 
-	// The SHARED empty type-parameter-POSITION array the consume scan passes for every
-	// receiver-less function OUTSIDE a generic type — which is all of them on the generics-free corpus. It is
-	// never mutated (`paramNamesIn` skips the position work when `collectTypeParamFlags` is false, and
-	// `TypeParamSlots` reads a missing index as a concrete slot), so one allocation per parser
-	// serves every non-generic function's consume scan, keeping that hot path allocation-free.
-	var emptyTypeParamPositions as TypeParamSlots
-
 	// ⚡ The shared, NEVER-WRITTEN sink the two walks that want NAMES but no types hand `paramNamesIn`, so a
 	// declaration whose types nobody reads allocates no array for them. `collectTypes: false` is what keeps it
-	// unwritten; it is `emptyTypeParamPositions`' twin, one fact over.
+	// unwritten.
 	var emptySweptParamTypes as MaxonTypeArray
 	var emptyParamSpellings as NameRoster
 
@@ -10697,7 +10690,6 @@ type Parser
 			extensionAssociated: ExtensionAssociatedScope.empty(),
 			sweptImplementsClauses: AliasImplementsClauseArray.create(0),
 			refusedInstances: RefusedInstanceMap.create(),
-			emptyTypeParamPositions: TypeParamSlots.create(),
 			emptySweptParamTypes: MaxonTypeArray.create(0),
 			emptyParamSpellings: NameRoster.create(0),
 			emptyTypeParams: freeze NameRoster.create(0),

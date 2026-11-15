@@ -2523,7 +2523,7 @@ extension ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, implementsClauses AliasImplementsClauseArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, freeFunctionNames NameRoster, testDecls DiscoveredTestArray, moduleDirectory String, filePath FilePath, fileStream DeclTokenStream, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, implementsClauses AliasImplementsClauseArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, freeFunctionNames NameRoster, testDecls DiscoveredTestArray, moduleDirectory String, filePath FilePath, fileStream DeclTokenStream, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// Which file holds which declarations decides how other files resolve them, so the boundary
 		// between files rides the hash.
 		self.hash = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeFileBoundary), bytes: filePath.toString().toByteArray())
@@ -2714,24 +2714,6 @@ extension ProgramSignatures
 			self.recordParamReassign(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory), site: entry.site, info: entry.info)
 		end 'eachByRef'
 
-		// The immutable-global-return raw material rides the same loop and the same key for the
-		// by-reference columns' reason: it is another per-declaration fact a CALL SITE reads about a
-		// callee it cannot see.
-		//
-		// ⚡ **THE DECLARING FILE IS FOLDED HERE, ONCE, RATHER THAN INSIDE THE LOOP** — see
-		// `GlobalAliasReturnInfo.declFilePath` for why the file has to ride the hash at all. Every entry in this
-		// array was swept by ONE `Parser` off ONE file, so `entry.info.declFilePath` is `filePath` for all of
-		// them; folding it per entry meant a `String.toByteArray()` — a `managed.slice` COPY plus a
-		// `ByteArray.init` — per DECLARATION, for a fact that changes per FILE. The hash still distinguishes two
-		// files stating identical bodies, which is the whole reason the file rides.
-		if globalAliasReturns.count() > 0 or anyDefaultHelperStatesAGlobalAliasReturn(paramDefaults) 'thisFileStatesOne'
-			self.hash = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeGlobalAliasReturn), bytes: filePath.toString().toByteArray())
-		end 'thisFileStatesOne'
-
-		for entry in globalAliasReturns 'eachGlobalAliasReturn'
-			self.recordGlobalAliasReturn(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory), info: entry.info)
-		end 'eachGlobalAliasReturn'
-
 		// A helper's NAME was minted by the token SCAN, from the name the source wrote, a pass before
 		// any contest was known — two directories each declaring a defaulting `pick` both mint
 		// `__paramDefault#pick#0`. Filed under that name, the second declaration's helper would overwrite
@@ -2803,11 +2785,6 @@ extension ProgramSignatures
 			let helperName = self.defaultHelperNameUnder(helper.slot, sweptName: helper.signature.name, bareName: bareName, registrationName: registrationName)
 			filed = filed.withHelperRenamed(helper.slot, renamedTo: helperName)
 			self.recordScannedSignature(helper.signature, name: helperName, moduleDirectory: moduleDirectory, declFilePath: declFilePath, remap: remap)
-
-			match helper.aliasReturn 'aliasReturn'
-				statesNothing then continue
-				states(aliasInfo) then self.recordGlobalAliasReturn(helperName, info: aliasInfo.declaredAs(helperName))
-			end 'aliasReturn'
 		end 'eachSynthesizedHelper'
 
 		return filed
@@ -3925,192 +3902,8 @@ extension ProgramSignatures
 		state = mixBytes(state, bytes: info.bareName)
 		state = foldCallability(state, callability: info.callability)
 		self.hash = state
-		self.noteNamesAClosureReaches(info.bareName, calls: ForwardCallArray.create(0), authorStatesIt: true)
+		self.noteDeclaredName(info.bareName)
 	end 'recordParamReassign'
-
-	function noteNamesAClosureReaches(bareName ByteArray, calls ForwardCallArray, authorStatesIt bool)
-		self.noteMentionedName(bareName)
-
-		if authorStatesIt 'anAuthorsSeed'
-			self.noteDeclaredName(bareName)
-		end 'anAuthorsSeed'
-
-		for call in calls 'eachSpelling'
-			self.noteMentionedName(forwardCallName(call))
-		end 'eachSpelling'
-	end 'noteNamesAClosureReaches'
-
-	// Add one function's immutable-global-return raw material to the index AND fold it into the hash — the one
-	// write, for `recordParamReassign`'s reason. A function that states nothing is not recorded, so the common
-	// function costs no map entry and no hash movement. The GATE is raised here, off the returned-NAME column
-	// alone, because only a name can seed the closure.
-	function recordGlobalAliasReturn(name ByteArray, info GlobalAliasReturnInfo)
-		self.mainThreadSettled().funcGlobalAliasReturns.upsert(name, value: info)
-		self.sawGlobalNameReturn = self.sawGlobalNameReturn or info.returnedNames.count() > 0
-
-		// The declaring FILE is NOT folded here — `foldFile` folds it once for the whole file, because that is
-		// the granularity the fact has. See there.
-		var state = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeGlobalAliasReturn), bytes: name)
-
-		for returned in info.returnedNames 'eachName'
-			state = mixBytes(state, bytes: returned)
-		end 'eachName'
-
-		state = mixBytes(state, bytes: info.bareName)
-		state = foldCallability(state, callability: info.callability)
-
-		for call in info.returnCalls 'eachEdge'
-			// The SHAPE rides with the name: the three call shapes reach different nodes, so two bodies
-			// differing only in a receiver state different things and must not hash alike.
-			state = mixBytes(state, bytes: forwardCallName(call))
-			state = mixBytes(Hasher.combined(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
-		end 'eachEdge'
-
-		self.hash = state
-		self.noteNamesAClosureReaches(info.bareName, calls: info.returnCalls, authorStatesIt: true)
-	end 'recordGlobalAliasReturn'
-
-	// ⭐⭐ **MAY A CALL TO `callee` HAND BACK A `let`-DECLARED GLOBAL'S OWN RECORD?** — the ONE door the
-	// parser asks, at a call site, to decide whether the result must carry the immutable-global mark. A key
-	// with no entry answers false, which is every function in every program that returns no global.
-	export function returnsImmutableGlobalAlias(callee ByteArray) returns bool
-		self.closeGlobalAliasReturns()
-		return self.settledDeclarations().globalAliasReturnKeys.contains(callee)
-	end 'returnsImmutableGlobalAlias'
-
-	// ⭐ **DOES ANY FUNCTION IN THE PROGRAM RETURN ONE?** The whole-program skip, asked before a call site
-	// spends a hash on the question above — `programTakesAParamByRef`'s twin, and true of very few programs.
-	export function programReturnsAnImmutableGlobalAlias() returns bool
-		self.closeGlobalAliasReturns()
-		return self.settledDeclarations().globalAliasReturnKeys.count() != 0
-	end 'programReturnsAnImmutableGlobalAlias'
-
-	// ⭐⭐ **CLOSE THE IMMUTABLE-GLOBAL-RETURN RELATION — the fixpoint that turns `get()` returning what
-	// `inner()` returns into "`get()` may hand back a `let` global too", transitively.**
-	//
-	// It runs once, at the first read, as a single reverse reachability pass over the `DeclNodeSpace` and
-	// edge shapes below rather than as round-based rescanning.
-	//
-	// ⭐ **THE SEED CANNOT BE DECIDED BY THE SWEEP, AND THAT IS WHY THE RAW NAMES ARE CARRIED.** "Is `A` an
-	// immutable stored global?" needs every file's declarations folded and every initializer evaluated, and
-	// the sweep runs while files are still arriving. Here, both are done.
-	//
-	// ⚠ **A SCALAR `let` IS NOT A SEED, AND THAT FALLS OUT RATHER THAN BEING EXCLUDED**: the seed test asks
-	// whether the name denotes a RECORD, and an inlined scalar constant has none to alias in the first place
-	// — the whole rule is about a record two names can reach.
-	function closeGlobalAliasReturns()
-		if self.globalAliasReturnsClosed 'alreadySettled'
-			return
-		end 'alreadySettled'
-
-		self.globalAliasReturnsClosed = true
-
-		// ⚡ **NO SEED, NO GRAPH.** A body is recorded merely for returning a CALL, so the map is non-empty on
-		// most programs; what decides whether anything can be marked is whether some body returns a NAME at all.
-		if not self.sawGlobalNameReturn 'noReturnedNameCanSeedIt'
-			return
-		end 'noReturnedNameCanSeedIt'
-
-		self.publishGlobalAliasReturnKeys()
-	end 'closeGlobalAliasReturns'
-
-	function publishGlobalAliasReturnKeys()
-		// ⚡⚡ **AND THE SAME GATE ASKED EXACTLY, WHICH THE ONE ABOVE CANNOT BE.** `sawGlobalNameReturn` is
-		// raised at the SWEEP, where no name can be resolved, so it says only *"some body returned a bare
-		// name"* — true of nearly every program, because `return EmptySourceText` and `return SomeConstant`
-		// are ordinary. Here every declaration is folded and every initializer evaluated, so the real
-		// question — does any of those names DENOTE a `let`-declared stored global? — has an answer, and a
-		// `false` means reachability would run from an empty seed set and mark nothing. Skipping it skips
-		// the node space, both edge columns, the CSR build and the BFS — a cost billed to `phase:parse`,
-		// because this closure is asked lazily and its FIRST asker is `Parser.beginFunction`.
-		if not self.anyRecordedReturnNamesAGlobal() 'noSeedResolvesToOne'
-			return
-		end 'noSeedResolvesToOne'
-
-		let nodes = DeclNodeSpace.create()
-
-		for (_, info) in self.settledDeclarations().funcGlobalAliasReturns 'eachRecorded'
-			let node = nodes.nodeFor(info.bareName, callability: info.callability)
-
-			if self.returnsAGlobalDirectly(info) 'namesOneItself'
-				try nodes.seeds.set(node, value: true) otherwise panic("closeGlobalAliasReturns: seeds.set OOB at {node} despite the node having just been interned")
-			end 'namesOneItself'
-		end 'eachRecorded'
-
-		// The return-forwarding edges, REVERSED — a forward `caller -> callee` is recorded as `callee -> caller`,
-		// so a seed's row lists the declarations that return INTO it and the mark propagates back up the chain.
-		let edgeCallee = CsrColumn.create(0)
-		let edgeForwarder = CsrColumn.create(0)
-
-		for (_, info) in self.settledDeclarations().funcGlobalAliasReturns 'eachForwarder'
-			let forwarder = nodes.nodeFor(info.bareName, callability: info.callability)
-
-			for call in info.returnCalls 'eachEdge'
-				for callee in nodes.targetsOf(call) 'eachTargetItCanName'
-					edgeCallee.push(callee)
-					edgeForwarder.push(forwarder)
-				end 'eachTargetItCanName'
-			end 'eachEdge'
-		end 'eachForwarder'
-
-		let mayAlias = reverseReachabilityMark(buildCsr(edgeCallee, to: edgeForwarder, nodeCount: nodes.bareNames.count() as CsrIndex), seeds: nodes.seeds)
-
-		// ⭐ Published per REGISTRATION KEY and not per node: the parser asks under the key it resolved a
-		// call to, and two keys may share a node.
-		for (name, info) in self.settledDeclarations().funcGlobalAliasReturns 'publishKeys'
-			let marked = try mayAlias.get(nodes.nodeFor(info.bareName, callability: info.callability)) otherwise panic("closeGlobalAliasReturns: mayAlias.get OOB for a node interned before the graph was built")
-
-			if marked 'marked'
-				self.mainThreadSettled().globalAliasReturnKeys.insert(name)
-			end 'marked'
-		end 'publishKeys'
-	end 'publishGlobalAliasReturnKeys'
-
-	// ⚡ **IS THERE A SEED AT ALL?** — the closure's exact precondition, over the SAME per-declaration test the
-	// seed loop uses, so the two cannot come to disagree about what a seed is. It walks and resolves nothing
-	// the seed loop would not have resolved anyway; what it buys is the right to stop before the graph exists.
-	function anyRecordedReturnNamesAGlobal() returns bool
-		for (_, info) in self.settledDeclarations().funcGlobalAliasReturns 'eachRecorded'
-			if self.returnsAGlobalDirectly(info) 'namesOneItself'
-				return true
-			end 'namesOneItself'
-		end 'eachRecorded'
-
-		return false
-	end 'anyRecordedReturnNamesAGlobal'
-
-	// Does this body return a name that DENOTES an immutable stored global, read from its own file? The
-	// closure's seed test, asked once per recorded declaration.
-	function returnsAGlobalDirectly(info GlobalAliasReturnInfo) returns bool
-		for returned in info.returnedNames 'eachName'
-			if self.namesImmutableRecordGlobal(returned, readerFilePath: info.declFilePath) 'namesAGlobal'
-				return true
-			end 'namesAGlobal'
-		end 'eachName'
-
-		return false
-	end 'returnsAGlobalDirectly'
-
-	// ⭐ **DOES `name`, READ FROM `readerFilePath`, DENOTE A `let`-DECLARED TOP-LEVEL BINDING WITH A RECORD?**
-	// The one place the halves of that question are joined — the SAME scoped-then-bare probe every other
-	// reader of a top-level name goes through (`declFor`).
-	//
-	// ⚠ **IT ASKS ABOUT THE RECORD AND THEREFORE ABOUT BOTH STORAGE MODELS.** The rule rests on two
-	// names being able to reach ONE record, and an IMAGED `let` shares one exactly as a stored one
-	// does — its reads are one `.rdata` address — so the imaging of a binding may not decide whether
-	// the rule sees it. A scalar or managed `let` has no record to alias at all and answers false
-	// either way.
-	export function namesImmutableRecordGlobal(name ByteArray, readerFilePath FilePath) returns bool
-		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'stored'
-			found(index) then return not declIsAPayloadFreeUnionCase(self.declAt(index))
-			notFound then break
-		end 'stored'
-
-		return match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.inlined) 'imaged'
-			found(index) gives declHoldsAnImageRecord(self.declAt(index)) and not declIsAPayloadFreeUnionCase(self.declAt(index))
-			notFound gives false
-		end 'imaged'
-	end 'namesImmutableRecordGlobal'
 
 	// ⭐⭐ **IS `callee`'s PARAMETER AT `index` PASSED BY REFERENCE, UNDER ANY DECLARATION OF IT?** A
 	// callee with no recorded entry, or an index past its recorded columns, is BY VALUE: the safe
@@ -4381,10 +4174,10 @@ extension ProgramSignatures
 	// need. Sound — a cell is a legal home for any value — and confined to programs that declare a `mutable`
 	// parameter.
 	//
-	// ⚠ **IT DOES NOT SPLIT ON THE CALL'S SHAPE, AND THAT IS DELIBERATE RATHER THAN AN OVERSIGHT.** The shape
-	// split exists where an over-approximation becomes a false refusal (see `ForwardCall`); here the only
-	// consequence is a heap cell a local did not need, which is the case the paragraph above already argues is
-	// free. Narrowing it would buy an allocation and risk a MISSING cell, which is a wrong answer.
+	// ⚠ **IT DOES NOT SPLIT ON THE CALL'S SHAPE, AND THAT IS DELIBERATE RATHER THAN AN OVERSIGHT.** The only
+	// consequence of answering for every shape `ForwardCall` tells apart is a heap cell a local did not need,
+	// which is the case the paragraph above already argues is free. Narrowing it would buy an allocation and
+	// risk a MISSING cell, which is a wrong answer.
 	export function bareNameTakesAParamByRef(bareName ByteArray) returns bool
 		self.publishByRefNames()
 		return self.settledDeclarations().byRefBareNames.contains(bareName)
@@ -6049,7 +5842,6 @@ extension ProgramSignatures
 			opaqueParams then self.mainThreadSettled().funcOpaqueParams.moveEntry(from, to: to)
 			paramConsumes then self.mainThreadSettled().funcParamConsumes.moveEntry(from, to: to)
 			paramReassigns then self.mainThreadSettled().byRefSitesOfKey.moveEntry(from, to: to)
-			globalAliasReturn then self.mainThreadSettled().funcGlobalAliasReturns.moveEntry(from, to: to)
 			paramDefaults then self.mainThreadSettled().funcParamDefaults.moveEntry(from, to: to)
 			throwsClause then self.mainThreadSettled().funcThrows.moveEntry(from, to: to)
 			diverges then self.mainThreadSettled().funcDiverges.moveMember(from, to: to)
@@ -6071,8 +5863,7 @@ extension ProgramSignatures
 	//
 	// The helper's facts are moved, not copied, because when this runs the swept name holds only the
 	// incumbent's: the contestant that triggered it files its own helpers later in its fold
-	// (`recordSweptDefaultHelpers`), after the contest is settled. The moved alias-return info is
-	// refiled through `declaredAs` for that function's reason.
+	// (`recordSweptDefaultHelpers`), after the contest is settled.
 	function renameContestedParamDefaultHelpers(bareName ByteArray, registrationName ByteArray)
 		var info = try self.mainThreadSettled().funcParamDefaults.get(registrationName) otherwise return
 
@@ -6095,10 +5886,6 @@ extension ProgramSignatures
 	function refileContestedDefaultHelper(slot ParamCount, sweptName ByteArray, bareName ByteArray, registrationName ByteArray) returns immutable ByteArray
 		let renamed = self.defaultHelperNameUnder(slot, sweptName: sweptName, bareName: bareName, registrationName: registrationName)
 		self.moveDeclarationSweepFacts(sweptName, to: renamed)
-
-		if let aliasReturn = try self.mainThreadSettled().funcGlobalAliasReturns.get(renamed) 'returnsAGlobalOrACall'
-			self.mainThreadSettled().funcGlobalAliasReturns.upsert(renamed, value: aliasReturn.declaredAs(renamed))
-		end 'returnsAGlobalOrACall'
 
 		return renamed
 	end 'refileContestedDefaultHelper'

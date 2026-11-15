@@ -6798,12 +6798,9 @@ extension ProgramSignatures
 	// `MmRuntime.installStructRuntimeEntries` walks `project.structTypes` AND
 	// `ProgramSignatures.tupleLayouts()` into one installer, and the installer resolved every field type
 	// against `project.typeNames` — which is right for the first walk and a different table's number for
-	// the second. MEASURED on this compiler's own source: the tuple `__Tuple2.Array_Byte.GlobalAliasReturnInfo`
-	// has a `structRef` field at id 814, and id 814 in the PROJECT's table is `InstantNanos` — a ranged
-	// alias — so the destructor synthesis panicked *"'InstantNanos' is a ranged typealias, a scalar, which
-	// `typeIsManaged` never classifies managed"* on a field that is a struct. A misread that lands on a
-	// DECLARED type instead would have emitted the wrong destructor silently, which is the half of #56 the
-	// panic exists to keep unrepresentable.
+	// the second. A tuple's `structRef` field id read against the PROJECT's table names whatever type holds
+	// that number there: a ranged alias makes the destructor synthesis panic on a field that is a struct, and
+	// a DECLARED type emits the wrong destructor silently.
 	export function indexTypeNames() returns TypeNameInterner
 		return self.typeNames
 	end 'indexTypeNames'

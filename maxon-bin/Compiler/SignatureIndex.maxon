@@ -532,23 +532,10 @@ enum SignatureDiscriminator
 	byRefBitSet = 91
 	byRefBitClear = 92
 
-	// The three `ForwardCall` shapes and the three `DeclCallability` answers, as distinct hash marks — a
-	// declaration that MOVES into or out of a type body, and a call that gains or loses a receiver, each change
-	// an ABI without changing a parameter name, so both must move the memo key.
-	bareCallShape = 93
-	receiverCallShape = 94
-	selfCallShape = 95
-	rootFreeFunctionDecl = 96
-	routableFreeFunctionDecl = 97
+	// The `DeclCallability` answers, as distinct hash marks — a declaration that MOVES into or out of a type
+	// body changes an ABI without changing a parameter name, so it must move the memo key.
+	freeFunctionDecl = 96
 	methodDecl = 98
-
-	// ⭐ A function's IMMUTABLE-GLOBAL-RETURN raw material, mixed for `declShapeParamConsume`'s reason.
-	// A body that starts or stops returning a `let` global — or starts returning what some OTHER function
-	// returns — changes what every caller may do with the result while not one byte of any caller moves, so
-	// only this hash can carry it. The declaring FILE rides because the same spelling resolves to different
-	// declarations from different files (a name two directories declare resolves per reader), so two
-	// identical bodies in two files genuinely state two different facts.
-	declShapeGlobalAliasReturn = 104
 
 	// ⭐ A free function's NAMESPACE-QUALIFIED SPELLING — `utils.helper` for a `helper` declared in
 	// `utils/`. Its own discriminator for `declShapeAlias`'s reason, and load-bearing for a reason NO other
@@ -1972,28 +1959,6 @@ function cacheReadDefinedInitializerFlag(reader LibraryCacheReader) returns Defi
 end 'cacheReadDefinedInitializerFlag'
 
 // @generated library-cache end
-
-// Does this SLOTLESS binding hold an image-data record? Asked only of a decl resolved through
-// `DeclKind.inlined`, so having no slot is the precondition and the outcome is the whole answer: a RECORD
-// outcome with no slot is an imaged one by `settleImagedOutcome`'s construction, and a scalar or a managed
-// literal has no shared record to alias at all. One record arm for `resolvedValueOf`'s reason — which
-// shapes may be imaged is decided in one place, not restated here where a stale copy would be a silently
-// missed immutable-global-return seed.
-function declHoldsAnImageRecord(decl TopLevelDecl) returns bool
-	return match decl.outcome 'state'
-		pending or
-		evaluating or
-		value or
-		failed or
-		poisoned or
-		managedValue gives false
-		deferredRecord or
-		unvalidatedRecord or
-		storedRecord or
-		imagedRecord or
-		imagedBox gives true
-	end 'state'
-end 'declHoldsAnImageRecord'
 
 function declHasInitializerFunction(decl TopLevelDecl) returns bool
 	return match decl.outcome 'state'
@@ -4678,8 +4643,7 @@ export type ParamReassignInfo
 	// never a function value (E2078), and the function-value prescan must see only real free functions.
 	export function isAFreeFunction() returns bool
 		return match self.callability 'callability'
-			bareCallOnly or
-			bareCallOrDirectoryRoute gives true
+			freeFunction gives true
 			methodOf gives false
 		end 'callability'
 	end 'isAFreeFunction'
@@ -4721,8 +4685,8 @@ type FunctionValueSlot
 	end 'create'
 end 'FunctionValueSlot'
 
-// ⭐⭐ **ONE FORWARDING EDGE, CARRYING THE ONE THING ABOUT A CALL THE SWEEP CAN READ WITHOUT RESOLVING IT:
-// WHETHER THE SOURCE WROTE A RECEIVER IN FRONT OF THE NAME.**
+// ⭐⭐ **ONE CALL SITE AS THE BY-REFERENCE PRESCAN CLASSIFIES IT, CARRYING THE ONE THING ABOUT A CALL A TOKEN
+// WALK CAN READ WITHOUT RESOLVING IT: WHETHER THE SOURCE WROTE A RECEIVER IN FRONT OF THE NAME.**
 //
 // That single token — the `.` before the callee — is a hard partition of what a call can name, and it needs
 // no type and no scope to read:
@@ -4730,8 +4694,7 @@ end 'FunctionValueSlot'
 //   • **`f(…)`** may name a free `f` OR, through implicit `self`, a sibling METHOD `f`. It widens over both.
 //   • **`x.f(…)`** can name only a METHOD `f`, or a free `f` reached by the directory ROUTE `utils.f(…)`.
 //     It can NEVER name a plain root-level free function — that name has no qualified spelling to be
-//     written after a dot. This is the arm that stops a user program's free `swap` from marking
-//     `stdlib`'s `Array.swap`.
+//     written after a dot.
 //
 //   • **`self.f(…)` / `Self.f(…)`** narrows that once more: the receiver's type is the ENCLOSING TYPE,
 //     statically and syntactically, so the call can name only THAT type's `f`. It is the same fact
@@ -4740,167 +4703,30 @@ end 'FunctionValueSlot'
 // ⚠ **THE `self.` ARM IS SOUND BECAUSE THE SWEEP ENTERS EACH CONFORMER'S SCOPE, NOT THE INTERFACE'S**, and
 // that was CHECKED rather than assumed: an interface extension's default body is swept once per conformer
 // under `enterTypeScope(conformer)` (`Parser.foldExtensionDeclarationInto`, the same loop the real parse runs),
-// so a `self.f()` inside one is recorded against the CONFORMER — which is also the type its own declaration
-// is filed under. An `interface` declaration itself carries signatures and no bodies, so it records no edge
-// at all. There is no route by which `self.f()` names a method of a type other than the one enclosing it.
-//
-// ⚠ **IT DELIBERATELY DOES NOT CARRY THE ASSEMBLED CHAIN.** `resolvesAsNamespaceQualifiedFunction` could
-// answer "is `utils.helper` a route to a free `helper`?" exactly, but asking it would mean assembling the
-// written chain at every recorded edge and holding the bytes until the closure runs. The declaration-side
-// answer (`DeclCallability`) buys the same soundness for one union case: a free function that HAS a
-// namespace is admitted to the receiver-reachable side whether or not this particular chain names it. Wider
-// than the exact question, and wider only across `stdlib`'s own free functions, which are few.
-export union ForwardCall
+// so a `self.f()` inside one is read against the CONFORMER — which is also the type its own declaration
+// is filed under. An `interface` declaration itself carries signatures and no bodies, so it holds no call
+// site at all. There is no route by which `self.f()` names a method of a type other than the one
+// enclosing it.
+union ForwardCall
 	bare(name immutable ByteArray)
 	throughAReceiver(name immutable ByteArray)
 	throughSelf(typeName immutable ByteArray, name immutable ByteArray)
 end 'ForwardCall'
 
-// @generated library-cache begin
-function cacheWriteForwardCall(writer LibraryCacheWriter, value ForwardCall)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		bare(a0) then cacheWriteForwardCallBare(writer, a0: a0)
-		throughAReceiver(a0) then cacheWriteForwardCallThroughAReceiver(writer, a0: a0)
-		throughSelf(a0, a1) then cacheWriteForwardCallThroughSelf(writer, a0: a0, a1: a1)
-	end 'payload'
-end 'cacheWriteForwardCall'
-
-function cacheWriteForwardCallBare(writer LibraryCacheWriter, a0 immutable ByteArray)
-	writer.bytes(a0)
-end 'cacheWriteForwardCallBare'
-
-function cacheWriteForwardCallThroughAReceiver(writer LibraryCacheWriter, a0 immutable ByteArray)
-	writer.bytes(a0)
-end 'cacheWriteForwardCallThroughAReceiver'
-
-function cacheWriteForwardCallThroughSelf(writer LibraryCacheWriter, a0 immutable ByteArray, a1 immutable ByteArray)
-	writer.bytes(a0)
-	writer.bytes(a1)
-end 'cacheWriteForwardCallThroughSelf'
-
-function cacheReadForwardCall(reader LibraryCacheReader) returns ForwardCall throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives try cacheReadForwardCallBare(reader)
-		1 gives try cacheReadForwardCallThroughAReceiver(reader)
-		2 gives try cacheReadForwardCallThroughSelf(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadForwardCall'
-
-function cacheReadForwardCallBare(reader LibraryCacheReader) returns ForwardCall throws LibraryCacheDamage
-	let a0 = freeze try reader.bytes()
-
-	return ForwardCall.bare(a0)
-end 'cacheReadForwardCallBare'
-
-function cacheReadForwardCallThroughAReceiver(reader LibraryCacheReader) returns ForwardCall throws LibraryCacheDamage
-	let a0 = freeze try reader.bytes()
-
-	return ForwardCall.throughAReceiver(a0)
-end 'cacheReadForwardCallThroughAReceiver'
-
-function cacheReadForwardCallThroughSelf(reader LibraryCacheReader) returns ForwardCall throws LibraryCacheDamage
-	let a0 = freeze try reader.bytes()
-	let a1 = freeze try reader.bytes()
-
-	return ForwardCall.throughSelf(a0, name: a1)
-end 'cacheReadForwardCallThroughSelf'
-
-// @generated library-cache end
-
-export typealias ForwardCallArray = Array with ForwardCall
-
-// @generated library-cache begin
-function cacheWriteForwardCallArray(writer LibraryCacheWriter, value ForwardCallArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		cacheWriteForwardCall(writer, value: item)
-	end 'eachItem'
-end 'cacheWriteForwardCallArray'
-
-function cacheReadForwardCallArray(reader LibraryCacheReader) returns ForwardCallArray throws LibraryCacheDamage
-	let count = try reader.count()
-	let result = ForwardCallArray.create(count, zeroed: false)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try cacheReadForwardCall(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadForwardCallArray'
-
-// @generated library-cache end
-
-// The callee name an edge carries, whichever shape it was written in — the one place the arms' shared
-// payload is read, so a fourth reader cannot come to match one arm and forget the others.
-function forwardCallName(call ForwardCall) returns immutable ByteArray
-	return match call 'c'
-		bare(name) gives name
-		throughAReceiver(name) gives name
-		throughSelf(_, name) gives name
-	end 'c'
-end 'forwardCallName'
-
-// The shape as a value that can be COMPARED and HASHED — what the memo fold and the per-body edge
-// de-duplication both need, neither of which dispatches on the arm. A `throughSelf` folds its type name in
-// too, because `self.f()` in two different types states two different edges.
-function forwardCallShapeMark(call ForwardCall) returns HashDigest
-	return match call 'c'
-		bare gives SignatureDiscriminator.bareCallShape
-		throughAReceiver gives SignatureDiscriminator.receiverCallShape
-		throughSelf gives SignatureDiscriminator.selfCallShape
-	end 'c'
-end 'forwardCallShapeMark'
-
-// Do two edges state the SAME thing? Name, shape and — for a `self.` call — the type it is `self` of. Used
-// only to de-duplicate a body's own handful of edges (`Parser.noteForwardCall`).
-function forwardCallsAreEqual(a ForwardCall, b ForwardCall) returns bool
-	if forwardCallShapeMark(a) != forwardCallShapeMark(b) 'differentShapes'
-		return false
-	end 'differentShapes'
-
-	return forwardCallName(a).equals(forwardCallName(b)) and forwardCallSelfType(a).equals(forwardCallSelfType(b))
-end 'forwardCallsAreEqual'
-
-// One declaration's callability, folded into the memo hash — the twin of `forwardCallShapeMark` on the
-// declaration side, and a `match` so a fourth answer fails to compile here rather than hashing as a third.
+// One declaration's callability, folded into the memo hash — a `match` so a new answer fails to compile
+// here rather than hashing as an existing one.
 function foldCallability(state HashDigest, callability DeclCallability) returns HashDigest
 	return match callability 'c'
-		bareCallOnly gives Hasher.combined(state, value: SignatureDiscriminator.rootFreeFunctionDecl)
-		bareCallOrDirectoryRoute gives Hasher.combined(state, value: SignatureDiscriminator.routableFreeFunctionDecl)
+		freeFunction gives Hasher.combined(state, value: SignatureDiscriminator.freeFunctionDecl)
 		methodOf(typeName) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.methodDecl), bytes: typeName)
 	end 'c'
 end 'foldCallability'
 
-// The type a `self.`-qualified edge is `self` of, or EMPTY for the two shapes that name no type. Empty is
-// not a sentinel here: it is compared only against another edge's answer, and the shape mark has already
-// established that both are `throughSelf` or neither is.
-function forwardCallSelfType(call ForwardCall) returns immutable ByteArray
-	return match call 'c'
-		bare or
-		throughAReceiver gives EmptySourceText
-		throughSelf(typeName, _) gives typeName
-	end 'c'
-end 'forwardCallSelfType'
-
 // ⭐⭐ **WHICH CALLS CAN NAME THIS DECLARATION?** — the declaration-side half of `ForwardCall`'s partition,
-// and the three answers are decided from two facts the sweep holds outright, with nothing resolved:
-// whether the declaration sits inside a `type`/`extension` body, and whether its file has a directory
-// namespace.
+// decided from one fact the sweep holds outright, with nothing resolved: whether the declaration sits
+// inside a `type`/`extension` body.
 export union DeclCallability
-	// A free function at the compile ANCHOR. Only a BARE call can name it: it has no qualified spelling
-	// (`namespaceQualifiedName` panics if asked for one), so no dotted call anywhere can reach it. This is
-	// the arm that stops a user program's free `swap` from marking `stdlib`'s `Array.swap`.
-	bareCallOnly
-
-	// A free function in a NON-ROOT directory: a bare call, or the directory route `utils.f(…)`.
-	bareCallOrDirectoryRoute
+	freeFunction
 
 	// A method of `typeName`: a bare call (implicit `self` reaches a sibling — MEASURED), any
 	// receiver-qualified call, and a `self.`/`Self.`-qualified call inside `typeName`'s own body.
@@ -4912,8 +4738,7 @@ function cacheWriteDeclCallability(writer LibraryCacheWriter, value DeclCallabil
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		bareCallOnly then break
-		bareCallOrDirectoryRoute then break
+		freeFunction then break
 		methodOf(a0) then cacheWriteDeclCallabilityMethodOf(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDeclCallability'
@@ -4926,9 +4751,8 @@ function cacheReadDeclCallability(reader LibraryCacheReader) returns DeclCallabi
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
-		0 gives DeclCallability.bareCallOnly
-		1 gives DeclCallability.bareCallOrDirectoryRoute
-		2 gives try cacheReadDeclCallabilityMethodOf(reader)
+		0 gives DeclCallability.freeFunction
+		1 gives try cacheReadDeclCallabilityMethodOf(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadDeclCallability'
@@ -4999,163 +4823,6 @@ function anyBitSet(column BoolArray) returns bool
 
 	return false
 end 'anyBitSet'
-
-// ⭐⭐ **MAY A CALL TO THIS FUNCTION HAND BACK A `let`-DECLARED TOP-LEVEL GLOBAL'S OWN RECORD?** —
-// the whole-program fact that lets the immutability rule be enforced AT THE WRITE (⚖ user, 2026-08-14)
-// rather than at the return. Reading a `let` global and returning it is legal; MUTATING through what came
-// back is the error, and the caller can only know to refuse that if it knows what the callee's return may
-// alias. The callee's body is routinely in another file, so no per-file parse can answer it.
-//
-// ⭐ **A PER-DECLARATION FACT DERIVED FROM BODIES BY THE TOKEN SWEEP, WHOSE TRANSITIVE HALF NO SINGLE FILE
-// CAN SETTLE** — recorded raw here and closed by `ProgramSignatures.closeGlobalAliasReturns` once every file
-// is in, over `DeclNodeSpace` and the `ForwardCall` edge shape.
-//
-// ⭐⭐⭐ **THE SWEEP IS DELIBERATELY NARROW, AND WHAT MAKES THAT SOUND IS A FALLBACK RATHER THAN COVERAGE.**
-// A `return` this scan does not recognise records nothing, so the function's bit stays clear — and a bit
-// that is clear is exactly the condition under which `Parser.ownedFormOfBorrowedValue` keeps the ORIGINAL
-// E2015 refusal at the return. So:
-//
-//   • **UNDER-approximating (missing a seed or an edge) costs a REFUSAL, never a silent acceptance.** The
-//     program is rejected with the ORIGINAL E2015 message.
-//   • **OVER-approximating (a spurious seed or edge) costs a FALSE REJECT at some later write**, which is
-//     the only real hazard here.
-//
-// ⇒ **EVERY AMBIGUITY RESOLVES TOWARD "NOT A SEED".** That is why the returned name must be a bare
-// statement (`return A`, `return T.member`) and why a name the body BINDS anywhere is dropped outright
-// (`Parser.scanBodyFacts`). A later reader must not "simplify" the narrowness away by widening the scan
-// and deleting the fallback: the narrowness is only safe while the fallback stands.
-export type GlobalAliasReturnInfo
-	// The names this body returns as a whole statement — `A`, or the joined `Box.shared` a static member is
-	// read under (`Parser.parseStaticMemberAccess` looks a static member up under exactly that spelling).
-	// Whether one of them DENOTES an immutable stored global is decided at closure time, because a file that
-	// has not folded yet may be the one that declares it.
-	export let returnedNames as NameRoster
-
-	// The calls whose result this body returns — `return f(…)` — as the un-resolved shapes the source wrote
-	// (see `ForwardCall`). A function that returns what a marked function returns is marked itself.
-	export let returnCalls as ForwardCallArray
-
-	// This declaration's own bare name and callability: the closure files its node in `DeclNodeSpace` from them.
-	export let bareName as immutable ByteArray
-	export let callability as DeclCallability
-
-	// The file the declaration was swept from — the READER whose scope `returnedNames` must be resolved in.
-	// A name two directories declare resolves per reader, so two directories' `A` are two different globals
-	// and the answer is meaningless without the asking file.
-	export let declFilePath as FilePath
-
-	export static function create(returnedNames NameRoster, returnCalls ForwardCallArray, bareName ByteArray, callability DeclCallability, declFilePath FilePath) returns GlobalAliasReturnInfo
-		return Self{returnedNames: returnedNames, returnCalls: returnCalls, bareName: bareName, callability: callability, declFilePath: declFilePath}
-	end 'create'
-
-	// Is there anything to record at all? A body that returns neither a bare name nor a call states nothing
-	// and is not recorded — the "absence is the answer" default the whole registry rests on, and what keeps
-	// the map empty for a program with no top-level aggregate at all.
-	//
-	// ⚡ **OVER THE TWO COLUMNS RATHER THAN OVER A BUILT `Self`, SO THE ANSWER IS AVAILABLE *BEFORE* THE
-	// RECORD EXISTS.** The sweep asks it of the raw columns and builds nothing for a body that states nothing,
-	// which is most of them; asked of a `Self` it would have cost a record and a `DeclCallability` per swept
-	// declaration to discover that neither was wanted.
-	export static function statesAnything(returnedNames NameRoster, returnCalls ForwardCallArray) returns bool
-		return returnedNames.count() > 0 or returnCalls.count() > 0
-	end 'statesAnything'
-
-	// The closure interns a declaration's node from `bareName` (`closeGlobalAliasReturns`), so an
-	// info filed under any other key must carry that key: otherwise no call reaches its node and
-	// the mark is lost.
-	export function declaredAs(declaredName ByteArray) returns GlobalAliasReturnInfo
-		return Self.create(self.returnedNames, returnCalls: self.returnCalls, bareName: declaredName, callability: self.callability, declFilePath: self.declFilePath)
-	end 'declaredAs'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteNameRoster(writer, value: self.returnedNames)
-		cacheWriteForwardCallArray(writer, value: self.returnCalls)
-		writer.bytes(self.bareName)
-		cacheWriteDeclCallability(writer, value: self.callability)
-		writer.text(self.declFilePath.toString())
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns GlobalAliasReturnInfo throws LibraryCacheDamage
-		let f_returnedNames = try cacheReadNameRoster(reader)
-		let f_returnCalls = try cacheReadForwardCallArray(reader)
-		let f_bareName = freeze try reader.bytes()
-		let f_callability = try cacheReadDeclCallability(reader)
-		let f_declFilePath = try reader.path()
-
-		return Self{returnedNames: f_returnedNames, returnCalls: f_returnCalls, bareName: f_bareName, callability: f_callability, declFilePath: f_declFilePath}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(GlobalAliasReturnInfo) as CacheSize40
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'GlobalAliasReturnInfo'
-
-export type GlobalAliasReturnEntry
-	export let name as immutable ByteArray
-	export let info as GlobalAliasReturnInfo
-
-	export static function create(name ByteArray, info GlobalAliasReturnInfo) returns GlobalAliasReturnEntry
-		return Self{name: name, info: info}
-	end 'create'
-end 'GlobalAliasReturnEntry'
-
-export typealias GlobalAliasReturnEntryArray = Array with GlobalAliasReturnEntry
-typealias GlobalAliasReturnMap = Map with (ByteArray, GlobalAliasReturnInfo)
-
-// @generated library-cache begin
-function cacheWriteGlobalAliasReturnMap(writer LibraryCacheWriter, value GlobalAliasReturnMap)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for (key, entry) in value 'eachEntry'
-		writer.bytes(key)
-		entry.cacheWrite(writer)
-	end 'eachEntry'
-end 'cacheWriteGlobalAliasReturnMap'
-
-function cacheReadGlobalAliasReturnMap(reader LibraryCacheReader) returns GlobalAliasReturnMap throws LibraryCacheDamage
-	let count = try reader.count()
-	let result = GlobalAliasReturnMap.create()
-
-	for _ in 0 upto count 'eachEntry'
-		let key = try reader.bytes()
-		let entry = try GlobalAliasReturnInfo.cacheRead(reader)
-		result.upsert(key, value: entry)
-	end 'eachEntry'
-
-	return result
-end 'cacheReadGlobalAliasReturnMap'
-
-// @generated library-cache end
-
-// The registration keys whose function may hand back an immutable global's record — the settled output of
-// `ProgramSignatures.closeGlobalAliasReturns`. A key with no entry answers false.
-typealias GlobalAliasReturnKeySet = Set with ByteArray
-
-// @generated library-cache begin
-function cacheWriteGlobalAliasReturnKeySet(writer LibraryCacheWriter, value GlobalAliasReturnKeySet)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		writer.bytes(item)
-	end 'eachItem'
-end 'cacheWriteGlobalAliasReturnKeySet'
-
-function cacheReadGlobalAliasReturnKeySet(reader LibraryCacheReader) returns GlobalAliasReturnKeySet throws LibraryCacheDamage
-	let count = try reader.count()
-	let result = GlobalAliasReturnKeySet.create()
-
-	for _ in 0 upto count 'eachItem'
-		let item = try reader.bytes()
-		result.insert(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadGlobalAliasReturnKeySet'
-
-// @generated library-cache end
 
 export type ParamReassignEntry
 	export let name as immutable ByteArray
@@ -5329,138 +4996,6 @@ function cacheReadDeepCloneAnswerMap(reader LibraryCacheReader) returns DeepClon
 end 'cacheReadDeepCloneAnswerMap'
 
 // @generated library-cache end
-
-// A bare name -> its dense node in the forwarding graph `closeGlobalAliasReturns` closes. The CSR key space must
-// be dense and 0-based (see `CsrGraph`), and a bare name is neither, so it is interned into one.
-typealias DeclNodeIndex = Map with (ByteArray, CsrIndex)
-
-// A bare name -> every METHOD node wearing it. A method's node is keyed by its QUALIFIED spelling, so a
-// call that knows only the final segment (`x.swap(…)`) needs this to reach them; a `self.swap(…)` does not,
-// because it knows the type. Built by `DeclNodeSpace.internMethod` as it mints each method node.
-typealias MethodNodesByName = Map with (ByteArray, CsrColumn)
-
-// ⭐⭐ **THE NODE SPACE `closeGlobalAliasReturns` CLOSES OVER — ONE NODE PER DECLARATION, THREE WAYS TO
-// FIND IT.** A declaration gets exactly one node (that is what makes a mark on it mean one thing); which
-// INDEX it is filed in is `GlobalAliasReturnInfo.callability`, and which indexes an EDGE consults is
-// `ForwardCall`'s shape. The two meet in `targetsOf`, which is the ONLY place the shape→node rule
-// is written.
-//
-// ⚠ **ONE NODE PER DECLARATION IS A CORRECTNESS PROPERTY, NOT A TIDINESS ONE.** Filing a method under both
-// its bare name and its qualified one would give it two nodes, and `reverseReachabilityMark` marks NODES —
-// so a mark arriving through the bare node would be invisible to a `self.`-qualified edge asking the
-// qualified one, which is a MISSED mark and therefore the original E2015 refusal. The bare-name reach is
-// served by `methodNodesByName` (an index onto the same node) rather than by a second node.
-type DeclNodeSpace
-	// Per node, in mint order: the declaration's BARE name (what the published set is keyed by) and whether
-	// any declaration on that node returns an immutable global's record directly (the closure's seed).
-	export var bareNames as NameRoster
-	export var seeds as BoolArray
-
-	// A free function at the compile ANCHOR, keyed by its bare name. Only a bare call reaches these.
-	export var rootFreeFunctions as DeclNodeIndex
-
-	// A free function with a directory route, keyed by its bare name. A bare call or any dotted call.
-	export var routableFreeFunctions as DeclNodeIndex
-
-	// A method, keyed by its QUALIFIED `Type.name` spelling — which is what makes `Array.swap` and
-	// `Holder.swap` two nodes rather than one.
-	export var methods as DeclNodeIndex
-	export var methodNodesByName as MethodNodesByName
-
-	static function create() returns DeclNodeSpace
-		return Self{bareNames: NameRoster.create(0), seeds: BoolArray.create(0), rootFreeFunctions: DeclNodeIndex.create(), routableFreeFunctions: DeclNodeIndex.create(), methods: DeclNodeIndex.create(), methodNodesByName: MethodNodesByName.create()}
-	end 'create'
-
-	// ⭐ **THE NODE A DECLARATION OWNS** — minted on first sight, and the one place a `callability` is turned
-	// into an index. The METHOD arm also files the node under its bare name, because that is how a call that
-	// wrote only the final segment finds it.
-	function nodeFor(bareName ByteArray, callability DeclCallability) returns CsrIndex
-		return match callability 'c'
-			bareCallOnly gives self.intern(self.rootFreeFunctions, key: bareName, bareName: bareName)
-			bareCallOrDirectoryRoute gives self.intern(self.routableFreeFunctions, key: bareName, bareName: bareName)
-			methodOf(typeName) gives self.internMethod(typeName, bareName: bareName)
-		end 'c'
-	end 'nodeFor'
-
-	function internMethod(typeName ByteArray, bareName ByteArray) returns CsrIndex
-		let node = self.intern(self.methods, key: qualifiedMethodName(typeName, methodName: bareName), bareName: bareName)
-		let wearers = try self.methodNodesByName.get(bareName) otherwise CsrColumn.create(0)
-
-		for existing in wearers 'alreadyListed'
-			if existing == node 'sameNode'
-				return node
-			end 'sameNode'
-		end 'alreadyListed'
-
-		wearers.push(node)
-		self.methodNodesByName.upsert(bareName, value: wearers)
-		return node
-	end 'internMethod'
-
-	// `key`'s dense node in `index`, minting one on first sight. The three columns move together — the name,
-	// its node and its seed bit — because a node with no seed slot would read a bit belonging to a different
-	// declaration, which is the one way a counting-sorted key space can be corrupted silently.
-	function intern(index DeclNodeIndex, key ByteArray, bareName ByteArray) returns CsrIndex
-		if let existing = try index.get(key) 'alreadyANode'
-			return existing
-		end 'alreadyANode'
-
-		let node = self.bareNames.count()
-		self.bareNames.push(bareName)
-		self.seeds.push(false)
-		index.upsert(key, value: node as CsrIndex)
-		return node
-	end 'intern'
-
-	// ⭐⭐ **THE NODES A CALL CAN NAME — THE ONE HOME OF THE SHAPE→FAMILY RULE.** `closeGlobalAliasReturns`
-	// builds an edge per target.
-	//
-	// A name no recorded declaration wears yields NO targets, and that is the answer: nothing can ever mark
-	// it.
-	function targetsOf(call ForwardCall) returns CsrColumn
-		let targets = CsrColumn.create(0)
-		let name = forwardCallName(call)
-
-		match call 'c'
-			// `self.f(…)` / `Self.f(…)`: the receiver's type IS the enclosing type, so exactly one node.
-			throughSelf(typeName, _) then self.pushIfPresent(targets, index: self.methods, key: qualifiedMethodName(typeName, methodName: name))
-
-			// `x.f(…)`: a method wearing the name, or a free function with a directory route.
-			throughAReceiver then self.pushDottedTargets(targets, name: name)
-
-			// `f(…)`: everything a dotted call reaches, plus a root-level free function.
-			bare then self.pushBareTargets(targets, name: name)
-		end 'c'
-
-		return targets
-	end 'targetsOf'
-
-	// The targets EVERY dotted shape shares: the methods wearing the name, and the free function a
-	// directory route could reach. `throughSelf` deliberately does not come through here — it names one
-	// method and no free function at all.
-	function pushDottedTargets(targets CsrColumn, name ByteArray)
-		for node in try self.methodNodesByName.get(name) otherwise CsrColumn.create(0) 'eachMethodWearingIt'
-			targets.push(node)
-		end 'eachMethodWearingIt'
-
-		self.pushIfPresent(targets, index: self.routableFreeFunctions, key: name)
-	end 'pushDottedTargets'
-
-	// A bare call reaches everything a dotted one does — implicit `self` makes it name a sibling METHOD, and
-	// a free function is nameable bare whether or not it also has a directory route — PLUS the root-level
-	// free function no dotted spelling can reach. Stated as "the dotted set plus one" rather than as its own
-	// list, because that containment IS the rule and a second list could stop expressing it.
-	function pushBareTargets(targets CsrColumn, name ByteArray)
-		self.pushDottedTargets(targets, name: name)
-		self.pushIfPresent(targets, index: self.rootFreeFunctions, key: name)
-	end 'pushBareTargets'
-
-	function pushIfPresent(targets CsrColumn, index DeclNodeIndex, key ByteArray)
-		if let node = try index.get(key) 'namesARecordedDeclaration'
-			targets.push(node)
-		end 'namesARecordedDeclaration'
-	end 'pushIfPresent'
-end 'DeclNodeSpace'
 
 // ⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME.**
 // `function greet(name String = "World")` declares a second function, `__paramDefault#greet#0`, whose whole
@@ -5672,35 +5207,16 @@ export type ParamDefaultInfo
 	// @generated library-cache end
 end 'ParamDefaultInfo'
 
-export union DefaultHelperAliasReturn
-	statesNothing
-	states(info GlobalAliasReturnInfo)
-end 'DefaultHelperAliasReturn'
-
 export type SweptDefaultHelper
 	export let slot as ParamCount
 	export let signature as FuncReturnTypeEntry
-	export let aliasReturn as DefaultHelperAliasReturn
 
-	export static function create(slot ParamCount, signature FuncReturnTypeEntry, aliasReturn DefaultHelperAliasReturn) returns SweptDefaultHelper
-		return Self{slot: slot, signature: signature, aliasReturn: aliasReturn}
+	export static function create(slot ParamCount, signature FuncReturnTypeEntry) returns SweptDefaultHelper
+		return Self{slot: slot, signature: signature}
 	end 'create'
 end 'SweptDefaultHelper'
 
 export typealias SweptDefaultHelperArray = Array with SweptDefaultHelper
-
-function anyDefaultHelperStatesAGlobalAliasReturn(paramDefaults ParamDefaultEntryArray) returns bool
-	for entry in paramDefaults 'eachDefaultingDeclaration'
-		for helper in entry.helpers 'eachSynthesizedHelper'
-			match helper.aliasReturn 'aliasReturn'
-				statesNothing then continue
-				states then return true
-			end 'aliasReturn'
-		end 'eachSynthesizedHelper'
-	end 'eachDefaultingDeclaration'
-
-	return false
-end 'anyDefaultHelperStatesAGlobalAliasReturn'
 
 export type ParamDefaultEntry
 	export let name as immutable ByteArray
@@ -5768,7 +5284,7 @@ export type TypeParamSlots
 	end 'count'
 
 	// A slot past the recorded list reads as concrete: outside a generic type the parser records no slots
-	// at all (`Parser.emptyTypeParamPositions`).
+	// at all.
 	export function namesATypeParameter(index ParamCount) returns bool
 		return try self.typed.get(index) otherwise false
 	end 'namesATypeParameter'
@@ -8777,16 +8293,6 @@ export type ProgramSignatures
 
 	var byRefNamesPublished as bool
 
-	// ⚡ **HAS ANY RECORDED BODY RETURNED A BARE NAME AT ALL?** — the closure's precondition, raised at the
-	// instant the fact arrives rather than re-derived by a pass over the map. Only a returned NAME can be a
-	// seed (a `return f(…)` merely forwards), and reachability from an empty seed set marks nothing — so a
-	// false here means the graph, its edge columns and the BFS are all skipped, which is every program whose
-	// functions all return computed values. A stale TRUE builds a graph that marks nothing; a stale FALSE would
-	// lose a refusal.
-	var sawGlobalNameReturn as bool
-
-	var globalAliasReturnsClosed as bool
-
 	// ⭐ The deep-clone gate's answers, one per aggregate name. A pure MEMO of a walk over declarations — it
 	// is written by `aggregateSupportsDeepClone` and read by nothing else, enters no hash, and a compile that
 	// dropped it would answer identically and only slower.
@@ -8945,7 +8451,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{ownSettled: OwnedDeclarations.held(SettledDeclarations.create(os)), sharedSettled: freeze SettledDeclarations.unused(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(0), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), uniqueTypeAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(0), byRefNamesPublished: false, deepCloneAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), contestedAliasesDigest: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{ownSettled: OwnedDeclarations.held(SettledDeclarations.create(os)), sharedSettled: freeze SettledDeclarations.unused(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(0), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), uniqueTypeAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(0), byRefNamesPublished: false, deepCloneAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), contestedAliasesDigest: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	export static function overlayAllocations(declarations SettledDeclarationsCell, template IndexTemplateCell) returns AllocCount
@@ -8974,7 +8480,7 @@ export type ProgramSignatures
 	end 'overlayTables'
 
 	static function reassembled(template ProgramSignatures, tables IndexTables, baseline IndexBaseline, own OwnedDeclarations, shared immutable SettledDeclarations) returns ProgramSignatures
-		return Self{ownSettled: own, sharedSettled: shared, structSlots: tables.structSlots, mintedTupleLayouts: tables.mintedTupleLayouts, published: tables.published, genericInstances: tables.genericInstances, compiledInstanceNames: tables.compiledInstanceNames, canonicalInstanceNames: tables.canonicalInstanceNames, substitutedInstanceOrigins: tables.substitutedInstanceOrigins, canonicalInstanceNameIndex: tables.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: tables.tupleCanonicalNames, tupleElementTokens: tables.tupleElementTokens, tupleElementTokenOwners: tables.tupleElementTokenOwners, tupleAliases: tables.tupleAliases, multiplyDeclaredTupleAliases: tables.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: tables.cascadeWalkRoots, cascadeBreakReached: tables.cascadeBreakReached, interfaceCloneAnswers: tables.interfaceCloneAnswers, uniqueTypeAnswers: tables.uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: tables.typeNames, crossFileConstantReads: tables.crossFileConstantReads, byRefNamesPublished: template.byRefNamesPublished, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: tables.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, shareWalkAnswers: tables.shareWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, contestedAliasesDigest: template.contestedAliasesDigest, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, witnessByRefMasks: tables.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: tables.functionValuedFieldNames, liveDefaultKeyNames: tables.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: baseline, journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
+		return Self{ownSettled: own, sharedSettled: shared, structSlots: tables.structSlots, mintedTupleLayouts: tables.mintedTupleLayouts, published: tables.published, genericInstances: tables.genericInstances, compiledInstanceNames: tables.compiledInstanceNames, canonicalInstanceNames: tables.canonicalInstanceNames, substitutedInstanceOrigins: tables.substitutedInstanceOrigins, canonicalInstanceNameIndex: tables.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: tables.tupleCanonicalNames, tupleElementTokens: tables.tupleElementTokens, tupleElementTokenOwners: tables.tupleElementTokenOwners, tupleAliases: tables.tupleAliases, multiplyDeclaredTupleAliases: tables.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: tables.cascadeWalkRoots, cascadeBreakReached: tables.cascadeBreakReached, interfaceCloneAnswers: tables.interfaceCloneAnswers, uniqueTypeAnswers: tables.uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: tables.typeNames, crossFileConstantReads: tables.crossFileConstantReads, byRefNamesPublished: template.byRefNamesPublished, deepCloneAnswers: tables.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, shareWalkAnswers: tables.shareWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, contestedAliasesDigest: template.contestedAliasesDigest, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, witnessByRefMasks: tables.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: tables.functionValuedFieldNames, liveDefaultKeyNames: tables.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: baseline, journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
 	end 'reassembled'
 
 	// @generated library-cache begin
@@ -9013,8 +8519,6 @@ export type ProgramSignatures
 		cacheWriteTypeNameInterner(writer, value: self.typeNames)
 		cacheWriteNameInFileArray(writer, value: self.crossFileConstantReads)
 		writer.flag(self.byRefNamesPublished)
-		writer.flag(self.sawGlobalNameReturn)
-		writer.flag(self.globalAliasReturnsClosed)
 		cacheWriteDeepCloneAnswerMap(writer, value: self.deepCloneAnswers)
 		writer.flag(self.deepCloneWalkReadInstances)
 		cacheWriteDeepCloneAnswerMap(writer, value: self.shareWalkAnswers)
@@ -9087,8 +8591,6 @@ export type ProgramSignatures
 		let f_typeNames = try cacheReadTypeNameInterner(reader)
 		let f_crossFileConstantReads = try cacheReadNameInFileArray(reader)
 		let f_byRefNamesPublished = try reader.flag()
-		let f_sawGlobalNameReturn = try reader.flag()
-		let f_globalAliasReturnsClosed = try reader.flag()
 		let f_deepCloneAnswers = try cacheReadDeepCloneAnswerMap(reader)
 		let f_deepCloneWalkReadInstances = try reader.flag()
 		let f_shareWalkAnswers = try cacheReadDeepCloneAnswerMap(reader)
@@ -9125,11 +8627,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: Hasher.empty(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: Hasher.empty(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize624
-		return sizeof(ProgramSignatures) as CacheSize624
+	static function cacheLayoutBytes() returns CacheSize608
+		return sizeof(ProgramSignatures) as CacheSize608
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

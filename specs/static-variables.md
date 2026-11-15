@@ -1934,27 +1934,14 @@ end 'main'
 error E3197: <fragment>:15:7: cannot write through a read-only value, as it joins immutable and mutable data
 ```
 
-### The returned-shape sweep — the INLINE CONDITIONAL
+### A `return` whose value is an INLINE CONDITIONAL may hand back a `let`'s record
 
 ⭐⭐ **A `return` WHOSE VALUE IS AN INLINE CONDITIONAL HAS TWO ARMS, AND EITHER MAY BE A GLOBAL'S RECORD.**
-`noteReturnedGlobalOrForward` recognises a deliberately narrow set of `return` shapes, and its own tail
-states the family rule: an unrecognised shape leaves the function's bit clear, and a clear bit keeps the
-E2015 refusal at the return — *"a missed shape costs a REFUSAL, never a silent acceptance"*.
-
-⛔ **THE MISS WAS REACHED, BY THE COMPILER'S OWN SOURCE.** `ConformanceCheck.pairableAssociatedTypeNames` is
-`return sharedEmptyDeclaredConformances if boundTypeNames.count() < associatedTypeNames.count() else
-associatedTypeNames` — a legal program, refused because the sweep read the shape and recorded nothing.
-
-⚠ **BOTH ARMS ARE SEEDED, NEVER ONE.** The shape says the value is one of two records and the sweep
-cannot know which; recording only the half it happened to read first would be a fact about the parser
-rather than about the program. A nested conditional — in the CONDITION, where its `else` sits behind a
-paren, or in the ELSE arm, where the arm is not a bare name — still records nothing for that arm, which
-is the family rule again: the THEN arm is seeded either way, so a missed else arm cannot make the bit
-WRONG, only incomplete.
+A function may return a module-level `let`'s record on one arm and another value on the other: each call
+hands back the arm its condition selects.
 
 <!-- test: a-returned-inline-conditional-may-hand-back-a-global -->
-The `pairableAssociatedTypeNames` shape, and both arms are exercised — one call takes the global, the
-other takes the parameter.
+Both arms are exercised — one call takes the global, the other takes the parameter.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
@@ -1984,29 +1971,16 @@ end 'main'
 short=0 long=1
 ```
 
-### The shadowing filter — a binder shadows only what comes AFTER it
+### A returned name is the `let` global unless the body binds that name ABOVE the `return`
 
-⛔⛔ **THE FILTER IS POSITION-AWARE, BECAUSE ITS BINDER SET IS GENEROUS.**
-`returnedNamesNotBoundHere` drops a returned name that the body binds itself, using a deliberately
-GENEROUS binder set — a name is bound when it follows `let`, `var`, `for`, `(` or `,`, which also
-catches plain call ARGUMENTS. Over-inclusion drops a seed, and a dropped seed falls back to the E2015
-refusal at the return — which is not acceptable when a real program is the one refused.
-
-⭐ **THE COMPILER'S OWN SOURCE REACHES IT.** `SignatureIndex.surfaceOfRootBits` returns
-`sharedEmptyDeclaredSurface` BARE on one path — a shape the sweep DOES recognise — and hands that same
-name to a call on the next line. A position-blind filter would read the argument as binding the
-candidate, drop the seed, and refuse the bare return on legal source.
-
-⭐⭐ **THE FILTER KEYS ON POSITION, NOT SHAPE, AND THE SET STAYS GENEROUS.** Narrowing the binder SET is what the
-header warns against and it is right to: a `match` payload `case(a, b)` is character for character a
-call, and no token test separates them. Position needs no such test and is EXACT for the question being
-asked — **a name cannot resolve to a local at a `return` that precedes the local's own declaration,
-because such a program does not compile at all.** So requiring the binder to come FIRST can only drop
-FALSE shadowings; it cannot miss a real one.
+⭐⭐ **A `return` OF A BARE NAME HANDS BACK WHAT THE NAME RESOLVES TO AT THE `return`.** A function may
+return a module-level `let`'s record bare on one path and pass that same name to a call on another:
+a call argument binds nothing. A local the body declares above the `return` takes the name, and the value
+handed back is then the local's, which the caller may write through.
 
 <!-- test: a-returned-global-is-not-shadowed-by-a-later-call-argument -->
-The `surfaceOfRootBits` shape: the global is returned bare on one path and passed as an argument on the
-next line. Both paths are exercised.
+The global is returned bare on one path and passed as an argument on the next line. Both paths are
+exercised.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Bits = Array with Integer
@@ -2042,13 +2016,11 @@ empty=0 one=1
 ```
 
 <!-- test: a-returned-name-IS-shadowed-by-a-binder-above-it -->
-⭐ **THE CONTROL, AND IT IS THE HALF THAT MUST NOT BREAK.** The filter's whole job is to drop a name the
-body binds itself, and this program binds one ABOVE the return — so the local wins, the seed is dropped,
-and the value handed back is the LOCAL's and not the global's.
-**It WRITES through the returned value, and that is what makes it discriminating**: a spurious seed
-would mark `localWins` as handing back a global's record, and the `push` would then be refused on a
-program that touches no global at all. A read-only version of this case passes either way and would
-have proved nothing.
+⭐ **THE CONTROL, AND IT IS THE HALF THAT MUST NOT BREAK.** This program binds a local of the global's
+name ABOVE the return — so the local wins, and the value handed back is the LOCAL's and not the global's.
+**It WRITES through the returned value, and that is what makes it discriminating**: a result taken for
+the global's record would have the `push` refused on a program that touches no global at all. A
+read-only version of this case passes either way.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Bits = Array with Integer
@@ -2076,29 +2048,16 @@ end 'main'
 global=0 local=3
 ```
 
-### The returned-shape sweep — A PARAMETER DEFAULT IS THE LANGUAGE'S OTHER `return`
+### A PARAMETER DEFAULT IS THE LANGUAGE'S OTHER `return`
 
 ⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION WHOSE ENTIRE BODY IS `return <the expression>`**
-(`Parser.parseDefaultHelperBody`), so `f(p T = A)` hands its caller exactly what `f(A)` hands it. The sweep
-therefore reads a default's helper as well as `return` STATEMENTS, so the two spellings give one answer
-to the question the sweep exists to answer — *may this argument alias a `let`-declared global's record?* —
-which is the one thing a default may never differ from the written-out argument in. A sweep that read
-`return` statements only would fail in OPPOSITE directions:
-
-⛔ **THE BARE NAME WOULD BE REFUSED, ON THE COMPILER'S OWN SOURCE.** `ParseStaging.maxon:125` declares `opaqueParams
-OpaqueParamInfo = sharedNoOpaqueParams` and `Project.maxon:648` declares `payloadStorage MaxonType =
-NoPayloadStorage`; both would be E2015 at the helper's return, because the sweep would publish no bit for a
-function it never read.
-
-⛔⛔ **AND THE CALL EDGE WOULD BE SILENTLY ACCEPTED, WHICH IS THE HALF A REFUSAL DOES NOT COVER.** A default
-that names the global THROUGH AN ACCESSOR (`= shared()`) reaches the helper's return as an already-OWNED
-call result, so it never touches the promotion and there is no refusal to fall back on — the mark would
-stop at the helper and the caller would get an untainted value: a `grow(names Names = shared())`
-whose body pushes would print `a=1 b=2 g=2`, mutating a `let` global, while the written-out `grow(shared())`
-one line over is refused. So this door is a matter of SOUNDNESS and not only of lifting a refusal.
+(`Parser.parseDefaultHelperBody`), so `f(p T = A)` hands its caller exactly what `f(A)` hands it. A default
+that names a module-level `let`, bare or through an accessor declared `returns immutable`, is accepted where
+the written-out argument is and refused where the written-out argument is: a callee that writes the
+parameter is E3207 at the call that omits the argument.
 
 <!-- test: a-parameter-default-may-name-a-let-global -->
-The `sharedNoOpaqueParams` shape, and all three spellings of the same argument are exercised side by
+All three spellings of the same argument are exercised side by
 side — omitted, written out, and a value of the caller's own — because "the default agrees with the
 written-out argument" is the property, not "the default compiles".
 ```maxon
@@ -2127,8 +2086,7 @@ omitted=0 written=0 given=2
 ```
 
 <!-- test: a-parameter-default-may-call-an-accessor-that-returns-a-global -->
-The transitive half: the default is a CALL, and the mark reaches the helper through the sweep's ordinary
-forwarding edge rather than through a seed of its own.
+The transitive half: the default is a CALL to an accessor that hands back the global's record.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
@@ -2156,7 +2114,7 @@ omitted=0
 ```
 
 <!-- test: a-defaulted-global-may-not-reach-a-mutating-parameter -->
-⭐ **THE CONTROL FOR THE NAME, AND IT IS THE HALF THAT MUST NOT BREAK.** Admitting the return is only
+⭐ **THE CONTROL FOR THE NAME, AND IT IS THE HALF THAT MUST NOT BREAK.** Admitting the default is only
 half of the rule; the other half is that the refusal is at the write rather than dropped. The
 callee pushes, so the omitted argument is refused at the CALL by the capability checker, as the written-out
 `grow(sharedEmptyNames)` is. **The subject is "the argument" and not a binding name**, because a filled default
@@ -2182,9 +2140,9 @@ error E3207: <fragment>:13:12: 'grow' writes 'names' (line 8: `names.push(1)`); 
 ```
 
 <!-- test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter -->
-⭐⭐ **THE CONTROL FOR THE EDGE — AND ITS FAILURE WOULD BE A WRONG ANSWER, NOT A REFUSAL.** Identical to
-the case above but for the default naming the global through `shared()`, which is the spelling that would
-otherwise compile clean and mutate the global. It is refused for the reason the written-out `grow(shared())` is.
+⭐⭐ **THE CONTROL FOR THE ACCESSOR — AND ITS FAILURE WOULD BE A WRONG ANSWER, NOT A REFUSAL.** Identical to
+the case above but for the default naming the global through `shared()`: accepted, the `push` would mutate
+the global. It is refused for the reason the written-out `grow(shared())` is.
 
 ⚠ **CATCHING ONLY A `let` HANDED OVER BY NAME WOULD ACCEPT BOTH THIS PROGRAM AND THE WRITTEN-OUT
 `grow(shared())`.** Both are refused, which is the rule's whole stance — the subject is the RECORD, not the

@@ -350,7 +350,6 @@ extension Parser
 		// parameter into a struct field, so a call site can decide whether an owned argument is moved.
 		let paramConsumes = ParamConsumeEntryArray.create(0)
 		let paramReassigns = ParamReassignEntryArray.create(0)
-		let globalAliasReturns = GlobalAliasReturnEntryArray.create(0)
 
 		// ⭐ Per-function parameter DEFAULTS — the call-site dual of the return type, from
 		// the SAME token walk. One entry per function that declares at least one default, so a call site can
@@ -568,7 +567,7 @@ extension Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, messageMethodNameOut: noMessageMethodsAtFileScope)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, messageMethodNameOut: noMessageMethodsAtFileScope)
 				continue
 			end 'isFunction'
 
@@ -605,7 +604,7 @@ extension Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
 				continue
 			end 'isTypeDecl'
 
@@ -617,7 +616,7 @@ extension Parser
 			// itself is `enumDeclarationAt`'s, shared with the block-extent walk so the sweep and that walk
 			// cannot disagree about where a case list begins.
 			if depth == 0 and self.enumDeclarationAt(self.pos) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -645,7 +644,7 @@ extension Parser
 
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.job.path), filePath: self.job.path, fileStream: DeclTokenStream.create(PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), job: self.job), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.job.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.job.path), filePath: self.job.path, fileStream: DeclTokenStream.create(PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), job: self.job), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.job.isStdlibSource)
 		self.sweptImplementsClauses = AliasImplementsClauseArray.create(0)
 		self.drainGenericWithSitesInto(index)
 
@@ -1304,7 +1303,7 @@ extension Parser
 		return try typeParamNames.positionOfName(self.tokenAt(typeStart).value)
 	end 'bareTypeParamIndexIn'
 
-	function recordScannedGenericTemplate(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, messageMethodNameOut NameRoster)
+	function recordScannedGenericTemplate(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, messageMethodNameOut NameRoster)
 		let nameIndex = self.pos
 		let template = try self.readGenericTemplateAt(nameIndex) otherwise 'malformedHead'
 			self.pos = nameIndex
@@ -1322,7 +1321,7 @@ extension Parser
 		for position in 0 upto self.signatures.genericInstanceCountAt(template.siteKey()) 'eachInstance'
 			self.openGenericInstance(template, position: position)
 			self.pos = nameIndex
-			self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethodNameOut)
+			self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethodNameOut)
 			self.closeGenericInstance()
 		end 'eachInstance'
 
@@ -1340,10 +1339,10 @@ extension Parser
 			paramReassigns.push(ParamReassignEntry.create(template.siteKey(), site: template.siteKey(), info: ParamReassignInfo.create(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked), writtenParams: markers.written, markerHeads: markers.heads, bareName: bareName, callability: self.declarationCallability())))
 		end 'aMutableParameter'
 
-		let unreadConsumes = ParamConsumeEntryArray.create(0)
-		let unreadAliasReturns = GlobalAliasReturnEntryArray.create(0)
-		let unreadBodyFacts = SweptBodyFactEntryArray.create(0)
-		self.scanBodyFacts(template.siteKey(), declarationSite: template.siteKey(), funcBareName: bareName, paramNames: sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked), typeParamPositions: self.emptyTypeParamPositions, bodyStart: bodyStart, paramConsumes: unreadConsumes, globalAliasReturns: unreadAliasReturns, bodyFacts: unreadBodyFacts, declaresThrows: false, declaredSole: false, detectFieldStores: false, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked, promiseCarriers: NoParamPositions, isolatedOpaqueParams: NoParamPositions)
+		match self.bodyCloserFrom(bodyStart) 'closer'
+			closes(at) then self.noteDeclarationCloser(at, openingLabel: bareName, bodyStart: bodyStart)
+			unterminated then break
+		end 'closer'
 	end 'recordTemplateParamReassigns'
 
 	function openGenericInstance(template GenericFunctionTemplate, position ElementIndex)
@@ -1369,11 +1368,11 @@ extension Parser
 		end 'aFreeFunction'
 	end 'noteFreeFunctionName'
 
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, messageMethodNameOut NameRoster)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, messageMethodNameOut NameRoster)
 		let nameTok = self.current()
 
 		if not self.genericInstanceName.isInstance() and functionDeclaresTypeParamsIn(self.tokens, groups: self.parenGroups, nameIndex: self.pos) 'aGenericTemplate'
-			self.recordScannedGenericTemplate(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethodNameOut)
+			self.recordScannedGenericTemplate(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethodNameOut)
 			return
 		end 'aGenericTemplate'
 
@@ -1516,10 +1515,9 @@ extension Parser
 		// ⭐ **PARAMETER DEFAULTS** — recorded from the SAME token walk, and the ONLY place
 		// the whole program learns that a call may legally omit an argument. It also carries each
 		// synthesized helper's RETURN TYPE, which is what lets a call site in another file type the
-		// call it emits to that helper (`mintCallResult`) — and, since a default expression is a
-		// `return` in every respect that matters here, its `let`-global-alias shape. Both ride the
-		// `ParamDefaultEntry` rather than `entries` and `globalAliasReturns`: the helper's final name
-		// waits on a contest only the fold can see (`ProgramSignatures.recordSweptDefaultHelpers`).
+		// call it emits to that helper (`mintCallResult`). It rides the `ParamDefaultEntry` rather than
+		// `entries`: the helper's final name waits on a contest only the fold can see
+		// (`ProgramSignatures.recordSweptDefaultHelpers`).
 		if declaresDefaults 'someParameterDefaults'
 			self.recordScannedParamDefaults(funcName, nameTok: nameTok, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, paramDefaults: paramDefaults)
 		end 'someParameterDefaults'
@@ -1594,7 +1592,7 @@ extension Parser
 		// forwards a parameter into a `mutable` one is as much a forwarder as a free function is, and a method
 		// that awaits the promise it is handed owns it as much as a free function does — so both halves read every
 		// declaration, through one call and one list.
-		self.scanBodyFacts(funcName, declarationSite: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: sweptTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, declaredSole: qualifiedReturn.capability == ResultCapability.isolated, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver, selfCapability: declaredSelfCapability, promiseCarriers: promiseCarriers, isolatedOpaqueParams: self.isolatedOpaqueParamMask(sweptTypeParamPositions, capabilities: sweptParamCapabilities, written: declaredMarkers.written, takesReceiver: takesReceiver))
+		self.scanBodyFacts(funcName, declarationSite: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: sweptTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, bodyFacts: bodyFacts, declaresThrows: declaresThrows, declaredSole: qualifiedReturn.capability == ResultCapability.isolated, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver, selfCapability: declaredSelfCapability, promiseCarriers: promiseCarriers, isolatedOpaqueParams: self.isolatedOpaqueParamMask(sweptTypeParamPositions, capabilities: sweptParamCapabilities, written: declaredMarkers.written, takesReceiver: takesReceiver))
 	end 'recordScannedSignature'
 
 	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR "NONE"** — see `OpaqueParamInfo`
@@ -1696,7 +1694,7 @@ extension Parser
 					// `slotElementsFromAliases: false` for `returnDeclaredSurface`'s reason, and it is the same
 					// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
 					// stores, so a SLOT's element bit read here would be how far the sweep had got.
-					helpers.push(SweptDefaultHelper.create(slot, signature: FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility, enclosingTypeName: self.enclosingTypeNameOrEmpty(), returnCapability: resultCapabilityOf(self.paramCapabilityAt(self.paramCapabilityIndexAfter(q)))), aliasReturn: self.defaultHelperGlobalAliasReturn(helperName, valueStart: typeEnd + 1, exprEnd: itemEnd)))
+					helpers.push(SweptDefaultHelper.create(slot, signature: FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility, enclosingTypeName: self.enclosingTypeNameOrEmpty(), returnCapability: resultCapabilityOf(self.paramCapabilityAt(self.paramCapabilityIndexAfter(q))))))
 				end 'synthesizedHelper'
 			end 'hasDefault'
 
@@ -1711,56 +1709,6 @@ extension Parser
 
 		paramDefaults.push(ParamDefaultEntry.create(funcName, nameLine: nameTok.line, nameColumn: nameTok.column, info: ParamDefaultInfo.create(freeze names, producers: freeze producers), helpers: helpers))
 	end 'recordScannedParamDefaults'
-
-	// ⭐⭐ **THE `let`-GLOBAL ALIAS SEED FOR THE OTHER `return` IN THE LANGUAGE: A PARAMETER DEFAULT.** The captured expression becomes
-	// the whole body of a synthesized nullary helper (`parseDefaultHelperBody`), so `f(p T = A)` hands its
-	// caller precisely what `f(A)` hands it — and the two spellings must give the SAME answer to
-	// "may this argument alias a `let` global's record?", which is the one thing a default may never differ from
-	// the written-out argument in. Without this walk they differ in both directions:
-	//
-	//   • `f(p T = A)` naming the global BARE was refused outright — `ownedFormOfBorrowedValue` keeps its E2015
-	//     for a helper the sweep never published, and the sweep read `return` statements only. That refusal is
-	//     `ParseStaging.maxon:125` and `Project.maxon:648` in this compiler's own source, on a legal
-	//     shape.
-	//   • `f(p T = accessor())` naming one THROUGH A CALL was silently ACCEPTED and mutated the global, where
-	//     the written-out `f(accessor())` beside it is E3207. A missed EDGE costs no refusal here, because the
-	//     helper returns an already-owned call result and never reaches the promotion — so this door had to be
-	//     opened for soundness and not only to lift a refusal.
-	//
-	// ⚠ Keyed by the name the fold files the helper under (`ProgramSignatures.recordSweptDefaultHelpers`).
-	// A helper emitted under any other name has no entry here, so its
-	// default is refused E2015 rather than admitted unmarked. That is the family rule holding in the one
-	// place a key can be wrong: the sweep publishes ONE entry per key, and the direction it errs in is a
-	// REFUSAL.
-	//
-	// ⚡ Four columns per default expression, unconditionally. The per-BODY twin had to be gated behind a
-	// `sawAReturn` flag because every function in the program walks it; this one is reached only for a
-	// parameter that declares an expression default, of which a program has tens.
-	function defaultHelperGlobalAliasReturn(helperName immutable ByteArray, valueStart ElementIndex, exprEnd ElementIndex) returns DefaultHelperAliasReturn
-		let returnedNames = NameRoster.create(0)
-		let returnedHeads = NameRoster.create(0)
-		let returnedAt = TokenIndexArray.create(0)
-		let returnCalls = ForwardCallArray.create(0)
-		self.noteReturnedGlobalOrForward(valueStart, regionEnd: SweptValueRegionEnd.atToken(exprEnd), returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
-
-		// The same "states nothing, records nothing" gate `scanBodyFacts` raises, and it is nearly every
-		// default: `= 0`, `= false`, `= ""`, `= Colour.red` all leave both columns empty.
-		//
-		// ⚠ **AND NO SHADOWING FILTER, WHICH IS A PROPERTY OF THE HELPER RATHER THAN AN OMISSION.**
-		// `returnedNamesNotBoundHere` exists because a BODY may bind the name it returns; a default expression
-		// is one expression parsed into a helper whose scope is created empty and whose parameter list is
-		// empty (`parseDefaultHelperBody`), so there is nothing it could bind and no local for a name to
-		// resolve to ahead of the global.
-		if not GlobalAliasReturnInfo.statesAnything(returnedNames, returnCalls: returnCalls) 'statesNothing'
-			return DefaultHelperAliasReturn.statesNothing
-		end 'statesNothing'
-
-		// `bareCallOnly` and no receiver: the helper is a free function whose name is in the reserved `__`
-		// space with a `#` in it (`Project.paramDefaultHelperName`), so it wears its own node in the closure's
-		// graph and no call any source can write reaches it. Its own forwarding EDGES are ordinary and are
-		// what carries the mark up from a default that calls an accessor.
-		return DefaultHelperAliasReturn.states(GlobalAliasReturnInfo.create(returnedNames, returnCalls: returnCalls, bareName: helperName, callability: DeclCallability.bareCallOnly, declFilePath: self.job.path))
-	end 'defaultHelperGlobalAliasReturn'
 
 	// Which source positions of the parameter list at `parenPos` declare a default — a peek-only,
 	// allocation-free walk asked once per declared function.
@@ -1851,17 +1799,16 @@ extension Parser
 	// file is in. A bare reference strips surrounding
 	// parens as the real parse's `rhsWasBareLocalReference` does (`parenStrippedParamAt`), so the two
 	// agree on what a bare-parameter value is.
-	function scanBodyFacts(funcName immutable ByteArray, declarationSite immutable ByteArray, funcBareName ByteArray, paramNames NameRoster, typeParamPositions TypeParamSlots, bodyStart ElementIndex, paramConsumes ParamConsumeEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, declaredSole bool, detectFieldStores bool, takesReceiver bool, selfCapability ParamCapability, promiseCarriers ParamPositionMask, isolatedOpaqueParams ParamPositionMask)
+	function scanBodyFacts(funcName immutable ByteArray, declarationSite immutable ByteArray, funcBareName ByteArray, paramNames NameRoster, typeParamPositions TypeParamSlots, bodyStart ElementIndex, paramConsumes ParamConsumeEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, declaredSole bool, detectFieldStores bool, takesReceiver bool, selfCapability ParamCapability, promiseCarriers ParamPositionMask, isolatedOpaqueParams ParamPositionMask)
 		// ⚠ **ONE CALL-ALIGNED NAME LIST, READ BY BOTH HALVES** (`sweptParamNamesFor` builds it). The consume
 		// half and the by-reference half ask the same question of the same tokens — which parameter does this
 		// name denote — and every declaration shape owes both answers: an instance method forwards a parameter
 		// into a reassigning one exactly as a free function does
 		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program), and it owns the
 		// promise it awaits exactly as a free function does.
-		// ⭐ **THE WALK IS UNCONDITIONAL; THE PARAMETER PROBES ARE A SCOPE INSIDE IT.** The `let`-global alias question — does
-		// this body RETURN a `let` global's record? — has nothing to do with parameters, and the functions that
-		// ask it most are the receiverless zero-parameter accessors (`Box.get()`,
-		// `CharacterSet.whitespaces`), so the walk must reach a body with no parameters at all. With the list
+		// ⭐ **THE WALK IS UNCONDITIONAL; THE PARAMETER PROBES ARE A SCOPE INSIDE IT.** What a body RETURNS and
+		// how it exits have nothing to do with parameters, so the walk must reach a body with no parameters at
+		// all. With the list
 		// empty every parameter probe below is provably inert — each is gated on an index below a count of
 		// zero, and the bracket stacks exist only to feed those probes — so such a body pays the token walk and
 		// the return scan and nothing else. ⚠ Do not fold `scansParams` into the probes individually: keeping
@@ -1893,20 +1840,6 @@ extension Parser
 		let shadowedInBlock = ParamShadowColumn.create(0)
 		let shadowedOnLine = BoolArray.create(0)
 
-		// ⭐ **THREE COLUMNS: the names this body RETURNS as a whole statement, their first SEGMENTS, and
-		// the calls whose result it returns.** `returnedHeads` is the head of each name (`Box` of `Box.shared`),
-		// which is what the shadowing filter compares against — a body that binds `Box` returns its own local,
-		// not the global.
-		//
-		// ⚡ Each is FRESH rather than copy-on-written off a shared module-level empty: a column that MAY alias a
-		// `let` global's record cannot be passed where it can be written (E3207), and the privatise flag that
-		// would make the sharing safe is an invariant no analysis can see. A body with no `return` pays four
-		// empty records for it.
-		let returnedNames = NameRoster.create(0)
-		let returnedHeads = NameRoster.create(0)
-		let returnedAt = TokenIndexArray.create(0)
-		let returnCalls = ForwardCallArray.create(0)
-
 		// The type-parameter FEED column, EMPTY until a feed is actually recorded (`setParamFeed`) — a feed
 		// requires a type-parameter-typed field, so a top-level function and a non-generic type's method (all of
 		// them on the generics-free corpus) never grow it past zero and `typeParamFeedOf` reads every one of their
@@ -1917,10 +1850,10 @@ extension Parser
 
 		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`. A `[` is not pushed at all
 		// (`trackBracketAt`). The innermost open bracket being a `{` is what distinguishes a struct-field `:`
-		// from a labelled-call-argument one. ⚡ Both were SHARED EMPTIES for a body with no parameters to watch
-		// — `trackBracketAt` is the only writer and it runs under `scansParams`, as does every reader — and
-		// both are FRESH now, for the reason the deleted anchors' note records: `scansParams` is a flag, and a
-		// name that may hold a `let` global's record may not be passed somewhere that writes it.
+		// from a labelled-call-argument one. ⚡ Both are FRESH even for a body with no parameters to watch
+		// — `trackBracketAt` is the only writer and it runs under `scansParams`, as does every reader — because
+		// `scansParams` is a flag, and a name that may hold a `let` global's record may not be passed somewhere
+		// that writes it.
 		let braceStack = BoolArray.create(0)
 		let openBrackets = TokenIndexArray.create(0)
 		var blockDepth = 0 as BlockDepth
@@ -2018,15 +1951,9 @@ extension Parser
 				bodySpellsAReturn = true
 			end 'aReturnAnywhereInThisBody'
 
-			// ⭐⭐ **THE `let`-GLOBAL ALIAS SEED AND EDGE, both read off a `return` statement's own first tokens.** Probed here
-			// rather than in a walk of its own because this walk already stands on every token of the body with
-			// the block-depth state a second one would have to rebuild. AHEAD of the parameter probes because it
-			// is the one fact this walk collects for a body that has no parameters at all.
 			if kind == TokenKind.return 'returnStatement'
-				self.noteReturnedGlobalOrForward(q + 1, regionEnd: sharedSweptValueLineEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls)
-
-				// The fresh-return probe rides the same `return` token the `let`-global alias probe does, for that probe's reason: this walk already
-				// stands on it, and a second walk would rebuild the block-depth state to reach the same tokens.
+				// The fresh-return probe rides this walk's `return` token: the walk already stands on it, and a
+				// second walk would rebuild the block-depth state to reach the same tokens.
 				//
 				// ⚡ **ASKED ONLY WHILE THE CLAIM IS STILL ALIVE.** It is UNIVERSAL over the body's returns and only
 				// ever cleared, so one unreadable return settles the declaration and every later probe is a token
@@ -2260,30 +2187,6 @@ extension Parser
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, site: declarationSite, info: ParamConsumeInfo.create(paramNames, bits: freeze consumed, feeds: freeze feeds, handedOn: freeze handedOn, forwardedStores: freeze forwardedStores)))
 		end 'consumes'
-
-		// ⚡ **NOTHING IS BUILT FOR A BODY THAT STATES NOTHING** — the predicate is asked of the raw COLUMNS,
-		// ahead of the record, because building the record to ask it cost a `GlobalAliasReturnInfo` and a
-		// `DeclCallability` per swept declaration to discover that neither was wanted.
-		if GlobalAliasReturnInfo.statesAnything(returnedNames, returnCalls: returnCalls) 'returnedANameOrACall'
-			// ⭐ **THE SHADOWING FILTER RUNS ONLY FOR A BODY THAT RETURNED A BARE NAME** — not for one that
-			// merely returns a call, and not at all for one that returns neither. See
-			// `returnedNamesNotBoundHere` for what it decides and which way it errs.
-			//
-			// ⚠ **THIS USED TO SAY *"a handful of functions in a program and none at all in most"*, AND THAT
-			// WAS NEVER MEASURED.** `return EmptySourceText` and `return SomeConstant` are ordinary, so the
-			// population is bodies-returning-an-unbound-name, not accessors-returning-a-global — the same
-			// over-estimate `sawGlobalNameReturn` makes, one tier down. What IS measured is the price: a
-			// SECOND O(tokens) walk of the body plus two arrays, per such body. It stands because the
-			// alternative — carrying the names bound so far through the first walk — costs a per-body set and
-			// an insert per binder, which is more than one allocation-free re-walk.
-			let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, bodyStart: bodyStart, paramNames: paramNames) if returnedNames.count() > 0 else returnedNames
-
-			// Asked a second time because the FILTER can empty the name column: a body whose only `return` named
-			// a local of its own states nothing after all, and must not reach the map.
-			if GlobalAliasReturnInfo.statesAnything(unshadowed, returnCalls: returnCalls) 'mayHandBackAGlobalsRecord'
-				globalAliasReturns.push(GlobalAliasReturnEntry.create(funcName, info: GlobalAliasReturnInfo.create(unshadowed, returnCalls: returnCalls, bareName: funcBareName, callability: self.declarationCallability(), declFilePath: self.job.path)))
-			end 'mayHandBackAGlobalsRecord'
-		end 'returnedANameOrACall'
 	end 'scanBodyFacts'
 
 	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD THE `return` ITSELF BUILDS? — the whole freshness proof,
@@ -2609,12 +2512,48 @@ extension Parser
 	// Does any written name a forwarding `return` resolves by name denote a parameter or a local of this body
 	// instead? Then it is a VALUE at that call — a closure, or an instance method's receiver — and no
 	// declaration key describes what it hands back.
+	//
+	// The binder positions are deliberately generous — `(` and `,` also admit plain call arguments, which a
+	// `match` payload is token for token: a false binding only withholds the forward, a missed one is unsound.
 	function noForwardHeadIsBoundHere(forwardHeads NameRoster, forwardHeadsAt TokenIndexArray, bodyStart ElementIndex, paramNames NameRoster) returns bool
 		if forwardHeads.count() == 0 'nothingResolvedByName'
 			return true
 		end 'nothingResolvedByName'
 
-		return self.returnedNamesNotBoundHere(forwardHeads, returnedHeads: forwardHeads, returnedAt: forwardHeadsAt, bodyStart: bodyStart, paramNames: paramNames).count() == forwardHeads.count()
+		for head in forwardHeads 'eachHead'
+			if bodyNamesAParam(paramNames, name: head) 'aParameter'
+				return false
+			end 'aParameter'
+		end 'eachHead'
+
+		var depth = 0 as BlockDepth
+		var q = bodyStart
+
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if depth == 0 and self.closesBlockAt(q) 'bodyEnds'
+				break
+			end 'bodyEnds'
+
+			if q > bodyStart and tokenCanBeAName(self.tokenAt(q)) 'maybeABinder'
+				let before = self.kindAt(q - 1)
+
+				if bindingKeywordSpells(before) or before == TokenKind.for or before == TokenKind.leftParen or before == TokenKind.comma 'aBinderPosition'
+					for i in 0 upto forwardHeads.count() 'eachHeadAt'
+						let head = try forwardHeads.get(i) otherwise panic("noForwardHeadIsBoundHere: forwardHeads.get({i}) OOB below its own count")
+						let headAt = try forwardHeadsAt.get(i) otherwise panic("noForwardHeadIsBoundHere: forwardHeadsAt.get({i}) OOB — the columns are parallel by construction")
+
+						if q <= headAt and head.equals(self.tokenAt(q).value) 'bindsTheHeadBeforeItsReturn'
+							return false
+						end 'bindsTheHeadBeforeItsReturn'
+					end 'eachHeadAt'
+				end 'aBinderPosition'
+			end 'maybeABinder'
+
+			depth = self.blockDepthAfter(q, depth: depth)
+			q = q + 1
+		end 'walk'
+
+		return true
 	end 'noForwardHeadIsBoundHere'
 
 	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD BUILT OUT OF THIS DECLARATION'S OWN PARAMETERS, AND NOTHING
@@ -2749,226 +2688,18 @@ extension Parser
 		return q
 	end 'groupCloserAt'
 
-	// ⭐⭐ **THE `let`-GLOBAL ALIAS SEED AND EDGE, READ OFF ONE VALUE EXPRESSION.** Exactly five shapes are recognised, and
-	// the region must hold nothing BUT the shape — its own end after a name, an opening `(` for a call:
-	//
-	//   • `<name>`            — a seed candidate, the name as written;
-	//   • `<Type>.<member>`   — a seed candidate under the JOINED spelling, which is the key a static
-	//                           member is looked up under (`parseStaticMemberAccess`);
-	//   • `<name>(…)`         — a forwarding edge, bare;
-	//   • `<recv>.<name>(…)`  — a forwarding edge through a receiver, or through `self` inside a type;
-	//   • `<name> if <cond> else <arm>` — the INLINE CONDITIONAL, whose BOTH arms are candidates
-	//                           because either may be the value. See below.
-	//
-	// ⭐⭐ **TWO DOORS ASK IT, AND THE ONLY THING THEY DIFFER IN IS WHERE THE REGION ENDS (`SweptValueRegionEnd`).**
-	// A `return` statement is the obvious one. The other is a captured PARAMETER DEFAULT, which is a value
-	// expression the compiler turns into a nullary helper whose entire body is `return <that expression>`
-	// (`parseDefaultHelperBody`) — so `f(p T = A)` hands its caller exactly what `f(A)` hands it, and the
-	// question "may this call's argument alias a `let` global's record?" has to have the same answer for both
-	// spellings or a default stops being sugar for writing the argument out: `grow(names Names = shared())`
-	// must be refused E3207 exactly where `grow(shared())` is.
-	//
-	// ⭐⭐ **BOTH ARMS OF THE CONDITIONAL ARE SEEDED, NEVER ONE.** `return table if
-	// full else other`, with `table` a module `let`, is a `return` whose value IS a global's record on one
-	// path, and the sweep cannot know which, so recording only the half it happened to read first would be a
-	// fact about the parser rather than about the program.
-	//
-	// ⚠⚠ **ANYTHING ELSE RECORDS NOTHING, AND THAT IS SOUND BECAUSE OF THE FALLBACK RATHER THAN BECAUSE THE
-	// LIST IS COMPLETE.** A value this does not recognise leaves the function's bit clear, and a clear bit
-	// is precisely the condition under which `ownedFormOfBorrowedValue` keeps the ORIGINAL E2015 refusal at the
-	// return — so a missed shape costs a REFUSAL, never a silent acceptance. The hazard runs the other way:
-	// recording a shape whose value is not really the global's record would taint a caller's value and refuse a
-	// write on a legal program. ⇒ **Every ambiguity resolves toward recording NOTHING**, which is why the
-	// shape test is exact rather than "a value mentioning a name somewhere".
-	//
-	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
-	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
-	// can name.
-	function noteReturnedGlobalOrForward(valueStart ElementIndex, regionEnd SweptValueRegionEnd, returnedNames NameRoster, returnedHeads NameRoster, returnedAt TokenIndexArray, returnCalls ForwardCallArray)
-		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
-			return
-		end 'notANameAtAll'
-
-		if self.kindAt(valueStart + 1) == TokenKind.leftParen 'returnsABareCall'
-			if let call = try self.forwardCallOpeningAt(valueStart + 1) 'aNamedCall'
-				noteForwardCall(returnCalls, call: call)
-			end 'aNamedCall'
-
-			return
-		end 'returnsABareCall'
-
-		if self.sweptValueRegionEndsAt(valueStart + 1, regionEnd: regionEnd) 'returnsABareName'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(valueStart).value, head: self.tokenAt(valueStart).value, valueStart: valueStart)
-			return
-		end 'returnsABareName'
-
-		// The INLINE CONDITIONAL. `valueStart + 1` being `if` fixes the THEN arm at exactly the one token the
-		// region opens with, which the two tests above have already established is a name — so it is seeded
-		// here on the same terms `returnsABareName` seeds its own, and the ELSE arm is read on those terms too.
-		if self.kindAt(valueStart + 1) == TokenKind.if 'returnsAConditional'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(valueStart).value, head: self.tokenAt(valueStart).value, valueStart: valueStart)
-			self.noteConditionalElseArm(valueStart + 2, regionEnd: regionEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, valueStart: valueStart)
-			return
-		end 'returnsAConditional'
-
-		if self.kindAt(valueStart + 1) != TokenKind.dot or not tokenCanBeAName(self.tokenAt(valueStart + 2)) 'notADottedShape'
-			return
-		end 'notADottedShape'
-
-		if self.kindAt(valueStart + 3) == TokenKind.leftParen 'returnsADottedCall'
-			if let call = try self.forwardCallOpeningAt(valueStart + 3) 'aNamedCall'
-				noteForwardCall(returnCalls, call: call)
-			end 'aNamedCall'
-
-			return
-		end 'returnsADottedCall'
-
-		if self.sweptValueRegionEndsAt(valueStart + 3, regionEnd: regionEnd) 'returnsAStaticMember'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: qualifiedMethodName(self.tokenAt(valueStart).value, methodName: self.tokenAt(valueStart + 2).value), head: self.tokenAt(valueStart).value, valueStart: valueStart)
-		end 'returnsAStaticMember'
-	end 'noteReturnedGlobalOrForward'
-
-	// ⭐ **HAS THE VALUE THE SWEEP IS READING RUN OUT AT `index`?** — the one place `SweptValueRegionEnd`'s two
-	// answers are spent, so the recogniser's three "and nothing follows it" tests cannot come to mean different
-	// things at the two doors. See the union for why the default door states a TOKEN where the return door
-	// states a line.
-	function sweptValueRegionEndsAt(index ElementIndex, regionEnd SweptValueRegionEnd) returns bool
-		return match regionEnd 'ends'
-			atLineEnd gives self.kindAt(index) == TokenKind.newline
-			atToken(stop) gives index == stop
-		end 'ends'
-	end 'sweptValueRegionEndsAt'
-
-	// ⭐ **THE ELSE ARM OF A RETURNED INLINE CONDITIONAL**, read on the SAME two terms the statement-level
-	// shapes are read on — a bare name to the region's end, or a bare call — so an arm this admits is an
-	// arm `noteReturnedGlobalOrForward` would have admitted had it stood alone.
-	//
-	// ⚠ **THE `else` IT LOOKS FOR IS AT BRACKET DEPTH ZERO, and everything else records NOTHING.** A
-	// conditional nested inside the CONDITION (`return A if (x if y else z) else B`) puts an `else` behind a
-	// paren, and one nested in the ELSE arm (`return A if x else B if y else C`) leaves an arm that is not a
-	// bare name — both fall through recording nothing, which is this function's family rule: an unrecognised
-	// shape costs a REFUSAL at the return, never a silent acceptance. The THEN arm is already seeded by the
-	// caller either way, so a missed else arm cannot make the function's bit WRONG, only incomplete.
-	function noteConditionalElseArm(condStart ElementIndex, regionEnd SweptValueRegionEnd, returnedNames NameRoster, returnedHeads NameRoster, returnedAt TokenIndexArray, returnCalls ForwardCallArray, valueStart ElementIndex)
-		var depth = 0 as NestingDepth
-		var q = condStart
-
-		while not self.sweptValueRegionEndsAt(q, regionEnd: regionEnd) and self.kindAt(q) != TokenKind.eof 'scanForElse'
-			let kind = self.kindAt(q)
-
-			if tokenKindOpensABracket(kind) 'opensGroup'
-				depth = depth + 1
-			end 'opensGroup'
-
-			if tokenKindClosesABracket(kind) 'closesGroup'
-				depth = depth - 1
-			end 'closesGroup'
-
-			if depth == 0 and kind == TokenKind.else 'foundTheElse'
-				self.noteConditionalArmValue(q + 1, regionEnd: regionEnd, returnedNames: returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, returnCalls: returnCalls, valueStart: valueStart)
-				return
-			end 'foundTheElse'
-
-			q = q + 1
-		end 'scanForElse'
-	end 'noteConditionalElseArm'
-
-	// One arm's VALUE, on the two terms above. Split from the scan so the admission rule is written once and
-	// reads the same as the statement-level one it mirrors.
-	function noteConditionalArmValue(armStart ElementIndex, regionEnd SweptValueRegionEnd, returnedNames NameRoster, returnedHeads NameRoster, returnedAt TokenIndexArray, returnCalls ForwardCallArray, valueStart ElementIndex)
-		if not tokenCanBeAName(self.tokenAt(armStart)) 'notANameAtAll'
-			return
-		end 'notANameAtAll'
-
-		if self.kindAt(armStart + 1) == TokenKind.leftParen 'aBareCall'
-			if let call = try self.forwardCallOpeningAt(armStart + 1) 'aNamedCall'
-				noteForwardCall(returnCalls, call: call)
-			end 'aNamedCall'
-
-			return
-		end 'aBareCall'
-
-		if self.sweptValueRegionEndsAt(armStart + 1, regionEnd: regionEnd) 'aBareName'
-			noteReturnedCandidate(returnedNames, returnedHeads: returnedHeads, returnedAt: returnedAt, name: self.tokenAt(armStart).value, head: self.tokenAt(armStart).value, valueStart: valueStart)
-		end 'aBareName'
-	end 'noteConditionalArmValue'
-
-	// ⭐⭐ **DROP EVERY RETURNED NAME THIS BODY BINDS ITSELF.** `function f() returns Names  let A = …
-	//  return A  end` returns its own LOCAL, and the sweep — which has no scope — would otherwise file it as a
-	// return of the global `A` and taint every caller's result. The real parse resolves a local first
-	// (`parseVariableReference` asks `scope.contains` before any top-level probe), so this is what keeps the
-	// swept fact agreeing with what the body will actually mean.
-	//
-	// ⚠ **THE BINDER TEST IS DELIBERATELY GENEROUS, AND THE DIRECTION IS THE POINT.** A name is treated as
-	// bound when it follows `let`, `var`, `for`, `(` or `,` — which catches every binder form the language has
-	// (a declaration, a loop variable, a caught-error binder, a `match` payload, a destructuring name) and also
-	// catches plain call ARGUMENTS, which are not binders at all. Under-inclusion is the costly direction — a
-	// spurious seed refuses a write on a legal program — so the SET errs the way it does on purpose. Do not
-	// narrow it: a `match` payload `case(a, b)` is character for character a call, and no token test separates
-	// them.
-	//
-	// ⛔⛔ **BUT THE OVER-INCLUSION IS NOT FREE.** *"It drops a seed, and a dropped seed falls back to the
-	// E2015 refusal at the return"* is true, and it stops being acceptable the moment a real program is the
-	// one refused: a function can return a name BARE on one path
-	// and hand that same name to a call on the next line, so a POSITION-BLIND walk lets the argument mark
-	// the candidate bound and the bare return is refused — on a legal program.
-	//
-	// ⭐ **THE CURE IS POSITION AND IT LEAVES THE SET ALONE** (`markBoundHead`, where the argument lives): a
-	// binder can only shadow a `return` that comes AFTER it, because a name cannot resolve to a local at a
-	// point before that local is declared. That is EXACT for the question, so it drops only FALSE shadowings —
-	// which is why the generous set can stay generous.
-	function returnedNamesNotBoundHere(returnedNames NameRoster, returnedHeads NameRoster, returnedAt TokenIndexArray, bodyStart ElementIndex, paramNames NameRoster) returns NameRoster
-		// A PARAMETER shadows exactly as a local does, and it is known without walking anything.
-		let bound = BoolArray.create(returnedHeads.count(), zeroed: false)
-
-		for candidateHead in returnedHeads 'eachHead'
-			bound.push(bodyNamesAParam(paramNames, name: candidateHead))
-		end 'eachHead'
-
-		var depth = 0 as BlockDepth
-		var q = bodyStart
-
-		while self.kindAt(q) != TokenKind.eof 'walk'
-			if depth == 0 and self.closesBlockAt(q) 'bodyEnds'
-				break
-			end 'bodyEnds'
-
-			if q > bodyStart and tokenCanBeAName(self.tokenAt(q)) and kindBindsTheNameAfterIt(self.kindAt(q - 1)) 'aBinderPosition'
-				markBoundHead(returnedHeads, bound: bound, returnedAt: returnedAt, name: self.tokenAt(q).value, binderIndex: q)
-			end 'aBinderPosition'
-
-			depth = self.blockDepthAfter(q, depth: depth)
-			q = q + 1
-		end 'walk'
-
-		let kept = NameRoster.create(0)
-
-		for i in 0 upto returnedNames.count() 'eachCandidate'
-			let shadowed = try bound.get(i) otherwise panic("returnedNamesNotBoundHere: bound.get({i}) OOB — the two columns are parallel by construction")
-
-			if shadowed 'shadowed'
-				continue
-			end 'shadowed'
-
-			kept.push(try returnedNames.get(i) otherwise panic("returnedNamesNotBoundHere: returnedNames.get({i}) OOB below its own count"))
-		end 'eachCandidate'
-
-		return kept
-	end 'returnedNamesNotBoundHere'
-
 	// ⭐⭐ **WHICH CALL SHAPES CAN NAME THE DECLARATION THE SWEEP IS STANDING ON** — decided here
-	// because this is where both its inputs are. `enclosingType` says "a method" (the same test
-	// `declaredMethodName` qualifies on, and the same name it qualifies WITH, so a `self.`-shaped edge and
-	// this declaration join the identical two halves) and `namespace` says "this file has a directory route"
-	// (the same test `recordScannedSignature` publishes a namespace-qualified spelling on). Neither survives
-	// past this scan, and neither is derivable from the registration name: a root-level free function and a
+	// because this is where its input is. `enclosingType` says "a method" (the same test
+	// `declaredMethodName` qualifies on, and the same name it qualifies WITH, so a `self.`-shaped call and
+	// this declaration join the identical two halves). It does not survive
+	// past this scan, and is not derivable from the registration name: a root-level free function and a
 	// method in a namespace-free program are both spelled bare.
 	function declarationCallability() returns DeclCallability
 		if let typeName = try self.enclosingType.typeName() 'aMethod'
 			return DeclCallability.methodOf(typeName)
 		end 'aMethod'
 
-		return DeclCallability.bareCallOrDirectoryRoute if not self.job.namespace.isEmpty() else DeclCallability.bareCallOnly
+		return DeclCallability.freeFunction
 	end 'declarationCallability'
 
 	// ⭐ **THE NAME AT `namePos` IS BOUND HERE FOR THE REST OF ITS BLOCK — so if it is a parameter's, the
@@ -3206,31 +2937,30 @@ extension Parser
 		return edges
 	end 'fixedElementCountEdgesFor'
 
-	// The token index just past the `end` that closes the method body opening at `bodyStart`. `depth` starts at
-	// 1 because the method's own block is already open; EOF answers itself, which is what an unterminated body
-	// (a program the real parse refuses with a position) leaves.
+	// The token index just past the `end` that closes the method body opening at `bodyStart`. EOF answers
+	// itself, which is what an unterminated body (a program the real parse refuses with a position) leaves.
 	function methodBodyEndFrom(bodyStart ElementIndex) returns ElementIndex
-		var depth = 1 as BlockDepth
+		return match self.bodyCloserFrom(bodyStart) 'closer'
+			closes(at) gives at + 1
+			unterminated(at) gives at
+		end 'closer'
+	end 'methodBodyEndFrom'
+
+	function bodyCloserFrom(bodyStart ElementIndex) returns BodyCloser
+		var depth = 0 as BlockDepth
 		var q = bodyStart
 
 		while self.kindAt(q) != TokenKind.eof 'walk'
-			if self.opensBlockAt(q) 'opensBlock'
-				depth = depth + 1
-			end 'opensBlock' else 'notOpener'
-				if self.closesBlockAt(q) 'closes'
-					depth = depth - 1
+			if depth == 0 and self.closesBlockAt(q) 'theBodyCloses'
+				return BodyCloser.closes(q)
+			end 'theBodyCloses'
 
-					if depth == 0 'methodEnd'
-						return q + 1
-					end 'methodEnd'
-				end 'closes'
-			end 'notOpener'
-
+			depth = self.blockDepthAfter(q, depth: depth)
 			q = q + 1
 		end 'walk'
 
-		return q
-	end 'methodBodyEndFrom'
+		return BodyCloser.unterminated(q)
+	end 'bodyCloserFrom'
 
 	function scanFixedElementCountIn(start ElementIndex, regionEnd ElementIndex) returns FixedElementCountScan
 		var readsACount = false
@@ -3569,9 +3299,9 @@ extension Parser
 	// by-reference forward is refused because the binder is immutable. Closing it needs a discriminator that
 	// tells the two `else (` apart (the handler's is preceded by the `end` label), not a fourth keyword.
 	//
-	// ⚠ **THE MISSED DIRECTION IS THE COSTLY ONE HERE, WHICH IS THE OPPOSITE OF `kindBindsTheNameAfterIt`'s.**
-	// That predicate may admit a plain call argument, because a spurious binding there only drops a
-	// returned-name seed. A spurious binding HERE drops a consume, which is a clean E2015/E3141 refusal, while
+	// ⚠ **THE MISSED DIRECTION IS THE COSTLY ONE HERE, WHICH IS THE OPPOSITE OF `noForwardHeadIsBoundHere`'s.**
+	// That walk may admit a plain call argument, because a spurious binding there only withholds a
+	// fresh-return forward. A spurious binding HERE drops a consume, which is a clean E2015/E3141 refusal, while
 	// a missed one is the leak above. So this names the shapes instead of being generous: `validate(p)` ahead
 	// of a `Self{f: p}` is a call, and reading it as a binder would refuse a program that compiles.
 	function noteParameterRebindingsAt(q ElementIndex, paramNames NameRoster, openBrackets TokenIndexArray, braceStack BoolArray, depth BlockDepth, shadowedInBlock ParamShadowColumn, shadowedOnLine BoolArray)
@@ -5043,7 +4773,7 @@ extension Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
 		// The DECLARATION keyword, taken before anything moves the cursor — the position
 		// `Queries.foldConformanceClauses` puts a reader back down on. See `ConformanceClauseDeclSite`.
 		let declStart = self.pos
@@ -5245,7 +4975,7 @@ extension Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethods)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: messageMethods)
 				continue
 			end 'isMethod'
 
@@ -5609,7 +5339,6 @@ extension Parser
 		let entries = FuncReturnTypeEntryArray.create(0)
 		let paramConsumes = ParamConsumeEntryArray.create(0)
 		let paramReassigns = ParamReassignEntryArray.create(0)
-		let globalAliasReturns = GlobalAliasReturnEntryArray.create(0)
 		let paramDefaults = ParamDefaultEntryArray.create(0)
 		let throwsEntries = ThrowsClauseEntryArray.create(0)
 
@@ -5826,7 +5555,7 @@ extension Parser
 				end 'theConformerDeclaresItsOwn'
 
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, header: header, conformer: conformer, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, takesReceiver: memberTakesReceiver, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, header: header, conformer: conformer, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, takesReceiver: memberTakesReceiver, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName, shadowed: shadowed)
 				end 'verdict'
 
@@ -5846,7 +5575,7 @@ extension Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(0), implementsClauses: AliasImplementsClauseArray.create(0), functionAliases: functionAliasOut, structs: StructLayoutArray.create(0), enums: EnumLayoutArray.create(0), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(0), extensionSites: ExtensionDeclSiteArray.create(0), conformanceSites: ConformanceClauseDeclSiteArray.create(0), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(0), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(0), moduleDirectory: index.moduleDirectoryOf(self.job.path), filePath: self.job.path, fileStream: DeclTokenStream.create(PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), job: self.job), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.job.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(0), implementsClauses: AliasImplementsClauseArray.create(0), functionAliases: functionAliasOut, structs: StructLayoutArray.create(0), enums: EnumLayoutArray.create(0), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(0), extensionSites: ExtensionDeclSiteArray.create(0), conformanceSites: ConformanceClauseDeclSiteArray.create(0), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(0), paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(0), moduleDirectory: index.moduleDirectoryOf(self.job.path), filePath: self.job.path, fileStream: DeclTokenStream.create(PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), job: self.job), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.job.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	function noteExtensionBodyGenericSpellings(header ExtensionHeader, bodyStart ElementIndex, members NameRoster, functionAliases ScannedAliasNames, index ProgramSignatures)
@@ -6182,9 +5911,9 @@ extension Parser
 	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
 	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
 	// verdict independent of fold order.
-	function publishOrShadowExtensionMethod(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, shadowed bool, qualifiedMethodName ByteArray, takesReceiver bool, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster)
+	function publishOrShadowExtensionMethod(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, shadowed bool, qualifiedMethodName ByteArray, takesReceiver bool, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster)
 		if shadowed 'theConformerDeclaresItsOwn'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(0), paramConsumes: ParamConsumeEntryArray.create(0), paramReassigns: ParamReassignEntryArray.create(0), globalAliasReturns: GlobalAliasReturnEntryArray.create(0), paramDefaults: ParamDefaultEntryArray.create(0), throwsEntries: ThrowsClauseEntryArray.create(0), bodyFacts: SweptBodyFactEntryArray.create(0), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(0), freeFunctionNameOut: NameRoster.create(0), messageMethodNameOut: NameRoster.create(0))
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(0), paramConsumes: ParamConsumeEntryArray.create(0), paramReassigns: ParamReassignEntryArray.create(0), paramDefaults: ParamDefaultEntryArray.create(0), throwsEntries: ThrowsClauseEntryArray.create(0), bodyFacts: SweptBodyFactEntryArray.create(0), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(0), freeFunctionNameOut: NameRoster.create(0), messageMethodNameOut: NameRoster.create(0))
 			return
 		end 'theConformerDeclaresItsOwn'
 
@@ -6204,14 +5933,14 @@ extension Parser
 		// than threaded to the conformer's layout: `extension Countable` declares one body on every conformer, and
 		// a service's variant order is a wire format its own declaration has to own. The two withheld arms above
 		// discard for the same reason plus their own.
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: NameRoster.create(0))
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: NameRoster.create(0))
 	end 'publishOrShadowExtensionMethod'
 
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
 	function foldWithheldExtensionMethod(index ProgramSignatures, conformer immutable ByteArray, methodName immutable ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray, shadowed bool)
-		self.recordScannedSignature(FuncReturnTypeEntryArray.create(0), paramConsumes: ParamConsumeEntryArray.create(0), paramReassigns: ParamReassignEntryArray.create(0), globalAliasReturns: GlobalAliasReturnEntryArray.create(0), paramDefaults: ParamDefaultEntryArray.create(0), throwsEntries: ThrowsClauseEntryArray.create(0), bodyFacts: SweptBodyFactEntryArray.create(0), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(0), freeFunctionNameOut: NameRoster.create(0), messageMethodNameOut: NameRoster.create(0))
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(0), paramConsumes: ParamConsumeEntryArray.create(0), paramReassigns: ParamReassignEntryArray.create(0), paramDefaults: ParamDefaultEntryArray.create(0), throwsEntries: ThrowsClauseEntryArray.create(0), bodyFacts: SweptBodyFactEntryArray.create(0), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(0), freeFunctionNameOut: NameRoster.create(0), messageMethodNameOut: NameRoster.create(0))
 
 		// The skip is keyed by the qualified name the conformer's own method also wears, so filing one for a
 		// shadowed method would refuse every call to the conformer's method as E4006.
@@ -6243,7 +5972,7 @@ extension Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards. `declStart` is that same position kept for the whole-program clause
 		// re-read (`recordScannedType`'s twin, and `ConformanceClauseDeclSite`).
@@ -6293,7 +6022,7 @@ extension Parser
 				// ⚠ **AN ENUM/UNION METHOD IS NOT A MESSAGE** — a service is a declared `type`, reached through
 				// `spawn <T>.<factory>()`, whose target test requires a struct declaration. So the roster this method
 				// would contribute is discarded, exactly as an extension method's is.
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: NameRoster.create(0))
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut, messageMethodNameOut: NameRoster.create(0))
 				continue
 			end 'method'
 

@@ -7496,86 +7496,6 @@ function sweptParamNamesFor(sourceParamNames NameRoster, takesReceiver bool, sel
 	return callAlignedFrom(sourceParamNames)
 end 'sweptParamNamesFor'
 
-// ⭐⭐ **WHERE THE VALUE `noteReturnedGlobalOrForward` IS READING ENDS — THE ONLY THING ITS TWO DOORS DIFFER
-// IN.** The recogniser's whole rule is "the statement must be NOTHING BUT the shape", so every arm of it asks
-// *"and does the region stop right here?"*; a `return` statement's value stops at the end of its LINE, and a
-// captured PARAMETER DEFAULT's stops at the `,`/`)` the sweep has already walked to (`paramItemEndFrom`).
-//
-// ⚠ **THE DEFAULT DOOR HANDS ITS END OVER RATHER THAN LETTING THE RECOGNISER RE-DERIVE ONE.** "A `,` or a
-// `)` ends it" is very nearly right and is not exactly right — `= f(a, b)` holds both inside its own parens —
-// and the capture has ALREADY decided where the author's default ends. A second walk is a second answer; this
-// file has paid for that twice (see `sweptParamDefaultHelperName`, and `PendingDefaultHelper.exprEnd`).
-union SweptValueRegionEnd
-	// A `return` statement: the value runs to the end of the line, which the body walk never has to compute.
-	atLineEnd
-
-	// A captured parameter default: the value runs to exactly this token, which is the `,` or `)` the
-	// parameter-list walk stopped at.
-	atToken(index ElementIndex)
-end 'SweptValueRegionEnd'
-
-// The `atLineEnd` answer, shared: a payload-free union case is still a heap object in Maxon, and the return
-// door asks this question at every `return` statement in the program.
-let sharedSweptValueLineEnd = SweptValueRegionEnd.atLineEnd
-
-// ⭐ **DOES A TOKEN OF THIS KIND BIND THE NAME THAT FOLLOWS IT?** — the generous binder test
-// `Parser.returnedNamesNotBoundHere` filters a swept return candidate through; see there for the full
-// argument, including why `(` and `,` are in the list although a call argument is no binder at all. It is a
-// free function beside `noteForwardCall` because, like it, it reads nothing but its argument.
-function kindBindsTheNameAfterIt(kind TokenKind) returns bool
-	return bindingKeywordSpells(kind) or kind == TokenKind.for or kind == TokenKind.leftParen or kind == TokenKind.comma
-end 'kindBindsTheNameAfterIt'
-
-// Record one seed candidate on the three parallel columns AT ONCE — the name as it is looked up, the HEAD
-// segment the shadowing filter matches on, and the token index the returned VALUE starts at. One door
-// rather than three pushes at each of the four recording sites: the columns are parallel by construction and
-// every reader's panic says so, and a site that pushed two of the three would desynchronize the third
-// silently.
-//
-// ⚠ **THE POSITION IS THE VALUE'S FIRST TOKEN, WHERE IT USED TO BE THE `return` KEYWORD'S, AND THE
-// SHADOWING FILTER CANNOT TELL THE TWO APART.** `markBoundHead` shadows a candidate when the binder sits at
-// or before this index, so moving it one token later could only newly admit a binder recorded AT the value's
-// own first token — and none ever is: a binder is recorded where `kindBindsTheNameAfterIt` holds of the
-// PRECEDING token, which for a returned value is `return`, a keyword that binds nothing. What the move buys
-// is that the recogniser needs no anchor beside the region it is already given, which is what lets a
-// captured parameter default — where there is no `return` keyword at all — go through the same door.
-function noteReturnedCandidate(returnedNames NameRoster, returnedHeads NameRoster, returnedAt TokenIndexArray, name ByteArray, head ByteArray, valueStart ElementIndex)
-	returnedNames.push(name)
-	returnedHeads.push(head)
-	returnedAt.push(valueStart)
-end 'noteReturnedCandidate'
-
-// ⭐⭐ **MARK EVERY RETURNED CANDIDATE THIS BINDER SHADOWS — and a binder shadows only what comes AFTER it.**
-// One name can head more than one candidate (`Box.shared` and `Box.other` from two `return`s), so the walk is
-// over all of them rather than a lookup.
-//
-// ⛔⛔ **THE POSITION TEST IS THE WHOLE OF WHY THE GENEROUS BINDER SET IS SAFE TO KEEP, AND IT WAS
-// MISSING.** `returnedNamesNotBoundHere`'s own header records that the binder set deliberately
-// admits plain call ARGUMENTS, which bind nothing — and calls the resulting dropped seed acceptable
-// because it costs only a refusal. It is reached by a function that returns a name BARE on one path and
-// passes that same name as an ARGUMENT on the next line, so a position-blind walk marks the candidate bound
-// and refuses the return on a legal program.
-//
-// ⭐ **THE CURE IS POSITION, NOT SHAPE, AND THAT DISTINCTION IS LOAD-BEARING.** Narrowing the binder SET is
-// what that header warns against, and it is right to: a `match` payload `case(a, b)` is character for
-// character a call, so no token test can separate the two. Position needs no such test and is EXACT for the
-// question actually being asked — a name cannot resolve to a local at a `return` that precedes the local's
-// own declaration, because such a program does not compile at all. So requiring the binder to come FIRST can
-// only drop FALSE shadowings; it cannot miss a real one, and the set stays as generous as it was.
-function markBoundHead(returnedHeads NameRoster, bound BoolArray, returnedAt TokenIndexArray, name ByteArray, binderIndex ElementIndex)
-	for i in 0 upto returnedHeads.count() 'eachCandidate'
-		if not (try returnedHeads.get(i) otherwise panic("markBoundHead: returnedHeads.get({i}) OOB below its own count")).equals(name) 'otherHead'
-			continue
-		end 'otherHead'
-
-		if binderIndex > (try returnedAt.get(i) otherwise panic("markBoundHead: returnedAt.get({i}) OOB — the columns are parallel by construction")) 'bindsAfterTheReturn'
-			continue
-		end 'bindsAfterTheReturn'
-
-		try bound.set(i, value: true) otherwise panic("markBoundHead: bound.set({i}) OOB — the columns are parallel by construction")
-	end 'eachCandidate'
-end 'markBoundHead'
-
 typealias MemberHopCount = int(0 to u32.max)
 
 let HopsToCallOnAField = 2
@@ -7607,6 +7527,11 @@ type ReturnedLocal
 end 'ReturnedLocal'
 
 typealias ReturnedLocalArray = Array with ReturnedLocal
+
+union BodyCloser
+	closes(at ElementIndex)
+	unterminated(at ElementIndex)
+end 'BodyCloser'
 
 enum ReturnedLocalBinding
 	freshRecord
@@ -7650,22 +7575,6 @@ function noteForwardResolvedByName(forwards FreshReturnForwardArray, forward Fre
 	forwardHeads.push(head)
 	forwardHeadsAt.push(headAt)
 end 'noteForwardResolvedByName'
-
-// Record a forwarding edge, de-duplicated. The list is per BODY and a body forwards to a handful of names,
-// so a linear membership test beats a set's allocation — the same trade `captureSlotFor` makes one column over.
-//
-// ⚠ **THE SHAPE IS PART OF THE IDENTITY.** A body that writes both `swap(x)` and `self.swap(x)` states two
-// DIFFERENT edges — they reach different node families — so de-duplicating on the name alone would drop one
-// of them, and which one it dropped would depend on the order the tokens happen to appear in.
-function noteForwardCall(calls ForwardCallArray, call ForwardCall)
-	for existing in calls 'each'
-		if forwardCallsAreEqual(existing, b: call) 'alreadyRecorded'
-			return
-		end 'alreadyRecorded'
-	end 'each'
-
-	calls.push(call)
-end 'noteForwardCall'
 
 function receiverKeywordNamesTheEnclosingType(kind TokenKind) returns bool
 	return kind == TokenKind.self or kind == TokenKind.selfType
@@ -9179,20 +9088,6 @@ type FunctionBodyState
 	export let functionReturnSpelling as immutable ByteArray
 	export let functionReturnBrand as immutable ByteArray
 	export var resultOrigin as ReceiverOrigin
-
-	// Has the function being parsed been published as one whose return may alias an immutable global?
-	// Read at one place, the `returned` door of `ownedFormOfBorrowedValue`, where it decides between
-	// letting a marked value escape (the caller has been told, and marks what it gets back) and the
-	// E2015 refusal (the caller has not been told, so an escape would launder the record into an
-	// untracked alias).
-	//
-	// ⚠ It is the sweep's answer, not this parse's: the sweep recognises a deliberately narrow set of
-	// `return` shapes (`noteReturnedGlobalOrForward`), and every shape it does not recognise arrives
-	// here false and is refused.
-	//
-	// It is false inside a closure body, the indirect-call boundary: a closure has no static callee,
-	// so no call site can be told to mark what calling one returns. A closure's fresh state carries
-	// `false`, so the boundary needs no test of its own.
 
 	export var returnsAReceiverField = false
 

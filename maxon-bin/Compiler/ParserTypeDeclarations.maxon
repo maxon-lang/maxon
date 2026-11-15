@@ -2735,9 +2735,7 @@ extension Parser
 		let paramCount = userParamCount as ParamCount + existentialWitnessCount + countParamCount as ParamCount + witnessParamCount
 		try requireAbiParamCount(paramCount, anchor: nameTok)
 
-		// The global-alias answer is read once here rather than at each `return`: it cannot change while
-		// one body is parsed, and its door sits on the promotion path of every returned aggregate. The
-		// return and parameter aliases are read here because `resolveTypes` erases both.
+		// The return and parameter aliases are read here because `resolveTypes` erases both.
 		self.beginDeclaredBody((paramCount + layoutReserve) as ValueId, returnSpelling: returnSpelling, returnBrand: returnBrand, returnAlias: self.rangedReturnAlias(returnType), paramSites: try self.rangedParamSites(paramTypes, paramRanges: paramRanges) otherwise RangeCheckParamSiteArray.create(0), layoutParam: layoutParamOf(mayCarryALayoutDescriptor, paramCount: paramCount + layoutReserve), countParam: fixedElementCountParamOf(needsCountParam, paramCount: paramCount, witnessParamCount: witnessParamCount), nascentSelfFactory: nascentSelfFactory, kind: EnclosingBodyKind.testBody if isTest else EnclosingBodyKind.declaredFunction, witnessParamBase: witnessBlockStartValueId(paramCount + tailWitnessParamCount, witnessParamCount: witnessParamCount + tailWitnessParamCount), witnessParamCount: witnessParamCount + tailWitnessParamCount)
 
 		self.bodyState.returnsAReceiverField = takesReceiver and self.signatures.returnsAReceiverField(name)
@@ -4511,17 +4509,6 @@ extension Parser
 		// A synthesized helper is an ordinary declared function (see `EnclosingBodyKind`): the helpers
 		// are drained at the end of the file, so a file whose last declaration is a `test` would
 		// otherwise parse every default helper as though it were inside one.
-		//
-		// The global-alias answer is asked of the helper's own minted name, which separates the two
-		// default doors. A parameter default's helper is published by the sweep
-		// (`defaultHelperGlobalAliasReturn`), so `f(p T = A)` is admitted and its call site marks
-		// the argument as the written-out `f(A)` is. A field default's is not, so
-		// `ownedFormOfBorrowedValue` keeps the E2015 at its return. ⚠ The asymmetry is deliberate. The
-		// parameter door hands the record to a call argument, where the mark is read
-		// (`CapabilityCallCheck.checkCallArguments`) and a mutating callee is refused. A field
-		// default hands it to a struct slot, and the mark does not survive a field store, so publishing
-		// the field helper would let `var h = Holder.make(G)` followed by `h.names.push(1)` compile and
-		// mutate `G`.
 		//
 		// A ranged-alias declared type makes the helper a ranged-return function, so the default is
 		// guarded by the entry check exactly as `return <expr>` from such a function is. The brand stays

@@ -1,0 +1,7 @@
+let LibraryCacheByReferenceFunctionNamedInitCaseDirName = "library-cache-by-reference-init"
+let ByReferenceFunctionNamedInitProgramSource = "typealias Tally = int(0 to 1000)\n\nfunction init(total mutable Tally, amount Tally)\n\ttotal = total + amount\nend 'init'\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\tvar total = length\n\tinit(total, amount: seed)\n\treturn total as ExitCode\nend 'main'\n"
+let ByReferenceFunctionNamedInitProgramExitCode = 23
+
+test 'a program that adds a function taking a mutable parameter, named like the by-reference init the library declares, sweeps the library itself and builds the bytes a cold build writes'
+	requireHeldOutsideCheckout(LibraryCacheByReferenceFunctionNamedInitCaseDirName, check: BuiltInSequenceMatchesCold.create([SequencedProgram.create(ByReferenceFunctionNamedInitProgramSource, exitCode: ByReferenceFunctionNamedInitProgramExitCode, subject: "a program that adds a free function taking a `mutable` parameter under the name `init`, which library functions taking a `mutable` parameter bear", expectation: LibraryCacheExpectation.leavesTheBaselineUnused)]))
+end 'a program that adds a function taking a mutable parameter, named like the by-reference init the library declares, sweeps the library itself and builds the bytes a cold build writes'
