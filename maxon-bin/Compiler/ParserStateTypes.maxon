@@ -8093,7 +8093,7 @@ export type ParserAnchors
 
 	export static function create() returns ParserAnchors
 		let functions = FunctionPlaceholders.create()
-		return Self{interfaceAliases: GenericAliasEntryArray.create(0), pendingDefaultHelpers: PendingDefaultHelperArray.create(0), surfaceRoster: NameRoster.create(0), declarationRoster: NameRoster.create(0), mutableVarShadowed: MutableVarShadowColumn.create(0), noBlockExtents: BlockExtents.create(TokenArray.create(0), extentEnds: TokenIndexArray.create(0), keywordNames: TokenIndexArray.create(0), declaredNameKeywords: TokenIndexArray.create(0)), functions: functions, unwrittenRegionFacts: RegionFactTable.create(), detachedBlock: IrBlock.create(0, label: DetachedBlockLabel, heat: BlockHeat.normal, inlineSite: InlineSiteRef.none), undeclaredAlias: DeclaredAlias.undeclared}
+		return Self{interfaceAliases: GenericAliasEntryArray.create(0), pendingDefaultHelpers: PendingDefaultHelperArray.create(0), surfaceRoster: NameRoster.create(0), declarationRoster: NameRoster.create(0), mutableVarShadowed: MutableVarShadowColumn.create(0), noBlockExtents: BlockExtents.create(TokenArray.create(0), extentEnds: TokenIndexArray.create(0), keywordNames: TokenIndexArray.create(0), declaredNameKeywords: TokenIndexArray.create(0), qualifiers: TypeQualifierPositions.over(TokenArray.create(0))), functions: functions, unwrittenRegionFacts: RegionFactTable.create(), detachedBlock: IrBlock.create(0, label: DetachedBlockLabel, heat: BlockHeat.normal, inlineSite: InlineSiteRef.none), undeclaredAlias: DeclaredAlias.undeclared}
 	end 'create'
 end 'ParserAnchors'
 
@@ -9570,15 +9570,28 @@ export type BlockExtents
 	export let extentEnds as TokenIndexArray
 	export let keywordNames as TokenIndexArray
 	export let declaredNameKeywords as TokenIndexArray
+	let qualifiers as TypeQualifierPositions
 
-	static function create(tokens TokenArray, extentEnds TokenIndexArray, keywordNames TokenIndexArray, declaredNameKeywords TokenIndexArray) returns BlockExtents
-		return Self{tokens: tokens, extentEnds: extentEnds, keywordNames: keywordNames, declaredNameKeywords: declaredNameKeywords}
+	static function create(tokens TokenArray, extentEnds TokenIndexArray, keywordNames TokenIndexArray, declaredNameKeywords TokenIndexArray, qualifiers TypeQualifierPositions) returns BlockExtents
+		return Self{tokens: tokens, extentEnds: extentEnds, keywordNames: keywordNames, declaredNameKeywords: declaredNameKeywords, qualifiers: qualifiers}
 	end 'create'
 end 'BlockExtents'
 
-// Built by the header walk and adopted by the same file's fold, so the block-extent walk runs
-// once per token array.
+// Built by the header walk and adopted by the same file's fold, so the block-extent walk and the
+// type-qualifier scan run once per token array.
 typealias BlockExtentsByPath = Map with (String, BlockExtents)
+
+union KnownBlockExtents
+	none
+	held(extents BlockExtents)
+
+	function preparedOver(tokens TokenArray, respelledStarts RespelledTokenStartSet) returns PreparedTokens
+		return match self 'known'
+			held(extents) gives PreparedTokens.assembled(tokens, respelledStarts: respelledStarts, qualifiers: extents.qualifiers) if extents.tokens is tokens else PreparedTokens.create(tokens, respelledStarts: respelledStarts)
+			none gives PreparedTokens.create(tokens, respelledStarts: respelledStarts)
+		end 'known'
+	end 'preparedOver'
+end 'KnownBlockExtents'
 
 union DeclaredTupleTarget
 	none

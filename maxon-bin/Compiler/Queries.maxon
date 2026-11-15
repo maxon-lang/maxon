@@ -466,7 +466,7 @@ function foldedUserFilesOf(project Project, recordingClaims bool) returns UserFi
 	return UserFileFold.create(signatures, paths: userPaths)
 end 'foldedUserFilesOf'
 
-function extensionMethodKeysWritten(project Project, signatures ProgramSignatures) returns StringArray throws CompileError
+function extensionMethodKeysWritten(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) returns StringArray throws CompileError
 	let keys = signatures.userExtensionMethodKeys()
 	let seen = SourceNameSet.create()
 
@@ -475,7 +475,7 @@ function extensionMethodKeysWritten(project Project, signatures ProgramSignature
 	end 'eachFoldedKey'
 
 	for site in signatures.settledDeclarations().extensionDeclSites 'eachExtensionSite'
-		let reader = try siteFileReader(project, signatures: signatures, path: site.path, buildsBodies: false)
+		let reader = try siteFileReader(project, signatures: signatures, path: site.path, buildsBodies: false, spelled: spelled)
 		let written = NameRoster.create(0)
 		reader.methodKeysOfAnUndeclaredExtension(site, into: written)
 
@@ -493,7 +493,7 @@ function extensionMethodKeysWritten(project Project, signatures ProgramSignature
 	return keys
 end 'extensionMethodKeysWritten'
 
-function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures) throws CompileError
+function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) throws CompileError
 	signatures.settleCrossKindContests()
 	signatures.settleFunctionAliasShapeContests()
 	signatures.settleRangeScopedInstances()
@@ -501,10 +501,10 @@ function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures
 	signatures.internLiteralContainerInstances()
 	signatures.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredStruct)
 	signatures.settleInlineRecordGeometry()
-	try foldInterfaceDeclarations(project, signatures: signatures)
-	try foldConformanceClauses(project, signatures: signatures)
-	try foldExtensionConformances(project, signatures: signatures)
-	try foldExtensionDeclarations(project, signatures: signatures)
+	try foldInterfaceDeclarations(project, signatures: signatures, spelled: spelled)
+	try foldConformanceClauses(project, signatures: signatures, spelled: spelled)
+	try foldExtensionConformances(project, signatures: signatures, spelled: spelled)
+	try foldExtensionDeclarations(project, signatures: signatures, spelled: spelled)
 end 'foldExtensionsOfUserFiles'
 
 type UserFileFold
@@ -518,13 +518,14 @@ end 'UserFileFold'
 
 function claimsOfUserFiles(project Project) returns SourceClaims throws CompileError
 	let fold = try foldedUserFilesOf(project, recordingClaims: true)
-	try foldExtensionsOfUserFiles(project, signatures: fold.signatures)
+	let spelled = SpelledTokensByPath.create()
+	try foldExtensionsOfUserFiles(project, signatures: fold.signatures, spelled: spelled)
 	let nominals = fold.signatures.userDeclaredNominalNames()
 	let aliases = fold.signatures.userDeclaredAliasNames()
 	let mentioned = try namesWritten(project, paths: fold.paths)
 	let roster = try libraryRoster(project)
 	let shadowed = namesTheLibraryAlsoDeclares(roster, nominals: nominals, aliases: aliases)
-	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures)
+	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures, spelled: spelled)
 	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, libraryExtensionMethods: libraryExtensionMethodsOnConformers(roster, signatures: fold.signatures), mentionedNames: mentioned)
 end 'claimsOfUserFiles'
 
@@ -876,8 +877,7 @@ function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, 
 
 		let tokens = try queryActiveTokens(project, path: path)
 		let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: true)
-		let spelled = Parser.spelledTokens(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
-		signatures.restoreDeclTokenStream(path.toString(), stream: DeclTokenStream.create(PreparedTokens.create(spelled.tokens, respelledStarts: spelled.respelledStarts), job: job))
+		signatures.restoreDeclTokenStream(path.toString(), stream: DeclTokenStream.create(Parser.preparedTokensOf(tokens, job: job, signatures: signatures, anchors: project.readerAnchors), job: job))
 	end 'eachStream'
 end 'restoreDeclTokenStreams'
 
@@ -1090,7 +1090,8 @@ function queryProgramSignatures(project Project) returns ProgramSignatures throw
 	// instance no other declaration named, and an instance interned after the warming walk would have
 	// its two name memos derived lazily by the parse, which must only ever read them.
 	try requireStillWanted(project)
-	try foldInterfaceDeclarations(project, signatures: signatures)
+	let spelled = SpelledTokensByPath.create()
+	try foldInterfaceDeclarations(project, signatures: signatures, spelled: spelled)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Only now can an `implements` clause be read to its end: whether a comma opens a second argument
@@ -1098,15 +1099,15 @@ function queryProgramSignatures(project Project) returns ProgramSignatures throw
 	// establishes — so the per-file sweep stopped at the first unparenthesized `with`. Strictly
 	// between these two lines: after the interface fold because that is the arity, before the
 	// extension fold because `conformsTo` is the relation that pass expands over.
-	try foldConformanceClauses(project, signatures: signatures)
-	try foldExtensionConformances(project, signatures: signatures)
+	try foldConformanceClauses(project, signatures: signatures, spelled: spelled)
+	try foldExtensionConformances(project, signatures: signatures, spelled: spelled)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 	signatures.settleSynthesizedNominals()
 
 	// Every `extension <Interface>`'s methods, onto every conformer — strictly after the two lines
 	// above, which is what makes an extension's signatures render types exactly as the real parse
 	// will, and what puts every conformer into the relation this walks.
-	try foldExtensionDeclarations(project, signatures: signatures)
+	try foldExtensionDeclarations(project, signatures: signatures, spelled: spelled)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Only now can a swept `named` be told from an interface: the line above fills the interface
@@ -1141,7 +1142,7 @@ function queryProgramSignatures(project Project) returns ProgramSignatures throw
 	// puts an extension's methods onto their conformers. A count slot is ABI, so an answer that moved with
 	// declaration order would be a silently different calling convention.
 	signatures.settleByRefConventions()
-	try foldFixedElementCountNeeds(project, signatures: signatures)
+	try foldFixedElementCountNeeds(project, signatures: signatures, spelled: spelled)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Strictly after the sweep: this probe body-parses calls, which the sweep must not
@@ -1174,6 +1175,14 @@ function queryProgramSignatures(project Project) returns ProgramSignatures throw
 	return signatures
 end 'queryProgramSignatures'
 
+function headerWalkExtentsOf(extents BlockExtentsByPath, path FilePath) returns KnownBlockExtents
+	if let built = try extents.get(path.toString()) 'theHeaderWalkBuiltThem'
+		return KnownBlockExtents.held(built)
+	end 'theHeaderWalkBuiltThem'
+
+	return KnownBlockExtents.none
+end 'headerWalkExtentsOf'
+
 function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath) throws CompileError
 	// Outside the probe, exactly as `FrontEndRun` keeps `queryParseOps` outside its `merge` probe:
 	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
@@ -1189,12 +1198,10 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and the
 	// real parse cannot drift on what `returns X` means. It is handed the index it is building, which
 	// is safe because a sweep types no call and so never reads it.
-	let scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: true)
-
-	if let built = try extents.get(path.toString()) 'theHeaderWalkBuiltThem'
-		scanner.adoptBlockExtents(built)
-		_ = extents.remove(path.toString())
-	end 'theHeaderWalkBuiltThem'
+	let discovered = headerWalkExtentsOf(extents, path: path)
+	let scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: true, known: discovered)
+	scanner.adoptKnownBlockExtents(discovered)
+	_ = extents.remove(path.toString())
 
 	let producers = try producerMaskFor(project, signatures: signatures, path: path, scanner: scanner)
 	scanner.foldDeclaredSignaturesInto(signatures, producers: producers)
@@ -1980,13 +1987,13 @@ end 'tokenIsAMemberSpelling'
 // The sites arrive grouped by file — the sweep visits files in source-path order and appends within
 // each — so the grouping is a WALK and not a map: an inner loop consumes the run of sites sharing a
 // path.
-function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
+function foldInterfaceDeclarations(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) throws CompileError
 	let sites = signatures.settledDeclarations().interfaceDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
-		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
+		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true, spelled: spelled)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -2016,20 +2023,20 @@ end 'foldInterfaceDeclarations'
 // from another's would mean one thing in a body folded first and another folded later.
 // `publishExtensionInnerAliases` takes the member names from the tokens alone, for every site,
 // before the first body is read.
-function foldExtensionDeclarations(project Project, signatures ProgramSignatures) throws CompileError
+function foldExtensionDeclarations(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) throws CompileError
 	if signatures.nameEventsFolded 'aSecondFold'
 		panic("foldExtensionDeclarations: this index has folded its extension name events already — the fold runs once per index, and the shared-parse guard reads the flag it sets")
 	end 'aSecondFold'
 
-	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.innerAliasNames)
-	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.methodSignatures)
+	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.innerAliasNames, spelled: spelled)
+	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.methodSignatures, spelled: spelled)
 	signatures.nameEventsFolded = true
 end 'foldExtensionDeclarations'
 
 // ⚠ Strictly before `foldExtensionDeclarations`: a conditional extension's `where` verdict reads
 // `sweptConformanceIndex`, and a conformance filed after that read is a conformer the verdict withheld.
-function foldExtensionConformances(project Project, signatures ProgramSignatures) throws CompileError
-	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.conformances)
+function foldExtensionConformances(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) throws CompileError
+	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.conformances, spelled: spelled)
 end 'foldExtensionConformances'
 
 enum ExtensionSiteWalk
@@ -2041,13 +2048,13 @@ end 'ExtensionSiteWalk'
 // The passes differ only in what they do at each site, so the grouping, the reader construction
 // and the OOB sentences are written once: a copy of this loop per pass would be a chance for the
 // passes to disagree about which sites they visit.
-function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, walk ExtensionSiteWalk) throws CompileError
+function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, walk ExtensionSiteWalk, spelled SpelledTokensByPath) throws CompileError
 	let sites = signatures.settledDeclarations().extensionDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")).path
-		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
+		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true, spelled: spelled)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
@@ -2067,7 +2074,8 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 	end 'eachFile'
 end 'walkExtensionSitesPerFile'
 
-// Built once per file, not once per site. Every site-driven fold in this file shares it, so "what
+// Built once per file per walk, not once per site, over spelled tokens that every walk of one fold
+// shares through `spelled`. Every site-driven fold in this file shares this constructor, so "what
 // kind of reader reads a DEFERRED declaration" has one answer: the same tokens and the same stdlib
 // tier the real parse will use, which is what lets a deferred read render a type exactly as that
 // parse does.
@@ -2079,9 +2087,24 @@ end 'walkExtensionSitesPerFile'
 // Sharing one reader across a file's sites is safe for the same reason `foldInterfaceDeclarations`
 // gives: every entry point opens with `enterTypeScope`, which assigns the per-declaration scopes
 // rather than merging into them, so a site that throws part-way cannot be observed by the next.
-function siteFileReader(project Project, signatures ProgramSignatures, path FilePath, buildsBodies bool) returns Parser throws CompileError
-	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: buildsBodies)
+function siteFileReader(project Project, signatures ProgramSignatures, path FilePath, buildsBodies bool, spelled SpelledTokensByPath) returns Parser throws CompileError
+	let tokens = try queryActiveTokens(project, path: path)
+	let job = readerJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: buildsBodies)
+	let prepared = preparedTokensSpelledOnce(spelled, key: path.toString(), tokens: tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
+
+	return Parser.createOverPreparedTokens(prepared, sourceBytes: Parser.sourceByteCountOf(tokens), job: job, signatures: signatures, anchors: project.readerAnchors)
 end 'siteFileReader'
+
+function preparedTokensSpelledOnce(spelled SpelledTokensByPath, key String, tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns PreparedTokens
+	if let kept = try spelled.get(key) 'spelledByAnEarlierWalk'
+		return kept
+	end 'spelledByAnEarlierWalk'
+
+	let prepared = Parser.preparedTokensOf(tokens, job: job, signatures: signatures, anchors: anchors)
+	spelled.upsert(key, value: prepared)
+
+	return prepared
+end 'preparedTokensSpelledOnce'
 
 function structuralFileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray) returns Parser
 	let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: false)
@@ -2105,13 +2128,13 @@ end 'structuralFileReader'
 // element's `path` — is not something a bare type parameter can offer without an interface, a
 // witness and a per-site closure across the compiler's hottest fold. What can be shared is: one
 // reader constructor (`siteFileReader`) and one reader per file.
-function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
+function foldConformanceClauses(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) throws CompileError
 	let sites = signatures.settledDeclarations().conformanceClauseSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")).path
-		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
+		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true, spelled: spelled)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")
@@ -2126,7 +2149,7 @@ function foldConformanceClauses(project Project, signatures ProgramSignatures) t
 	end 'eachFile'
 end 'foldConformanceClauses'
 
-function foldFixedElementCountNeeds(project Project, signatures ProgramSignatures) throws CompileError
+function foldFixedElementCountNeeds(project Project, signatures ProgramSignatures, spelled SpelledTokensByPath) throws CompileError
 	let sites = signatures.settledDeclarations().descriptorScanSites
 
 	if sites.count() == 0 'noSizedContainerInThisProgram'
@@ -2140,7 +2163,7 @@ function foldFixedElementCountNeeds(project Project, signatures ProgramSignature
 
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldFixedElementCountNeeds: sites.get OOB at {i} below count {sites.count()}")).path
-		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false)
+		let reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false, spelled: spelled)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldFixedElementCountNeeds: sites.get OOB at {i} below count {sites.count()}")
@@ -3933,17 +3956,27 @@ function parseJobFrom(project Project, path FilePath, namespace String, livesUnd
 	return ParseJob.create(path, authoredPath: project.stagedSourceOrigins.authoredPathOf(path), namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage, recordsEditorFacts: recordsEditorFactsFor(project, path: path))
 end 'parseJobFrom'
 
-// A reader over one file for a pass that folds what it reads into the index rather than building an artifact —
-// the sweep and the whole-program declaration folds — sharing the project's anchors.
+// The sweep's reader over one file: it folds what it reads into the index rather than building an artifact,
+// sharing the project's anchors.
 //
 // `tokens` is a parameter rather than a `queryActiveTokens` call in here because a caller deliberately
 // fetches them outside its phase probe, so that a `signatures` phase never absorbs the lexing it depends on.
-function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
+function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool, known KnownBlockExtents) returns Parser
+	let job = readerJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+
+	return Parser.create(tokens, job: job, signatures: signatures, anchors: project.readerAnchors, known: known)
+end 'fileReader'
+
+function readerJobFor(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, buildsBodies bool) returns ParseJob
 	let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
 	signatures.attributeHashEventsTo(hashEventSourceOf(job.isStdlibSource, isRuntimeSource: job.isRuntimeSource))
 
-	return Parser.create(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
-end 'fileReader'
+	return job
+end 'readerJobFor'
+
+// Filled only by the walks after the sweep, once the contested-name and mint tables a spelling reads are
+// settled, so a spelling the sweep took would be stale here. It never leaves the fold that creates it.
+typealias SpelledTokensByPath = Map with (String, PreparedTokens)
 
 function hashEventSourceOf(isStdlibSource bool, isRuntimeSource bool) returns HashEventSource
 	return HashEventSource.library if isStdlibSource or isRuntimeSource else HashEventSource.author

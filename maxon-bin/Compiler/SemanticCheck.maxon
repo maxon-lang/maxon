@@ -1034,7 +1034,7 @@ type ViewedSources
 		for position in positions 'eachSourceArgument'
 			let source = try args.get(position) otherwise panic("ViewedSources.holdersOfElementRead: args.get OOB at {position} — a source position names an argument of this call")
 
-			if self.valueIsAnIterator(source) 'anIteratorTheResultIsReadFrom'
+			if self.sources.holdsAnIteratorRecord(source) 'anIteratorTheResultIsReadFrom'
 				mask = mask or self.sourcesOfCapture(source)
 			end 'anIteratorTheResultIsReadFrom'
 		end 'eachSourceArgument'
@@ -1044,17 +1044,13 @@ type ViewedSources
 
 	function anyArgumentIsAnIterator(args ValueIdArray) returns bool
 		for argument in args 'eachArgument'
-			if self.valueIsAnIterator(argument) 'anIterator'
+			if self.sources.holdsAnIteratorRecord(argument) 'anIterator'
 				return true
 			end 'anIterator'
 		end 'eachArgument'
 
 		return false
 	end 'anyArgumentIsAnIterator'
-
-	function valueIsAnIterator(value ValueId) returns bool
-		return valueIsAnIteratorRecord(self.sources.project, signatures: self.signatures, func: self.sources.func, value: value)
-	end 'valueIsAnIterator'
 
 	function sourcesOfCapture(value ValueId) returns ParamPositionMask
 		if let direct = try self.sources.parameterBehind(value) 'aParameterItself'
@@ -1083,7 +1079,7 @@ type ViewedSources
 			mask = mask or self.readFrom(access)
 		end 'readFromARecord'
 
-		if valueIsAnIteratorRecord(self.sources.project, signatures: self.signatures, func: self.sources.func, value: root) 'anIterator'
+		if self.sources.holdsAnIteratorRecord(root) 'anIterator'
 			mask = mask or self.sources.maskOf(root) or self.createdBySettledCall(root)
 		end 'anIterator'
 

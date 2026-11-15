@@ -10449,7 +10449,8 @@ type Parser
 	// ⚠ **NOT IN `queryActiveTokens`, AND THAT IS NOT A PREFERENCE.** That query is memoized on the file's
 	// CONTENT HASH alone and is what the declaration SWEEP reads — so a rewrite there would key a
 	// whole-program fact under a per-file hash, and worse, would need the contest before the sweep that
-	// decides it. Here there is no memo and no circularity: a `Parser` is built per pass, after the contest.
+	// decides it. Here there is no circularity: the spelling is taken after the contest, and the one memo of it
+	// (`SpelledTokensByPath`) lives for one fold's walks, which all run after the contest.
 	//
 	// A compile that contests nothing gets its own array back, so it allocates nothing and parses the very
 	// tokens it would parse without the rename — which is what keeps its emitted code byte-identical.
@@ -10498,13 +10499,14 @@ type Parser
 		return signatures.hasAuthorMints()
 	end 'mintsRenameTokens'
 
-	static function authorMintedTokens(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns TokenArray
+	static function authorMintedTokens(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors, known KnownBlockExtents) returns TokenArray
 		let positions = TokenIndexArray.create(0)
 		let minted = NameRoster.create(0)
 		let watched = DeclaredTypeNameSet.create()
+		let mintable = signatures.namesCarryingMints()
 
 		for (iter, tok) in tokens.withIterator() 'eachToken'
-			if tok.kind != TokenKind.identifier or followsADot(tokens, index: iter.index()) 'notATypeSpelling'
+			if tok.kind != TokenKind.identifier or not mintable.contains(tok.value) or followsADot(tokens, index: iter.index()) 'notATypeSpelling'
 				continue
 			end 'notATypeSpelling'
 
@@ -10524,8 +10526,7 @@ type Parser
 			return tokens
 		end 'nothingIsRespelled'
 
-		let reader = structuralReader(tokens, job: job, signatures: signatures, anchors: anchors)
-		let walk = AuthorNameScopeWalk.over(tokens, extents: reader.takeBlockExtents(), watched: watched)
+		let walk = AuthorNameScopeWalk.over(tokens, extents: blockExtentsOf(tokens, known: known, job: job, signatures: signatures, anchors: anchors), watched: watched)
 		walk.run()
 		let renamed = tokens.clone()
 
@@ -10579,13 +10580,21 @@ type Parser
 		return 0
 	end 'sourceByteCountOf'
 
-	static function create(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
-		let spelled = spelledTokens(tokens, job: job, signatures: signatures, anchors: anchors)
-
-		return createOverPreparedTokens(PreparedTokens.create(spelled.tokens, respelledStarts: spelled.respelledStarts), sourceBytes: sourceByteCountOf(tokens), job: job, signatures: signatures, anchors: anchors)
+	static function create(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors, known KnownBlockExtents = KnownBlockExtents.none) returns Parser
+		return createOverPreparedTokens(preparedTokensOf(tokens, job: job, signatures: signatures, anchors: anchors, known: known), sourceBytes: sourceByteCountOf(tokens), job: job, signatures: signatures, anchors: anchors)
 	end 'create'
 
-	static function spelledTokens(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns ShadowRenamedTokens
+	static function preparedTokensOf(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors, known KnownBlockExtents = KnownBlockExtents.none) returns PreparedTokens
+		let spelled = spelledTokens(tokens, job: job, signatures: signatures, anchors: anchors, known: known)
+
+		return known.preparedOver(spelled.tokens, respelledStarts: spelled.respelledStarts)
+	end 'preparedTokensOf'
+
+	function preparedTokens() returns PreparedTokens
+		return PreparedTokens.assembled(self.tokens, respelledStarts: self.respelledStarts, qualifiers: self.qualifiers)
+	end 'preparedTokens'
+
+	static function spelledTokens(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors, known KnownBlockExtents) returns ShadowRenamedTokens
 		var spelled = ShadowRenamedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create())
 
 		if shadowRenamesTokens(signatures, isStdlibSource: job.isStdlibSource) 'aLibraryFileBesideContestedLibraryNames'
@@ -10593,11 +10602,29 @@ type Parser
 		end 'aLibraryFileBesideContestedLibraryNames'
 
 		if mintsRenameTokens(signatures, job: job) 'aFileBesideContestedDeclarations'
-			spelled = ShadowRenamedTokens.create(authorMintedTokens(spelled.tokens, job: job, signatures: signatures, anchors: anchors), respelledStarts: spelled.respelledStarts)
+			spelled = ShadowRenamedTokens.create(authorMintedTokens(spelled.tokens, job: job, signatures: signatures, anchors: anchors, known: known), respelledStarts: spelled.respelledStarts)
 		end 'aFileBesideContestedDeclarations'
 
 		return spelled
 	end 'spelledTokens'
+
+	static function blockExtentsOf(tokens TokenArray, known KnownBlockExtents, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns BlockExtents
+		return match known 'known'
+			held(extents) gives extents if extents.tokens is tokens else structuralBlockExtents(tokens, job: job, signatures: signatures, anchors: anchors)
+			none gives structuralBlockExtents(tokens, job: job, signatures: signatures, anchors: anchors)
+		end 'known'
+	end 'blockExtentsOf'
+
+	static function structuralBlockExtents(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns BlockExtents
+		return structuralReader(tokens, job: job, signatures: signatures, anchors: anchors).takeBlockExtents()
+	end 'structuralBlockExtents'
+
+	function adoptKnownBlockExtents(known KnownBlockExtents)
+		match known 'known'
+			held(extents) then self.adoptBlockExtents(extents)
+			none then break
+		end 'known'
+	end 'adoptKnownBlockExtents'
 
 	static function structuralReader(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
 		return createOverPreparedTokens(PreparedTokens.create(tokens, respelledStarts: RespelledTokenStartSet.create()), sourceBytes: sourceByteCountOf(tokens), job: job, signatures: signatures, anchors: anchors)

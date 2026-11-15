@@ -6579,13 +6579,17 @@ end 'requireNeitherHalfIsDoomed'
 // future backend (arm64, wasm) inherits the check instead of having to remember to
 // re-install it.
 //
-// It walks LIVE ops via `IrModule.liveOpIndices`, NOT the flat `module.ops` array:
+// It walks LIVE ops via `IrModule.collectLiveOpIndices`, NOT the flat `module.ops` array:
 // `lowerToMachineForm` is a block-rebuilding pass, so the sugar ops it desugars
 // survive in `module.ops` as orphans. Scanning the flat array would panic on those
 // dead entries and report a desugaring failure that never happened.
 export function assertNoSugarOps(module StdModule)
+	let liveOps = OpIndexArray.create(0)
+
 	for func in module.functions 'eachFunc'
-		for opIdx in module.liveOpIndices(func) 'eachOp'
+		module.collectLiveOpIndices(func, into: liveOps)
+
+		for opIdx in liveOps 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("assertNoSugarOps: live op index {opIdx} not in module.ops")
 
 			if op.rawValue.category == StdOpCategory.sugar 'isSugar'
@@ -6639,11 +6643,15 @@ end 'assertNoSugarOps'
 // ⭐ The index is the CALLER's rather than one built here, and it is the index every backend resolves a
 // callee through (`BackendDispatch.buildBackend`), so "does the module contain this callee" is answered
 // here exactly as the encoder will answer it.
-export function assertCallsMatchCalleeArity(module StdModule, byName FunctionNameIndex)
+export function assertCallsMatchCalleeArity(module StdModule, byName FunctionNameIndex, resumption ResumptionCalls)
 	let call = StdCallOperands.create()
+	let liveOps = OpIndexArray.create(0)
 
-	for func in module.functions 'eachFunc'
-		for opIdx in module.liveOpIndices(func) 'eachOp'
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		module.collectLiveOpIndices(func, into: liveOps)
+
+		for opIdx in liveOps 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("assertCallsMatchCalleeArity: live op index {opIdx} not in module.ops")
 			classifyCallOperands(op, call: call)
 
@@ -6651,7 +6659,13 @@ export function assertCallsMatchCalleeArity(module StdModule, byName FunctionNam
 				continue
 			end 'namesNoFunction'
 
-			let calleeFunc = try byName.funcNamed(call.callee) otherwise continue
+			let calleeIndex = try byName.byName.get(call.callee) otherwise 'aChunk'
+				resumption.noteChunkCall(funcIndex, callee: call.callee)
+				continue
+			end 'aChunk'
+
+			let calleeFunc = byName.functionAtPosition(calleeIndex, named: call.callee)
+			resumption.noteFunctionCall(funcIndex, calleeIndex: calleeIndex)
 
 			if call.argCount != calleeFunc.paramCount 'arity'
 				panic("assertCallsMatchCalleeArity: '{String.from(func.name)}' calls '{String.from(call.callee)}' with {call.argCount} argument(s) against {calleeFunc.paramCount} parameter(s) — every call the compiler emits fills every parameter slot of the callee it names, so the callee would read a register this call never wrote. A builder spelling its own `StdOp.call` for a callee whose arity depends on the build (`__mm_alloc` takes a tag under `--debugstream`) is the shape this catches: route it through the emitter that owns that callee's call")

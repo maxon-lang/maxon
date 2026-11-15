@@ -2721,3 +2721,35 @@ The two arms' executables and debug sidecars are byte-identical. The signature s
 `tests/ladders/gentypeprops.sh <N> services`, `phase semanticCheck` CPU ticks at N = 250, 500, 1000, 2000:
 271 M, 475 M, 1,022 M, 2,527 M before (x1.75, x2.15, x2.47 per doubling) and 237 M, 374 M, 668 M, 1,231 M after
 (x1.58, x1.78, x1.84), allocations linear in both.
+
+### Result — 2026-11-15, the signature sweep spells a file once, and three smaller repeats go
+
+A second pass over the compiling thread's profile, after the result above. What was repeated:
+
+| what | where | before | after |
+|---|---|---|---|
+| a `Parser` built for the same file by the sweep and by each later declaration walk, each re-deriving the file's spelled tokens with up to three probes per identifier; the declaration fold preparing tokens the `Parser` already held; a path comparison that lower-cased both paths on every type reference | `signatures` | 6.4 s | 4.7 s |
+| a value's capability and iterator verdicts re-derived per call argument | `semanticCheck` | 10.9 s | 10.1 s |
+| two liveness censuses of one caller's body, one for its splice sites and one for its staying calls | `inlineLeaves` | 6.9 s | 6.3 s |
+| a whole-module walk collecting call edges for the indirect-jump marking, beside the arity gate's walk of the same ops | `callArityGate` and the row that held the marking | 0.3 s + about 0.25 s | 0.3 s |
+
+The spelled tokens of a file are shared by the walks that follow the sweep, in a map that lives for one fold
+and is filled only once the contested-name and mint tables are settled. The respelling pass asks only about
+names that can carry a mint. One census per caller answers both questions, each cut keeping its own cap.
+
+The self-compile on an i7-8700, four interleaved rounds, both arms compiling the base commit's `maxon-bin`
+to the same file name in sibling directories:
+
+| | base | this change | |
+|---|---|---|---|
+| wall | 71.0 s, 72.7 s, 73.3 s, 73.5 s | 66.7 s, 66.9 s, 69.6 s, 69.7 s | −6.1% |
+| CPU ticks | 183.1 G, 187.5 G, 188.3 G, 189.1 G | 171.3 G, 171.7 G, 177.7 G, 178.2 G | −6.6% |
+| allocations | 479.9 M, 478.5 M, 478.5 M, 478.5 M | 451.2 M in every round | −5.8% |
+
+The two arms' executables and debug sidecars are byte-identical.
+
+Not taken: the frees at the end of a one-shot build (about 0.9 s after the image is written) cannot be
+skipped, because every program that touches the heap is checked for leaks after `main` returns. The
+compiler's own source also never starts from the library's cached declarations: it declares about 110 names
+the library uses too (`DrivePrefixLength` and `DriveColonByte` trip the rule first), so its sweep folds
+the library with the program.

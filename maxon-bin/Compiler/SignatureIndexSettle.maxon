@@ -29,10 +29,10 @@ extension ProgramSignatures
 		self.mainThreadSettled().functionTypeAliases.provenance.shareFilePartition(self.mainThreadSettled().fileModuleDirectories, libraryPaths: self.mainThreadSettled().libraryFilePaths, underTheLibraryCone: self.rootIsUnderStdlibDirectory)
 	end 'shareModuleDirectoriesWithProvenance'
 
-	// File this file's module directory. Called once per file by `Queries.foldOneFileInto`, before the
-	// file's declarations are folded, so `isVisibleFrom` can answer about any declaration the moment
-	// the sweep ends. LAST-WINS is unreachable rather than tolerated: the sweep visits each path
-	// exactly once.
+	// File this file's module directory. Called once per file by `FileTokenFacts.noteInto`, during the
+	// token-fact discovery that precedes the sweep, so `isVisibleFrom` can answer about any declaration
+	// the moment the sweep ends. LAST-WINS is unreachable rather than tolerated: discovery visits each
+	// path exactly once.
 	//
 	// The directory rides the hash: it decides unexported visibility and a file's namespace, so moving a
 	// file changes what other files compile to while no file's bytes change.
@@ -938,8 +938,32 @@ extension ProgramSignatures
 		return self.settledDeclarations().libraryContestedBindingNames.count() > 0
 	end 'hasLibraryMints'
 
+	// Every name `nameCarriesAMint` answers true for, enumerated from the tables it reads:
+	// `Parser.authorMintedTokens` never asks about a name outside it, so a table added there joins here.
+	function namesCarryingMints() returns DeclaredTypeNameSet
+		let names = DeclaredTypeNameSet.create()
+
+		for (name, _) in self.settledDeclarations().contestedNominalClaims 'eachContestedNominal'
+			names.insert(name)
+		end 'eachContestedNominal'
+
+		for name in self.settledDeclarations().contestedBindingNames 'eachContestedBinding'
+			names.insert(name)
+		end 'eachContestedBinding'
+
+		for name in self.settledDeclarations().libraryContestedBindingNames 'eachLibraryContestedBinding'
+			names.insert(name)
+		end 'eachLibraryContestedBinding'
+
+		return names
+	end 'namesCarryingMints'
+
+	function nameCarriesAMint(name ByteArray) returns bool
+		return self.settledDeclarations().contestedNominalClaims.contains(name) or self.bindingNameIsContested(name)
+	end 'nameCarriesAMint'
+
 	export function authorMintOf(declFilePath FilePath, name immutable ByteArray) returns immutable ByteArray
-		if not self.settledDeclarations().contestedNominalClaims.contains(name) and not self.bindingNameIsContested(name) 'uncontested'
+		if not self.nameCarriesAMint(name) 'uncontested'
 			return name
 		end 'uncontested'
 
@@ -11159,7 +11183,7 @@ extension ProgramSignatures
 	end 'wantedKindsOfForm'
 
 	export function bareWrittenKey(spelling immutable ByteArray, readerFilePath FilePath) returns immutable ByteArray
-		if readerFilePath.equals(CompilerOwnedDeclFilePath) 'aReaderThatHoldsNoFile'
+		if readerFilePath.toString().equals(CompilerOwnedDeclFilePath.toString()) 'aReaderThatHoldsNoFile'
 			return spelling
 		end 'aReaderThatHoldsNoFile'
 

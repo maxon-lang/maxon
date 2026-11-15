@@ -6,47 +6,52 @@
 // Indirect and witness calls add no edge: marking through them flags hot callees whose returns predict
 // well and slows every program. Correctness never depends on the flag, so a frame missed here still
 // returns correctly.
-export function markIndirectJumpReturns(module StdModule, byName FuncIndexByName)
-	let functionCount = module.funcCount()
-	let call = StdCallOperands.create()
-	let liveOps = OpIndexArray.create(0)
-	let calleeIndices = CsrColumn.create(0)
-	let callerIndices = CsrColumn.create(0)
-	let switchSeeds = BoolArray.create(functionCount)
+export type ResumptionCalls
+	let gathers as bool
+	let calleeIndices as CsrColumn
+	let callerIndices as CsrColumn
+	let switchSeeds as BoolArray
 
-	for funcIndex in 0 upto functionCount 'eachFunction'
-		let func = module.getFunc(funcIndex)
-		module.collectLiveOpIndices(func, into: liveOps)
+	export static function collecting(functionCount ElementIndex) returns ResumptionCalls
+		return Self{gathers: true, calleeIndices: CsrColumn.create(0), callerIndices: CsrColumn.create(0), switchSeeds: BoolArray.create(functionCount)}
+	end 'collecting'
 
-		for opIdx in liveOps 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("markIndirectJumpReturns: live op index {opIdx} not in module.ops")
-			classifyCallOperands(op, call: call)
+	export static function ignoring() returns ResumptionCalls
+		return Self{gathers: false, calleeIndices: CsrColumn.create(0), callerIndices: CsrColumn.create(0), switchSeeds: BoolArray.create(0)}
+	end 'ignoring'
 
-			if not call.namesACallee() 'namesNoFunction'
+	export function noteFunctionCall(callerIndex ElementIndex, calleeIndex ElementIndex)
+		if not self.gathers 'nothingIsAsked'
+			return
+		end 'nothingIsAsked'
+
+		self.calleeIndices.push(calleeIndex as CsrIndex)
+		self.callerIndices.push(callerIndex as CsrIndex)
+	end 'noteFunctionCall'
+
+	export function noteChunkCall(callerIndex ElementIndex, callee ByteArray)
+		if not self.gathers or not callee.equals(GtContextSwitchName) 'notTheSwitch'
+			return
+		end 'notTheSwitch'
+
+		try self.switchSeeds.set(callerIndex, value: true) otherwise panic("ResumptionCalls.noteChunkCall: function {callerIndex} is past the {self.switchSeeds.count()} the seed column spans")
+	end 'noteChunkCall'
+
+	export function markIndirectJumpReturns(module StdModule)
+		if not self.gathers 'nothingWasCollected'
+			panic("ResumptionCalls.markIndirectJumpReturns: the calls were ignored, so there is no closure to mark")
+		end 'nothingWasCollected'
+
+		let functionCount = module.funcCount()
+		let resumedAfterASwitch = reverseReachabilityMark(buildCsr(self.calleeIndices, to: self.callerIndices, nodeCount: functionCount as CsrIndex), seeds: self.switchSeeds)
+
+		for funcIndex in 0 upto functionCount 'eachMarked'
+			if not (try resumedAfterASwitch.get(funcIndex) otherwise panic("ResumptionCalls.markIndirectJumpReturns: function {funcIndex} is past the {functionCount} the closure spans")) 'staysAMatchedReturn'
 				continue
-			end 'namesNoFunction'
+			end 'staysAMatchedReturn'
 
-			let calleeIndex = try byName.get(call.callee) otherwise 'aChunk'
-				if call.callee.equals(GtContextSwitchName) 'theSwitch'
-					try switchSeeds.set(funcIndex, value: true) otherwise panic("markIndirectJumpReturns: function {funcIndex} is past the {functionCount} the seed column spans")
-				end 'theSwitch'
-
-				continue
-			end 'aChunk'
-
-			calleeIndices.push(calleeIndex as CsrIndex)
-			callerIndices.push(funcIndex as CsrIndex)
-		end 'eachOp'
-	end 'eachFunction'
-
-	let resumedAfterASwitch = reverseReachabilityMark(buildCsr(calleeIndices, to: callerIndices, nodeCount: functionCount as CsrIndex), seeds: switchSeeds)
-
-	for funcIndex in 0 upto functionCount 'eachMarked'
-		if not (try resumedAfterASwitch.get(funcIndex) otherwise panic("markIndirectJumpReturns: function {funcIndex} is past the {functionCount} the closure spans")) 'staysAMatchedReturn'
-			continue
-		end 'staysAMatchedReturn'
-
-		let func = module.getFunc(funcIndex)
-		func.returnsByIndirectJump = true
-	end 'eachMarked'
-end 'markIndirectJumpReturns'
+			let func = module.getFunc(funcIndex)
+			func.returnsByIndirectJump = true
+		end 'eachMarked'
+	end 'markIndirectJumpReturns'
+end 'ResumptionCalls'

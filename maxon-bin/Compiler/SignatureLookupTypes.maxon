@@ -6580,13 +6580,19 @@ export type PreparedTokens
 	export let tokens as TokenArray
 	export let respelledStarts as RespelledTokenStartSet
 
-	// Classified once per file here, so every Parser built over these tokens (a constant's initializer
+	// Classified once per file, so every Parser built over these tokens (a constant's initializer
 	// included) reads it instead of running the pass again.
 	let qualifiers as TypeQualifierPositions
 
 	export static function create(tokens TokenArray, respelledStarts RespelledTokenStartSet) returns PreparedTokens
-		return Self{tokens: tokens, respelledStarts: respelledStarts, qualifiers: TypeQualifierPositions.over(tokens)}
+		return Self.assembled(tokens, respelledStarts: respelledStarts, qualifiers: TypeQualifierPositions.over(tokens))
 	end 'create'
+
+	// `qualifiers` must have been classified over this very `tokens`: positions taken over another array
+	// classify the wrong tokens, with no diagnostic.
+	static function assembled(tokens TokenArray, respelledStarts RespelledTokenStartSet, qualifiers TypeQualifierPositions) returns PreparedTokens
+		return Self{tokens: tokens, respelledStarts: respelledStarts, qualifiers: qualifiers}
+	end 'assembled'
 end 'PreparedTokens'
 
 export type DeclTokenStream

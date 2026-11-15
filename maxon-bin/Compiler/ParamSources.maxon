@@ -16,6 +16,33 @@ typealias ParamMaskByCallArgument = Map with (PositionSlotKey, ParamPositionMask
 
 typealias ParamSourcesByFunction = Map with (ElementIndex, ParamSources)
 
+typealias TypeVerdictKey = int(0 to 9223372036854775807)
+
+typealias IteratorVerdictByType = Map with (TypeVerdictKey, bool)
+
+typealias BoxedUnionByName = Map with (TypeNameId, bool)
+
+let DeclaredTypeKeySlot = 0 as TypeVerdictKey
+
+let InstanceTypeKeySlot = 1 as TypeVerdictKey
+
+let TypeVerdictKeySlots = 2 as TypeVerdictKey
+
+// A genericInstance's name id is a `GenericInstanceId`, numbered apart from the project's type names, so
+// without the slot an instance and a declared type would share a verdict.
+function typeVerdictKey(nameId TypeNameId, isInstance bool) returns TypeVerdictKey
+	return (nameId as TypeVerdictKey) * TypeVerdictKeySlots + (InstanceTypeKeySlot if isInstance else DeclaredTypeKeySlot)
+end 'typeVerdictKey'
+
+type TypeVerdicts
+	let iterators as IteratorVerdictByType
+	let boxedUnions as BoxedUnionByName
+
+	static function create() returns TypeVerdicts
+		return Self{iterators: IteratorVerdictByType.create(), boxedUnions: BoxedUnionByName.create()}
+	end 'create'
+end 'TypeVerdicts'
+
 function positionSlotKey(index ElementIndex, position ElementIndex) returns PositionSlotKey
 	return (index as PositionSlotKey) * (MaxAbiArgs as PositionSlotKey) + (position as PositionSlotKey)
 end 'positionSlotKey'
@@ -214,13 +241,47 @@ type ParamSources
 	var derivationsIndexed as bool
 	let elementHolders as ParamMaskByValue
 	var elementHoldersIndexed as bool
+	let verdicts as TypeVerdicts
 
-	static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex, signatures ProgramSignatures) returns ParamSources
+	static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex, signatures ProgramSignatures, verdicts TypeVerdicts) returns ParamSources
 		let captured = CapturedLoadMap.create()
 		let retainedFrom = RetainedValueMap.create()
 		scanParamAliases(ir, func: func, captured: captured, retainedFrom: retainedFrom)
-		return Self{project: project, ir: ir, signatures: signatures, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), settledWithin: ParamMaskByValue.create(), settledThroughResults: ParamMaskByValue.create(), settledOpaqueElements: ParamMaskByValue.create(), walking: ValueMarkSet.create(), loadedFrom: LoadedFromMap.create(), payloadHolderOf: LoadedFromMap.create(), definingCall: SettlingOpByValue.create(), incomingsOf: IncomingsByPhi.create(), derivationsIndexed: false, elementHolders: ParamMaskByValue.create(), elementHoldersIndexed: false}
+		return Self{project: project, ir: ir, signatures: signatures, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), settledWithin: ParamMaskByValue.create(), settledThroughResults: ParamMaskByValue.create(), settledOpaqueElements: ParamMaskByValue.create(), walking: ValueMarkSet.create(), loadedFrom: LoadedFromMap.create(), payloadHolderOf: LoadedFromMap.create(), definingCall: SettlingOpByValue.create(), incomingsOf: IncomingsByPhi.create(), derivationsIndexed: false, elementHolders: ParamMaskByValue.create(), elementHoldersIndexed: false, verdicts: verdicts}
 	end 'of'
+
+	function carriesACapability(value ValueId) returns bool
+		if valueTagOf(self.func, value: value) != ValueTypeTag.named 'decidedByTheTagAlone'
+			return valueCarriesACapability(self.project, func: self.func, value: value)
+		end 'decidedByTheTagAlone'
+
+		let nameId = try self.func.valueNameIds.get(value) otherwise panic("ParamSources.carriesACapability: v{value} of '{String.from(self.func.name)}' has no type name — the type columns are minted in lockstep")
+
+		if let known = try self.verdicts.boxedUnions.get(nameId) 'askedBefore'
+			return known
+		end 'askedBefore'
+
+		let carries = valueCarriesACapability(self.project, func: self.func, value: value)
+		self.verdicts.boxedUnions.upsert(nameId, value: carries)
+		return carries
+	end 'carriesACapability'
+
+	function holdsAnIteratorRecord(value ValueId) returns bool
+		if not valueMayHoldAnIterator(self.signatures, func: self.func, value: value) 'notADeclaredType'
+			return false
+		end 'notADeclaredType'
+
+		let nameId = try self.func.valueNameIds.get(value) otherwise panic("ParamSources.holdsAnIteratorRecord: v{value} of '{String.from(self.func.name)}' has no type name — the type columns are minted in lockstep")
+		let key = typeVerdictKey(nameId, isInstance: valueTagOf(self.func, value: value) == ValueTypeTag.genericInstance)
+
+		if let known = try self.verdicts.iterators.get(key) 'askedBefore'
+			return known
+		end 'askedBefore'
+
+		let holds = valueIsAnIteratorRecord(self.project, signatures: self.signatures, func: self.func, value: value)
+		self.verdicts.iterators.upsert(key, value: holds)
+		return holds
+	end 'holdsAnIteratorRecord'
 
 	function indexElementHolders()
 		if self.elementHoldersIndexed 'alreadyIndexed'
@@ -278,7 +339,7 @@ type ParamSources
 	end 'indexDerivations'
 
 	function noteWordPayload(result ValueId, holder ValueId)
-		if valueCarriesACapability(self.project, func: self.func, value: result) 'aPayloadThatHoldsRecords'
+		if self.carriesACapability(result) 'aPayloadThatHoldsRecords'
 			self.payloadHolderOf.upsert(result, value: holder)
 		end 'aPayloadThatHoldsRecords'
 	end 'noteWordPayload'
@@ -295,7 +356,7 @@ type ParamSources
 	end 'noteLoad'
 
 	function maskWithin(value ValueId, throughResults bool) returns ParamPositionMask
-		if not valueCarriesACapability(self.project, func: self.func, value: value) 'aValueHasNoStorageToLieWithin'
+		if not self.carriesACapability(value) 'aValueHasNoStorageToLieWithin'
 			return NoParamPositions
 		end 'aValueHasNoStorageToLieWithin'
 
@@ -305,6 +366,12 @@ type ParamSources
 	function holdersReachedFrom(value ValueId, walk HolderWalk) returns ParamPositionMask
 		self.indexDerivations()
 		let settled = self.settledHolders(walk)
+		let root = self.rootOf(value)
+
+		if let known = try settled.get(root) 'settledByAnEarlierWalk'
+			return known
+		end 'settledByAnEarlierWalk'
+
 		var mask = NoParamPositions
 		let pending = ValueIdArray.create(0)
 		let seen = ValueMarkSet.create()
@@ -341,7 +408,7 @@ type ParamSources
 			end 'walk'
 		end 'towardTheHolders'
 
-		settled.upsert(self.rootOf(value), value: mask)
+		settled.upsert(root, value: mask)
 		return mask
 	end 'holdersReachedFrom'
 
@@ -702,10 +769,11 @@ type ParamSourceIndex
 	let funcNames as FunctionNameIndex
 	let noNotes as ParamNoteIndex
 	let signatures as ProgramSignatures
+	let verdicts as TypeVerdicts
 	var built as ParamSourcesByFunction
 
 	static function over(project Project, ir MaxonModule, funcNames FunctionNameIndex, signatures ProgramSignatures) returns ParamSourceIndex
-		return Self{project: project, ir: ir, funcNames: funcNames, noNotes: ParamNoteIndex.empty(), signatures: signatures, built: ParamSourcesByFunction.create()}
+		return Self{project: project, ir: ir, funcNames: funcNames, noNotes: ParamNoteIndex.empty(), signatures: signatures, verdicts: TypeVerdicts.create(), built: ParamSourcesByFunction.create()}
 	end 'over'
 
 	function of(funcIndex ElementIndex) returns ParamSources
@@ -714,7 +782,7 @@ type ParamSourceIndex
 		end 'alreadyBuilt'
 
 		let func = try self.funcNames.functions.get(funcIndex) otherwise panic("ParamSourceIndex.of: functions.get OOB at {funcIndex}")
-		let sources = ParamSources.of(self.project, ir: self.ir, funcIndexByName: self.funcNames.byName, func: func, noNotes: self.noNotes, signatures: self.signatures)
+		let sources = ParamSources.of(self.project, ir: self.ir, funcIndexByName: self.funcNames.byName, func: func, noNotes: self.noNotes, signatures: self.signatures, verdicts: self.verdicts)
 		self.built.upsert(funcIndex, value: sources)
 		return sources
 	end 'of'

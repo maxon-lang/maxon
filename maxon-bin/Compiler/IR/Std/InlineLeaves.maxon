@@ -2774,15 +2774,74 @@ type CallerSiteFacts
 end 'CallerSiteFacts'
 
 function collectRegisterFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, cap RegCount, valueBound ValueId, frameMatters bool, liveness StdLiveness, calls CallProbe)
-	let cuts = AcrossCutArray.create(sites.count(), zeroed: false)
+	let siteCuts = AcrossCutArray.create(sites.count(), zeroed: false)
 
 	for site in sites 'eachSite'
-		cuts.push(site.cut)
+		site.cut.cap = cap
+		siteCuts.push(site.cut)
 	end 'eachSite'
 
-	SiteAcrossCensus.collect(module, func: func, cuts: cuts, cap: cap, valueBound: valueBound, liveness: liveness)
-	calls.recordFrameFacts(module, func: func, callerIndex: callerIndex, sites: sites, frameMatters: frameMatters, liveness: liveness)
+	let frame = calls.askCallerFrame(module, func: func, sites: sites, frameMatters: frameMatters)
+
+	let cuts = match frame 'frame'
+		notAsked gives siteCuts
+		asked(callCuts) gives cutsCountingTheCalls(siteCuts, callCuts: callCuts)
+	end 'frame'
+
+	SiteAcrossCensus.collect(module, func: func, cuts: cuts, valueBound: valueBound, liveness: liveness)
+	calls.recordFrameFacts(module, func: func, callerIndex: callerIndex, sites: sites, frame: frame)
 end 'collectRegisterFacts'
+
+function cutsCountingTheCalls(siteCuts AcrossCutArray, callCuts AcrossCutArray) returns AcrossCutArray
+	let sortedSites = AcrossCutArray.create(siteCuts.count(), zeroed: false)
+
+	for cut in siteCuts 'eachSiteCut'
+		sortedSites.push(cut)
+	end 'eachSiteCut'
+
+	sortByCoordinates(sortedSites)
+	let counted = AcrossCutArray.create(sortedSites.count() + callCuts.count(), zeroed: false)
+	var nextSite = 0 as ElementIndex
+	var nextCall = 0 as ElementIndex
+
+	while nextSite < sortedSites.count() or nextCall < callCuts.count() 'eachCoordinate'
+		if nextCall == callCuts.count() 'onlySitesLeft'
+			counted.push(plannedCutAt(sortedSites, index: nextSite))
+			nextSite = nextSite + 1
+			continue
+		end 'onlySitesLeft'
+
+		let call = plannedCutAt(callCuts, index: nextCall)
+
+		if nextSite == sortedSites.count() 'onlyCallsLeft'
+			counted.push(call)
+			nextCall = nextCall + 1
+			continue
+		end 'onlyCallsLeft'
+
+		let site = plannedCutAt(sortedSites, index: nextSite)
+		let order = compareCutCoordinates(site, right: call)
+
+		if order == Ordering.lessThan 'aSiteComesFirst'
+			counted.push(site)
+			nextSite = nextSite + 1
+			continue
+		end 'aSiteComesFirst'
+
+		if order == Ordering.greaterThan 'aCallComesFirst'
+			counted.push(call)
+			nextCall = nextCall + 1
+			continue
+		end 'aCallComesFirst'
+
+		counted.push(site)
+		try callCuts.set(nextCall, value: site) otherwise panic("cutsCountingTheCalls: callCuts.set OOB at {nextCall}")
+		nextSite = nextSite + 1
+		nextCall = nextCall + 1
+	end 'eachCoordinate'
+
+	return counted
+end 'cutsCountingTheCalls'
 
 // Caller -> its site facts, filled the first wave the caller is spliced into.
 typealias CallerSiteFactsMap = Map with (ElementIndex, CallerSiteFacts)
@@ -2804,7 +2863,7 @@ type SiteAcross
 	export var bypassable as bool
 
 	static function create(calleeIndex ElementIndex, position ElementIndex, opPos ElementIndex, args ValueIdArray) returns SiteAcross
-		return Self{calleeIndex: calleeIndex, cut: AcrossCut.create(position, opPos: opPos), args: args, spliced: false, bypassable: false}
+		return Self{calleeIndex: calleeIndex, cut: AcrossCut.create(position, opPos: opPos, cap: RegistersToleratedAcrossACall), args: args, spliced: false, bypassable: false}
 	end 'create'
 end 'SiteAcross'
 
@@ -2814,23 +2873,25 @@ type AcrossCut
 	export var position as ElementIndex
 	export var opPos as ElementIndex
 	export var across as ValueIdArray
+	var cap as RegCount
 
-	static function create(position ElementIndex, opPos ElementIndex) returns AcrossCut
-		return Self{position: position, opPos: opPos, across: ValueIdArray.create(0)}
+	static function create(position ElementIndex, opPos ElementIndex, cap RegCount) returns AcrossCut
+		return Self{position: position, opPos: opPos, across: ValueIdArray.create(0), cap: cap}
 	end 'create'
 end 'AcrossCut'
 
 typealias AcrossCutArray = Array with AcrossCut
 
+// A cut's list must not depend on which other cuts are handed in: `collectRegisterFacts` answers a
+// caller's sites and its staying calls from one census.
 type SiteAcrossCensus implements LiveRangeVisitor
 	var cutSites as AcrossCutArray
 	var loops as FunctionLoops
 	var liveness as StdLiveness
-	let cap as RegCount
 	var cutsByRank as BlockPositionColumn
 	var settled as ElementIndex
 
-	static function collect(module StdModule, func IrFunction, cuts AcrossCutArray, cap RegCount, valueBound ValueId, liveness StdLiveness)
+	static function collect(module StdModule, func IrFunction, cuts AcrossCutArray, valueBound ValueId, liveness StdLiveness)
 		let cutSites = AcrossCutArray.create(cuts.count(), zeroed: false)
 
 		for cut in cuts 'eachCut'
@@ -2848,7 +2909,7 @@ type SiteAcrossCensus implements LiveRangeVisitor
 
 		liveness.recomputeSegmented(module, func: func, valueBound: valueBound, cutBlock: cutBlock, cutOp: cutOp)
 		liveness.askAboutContinuations()
-		let census = Self{cutSites: cutSites, loops: FunctionLoops.of(func, succ: liveness.blockSucc), liveness: liveness, cap: cap, cutsByRank: liveness.continuationsByDescendingRank(), settled: 0}
+		let census = Self{cutSites: cutSites, loops: FunctionLoops.of(func, succ: liveness.blockSucc), liveness: liveness, cutsByRank: liveness.continuationsByDescendingRank(), settled: 0}
 
 		for cut in cuts 'eachCutInTheCaller'
 			census.loops.prepareReadsAround(module, func: func, position: cut.position, valueBound: valueBound)
@@ -2890,13 +2951,14 @@ type SiteAcrossCensus implements LiveRangeVisitor
 	end 'indexAt'
 
 	function isFull(cut ElementIndex) returns bool
-		return (plannedCutAt(self.cutSites, index: cut).across.count() as RegCount) > self.cap
+		let held = plannedCutAt(self.cutSites, index: cut)
+		return (held.across.count() as RegCount) > held.cap
 	end 'isFull'
 
 	function offer(cut ElementIndex, valueId ValueId)
 		let held = plannedCutAt(self.cutSites, index: cut)
 
-		if (held.across.count() as RegCount) > self.cap or not self.loops.readsAround(valueId, position: held.position) 'notKept'
+		if (held.across.count() as RegCount) > held.cap or not self.loops.readsAround(valueId, position: held.position) 'notKept'
 			return
 		end 'notKept'
 
@@ -3756,6 +3818,23 @@ end 'CalleeFrame'
 
 typealias CalleeFrameArray = Array with CalleeFrame
 
+union CallerFrameQuestion
+	notAsked
+	asked(callCuts AcrossCutArray)
+end 'CallerFrameQuestion'
+
+// Against the constant, not `cut.cap`: a call at a site's coordinates shares that site's cut, whose cap
+// is the splice budget (`cutsCountingTheCalls`).
+function anyRegisterIsHeld(cuts AcrossCutArray) returns bool
+	for cut in cuts 'eachCut'
+		if cut.across.count() > RegistersToleratedAcrossACall 'aRegisterHeld'
+			return true
+		end 'aRegisterHeld'
+	end 'eachCut'
+
+	return false
+end 'anyRegisterIsHeld'
+
 // The frame rule, applied under a register budget only, at called-once sites and wrapper sites alike
 // (`judgeSites`). A body that keeps a value in a register across a call makes its caller save callee
 // registers. The splice is refused (`widensCallerFrame`) when the caller keeps none across any hot call
@@ -3855,7 +3934,7 @@ type CallProbe
 				let opIdx = try ops.get(opPos) otherwise panic("CallProbe.callsOf: ops.get OOB at {opPos} inside its own count")
 
 				if self.opStaysACall(module, op: module.getOp(opIdx)) 'aCall'
-					cuts.push(AcrossCut.create(position, opPos: opPos))
+					cuts.push(AcrossCut.create(position, opPos: opPos, cap: RegistersToleratedAcrossACall))
 
 					if cuts.count() >= atMost 'enough'
 						return cuts
@@ -3874,24 +3953,16 @@ type CallProbe
 			return false
 		end 'noCalls'
 
-		SiteAcrossCensus.collect(module, func: func, cuts: cuts, cap: RegistersToleratedAcrossACall, valueBound: nextFreeValueId(module, func: func), liveness: liveness)
+		SiteAcrossCensus.collect(module, func: func, cuts: cuts, valueBound: nextFreeValueId(module, func: func), liveness: liveness)
 
-		for cut in cuts 'eachCut'
-			if cut.across.count() > 0 'aRegisterHeld'
-				return true
-			end 'aRegisterHeld'
-		end 'eachCut'
-
-		return false
+		return anyRegisterIsHeld(cuts)
 	end 'holdsRegisterAcrossACall'
 
 	// `frameMatters` is false when no callee at these sites holds a register across a call: no site can
-	// widen the frame, so the caller is recorded as not lean and nothing else is computed.
-	function recordFrameFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, frameMatters bool, liveness StdLiveness)
-		try self.lean.set(callerIndex, value: false) otherwise panic("CallProbe.recordFrameFacts: lean.set OOB at {callerIndex}")
-
+	// widen the frame, so nothing is asked and the caller is recorded as not lean.
+	function askCallerFrame(module StdModule, func IrFunction, sites SiteAcrossArray, frameMatters bool) returns CallerFrameQuestion
 		if not frameMatters 'noCalleeWidensAFrame'
-			return
+			return CallerFrameQuestion.notAsked
 		end 'noCalleeWidensAFrame'
 
 		var aCalleeCalls = false
@@ -3900,9 +3971,24 @@ type CallProbe
 			aCalleeCalls = aCalleeCalls or self.callsOf(module, func: module.getFunc(site.calleeIndex), atMost: OneCall).count() != 0
 		end 'eachSite'
 
-		if not aCalleeCalls or self.holdsRegisterAcrossACall(module, func: func, liveness: liveness) 'nothingToGuard'
-			return
+		if not aCalleeCalls 'nothingToGuard'
+			return CallerFrameQuestion.notAsked
 		end 'nothingToGuard'
+
+		return CallerFrameQuestion.asked(self.callsOf(module, func: func, atMost: EveryCall))
+	end 'askCallerFrame'
+
+	function recordFrameFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, frame CallerFrameQuestion)
+		try self.lean.set(callerIndex, value: false) otherwise panic("CallProbe.recordFrameFacts: lean.set OOB at {callerIndex}")
+
+		let nothingToGuard = match frame 'frame'
+			notAsked gives true
+			asked(callCuts) gives anyRegisterIsHeld(callCuts)
+		end 'frame'
+
+		if nothingToGuard 'noFrameToProtect'
+			return
+		end 'noFrameToProtect'
 
 		try self.lean.set(callerIndex, value: true) otherwise panic("CallProbe.recordFrameFacts: lean.set OOB at {callerIndex}")
 		let onEveryHotPath = blocksOnEveryHotPath(module, func: func, meta: self.meta)

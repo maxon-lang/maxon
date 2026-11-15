@@ -115,7 +115,8 @@ export function prepareBackend(stdModule StdModule, target Target, globalData Gl
 	// DFE removed is encoded nowhere, and checking it would need a second name index over an array that is about
 	// to be replaced.
 	let arityProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.callArityGate)
-	assertCallsMatchCalleeArity(stdModule, byName: funcNames)
+	let resumption = ResumptionCalls.collecting(stdModule.funcCount()) if usage.usesGt else ResumptionCalls.ignoring()
+	assertCallsMatchCalleeArity(stdModule, byName: funcNames, resumption: resumption)
 	recordPhase(project, phase: CompilePhase.callArityGate, probe: arityProbe)
 
 	// ⛔⛔ **THE `__Raw.splicedAtEverySite()` GATE, BESIDE THE ARITY ONE AND FOR ITS REASONS.** A body
@@ -131,7 +132,7 @@ export function prepareBackend(stdModule StdModule, target Target, globalData Gl
 	end 'stoppableBodies'
 
 	if usage.usesGt 'indirectJumpReturns'
-		markIndirectJumpReturns(stdModule, byName: funcNames.byName)
+		resumption.markIndirectJumpReturns(stdModule)
 	end 'indirectJumpReturns'
 
 	// ⭐⭐ **THE `.data` SECTION IS LAID OUT HERE, AFTER THE PRUNE, BECAUSE THE PRUNE IS WHAT SAYS WHICH

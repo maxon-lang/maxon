@@ -163,9 +163,12 @@ export type FunctionNameIndex
 	// The function a name denotes. Two lookups rather than a name -> function map, so the ONE checked index
 	// above serves a caller that wants the function as well as one that wants its position.
 	export function funcNamed(name ByteArray) returns IrFunction throws MapError
-		let index = try self.byName.get(name)
-		return try self.functions.get(index) otherwise panic("FunctionNameIndex.funcNamed: '{String.from(name)}' maps to position {index}, which is outside the array the index was built over")
+		return self.functionAtPosition(try self.byName.get(name), named: name)
 	end 'funcNamed'
+
+	function functionAtPosition(position ElementIndex, named ByteArray) returns IrFunction
+		return try self.functions.get(position) otherwise panic("FunctionNameIndex.functionAtPosition: '{String.from(named)}' maps to position {position}, which is outside the array the index was built over")
+	end 'functionAtPosition'
 
 	export function byReferenceParamsOf(callee ByteArray) returns ParamPositionMask
 		return (try self.funcNamed(callee) otherwise panic("FunctionNameIndex.byReferenceParamsOf: '{String.from(callee)}' is called but no function of the module carries the name")).reassignedParamMask
