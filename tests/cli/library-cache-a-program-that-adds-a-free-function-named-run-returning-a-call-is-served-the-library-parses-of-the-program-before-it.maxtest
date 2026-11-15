@@ -1,0 +1,7 @@
+let LibraryCacheFreeFunctionNamedRunCaseDirName = "library-cache-free-run"
+let FreeFunctionNamedRunProgramSource = "typealias Tally = int(0 to 1000)\n\nfunction bumped(amount Tally) returns Tally\n\treturn amount + 1\nend 'bumped'\n\nfunction run(amount Tally) returns Tally\n\treturn bumped(amount)\nend 'run'\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\tlet extra = run(5)\n\treturn (length + seed + extra) as ExitCode\nend 'main'\n"
+let FreeFunctionNamedRunProgramExitCode = 29
+
+test 'a program that adds a free function named run whose body returns a call is served the library parses of the program before it'
+	requireHeldOutsideCheckout(LibraryCacheFreeFunctionNamedRunCaseDirName, check: BuiltInSequenceMatchesCold.create([SequencedProgram.create(FreeFunctionNamedRunProgramSource, exitCode: FreeFunctionNamedRunProgramExitCode, subject: "a program that adds a free function named `run` whose body returns a call", expectation: LibraryCacheExpectation.servedEveryParse)]))
+end 'a program that adds a free function named run whose body returns a call is served the library parses of the program before it'

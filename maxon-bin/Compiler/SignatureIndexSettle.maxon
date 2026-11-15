@@ -100,7 +100,7 @@ extension ProgramSignatures
 
 	export function noteDeclaredName(name ByteArray)
 		match self.hashSource 'source'
-			author then self.insertAuthorDeclaredName(mixBytes(Hasher.empty(), bytes: name))
+			author then self.insertAuthorName(AuthorNames.declared, digest: mixBytes(Hasher.empty(), bytes: name))
 			library then self.noteMentionedName(name)
 			whole then break
 		end 'source'
@@ -116,35 +116,69 @@ extension ProgramSignatures
 		end 'source'
 	end 'noteDeclaredAliasName'
 
-	function insertAuthorDeclaredName(digest HashDigest)
-		self.mainThreadSettled().authorDeclaredNames.insert(digest)
+	function authorNamesOf(names AuthorNames) returns HashDigestSet
+		return match names 'names'
+			declared gives self.mainThreadSettled().authorDeclaredNames
+			alias gives self.mainThreadSettled().authorAliasNames
+			binding gives self.mainThreadSettled().authorBindingNames
+		end 'names'
+	end 'authorNamesOf'
 
-		if self.mainThreadSettled().libraryMeantNames.contains(digest) or self.mainThreadSettled().libraryAliasNames.contains(digest) 'theLibraryMeansIt'
-			self.authorNameMeantByTheLibrary = true
-		end 'theLibraryMeansIt'
-	end 'insertAuthorDeclaredName'
+	function libraryNamesOf(names LibraryNames) returns HashDigestSet
+		return match names 'names'
+			meant gives self.mainThreadSettled().libraryMeantNames
+			alias gives self.mainThreadSettled().libraryAliasNames
+			forwardCallee gives self.mainThreadSettled().libraryForwardCalleeNames
+		end 'names'
+	end 'libraryNamesOf'
+
+	// A forward callee meets a binding alone: a bare call in a library file means an author declaration
+	// only through a function-valued binding of that name.
+	function namesMeet(author AuthorNames, library LibraryNames) returns bool
+		return match author 'author'
+			declared gives library == LibraryNames.meant or library == LibraryNames.alias
+			alias gives library == LibraryNames.meant
+			binding gives library == LibraryNames.forwardCallee
+		end 'author'
+	end 'namesMeet'
+
+	function insertAuthorName(names AuthorNames, digest HashDigest)
+		self.authorNamesOf(names).insert(digest)
+
+		for library in LibraryNames.allCases 'eachLibrarySet'
+			if self.namesMeet(names, library: library) and self.libraryNamesOf(library).contains(digest) 'theLibraryMeansIt'
+				self.authorNameMeantByTheLibrary = true
+			end 'theLibraryMeansIt'
+		end 'eachLibrarySet'
+	end 'insertAuthorName'
+
+	function insertLibraryName(names LibraryNames, digest HashDigest)
+		self.libraryNamesOf(names).insert(digest)
+
+		for author in AuthorNames.allCases 'eachAuthorSet'
+			if self.namesMeet(author, library: names) and self.authorNamesOf(author).contains(digest) 'anAuthorDeclaresIt'
+				self.authorNameMeantByTheLibrary = true
+			end 'anAuthorDeclaresIt'
+		end 'eachAuthorSet'
+	end 'insertLibraryName'
 
 	function insertAuthorAliasName(digest HashDigest, form TypeDeclKind)
-		self.mainThreadSettled().authorAliasNames.insert(digest)
+		self.insertAuthorName(AuthorNames.alias, digest: digest)
 		self.mainThreadSettled().authorAliasForms.insert(aliasFormDigest(digest, form: form))
 
-		if self.mainThreadSettled().libraryMeantNames.contains(digest) or self.mainThreadSettled().libraryRedeclaredAliasNames.contains(digest) or aliasFormsHoldAnotherForm(self.mainThreadSettled().libraryAliasForms, name: digest, form: form) 'theLibraryMeansItOtherwise'
+		if self.mainThreadSettled().libraryRedeclaredAliasNames.contains(digest) or aliasFormsHoldAnotherForm(self.mainThreadSettled().libraryAliasForms, name: digest, form: form) 'theLibraryDeclaresItOtherwise'
 			self.authorNameMeantByTheLibrary = true
-		end 'theLibraryMeansItOtherwise'
+		end 'theLibraryDeclaresItOtherwise'
 	end 'insertAuthorAliasName'
 
 	function insertLibraryAliasName(digest HashDigest, form TypeDeclKind)
 		let redeclared = self.mainThreadSettled().libraryAliasNames.contains(digest)
-		self.mainThreadSettled().libraryAliasNames.insert(digest)
+		self.insertLibraryName(LibraryNames.alias, digest: digest)
 		self.mainThreadSettled().libraryAliasForms.insert(aliasFormDigest(digest, form: form))
 
 		if redeclared 'aSecondLibraryDeclaration'
 			self.mainThreadSettled().libraryRedeclaredAliasNames.insert(digest)
 		end 'aSecondLibraryDeclaration'
-
-		if self.mainThreadSettled().authorDeclaredNames.contains(digest) 'anAuthorDeclaresItAsAnotherKind'
-			self.authorNameMeantByTheLibrary = true
-		end 'anAuthorDeclaresItAsAnotherKind'
 
 		if self.mainThreadSettled().authorAliasNames.contains(digest) and (redeclared or aliasFormsHoldAnotherForm(self.mainThreadSettled().authorAliasForms, name: digest, form: form)) 'anAuthorsAliasIsNotTheSameDeclaration'
 			self.authorNameMeantByTheLibrary = true
@@ -159,20 +193,30 @@ extension ProgramSignatures
 		end 'source'
 	end 'noteMentionedName'
 
+	function noteForwardCalleeName(name ByteArray)
+		match self.hashSource 'source'
+			library then self.insertLibraryName(LibraryNames.forwardCallee, digest: mixBytes(Hasher.empty(), bytes: name))
+			author or
+			whole then break
+		end 'source'
+	end 'noteForwardCalleeName'
+
+	export function noteDeclaredBindingName(name ByteArray)
+		self.noteDeclaredName(name)
+
+		match self.hashSource 'source'
+			author then self.insertAuthorName(AuthorNames.binding, digest: mixBytes(Hasher.empty(), bytes: name))
+			library or
+			whole then break
+		end 'source'
+	end 'noteDeclaredBindingName'
+
 	function insertMeantName(name ByteArray)
-		self.insertMeantDigest(mixBytes(Hasher.empty(), bytes: name))
+		self.insertLibraryName(LibraryNames.meant, digest: mixBytes(Hasher.empty(), bytes: name))
 
 		let owner = try nameQualifierOf(name) otherwise return
-		self.insertMeantDigest(mixBytes(Hasher.empty(), bytes: owner))
+		self.insertLibraryName(LibraryNames.meant, digest: mixBytes(Hasher.empty(), bytes: owner))
 	end 'insertMeantName'
-
-	function insertMeantDigest(digest HashDigest)
-		self.mainThreadSettled().libraryMeantNames.insert(digest)
-
-		if self.mainThreadSettled().authorDeclaredNames.contains(digest) or self.mainThreadSettled().authorAliasNames.contains(digest) 'anAuthorDeclaresIt'
-			self.authorNameMeantByTheLibrary = true
-		end 'anAuthorDeclaresIt'
-	end 'insertMeantDigest'
 
 	function mixTypeNameTable(state HashDigest, upTo TypeNameId) returns HashDigest
 		var out = state
@@ -4332,14 +4376,16 @@ extension ProgramSignatures
 		end 'aCycle'
 
 		visiting.push(key)
-		let moves = self.declarationMovesAnElementOut(declaration, visiting: visiting)
+		let moves = self.declarationMovesAnElementOut(declaration, forwarderKey: key, visiting: visiting)
 		_ = try visiting.pop() otherwise panic("ProgramSignatures.keyMovesAnElementOut: pop from the list just pushed to")
 		return moves
 	end 'keyMovesAnElementOut'
 
-	function declarationMovesAnElementOut(declaration FreshReturnForwardingDeclaration, visiting NameRoster) returns bool
+	function declarationMovesAnElementOut(declaration FreshReturnForwardingDeclaration, forwarderKey ByteArray, visiting NameRoster) returns bool
+		let forwarderIsTheCorpus = self.forwarderIsTheCorpus(forwarderKey, declFilePath: declaration.declFilePath)
+
 		for forward in declaration.forwards 'eachForward'
-			if not self.fieldForwardMovesAnElementOut(forward, visiting: visiting) 'aBorrow'
+			if not self.fieldForwardMovesAnElementOut(forward, forwarderIsTheCorpus: forwarderIsTheCorpus, visiting: visiting) 'aBorrow'
 				return false
 			end 'aBorrow'
 		end 'eachForward'
@@ -4347,19 +4393,19 @@ extension ProgramSignatures
 		return true
 	end 'declarationMovesAnElementOut'
 
-	function fieldForwardMovesAnElementOut(forward FreshReturnForward, visiting NameRoster) returns bool
+	function fieldForwardMovesAnElementOut(forward FreshReturnForward, forwarderIsTheCorpus bool, visiting NameRoster) returns bool
 		return match forward 'shape'
-			ofFieldOfEnclosingType(typeName, fields, name) gives self.fieldTargetMovesAnElementOut(self.fieldMemberForwardTarget(typeName, fields: fields, name: name), visiting: visiting)
+			ofFieldOfEnclosingType(typeName, fields, name) gives self.fieldTargetMovesAnElementOut(self.fieldMemberForwardTarget(typeName, fields: fields, name: name), forwarderIsTheCorpus: forwarderIsTheCorpus, visiting: visiting)
 			unqualified or
 			ofEnclosingType or
 			ofNamedType panic("ProgramSignatures.fieldForwardMovesAnElementOut: a call forward reached the field move-out channel")
 		end 'shape'
 	end 'fieldForwardMovesAnElementOut'
 
-	function fieldTargetMovesAnElementOut(target FieldMoveOutTarget, visiting NameRoster) returns bool
+	function fieldTargetMovesAnElementOut(target FieldMoveOutTarget, forwarderIsTheCorpus bool, visiting NameRoster) returns bool
 		return match target 'target'
 			libraryDoor gives true
-			declaration(key) gives self.keyMovesAnElementOut(key, visiting: visiting)
+			declaration(key) gives self.forwarderMayNameKey(key, forwarderIsTheCorpus: forwarderIsTheCorpus) and self.keyMovesAnElementOut(key, visiting: visiting)
 			unnameable gives false
 		end 'target'
 	end 'fieldTargetMovesAnElementOut'
@@ -4385,6 +4431,10 @@ extension ProgramSignatures
 	end 'nameIsAnInterfaceRequirement'
 
 	function recordFreshReturnForward(name ByteArray, forwards FreshReturnForwardArray, declFilePath FilePath)
+		if self.freshReturnForwardsClosed 'theCloseHasRun'
+			panic("ProgramSignatures.recordFreshReturnForward: '{String.from(name)}' forwards after `closeFreshReturnForwards` ran, and the close runs once — this forwarder would never be closed, so every call to it would read as not fresh")
+		end 'theCloseHasRun'
+
 		self.recordForwardingDeclaration(self.mainThreadSettled().funcFreshReturnForwards, shape: SignatureDiscriminator.declShapeFreshReturnForward, name: name, forwards: forwards, declFilePath: declFilePath)
 	end 'recordFreshReturnForward'
 
@@ -4425,7 +4475,7 @@ extension ProgramSignatures
 
 	function mixFreshReturnForward(shape HashDigest, typeName ByteArray, callee ByteArray)
 		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: typeName), bytes: callee)
-		self.noteMentionedName(callee)
+		self.noteForwardCalleeName(callee)
 		self.noteMentionedName(typeName)
 	end 'mixFreshReturnForward'
 
@@ -4505,9 +4555,10 @@ extension ProgramSignatures
 	// to run the close this is part of.
 	function unsettledTargetsOf(declaration FreshReturnForwardingDeclaration, owner ByteArray, forwarder ElementIndex, waiters FreshReturnWaiterMap) returns UnsettledTargetCount
 		var pending = 0 as UnsettledTargetCount
+		let forwarderIsTheCorpus = self.forwarderIsTheCorpus(owner, declFilePath: declaration.declFilePath)
 
 		for forward in declaration.forwards 'eachForward'
-			match self.freshReturnForwardTarget(forward, declFilePath: declaration.declFilePath) 'target'
+			match self.freshReturnForwardTarget(forward, declFilePath: declaration.declFilePath, forwarderIsTheCorpus: forwarderIsTheCorpus) 'target'
 				declaration(key) then pending = pending + self.awaitedKeyCount(key, owner: owner, forwarder: forwarder, waiters: waiters)
 				unnameable then pending = pending + 1
 			end 'target'
@@ -4541,7 +4592,9 @@ extension ProgramSignatures
 	// asked once every declaration is folded.** It is re-derived rather than read off the parsed call because
 	// `returnsFreshValue` is asked while bodies are still being parsed, in any file order. `unnameable` wherever
 	// that resolution could reach something no key here names exactly; a wrong key would lend one declaration's
-	// freshness to a call that reaches another.
+	// freshness to a call that reaches another. `unnameable` too where a shared-corpus forwarder's callee
+	// resolves outside the corpus: its parses are shared between programs, so its answer cannot rest on an
+	// author's declaration.
 	//
 	//   • `name(…)` is `Parser.parseCall`: the enclosing type's member when it declares one
 	//     (`isImplicitSelfMethod`), else the one declaration `resolveFunctionName` finds visible from the
@@ -4553,14 +4606,53 @@ extension ProgramSignatures
 	//     nominal type from the declaring file. A user type that displaces a stdlib one needs no refusal: every
 	//     stdlib spelling of that name is rewritten into the reserved space (`Parser.shadowRenamedTokens`), so
 	//     the bare name is the user's alone.
-	function freshReturnForwardTarget(forward FreshReturnForward, declFilePath FilePath) returns FreshReturnForwardTarget
-		return match forward 'shape'
+	function freshReturnForwardTarget(forward FreshReturnForward, declFilePath FilePath, forwarderIsTheCorpus bool) returns FreshReturnForwardTarget
+		let target = match forward 'shape'
 			unqualified(enclosingType, name) gives self.unqualifiedForwardTarget(enclosingType, name: name, readerFilePath: declFilePath)
 			ofEnclosingType(typeName, name, _) gives self.declaredForwardTarget(qualifiedMethodName(typeName, methodName: name))
 			ofNamedType(typeName, name) gives self.namedTypeForwardTarget(typeName, name: name, readerFilePath: declFilePath)
 			ofFieldOfEnclosingType panic("freshReturnForwardTarget: a field move-out forward is read by `returnsAMovedOutElement` and never reaches the sole-owner close")
 		end 'shape'
+
+		if not self.targetMayBeNamed(target, forwarderIsTheCorpus: forwarderIsTheCorpus) 'anotherLayersDeclaration'
+			return FreshReturnForwardTarget.unnameable
+		end 'anotherLayersDeclaration'
+
+		return target
 	end 'freshReturnForwardTarget'
+
+	function targetMayBeNamed(target FreshReturnForwardTarget, forwarderIsTheCorpus bool) returns bool
+		return match target 'target'
+			declaration(key) gives self.forwarderMayNameKey(key, forwarderIsTheCorpus: forwarderIsTheCorpus)
+			unnameable gives true
+		end 'target'
+	end 'targetMayBeNamed'
+
+	function forwarderMayNameKey(key ByteArray, forwarderIsTheCorpus bool) returns bool
+		return not forwarderIsTheCorpus or self.declaredByTheSharedCorpusAt(self.declaringFileOf(key).toString())
+	end 'forwarderMayNameKey'
+
+	function forwarderIsTheCorpus(forwarderKey ByteArray, declFilePath FilePath) returns bool
+		return self.declaredByTheSharedCorpusAt(declFilePath.toString()) and not self.publishedOntoAnAuthorsType(forwarderKey)
+	end 'forwarderIsTheCorpus'
+
+	function publishedOntoAnAuthorsType(forwarderKey ByteArray) returns bool
+		if not self.settledDeclarations().extensionMethodDeclFiles.contains(forwarderKey) 'notAnExtensionMember'
+			return false
+		end 'notAnExtensionMember'
+
+		let owner = try nameQualifierOf(forwarderKey) otherwise panic("publishedOntoAnAuthorsType: '{String.from(forwarderKey)}' is an extension member and is filed under `<Type>.<member>`")
+
+		if not self.settledDeclarations().userDeclaredTypeNames.contains(owner) 'notAnAuthorsType'
+			return false
+		end 'notAnAuthorsType'
+
+		if not self.authorNamesOverlapTheLibrary() 'theLibraryParsesAreShared'
+			panic("ProgramSignatures.publishedOntoAnAuthorsType: '{String.from(forwarderKey)}' is a library extension member published onto the author's type '{String.from(owner)}', which is read as the author's layer only because `noteExtensionPublishedMethod` notes the member and its owner as library-meant, meeting the author's type name and tripping `authorNameMeantByTheLibrary` so that library parses are not shared — and that verdict is not tripped")
+		end 'theLibraryParsesAreShared'
+
+		return true
+	end 'publishedOntoAnAuthorsType'
 
 	function unqualifiedForwardTarget(enclosingType EnclosingTypeScope, name ByteArray, readerFilePath FilePath) returns FreshReturnForwardTarget
 		if let typeName = try enclosingType.typeName() 'insideAType'

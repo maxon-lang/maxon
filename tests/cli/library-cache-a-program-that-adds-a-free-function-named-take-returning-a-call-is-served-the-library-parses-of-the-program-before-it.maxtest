@@ -1,0 +1,7 @@
+let LibraryCacheFreeFunctionNamedTakeCaseDirName = "library-cache-free-take"
+let FreeFunctionNamedTakeProgramSource = "typealias Tally = int(0 to 1000)\n\nfunction bumped(amount Tally) returns Tally\n\treturn amount + 1\nend 'bumped'\n\nfunction take(amount Tally) returns Tally\n\treturn bumped(amount)\nend 'take'\n\nfunction main() returns ExitCode\n\tlet seed = 21\n\tlet words = \"seed \{seed\} grows\".split(\" \")\n\twords.insert(0, value: \"then\")\n\tlet word = try words.get(2) otherwise \"\"\n\tlet length = word.byteLength() as Tally\n\tlet extra = take(6)\n\treturn (length + seed + extra) as ExitCode\nend 'main'\n"
+let FreeFunctionNamedTakeProgramExitCode = 30
+
+test 'a program that adds a free function named take whose body returns a call is served the library parses of the program before it'
+	requireHeldOutsideCheckout(LibraryCacheFreeFunctionNamedTakeCaseDirName, check: BuiltInSequenceMatchesCold.create([SequencedProgram.create(FreeFunctionNamedTakeProgramSource, exitCode: FreeFunctionNamedTakeProgramExitCode, subject: "a program that adds a free function named `take` whose body returns a call", expectation: LibraryCacheExpectation.servedEveryParse)]))
+end 'a program that adds a free function named take whose body returns a call is served the library parses of the program before it'

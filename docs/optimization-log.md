@@ -276,6 +276,7 @@ ragged.
 | 2026-11-14 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The shared library-parse key holds only the program facts a library file's parse reads; a corpus file's call openings are walked once at discovery for by-reference hand-offs | 12,955,185 | 17,031,115 | 25,178,806 | 41,485,721 | 74,244,018 | 140,355,277 |
 | 2026-11-14 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A program declaring a typealias the library also declares loads the library baseline; the shared-parse key carries the set of contested alias names | 12,955,252 | 17,030,991 | 25,178,264 | 41,484,349 | 74,240,956 | 140,348,805 |
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The signature index no longer records which functions return a name or a call: the fact had no reader, and its second walk of each such body is gone | 10,284,138 | 14,335,453 | 22,407,124 | 38,572,170 | 71,048,509 | 136,609,121 |
+| 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 10,370,804 | 14,435,830 | 22,534,881 | 38,754,645 | 71,340,378 | 137,119,736 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -361,6 +362,7 @@ ragged.
 | 2026-11-14 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The shared library-parse key holds only the program facts a library file's parse reads; a corpus file's call openings are walked once at discovery for by-reference hand-offs | 1,258,629,440 | 1,760,139,248 | 2,766,693,104 | 4,805,081,296 | 8,938,989,120 | 17,233,021,024 |
 | 2026-11-14 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A program declaring a typealias the library also declares loads the library baseline; the shared-parse key carries the set of contested alias names | 1,258,763,584 | 1,760,289,232 | 2,766,899,952 | 4,805,388,800 | 8,939,496,736 | 17,233,927,664 |
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The signature index no longer records which functions return a name or a call: the fact had no reader, and its second walk of each such body is gone | 1,095,447,120 | 1,595,444,672 | 2,597,388,608 | 4,625,913,360 | 8,742,257,776 | 17,001,165,040 |
+| 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 1,101,829,024 | 1,602,748,160 | 2,606,533,680 | 4,638,740,016 | 8,762,446,016 | 17,036,074,864 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -489,6 +491,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-11-14 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The shared library-parse key holds only the program facts a library file's parse reads; a corpus file's call openings are walked once at discovery for by-reference hand-offs | 2,008,910,035 | 2,510,881,160 | 3,815,893,746 | 6,449,900,446 | 11,807,234,190 | 22,732,475,233 |
 | 2026-11-14 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A program declaring a typealias the library also declares loads the library baseline; the shared-parse key carries the set of contested alias names | 1,900,949,349 | 2,453,380,748 | 3,518,466,247 | 5,847,224,592 | 10,735,567,434 | 20,594,606,080 |
 | 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The signature index no longer records which functions return a name or a call: the fact had no reader, and its second walk of each such body is gone | 1,634,449,273 | 2,175,131,042 | 3,225,628,008 | 5,554,119,961 | 10,364,940,068 | 20,539,964,345 |
+| 2026-11-15 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library forwarder's fresh-return target is resolved inside the library, and a library forward callee name meets only an author binding in the name-overlap check | 1,713,300,507 | 2,440,862,462 | 3,637,198,662 | 5,889,140,558 | 12,088,468,798 | 21,344,903,217 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and

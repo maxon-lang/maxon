@@ -160,7 +160,9 @@ A typealias with the name and form of the library's one typealias of that name f
 the library means that name as its own declaration whichever program is compiled. Every other meeting of an
 author name and a library name is swept user first: an alias named like a library type, a runtime-tier type
 or a name the library only mentions, an alias of another form, a name the library declares twice, and any
-type or function overlap.
+type or function overlap. A name the library spells only as the callee of a returned call
+(`return name(…)`) meets an author top-level binding of that name, the one author declaration a bare library
+call can reach; an author function or method of that name folds on top of the baseline.
 It finds that out per file, through a flag the index sets the moment an author name meets a name the
 library means, and the facts already discovered for its files are handed to the user-first sweep, so each
 file is discovered once.
