@@ -250,6 +250,8 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   program-wide member lookup that includes an author's extension methods
 - seen: the spec-suite speed plan's forward-callee landing; f518f20 behaves the same. An author
   method's bare name is in no overlap set and no shared-parse key, so a cached library parse is served.
+  Such a method that also takes a `mutable` parameter and is named like a library forward callee was
+  declined the cache before that landing and is served after it.
 - repro: a program declaring `extension String` with a method `scanIsAscii` of another return type
   (the name of a free function `String.isAscii` calls bare) and calling `isAscii` on a string. Under a
   fresh cache root it is refused E3005 at the `return` inside stdlib's String; built after any other
