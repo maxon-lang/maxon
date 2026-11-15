@@ -289,7 +289,7 @@ the neighbouring cases in that file look like.
 
 **Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
 
-⚠ **When the ask (an issue, a `KNOWN_ISSUES.md` entry) names failing cases or a failure count, those named cases,
+⚠ **When the ask (an issue, a known issue) names failing cases or a failure count, those named cases,
 run, are part of the acceptance.** A hand-built red that reproduces the mechanism may be narrower than the
 class; it supplements the named cases and never replaces them.
 
@@ -445,8 +445,8 @@ missing or something changed after it.
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
   not the suite is green over it. **When it is RELATED to this change it is fixed NOW, and the
-  reproduction that found it becomes a case in the set; when it is not, it is recorded in
-  `KNOWN_ISSUES.md` and drained after the push (§10)** — fixed all the same, without slowing this one. A
+  reproduction that found it becomes a case in the set; when it is not, it is filed as a known
+  issue and drained after the push (§10)** — fixed all the same, without slowing this one. A
   hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the CI lanes a
   spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
 - **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
@@ -490,10 +490,10 @@ situation:
   and no branch, and the landing gates are YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
   standalone-only and it must skip them.
 - **Tell it that a finding NOT RELATED to this change (§10's test) is REPORTED, not fixed** — the
-  skill's "fix what you find even if it is pre-existing" is satisfied by the `KNOWN_ISSUES.md` drain,
+  skill's "fix what you find even if it is pre-existing" is satisfied by the known-issue drain,
   not by this diff.
 - **Anything it leaves for triage arrives in its REPORT, and you decide it here**, by §10's test: a
-  related defect is fixed now; an unrelated one is recorded in `KNOWN_ISSUES.md` and drained after the
+  related defect is fixed now; an unrelated one is filed as a known issue and drained after the
   push. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
   (AGENTS.md, "No skipped work").
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
@@ -714,13 +714,19 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 > cross lane that missed it.
 
 Then report in a few lines: the change, the cases that went red → green, each gate's number, and
-anything skipped with the reason — including the lanes only CI runs. **Then drain `KNOWN_ISSUES.md`
-(§10)** — that report is not the end of the task while the file holds a claimable entry.
+anything skipped with the reason — including the lanes only CI runs. **Then drain the known issues
+(§10)** — that report is not the end of the task while one is claimable.
 
-## 10. Known issues — record unrelated defects, drain the file after the push
+## 10. Known issues — record unrelated defects as GitHub issues, drain them after the push
 
-**Every defect found during the change gets fixed. Only the ones the change does not need wait — in
-`KNOWN_ISSUES.md`, where whichever agent finishes first takes them.**
+> ⭐ **In the maintainer's fleet the orchestrator files, claims and assigns every known issue**
+> (`AGENTS.md`, "Orchestration"): recording is a `FOUND` to it, asking the culprit is its job, and
+> draining is a `DONE` after which it assigns the next one. Everything below about *which* defects are
+> related, and how one is landed, still binds you; the filing, the claiming and the culprit hunt are
+> what move to it.
+
+**Every defect found during the change gets fixed. Only the ones the change does not need wait — as
+issues on `maxon-lang/maxon`, where whichever agent finishes first takes them.**
 
 > ### ⭐ RELATED — fixed now, in this change
 > - the acceptance set, or a gate in §8, **cannot go green** without it — including a red you did not
@@ -736,69 +742,79 @@ anything skipped with the reason — including the lanes only CI runs. **Then dr
 > a missed diagnostic you happened to see. ⚠ "It is in a file I am editing anyway" does not make it
 > related; "it blocks a case" does.
 
-### Recording — `KNOWN_ISSUES.md`, shared by every agent
+### Recording — an issue on `maxon-lang/maxon`, shared by every agent and every contributor
 
-**An UNRELATED defect goes in `KNOWN_ISSUES.md` at the repo root** — one file every session in the
-checkout reads, so two agents that find the same defect record it once and fix it once. Its header gives
-the entry format: symptom, `priority`, `status`, `where` (`file:line`), `seen`, and **a program that
-reproduces it** — the seed of the red set of the land that fixes it.
+**An UNRELATED defect is an issue labelled `bug` and `accepted`**, plus its area label (`compiler`,
+`codegen`, `runtime`, `stdlib`, `tooling`, `performance`), so two agents — or an agent and a
+contributor — that find the same defect record it once and fix it once. Its title is the one-line
+symptom; its body carries **Where** (`file:line`), **Seen** (how it was found, by which change), and
+**Repro** — **a program that reproduces it**, the seed of the red set of the land that fixes it.
 
-- **Read it before writing.** An entry with the same `where:` or symptom already records it: add at
-  most a `seen:` line, never a second entry.
-- **You, the coordinator, write it** — the moment a finding arrives. Implementers and reviewers report
-  to you; they do not touch the file.
-- **Commit every edit to it at once, alone:** `git commit -F <msg> -- KNOWN_ISSUES.md`. Left
-  uncommitted it is dirt for the next session's §0, or swept into a §9 commit. The commit goes out with
-  your next push; do not push it separately — a dirty tree cannot rebase without a stash (§8).
+- **Search before filing:** `gh issue list -R maxon-lang/maxon --state open --search "<file or symptom>"`.
+  An open issue that already records it gets at most a comment with the new sighting, never a twin.
+- **You, the coordinator, file it** — the moment a finding arrives. Implementers and reviewers report
+  to you; they do not file.
+- **File it with `gh issue create -R maxon-lang/maxon --label bug --label accepted --label <area> --title
+  <symptom> --body-file <file>`**, the body written in your scratchpad, then put it on the Roadmap as
+  free to take: `node .claude/roadmap/status.mjs <n> Ready`. Nothing touches the tree.
 - Then go on with the change. Recording is the whole of what an unrelated defect costs it.
 
-### CI reds — `ci-red` entries, and the culprit takes its own
+### CI reds — the `ci-red` label, and the culprit takes its own
 
-**A red lane on main is a `ci-red` entry**, kept above every `normal` one. Its `repro:` is the run URL,
-the lane and the failing case; its `suspects:` are the commits between the last green run and the first
-red one (`gh run list`, then `git log <green>..<red>`).
+**A red lane on main is an issue labelled `ci-red`, `bug`, `accepted` and `priority: high`**, drained
+before every other. Its **Repro** is the run URL, the lane and the failing case; its **Suspects** are
+the commits between the last green run and the first red one (`gh run list`, then
+`git log <green>..<red>`).
 
-**Whenever you meet a red — §9's glance, or one reported to you — look in the file first:**
+**Whenever you meet a red — §9's glance, or one reported to you — look for its issue first**
+(`gh issue list -R maxon-lang/maxon --label ci-red --state open`):
 
-- **Claimed by someone else:** it is theirs. Do not fix it; push.
-- **Not recorded:** record it, then ask the culprit (below) before claiming it.
-- **Recorded and open:** ask the culprit (below) before claiming it.
+- **Assigned to someone else:** it is theirs. Do not fix it; push.
+- **Not filed:** file it, then ask the culprit (below) before claiming it.
+- **Filed and unassigned:** ask the culprit (below) before claiming it.
 
 **Ask the culprit.** `ListAgents`, then one `SendMessage` to every session that can answer (cloud
 sessions cannot — skip them): the lane, the failing case, the run URL and the suspect shas, and *"Did your
-current task push one of these? If so, take this entry."* An agent whose commit it is claims the entry,
+current task push one of these? If so, take this issue."* An agent whose commit it is claims the issue,
 answers that it has, and fixes the red before its next push (AGENTS.md). Read answers with
 `ReadNotifications` while you go on with your own work — at §9's glance, that work is your push. **When
-every answer is "not mine", or none has come after 10 minutes, claim it yourself** — unless someone's
-claim is in the file by then — and land it before anything else in the drain.
+every answer is "not mine", or none has come after 10 minutes, claim it yourself** — unless someone has
+by then — and land it before anything else in the drain.
 
-### Draining — after the push, ONE entry at a time
+### Draining — after the push, ONE issue at a time
 
-**Once your push has landed, drain the file:**
+**Once your push has landed, drain the queue** — the open issues labelled `accepted` and `bug` with no
+assignee:
 
-1. **Re-read it and pick ONE entry:** the first open `ci-red`, else the oldest open `normal`. An entry
-   `claimed` more than 24 hours ago is abandoned, and as good as open.
-2. **Claim it** — set `status: claimed <session> <ISO date>` with Edit, and commit at once. Edit refuses
-   a file that changed since you read it: if it does, someone else moved first — go back to 1. A
-   `ci-red` entry is claimed only after asking the culprit.
-3. **Land it as its own `/land`**, its repro the red set. That land's commit deletes the entry. A
-   defect found while landing it takes the same RELATED test as any other: related to this entry, fixed
-   in this land; unrelated, recorded.
+1. **Pick ONE:** the oldest unassigned `ci-red`
+   (`gh issue list -R maxon-lang/maxon --state open --label ci-red --search "no:assignee sort:created-asc"`),
+   else the oldest unassigned `accepted` `bug`. An issue assigned more than 24 hours ago with no
+   comment or commit since is abandoned: unassign it, set it back to `Ready`, and it is as good as open.
+2. **Claim it:** `gh issue edit <n> --add-assignee @me`, `node .claude/roadmap/status.mjs <n> "In progress"`
+   — the project board is where everyone sees what is being implemented — then a comment
+   `Claimed by <session>`. Every
+   session on one machine shares one GitHub login, so the assignee alone cannot tell two of them
+   apart: re-read the comments, and if an earlier `Claimed by` than yours stands since the last
+   unassignment, someone else moved first — delete your comment and go back to 1. A `ci-red` issue is
+   claimed only after asking the culprit.
+3. **Land it as its own `/land`**, its repro the red set, its commit message carrying `Fixes #<n>` so the
+   push closes it. A defect found while landing it takes the same RELATED test as any other: related to
+   this issue, fixed in this land; unrelated, filed.
 4. **Repeat until nothing is claimable.** Then the task is done; one report names every sha.
 
-**Hold one claim at a time**: an entry that turns out to be slow then blocks only itself, and every
+**Hold one claim at a time**: an issue that turns out to be slow then blocks only itself, and every
 other one stays open for an agent that finishes sooner.
 
-- An entry whose repro will not go red was fixed on the way — delete it, naming the sha that fixed it
-  in the commit message.
-- ⛔ **The file is not `todo.md` and not a memory note** — it is a work queue, and draining it is part
+- An issue whose repro will not go red was fixed on the way — close it with a comment naming the sha
+  that fixed it.
+- ⛔ **The queue is not `todo.md` and not a memory note** — it is a work queue, and draining it is part
   of the task.
-- **An entry that needs a design ruling is a question** to the user, asked when its turn comes — never
-  a skipped entry.
+- **An issue that needs a design ruling is a question** to the user, asked when its turn comes — never
+  a skipped issue.
 
-> ### ⛔ AN ENTRY THAT REPEATS A LANDED FIX IS A DESIGN QUESTION, NOT ANOTHER ENTRY
-> Before writing an entry, and again before landing one, ask: **has a fix of this same kind already
-> landed, or does another entry name the same question at a different site?** Examples: "the async
+> ### ⛔ AN ISSUE THAT REPEATS A LANDED FIX IS A DESIGN QUESTION, NOT ANOTHER ISSUE
+> Before filing an issue, and again before landing one, ask: **has a fix of this same kind already
+> landed, or does another issue name the same question at a different site?** Examples: "the async
 > path does not consult X", after "the spawn path did not consult X"; or a second consumer that
 > disagrees with a third about one fact. If so, the fixes are treating symptoms: several consumers
 > answer one question each for themselves (`code-review` §3, "the same DECISION made in two places").
@@ -817,7 +833,7 @@ Everything above runs unattended. Stop and report, without landing, when:
 - **A case would have to be removed or excluded**, or **an existing `specs` expectation rewritten**. The first
   is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
   change and belongs to whoever owns that behaviour.
-- **A finding or `KNOWN_ISSUES.md` entry repeats a fix already landed, at another consumer of the same fact** (§10).
+- **A finding or known issue repeats a fix already landed, at another consumer of the same fact** (§10).
 - **A change would make the compiler accept a program an approved design refuses** — a checker rule
   relaxed, a pin dropped, a refusal narrowed, against a ruling or sample of the plan the change implements.
   That is an amendment of a model-checked design, never an implementation choice. The agent stops and
@@ -825,7 +841,8 @@ Everything above runs unattended. Stop and report, without landing, when:
   executable model (campaigns and a fresh red team, 0 counterexamples) before it lands. Every brief for
   such a change quotes the rulings it implements and says this.
 
-**Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
+**In the maintainer's fleet, each is a `QUESTION` to the orchestrator, not to the user** (`AGENTS.md`,
+"Orchestration"). **Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
 not open a worktree, or hand the work to another process. When the answer comes you carry
 on from where you stopped, in this file.
 

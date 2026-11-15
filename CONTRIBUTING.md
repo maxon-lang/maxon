@@ -70,6 +70,32 @@ The most useful thing you can do is build something real. Writing actual program
 rough edges no test suite will, and shapes where the language goes next. Share what you build,
 and report what felt awkward, what was missing, and what worked.
 
+## The roadmap
+
+Two project boards hold the project's plans. An idea starts in
+[Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas); one taken up becomes an issue.
+
+- **[Maxon Backlog](https://github.com/orgs/maxon-lang/projects/3)** holds what is proposed and not yet
+  decided: features, and design questions still open to discussion.
+- **[Maxon Roadmap](https://github.com/orgs/maxon-lang/projects/4)** is the decided direction. An issue
+  moves there, labelled `accepted`, when it is decided — a design ruled, a feature committed to, a bug
+  confirmed.
+
+On the Roadmap:
+
+- **A design is an issue labelled `design`.** Its body states the problem and the ruling that binds.
+  The full design and its current state — which stages have landed — are its page on the
+  [wiki](https://github.com/maxon-lang/maxon/wiki), `Design-<slug>`, and the two link to each other. **Every `design` issue on the Roadmap binds every change
+  as a specification does**, open or closed: a pull request that contradicts one starts as a comment on
+  that issue. A ruling replaced by a later one is closed as not planned, linked to its replacement, and
+  taken off the Roadmap.
+- **A release is a milestone.** What is in the next milestone is what that release is planned to carry.
+- **What is being implemented is the `In progress` column**, each issue assigned to whoever is on it.
+  A `Ready` issue with no assignee is free to take; comment on it before you start.
+
+To list the rulings:
+`gh project item-list 4 --owner maxon-lang --limit 1000 --format json --jq '.items[] | select(.labels // [] | index("design")) | "#\(.content.number) \(.title)"'`
+
 ## Building from source
 
 Maxon is written in Maxon, so building it needs a Maxon compiler. There is no second implementation

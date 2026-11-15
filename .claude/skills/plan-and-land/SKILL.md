@@ -107,9 +107,14 @@ the one thing `/land` never lets anyone else touch.
 
 ## 4. Write the plan file
 
-**`C:\Users\Eric\.claude\plans\<slug>.md` — OUTSIDE the checkout, never committed.** `/land` §0 wants a
-clean tree and §9 commits the whole tree, so an in-repo plan file is either dirt or gets swept into the
-commit. Not deleted after landing; the `STATUS:` line is stamped instead.
+**The plan is a page on the repository's wiki, `Design-<slug>.md`** — public, readable by every
+contributor and by the orchestrator on any machine, and outside the checkout: `/land` §0 wants a clean
+tree and §9 commits the whole tree, so an in-repo plan file would be either dirt or swept into the commit.
+Work in a clone of the wiki in your scratchpad (`git clone https://github.com/maxon-lang/maxon.wiki.git`),
+and commit and push every edit to the page at once — an unpushed page is invisible to everyone else.
+Link the page from the plan's `design` issue (`CONTRIBUTING.md`, "The roadmap"), and the issue from the
+page. Not deleted after landing; the `STATUS:` line is stamped instead. Nothing about the maintainer's
+agent fleet goes on the page (`AGENTS.md`, "Orchestration").
 
 ```
 # <the change in one line>          <- the line every /land brief carries
@@ -138,7 +143,8 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 
 ## 5. ⛔ HALT — present it and wait
 
-**In chat** — the file is the record, the halt is the conversation — in this order:
+**In chat** — the file is the record, the halt is the conversation; in the maintainer's fleet, a
+`QUESTION` to the orchestrator (`AGENTS.md`, "Orchestration") — in this order:
 
 1. **The change, one line.** If N > 1 stages: **`<N> STAGES — <named condition>`** as the very first thing.
 2. **The mechanism**, 2–4 sentences.
@@ -207,14 +213,14 @@ expires at the first commit — a multi-stage plan re-scouts before the next sta
 
 ## 7. Close the plan
 
-Stamp `STATUS:` — `LANDED <sha>`, `STAGE n/N LANDED <sha>`, or `ABANDONED — <reason>`. ⛔ The plan file
-is outside the repo; this is never a commit.
+Stamp `STATUS:` — `LANDED <sha>`, `STAGE n/N LANDED <sha>`, or `ABANDONED — <reason>` — on the wiki page,
+pushed at once, after every stage. ⛔ It is never a commit to the repository.
 
 ⛔ **Do not wait for CI** — not after the last stage, and not between stages: the next stage starts from
 the pushed commit (`/land` §9's ruling).
 
-Unrelated defects found while landing go in `KNOWN_ISSUES.md`, not the plan file. **Drain it after the
-LAST stage** (never between stages), one claimed entry at a time (`/land` §10). The plan is closed when
+Unrelated defects found while landing are filed as known issues, not in the plan file. **Drain them
+after the LAST stage** (never between stages), one claimed issue at a time (`/land` §10). The plan is closed when
 the file holds no claimable entry.
 
 ---
@@ -235,7 +241,7 @@ agent; the reviewer counts, since `/land` §5 is often where a design flaw is fi
 > ⛔ **NOT a design-flaw halt, and each will be offered as one:** it is bigger than the plan said · it
 > touches more files than §4 listed · a cleaner design occurred to me · the plan did not mention X · this
 > wants a refactor first · a pre-existing defect is in the way (`/land`: *"a defect ANYONE finds on the
-> way is FIXED, not filed"* — now if it blocks the acceptance, after the push via `KNOWN_ISSUES.md` if it
+> way is FIXED, not filed"* — now if it blocks the acceptance, after the push via a known issue if it
 > does not). Each of those is **carry on and say so in the report**.
 
 **This is not escalation.** `/land`'s *"THERE IS NO ESCALATION"* forbids the **coordinator** rerouting to

@@ -1,10 +1,56 @@
 You do not care if an issue is pre-existing. Just debug and fix it. One found while a change is in
-progress, and not related to it, is recorded in `KNOWN_ISSUES.md` — unless it is already there — and
-drained, one claimed entry at a time, after that change's push (`/land` §10).
+progress, and not related to it, is filed as a GitHub issue — a known issue, labelled `bug` and
+`accepted`, unless one already records it — and drained, one claimed issue at a time, after that change's
+push (`/land` §10; in the maintainer's fleet, the orchestrator does both — "Orchestration", below).
 
 **When another agent asks whether your task pushed a commit that turned CI red, answer it.** If the commit
-is yours, claim its `KNOWN_ISSUES.md` entry, reply that you have taken it, and fix the red before your
-next push, ahead of the rest of your task.
+is yours, claim its `ci-red` issue (in the fleet, tell the orchestrator instead), reply that you have
+taken it, and fix the red before your next push, ahead of the rest of your task.
+
+## Orchestration
+
+**A `design` issue on the Maxon Roadmap binds every agent, as a spec does.** The decided direction,
+designs and release plan live on that GitHub project, and what is proposed but undecided on the Maxon
+Backlog (`CONTRIBUTING.md`, "The roadmap"): read the rulings that touch your change before you start it. A change that contradicts one is a question on its `design` issue, not
+an implementation choice.
+
+**When `MAXON_FLEET_REPO` is set, you are a worker in the maintainer's fleet**, run by the
+`orchestrator` session (`.claude/agents/orchestrator.md`), which owns direction and assigns all work so
+that no two sessions own the same problem. It may be on another machine or another Claude account, so
+every message goes through the private fleet repository with `node .claude/fleet/fleet.mjs`, never
+through `SendMessage`. Your fleet id is your session's name (`claude -n <id>`); without one, ask the user.
+
+- **Before any work, tell it.** A task the user gave you directly is a `REQUEST`; with no task, send
+  `READY`. Start only on its `ASSIGN`. A `STOP` means another session owns the problem: tell the user.
+- **Check your inbox at every step boundary** (`fleet.mjs inbox --as <id>`, then `ack` what you have
+  acted on), and send a `heartbeat --as <id> --model <model id> --state working --task <n>` there too:
+  the orchestrator sizes the fleet to the plans' usage from it.
+- **`PAUSE`:** stop at the next step boundary, keeping your task and your tree — never inside §8's gates
+  or the push. Heartbeat `--state paused` and wait (below) for `RESUME`.
+- **Waiting** — for an `ASSIGN`, a `RULING` or a `RESUME` — is `fleet.mjs wait --as <id>` run with
+  `run_in_background`: it polls GitHub, not you, so it costs no usage, and its exit wakes you. Heartbeat
+  `--state idle` (or `paused`) before you start it.
+- **Stay in the assigned area.** Needing a file outside it is a `PROGRESS` naming the file before you
+  edit it; one that another task owns is a `BLOCKED`.
+- **Design rulings come from the orchestrator, not the user.** Every halt that `/land` and
+  `/plan-and-land` send "to the user" for a design ruling or an approval is a `QUESTION` to it; wait for
+  its `RULING`.
+- **You do not edit the boards — a `design` issue, a project item, a milestone — or another design's
+  wiki page (`/plan-and-land` §4: yours is yours), and you do not file,
+  claim or close a known issue.** An unrelated
+  defect is a `FOUND` carrying the issue's fields (`/land` §10, "Recording"); after your push, a `DONE`
+  replaces `/land` §10's draining — the orchestrator hands you the next issue. Your fix's commit still
+  carries `Fixes #<n>` for the issue it was assigned.
+- **A message is one line of kind, then the body:** `READY` · `REQUEST <goal>` ·
+  `QUESTION <task> <question, the options, your recommendation>` · `FOUND <task>` + issue fields ·
+  `PROGRESS <task> <state>` · `BLOCKED <task> <why>` · `DONE <task> <sha>`. It sends `ASSIGN`,
+  `RULING`, `STOP`, `PAUSE`, `RESUME` and `PING`; answer a `PING` with `PROGRESS`.
+- **Nothing about the fleet goes in this repository**, which is public: no session id, machine, account or
+  usage figure in a commit, a file, a public issue or a comment on one.
+- **No answer from the orchestrator within 30 minutes:** tell the user, and fall back to the user and
+  `/land` §10.
+
+Without `MAXON_FLEET_REPO`, none of this applies: `/land` §10 and the user are your coordination.
 
 A symptom with no mechanism (a one-off hang, a flake that will not reproduce) is the next thing to debug,
 not a risk to record: never ship it described as "unexplained". A hang and a crash in the same subsystem
