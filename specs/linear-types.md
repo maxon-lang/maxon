@@ -6061,3 +6061,387 @@ fin 2
 ```exitcode
 0
 ```
+
+<!-- test: a-match-in-the-then-branch-leaves-the-union-to-the-else-branch -->
+The `then` branch consumes `m` by matching it, and the `else` branch is a different path that still owns it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	nothing
+	some(r isolated Resp)
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		nothing then break
+		some(r) then r.fin()
+	end 'which'
+end 'settle'
+
+function ready(n Code) returns bool
+	return n > 0
+end 'ready'
+
+function main() returns ExitCode
+	let m = Maybe.some(Resp.create(1))
+
+	if ready(0) 'pick'
+		match m 'direct'
+			nothing then break
+			some(r) then r.fin()
+		end 'direct'
+	end 'pick' else 'other'
+		settle(m)
+	end 'other'
+
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: each-branch-of-an-if-may-match-the-same-linear-union -->
+Neither branch sees the other's consumption of `m`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	nothing
+	some(r isolated Resp)
+end 'Maybe'
+
+function ready(n Code) returns bool
+	return n > 0
+end 'ready'
+
+function main() returns ExitCode
+	let m = Maybe.some(Resp.create(2))
+
+	if ready(1) 'pick'
+		match m 'first'
+			nothing then break
+			some(r) then r.fin()
+		end 'first'
+	end 'pick' else 'other'
+		match m 'second'
+			nothing then break
+			some(r) then r.fin()
+		end 'second'
+	end 'other'
+
+	return 0
+end 'main'
+```
+```stdout
+fin 2
+```
+```exitcode
+0
+```
+
+<!-- test: a-union-consumed-on-one-path-is-consumed-after-the-join -->
+After the `if` joins, one path consumed `m`, so reading it again is a use after the move.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	nothing
+	some(r isolated Resp)
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		nothing then break
+		some(r) then r.fin()
+	end 'which'
+end 'settle'
+
+function ready(n Code) returns bool
+	return n > 0
+end 'ready'
+
+function main() returns ExitCode
+	let m = Maybe.some(Resp.create(3))
+
+	if ready(1) 'pick'
+		match m 'direct'
+			nothing then break
+			some(r) then r.fin()
+		end 'direct'
+	end 'pick'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:43:9: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-union-with-a-managed-payload-is-matched-in-each-branch-of-an-if -->
+The same holds for a union that is not linear: a branch that consumed the payload does not stop the other branch matching it.
+```maxon
+typealias Code = int(0 to 999)
+
+union Name
+	none
+	some(text String)
+end 'Name'
+
+function ready(n Code) returns bool
+	return n > 0
+end 'ready'
+
+function main() returns ExitCode
+	let n = Name.some("left")
+
+	if ready(1) 'pick'
+		match n 'first'
+			none then break
+			some(text) then print("first {text}\n")
+		end 'first'
+	end 'pick' else 'other'
+		match n 'second'
+			none then break
+			some(text) then print("second {text}\n")
+		end 'second'
+	end 'other'
+
+	return 0
+end 'main'
+```
+```stdout
+first left
+```
+```exitcode
+0
+```
+
+<!-- test: a-linear-union-held-in-an-isolated-local-is-matched-where-it-stands -->
+`m` is an `isolated` local that holds a linear union, and the `match` consumes it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	nothing
+	some(r isolated Resp)
+end 'Maybe'
+
+function ready(n Code) returns bool
+	return n > 0
+end 'ready'
+
+function main() returns ExitCode
+	let m = Maybe.some(Resp.create(4)) as isolated Maybe
+
+	if ready(1) 'pick'
+		match m 'direct'
+			nothing then break
+			some(r) then r.fin()
+		end 'direct'
+	end 'pick' else 'other'
+		match m 'again'
+			nothing then break
+			some(r) then r.fin()
+		end 'again'
+	end 'other'
+
+	return 0
+end 'main'
+```
+```stdout
+fin 4
+```
+```exitcode
+0
+```
+
+<!-- test: a-behaviour-matches-its-own-linear-union-parameter-in-both-branches -->
+The message parameter `m` is owned by the behaviour, which consumes it on whichever branch runs.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	nothing
+	some(r isolated Resp)
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		nothing then break
+		some(r) then r.fin()
+	end 'which'
+end 'settle'
+
+type Desk
+	var served as Code
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function serve(m Maybe, direct bool)
+		self.served = 1
+
+		if direct 'pick'
+			match m 'inline'
+				nothing then break
+				some(r) then r.fin()
+			end 'inline'
+		end 'pick' else 'other'
+			settle(m)
+		end 'other'
+	end 'serve'
+end 'Desk'
+
+function main() returns ExitCode
+	let desk = spawn Desk.create()
+
+	try desk.serve(Maybe.some(Resp.create(5)), direct: true) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back, _) then settle(back)
+			serviceStopped(back, _) then settle(back)
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```stdout
+fin 5
+```
+```exitcode
+0
+```
+
+<!-- test: a-handler-refills-the-union-the-body-refilled-before-it-threw -->
+`m` holds `Maybe.nothing` at the only point the body throws from, so the handler assigns it the linear case without dropping one.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	nothing
+	some(r isolated Resp)
+end 'Maybe'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function trouble() throws Oops
+	throw Oops.bad
+end 'trouble'
+
+function settle(m Maybe)
+	match m 'which'
+		nothing then break
+		some(r) then r.fin()
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	try 'body'
+		m = Maybe.nothing
+		trouble()
+	end 'body'
+	otherwise (e) 'handler'
+		match e 'kind'
+			bad then m = Maybe.some(Resp.create(6))
+		end 'kind'
+	end 'handler'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 6
+```
+```exitcode
+0
+```

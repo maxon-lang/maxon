@@ -3150,6 +3150,40 @@ end 'main'
 error E3102: <fragment>:46:15: use of moved value 'r': it was moved in an earlier iteration of this loop
 ```
 
+<!-- test: model-hand-ab-k-isolated-alias -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-alias` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(0)
+	let a = r as isolated Resp
+	a.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ab-k-isolated-from-iso -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-from-iso` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
@@ -7066,7 +7100,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-refill-var-in-handler -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-refill-var-in-handler` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-refill-var-in-handler` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7114,12 +7148,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:42:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+error E3196: <fragment>:38:28: cannot store an isolated 'Resp' into 'r', which holds a mutable 'Resp'; `merge` it first
 ```
 
 <!-- test: model-hand-ac-hb-refill-var-in-handler-no-use -->
-<!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3223. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-refill-var-in-handler-no-use` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-refill-var-in-handler-no-use` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7166,11 +7199,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:36:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3196: <fragment>:38:28: cannot store an isolated 'Resp' into 'r', which holds a mutable 'Resp'; `merge` it first
 ```
 
 <!-- test: model-hand-ac-hb-loop-refill -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-loop-refill` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-loop-refill` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7225,7 +7258,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:42:14: use of moved value 'r': it was moved in an earlier iteration of this loop
+error E3196: <fragment>:44:29: cannot store an isolated 'Resp' into 'r', which holds a mutable 'Resp'; `merge` it first
 ```
 
 <!-- test: model-hand-ac-hb-send-in-loop-fresh -->
@@ -9989,7 +10022,7 @@ error E3102: <fragment>:42:10: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-hb-iso-refill -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-iso-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10037,11 +10070,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:38:28: 'q' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Resp`, or store a copy
+error E3102: <fragment>:42:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-hb-iso-refill-no-use -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-iso-refill-no-use` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+<!-- unsupported-targets: wasm32-wasi -->
+The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `hb-iso-refill-no-use` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10088,11 +10122,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:38:28: 'q' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Resp`, or store a copy
+error E3223: <fragment>:36:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-ac-hb-iso-loop-refill -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-iso-loop-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-loop-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10147,11 +10181,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:44:29: 'q' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Resp`, or store a copy
+error E3102: <fragment>:42:14: use of moved value 'r': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: model-hand-ac-hb-iso-loop-refill-final -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `hb-iso-loop-refill-final` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-loop-refill-final` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10207,7 +10241,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:44:29: 'q' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Resp`, or store a copy
+error E3102: <fragment>:42:14: use of moved value 'r': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: model-hand-ac-hb-iso-handler-consume-then-sender-consume -->
@@ -21195,6 +21229,78 @@ end 'main'
 error E3223: <fragment>:65:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
+<!-- test: model-hand-ag-t8-wo-payload -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t8-wo-payload` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mq
+	m0(x Rl)
+	m1(y Wo)
+end 'Mq'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+function main() returns ExitCode
+	let w = Wo.create(Bx.create(0), item: Bx.create(1))
+	let u = Mq.m1(w) as isolated Mq
+	match u 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.keep.n = 4
+	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ag-bm-nowin-keep-p -->
 The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -21597,6 +21703,250 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ag-s1-beh-if-else-match-both -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-beh-if-else-match-both` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type K
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function eat(u Sh)
+		if lg(1) != 0 'i1'
+			match u 'x2'
+				none then break
+				held(q) then q.fin(1)
+			end 'x2'
+		end 'i1' else 'e3'
+			match u 'x4'
+				none then break
+				held(q) then q.fin(2)
+			end 'x4'
+		end 'e3'
+	end 'eat'
+end 'K'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	let k = spawn K.create(0)
+	try k.eat(Sh.held(Rl.create(1))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then eatSh(z)
+			serviceStopped(z) then eatSh(z)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-s2-beh-if-match-else-call -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s2-beh-if-match-else-call` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type K
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function eat(u Sh)
+		if lg(1) != 0 'i1'
+			match u 'x2'
+				none then break
+				held(q) then q.fin(1)
+			end 'x2'
+		end 'i1' else 'e3'
+			eatSh(u)
+		end 'e3'
+	end 'eat'
+end 'K'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	let k = spawn K.create(0)
+	try k.eat(Sh.held(Rl.create(1))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then eatSh(z)
+			serviceStopped(z) then eatSh(z)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-s3-iso-local-if-else -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s3-iso-local-if-else` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	let u = Sh.held(Rl.create(1)) as isolated Sh
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			none then break
+			held(q) then q.fin(1)
+		end 'x2'
+	end 'i1' else 'e3'
+		eatSh(u)
+	end 'e3'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ag-s6-w4-none-in-both-then-held -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s6-w4-none-in-both-then-held` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -21725,6 +22075,150 @@ function main() returns ExitCode
 		u = Sh.none
 		i = lg(0)
 	end 'w1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-s9-w3-iso-param-two-fns -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s9-w3-iso-param-two-fns` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(u isolated Sh)
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			none then break
+			held(q) then q.fin(1)
+		end 'x2'
+	end 'i1' else 'e3'
+		eatSh(u)
+	end 'e3'
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-s10-w3-local-from-plain-local -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s10-w3-local-from-plain-local` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mq
+	m0(x Rl)
+	m1(y Wo)
+end 'Mq'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+function main() returns ExitCode
+	let w = Wo.create(Bx.create(0), item: Bx.create(1))
+	let u = Mq.m1(w) as isolated Mq
+	match u 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.keep.n = 1
+	end 'x1'
 	return 0
 end 'main'
 ```
@@ -21869,9 +22363,155 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ag-h8-handback-vacant-literal -->
+The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `h8-handback-vacant-literal` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+union Mr
+	m0(x Rl)
+	m1(y Hq)
+end 'Mr'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Cap1
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeSh(u Sh)
+		match u 'x1'
+			none then break
+			held(qV) then qV.fin(1)
+		end 'x1'
+	end 'takeSh'
+
+	export function takeMp(u Mp)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then y.n = 1
+		end 'x1'
+	end 'takeMp'
+
+	export function takeMx(u Mx)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then takeB(y)
+		end 'x1'
+	end 'takeMx'
+
+	export function takeMr(u Mr)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then y.q.n = 1
+		end 'x1'
+	end 'takeMr'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Cap1'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function eatSh(pV Sh)
+	match pV 'x1'
+		none then break
+		held(qV) then qV.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 1) Cap1.create(0)
+	try k.poke() otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x2'
+	end 'h1'
+	var v = Sh.none
+	try k.takeSh(Sh.held(Rl.create(1))) otherwise (sendFailure) 'h3'
+		match sendFailure 'x4'
+			mailboxFull(z) then v = z
+			serviceStopped(z) then v = z
+		end 'x4'
+	end 'h3'
+	eatSh(v)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:133:28: cannot store an isolated 'Sh' into 'v', which holds a mutable 'Sh'; `merge` it first
+```
+
 <!-- test: model-hand-ag-h9-handback-overwrite-vacant -->
-<!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3223. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `h9-handback-overwrite-vacant` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `h9-handback-overwrite-vacant` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22015,7 +22655,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:137:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3196: <fragment>:133:28: cannot store an isolated 'Sh' into 'v', which holds a mutable 'Sh'; `merge` it first
 ```
 
 <!-- test: model-hand-ag-b5-binder-named-like-scrutinee -->
@@ -22418,6 +23058,108 @@ type Bm
 		match u 'x1'
 			m0(x) then x.fin(1)
 			m1(y) then self.keepP(y)
+		end 'x1'
+	end 'eat'
+end 'Bm'
+
+function eatMp(pV Mp)
+	match pV 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.n = 1
+	end 'x1'
+end 'eatMp'
+
+function main() returns ExitCode
+	let k = spawn Bm.create(0, item: Bx.create(0), plain: Bx.create(1), hq: Hq.create(Bx.create(1), q: Bx.create(1)))
+	try k.eat(Mp.m1(Bx.create(1))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then eatMp(z)
+			serviceStopped(z) then eatMp(z)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-beh-mp-state-item -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-item` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Bm
+	var n as Num
+	var item as isolated Bx
+	var plain as Bx
+	var hq as Hq
+
+	static function create(n Num, item isolated Bx, plain isolated Bx, hq isolated Hq) returns Self
+		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
+	end 'create'
+
+	function keepP(b Bx)
+		self.plain = b
+	end 'keepP'
+
+	export function eat(u Mp)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then self.item = y
 		end 'x1'
 	end 'eat'
 end 'Bm'

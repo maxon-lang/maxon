@@ -320,14 +320,15 @@ end 'consume'
 typealias IsoBox = isolated Box
 
 function main() returns ExitCode
-	var spare = Box.create(1)
+	let spare = Box.create(1)
+	spare.n = 2
 	let n = consume(spare)
 	print("{n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:20:18: 'spare' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3200: <fragment>:21:18: 'spare' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: closure-writing-a-capture-runs-when-called-directly -->

@@ -3953,6 +3953,7 @@ extension Parser
 	function loopExitEdgeMark(mark MoveMark, scan LoopMoveScan, movedAtTheHeader ValueMarkSet, touched MoveSlotIndexColumn) returns MoveMark
 		let positions = MoveSlotIndexColumn.create(0)
 		var consumes = mark.consumes
+		var partials = mark.partials
 
 		for back in scan.backEdges 'eachBackEdge'
 			for record in back.mark.consumes.recordsBeyond(mark.consumes) 'eachBackEdgeConsume'
@@ -3960,6 +3961,8 @@ extension Parser
 					consumes = consumes.recorded(record.promise, kind: record.kind)
 				end 'carriedAround'
 			end 'eachBackEdgeConsume'
+
+			partials = partialMovesUnioned(partials, second: partialMovesBelow(back.mark.partials, height: mark.height()))
 		end 'eachBackEdge'
 
 		// An untouched outer position keeps the edge's own slot: no back edge moved it or left it awaiting,
@@ -3983,7 +3986,7 @@ extension Parser
 			moved.push(mark.movedAt(position) or movedAtTheHeader.contains(value))
 		end 'eachBinding'
 
-		return MoveMark.create(self.bodyState.moveLedger.overlay(mark.slots, height: mark.height(), positions: positions, moved: moved, values: values), consumes: consumes)
+		return MoveMark.create(self.bodyState.moveLedger.overlay(mark.slots, height: mark.height(), positions: positions, moved: moved, values: values), consumes: consumes, partials: partials)
 	end 'loopExitEdgeMark'
 
 	function loopFalseEdgeBlock(func IrFunction, falseSource IrBlock, exit IrBlock, falseMark MoveMark, breaks ReachingMoveEdgeArray) returns IrBlock
@@ -4018,7 +4021,7 @@ extension Parser
 			moved.push(prefix.movedAt(position) or valueIdArrayContains(scan.droppedBeforeTheLoop, value: value))
 		end 'eachBinding'
 
-		return MoveMark.create(self.bodyState.moveLedger.overlay(prefix.slots, height: height, positions: positions, moved: moved, values: values), consumes: prefix.consumes)
+		return MoveMark.create(self.bodyState.moveLedger.overlay(prefix.slots, height: height, positions: positions, moved: moved, values: values), consumes: prefix.consumes, partials: prefix.partials)
 	end 'markOfASkippedLoop'
 
 	function entryValueOrItself(scan LoopMoveScan, headerValue ValueId) returns ValueId
@@ -5326,11 +5329,11 @@ extension Parser
 		let owned = try self.bodyState.ownedBindings.get(index) otherwise panic("setBindingPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 
 		if value 'movedOutHere'
-			owned.markPartiallyMovedAt(self.lineJustRead())
+			self.notePartiallyMoved(owned, line: self.lineJustRead())
 			return
 		end 'movedOutHere'
 
-		owned.partiallyMoved = false
+		self.forgetPartiallyMoved(owned)
 	end 'setBindingPartiallyMoved'
 
 	// Has the binding `owner` denotes had a managed payload moved out of it on the path parsed so far? The
@@ -7899,9 +7902,36 @@ extension Parser
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
 	// (`setBindingPartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// box, and marking it moved would make the other owner's later re-read a false E3102.
+	function valueIsAMessageParameter(value ValueId) returns bool
+		let func = self.bodyFunction()
+		return valueIsAParameter(value, paramCount: func.paramCount) and self.signatures.namesAServiceMessage(func.name)
+	end 'valueIsAMessageParameter'
+
+	function regionPayloadCount(bindings PayloadBindingArray, layout EnumLayout) returns ElementIndex
+		var count = 0 as ElementIndex
+
+		for binding in bindings 'each'
+			if binding.field.capability != ParamCapability.unmarked 'anIsolatedSlot'
+				continue
+			end 'anIsolatedSlot'
+
+			let declared = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
+
+			if payloadClassIsManaged(class) and not tagIsByteRecord(maxonTypeTag(payloadValueTypeOf(class, declared: declared))) 'aRegionHolder'
+				count = count + 1
+			end 'aRegionHolder'
+		end 'each'
+
+		return count
+	end 'regionPayloadCount'
+
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, standing ScrutineeStanding, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
 		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
+		let ownsItsRegion = self.valueIsLinear(scrutBox) and (self.valueIsAnOwnedIsolatedRegion(scrutBox) or self.valueIsAMessageParameter(scrutBox))
+		let loneRegionPayload = ownsItsRegion and self.regionPayloadCount(bindings, layout: layout) == 1
+		let handedBack = self.signatures.isServiceSendError(layout.name)
 
 		for binding in bindings 'each'
 			if binding.isDiscard 'discard'
@@ -7923,7 +7953,14 @@ extension Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordKeyOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
-			self.carryWindowBirthFrom(loaded, source: scrutBox)
+			let regionPayload = ownsItsRegion and binding.field.capability == ParamCapability.unmarked and not self.valueIsAValueType(loaded)
+
+			if regionPayload 'ownsItsOwnRegion'
+				self.setValueCapability(loaded, capability: ValueCapability.mutable)
+			end 'ownsItsOwnRegion' else 'borrowsTheScrutineesWindow'
+				self.carryWindowBirthFrom(loaded, source: scrutBox)
+			end 'borrowsTheScrutineesWindow'
+
 			self.brandValue(loaded, brand: self.payloadPlaceBrand(binding.field, layout: layout, resolved: declared))
 
 			// Whatever the payload's own mutability: a read-only scrutinee is read-only all the way down.
@@ -7932,6 +7969,14 @@ extension Parser
 			end 'payloadOwnsARecord'
 
 			let bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), value: loaded, scrutBox: scrutBox) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
+
+			if loneRegionPayload and regionPayload 'aPayloadNoOtherSlotNames'
+				self.registerFreshLocal(loaded, binding: bindingInfo)
+			end 'aPayloadNoOtherSlotNames'
+
+			if handedBack and self.valueIsLinear(loaded) and not self.valueIsAValueType(loaded) 'aHandedBackLinearArgument'
+				self.setValueCapability(loaded, capability: ValueCapability.isolated)
+			end 'aHandedBackLinearArgument'
 
 			if self.valueHoldsAUniqueRecord(loaded) 'aUniquePayloadIsAnAlias'
 				self.bodyState.functionMintedValueAliases = true

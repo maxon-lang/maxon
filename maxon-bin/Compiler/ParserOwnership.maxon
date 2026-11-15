@@ -7412,16 +7412,67 @@ extension Parser
 	// ⭐ **PATH-SENSITIVE MOVE STATE — CAPTURE.** Snapshot the `movedFrom` bit (and current value) of every
 	// owned binding in scope, so a branch's moves can be UNDONE for a sibling path (`restoreMoveMark`) or
 	// reconciled at a join (`reconcileMovesAtMerge`). The twin of `snapshotBindings` for the drop-gating
-	// bit. Positional over `ownedBindings`; see `MoveMark` for why only `movedFrom` rides and why the
-	// height is stable at every capture point.
+	// bit. Positional over `ownedBindings`; see `MoveMark` for why the height is stable at every capture
+	// point.
 	//
 	// ⭐ **AND THE CONSUMED GREEN THREADS BESIDE IT, WHICH ARE NOT POSITIONAL AND CANNOT BE.** A promise
 	// ALIASES rather than moves, so a second name for a thread enrols no owned binding — there is no slot in
 	// the positional column for the alias's poison to live in. The consume list is keyed on the thread's own
 	// `ValueId` instead and rides whole.
 	function captureMoveMark() returns MoveMark
-		return MoveMark.create(self.syncedMoveSlots(), consumes: self.bodyState.promiseConsumes)
+		return MoveMark.create(self.syncedMoveSlots(), consumes: self.bodyState.promiseConsumes, partials: self.bodyState.partialMoves)
 	end 'captureMoveMark'
+
+	function notePartiallyMoved(owned VarInfo, line LineNumber)
+		if owned.partiallyMoved 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		owned.markPartiallyMovedAt(line)
+		self.bodyState.partialMoves = partialMovesUnioned(self.bodyState.partialMoves, second: singlePartialMove(owned))
+	end 'notePartiallyMoved'
+
+	function singlePartialMove(owned VarInfo) returns VarInfoArray
+		let single = VarInfoArray.create(0)
+		single.push(owned)
+		return single
+	end 'singlePartialMove'
+
+	function forgetPartiallyMoved(binding VarInfo)
+		if not binding.partiallyMoved 'neverNoted'
+			return
+		end 'neverNoted'
+
+		binding.clearPartiallyMoved()
+		let kept = VarInfoArray.create(0)
+
+		for held in self.bodyState.partialMoves 'eachHeld'
+			if not (held is binding) 'anotherBinding'
+				kept.push(held)
+			end 'anotherBinding'
+		end 'eachHeld'
+
+		self.bodyState.partialMoves = kept
+	end 'forgetPartiallyMoved'
+
+	function assignPartialMoves(settled VarInfoArray)
+		let current = self.bodyState.partialMoves
+
+		for position in 0 upto current.count() 'eachCurrent'
+			let held = try current.get(position) otherwise panic("assignPartialMoves: partialMoves.get OOB at {position} below its own count")
+
+			if not partialMovesHold(settled, binding: held) 'noLongerConsumed'
+				held.clearPartiallyMoved()
+			end 'noLongerConsumed'
+		end 'eachCurrent'
+
+		for position in 0 upto settled.count() 'eachSettled'
+			let held = try settled.get(position) otherwise panic("assignPartialMoves: settled.get OOB at {position} below its own count")
+			held.markPartiallyMovedAt(self.lineJustRead())
+		end 'eachSettled'
+
+		self.bodyState.partialMoves = settled
+	end 'assignPartialMoves'
 
 	function syncedMoveSlots() returns MoveSlots
 		let height = self.bodyState.ownedBindings.count()
@@ -7577,6 +7628,7 @@ extension Parser
 		end 'eachDropped'
 
 		self.bodyState.ownedBindings.truncate(height)
+		self.bodyState.partialMoves = partialMovesStillEnrolled(self.bodyState.partialMoves)
 	end 'truncateOwnedBindings'
 
 	// ⭐ **PATH-SENSITIVE MOVE STATE — RESTORE.** Rewind every owned binding's `movedFrom` bit to a
@@ -7606,6 +7658,7 @@ extension Parser
 		// independent copy of the mark's states "the consume state at this join is exactly what the mark
 		// says" once, for both directions, instead of two rules that could disagree about which way is which.
 		self.bodyState.promiseConsumes = mark.consumes
+		self.assignPartialMoves(mark.partials)
 	end 'restoreMoveMark'
 
 	// ⭐⭐ **PATH-SENSITIVE MOVE STATE — RECONCILE AT A JOIN.** Given the edges that REACH a merge (each an
@@ -7663,12 +7716,15 @@ extension Parser
 		// because they are ASSIGNED from `anyMoved` over the reaching edges — which is what this does.
 		let firstEdge = try edges.get(0) otherwise panic("reconcileMovesAtMerge: a merge is reconciled only with a reaching edge")
 		var settled = firstEdge.mark.consumes
+		var settledPartials = firstEdge.mark.partials
 
 		for edge in edges 'eachEdgesConsumes'
 			settled = settled.unioned(edge.mark.consumes)
+			settledPartials = partialMovesUnioned(settledPartials, second: edge.mark.partials)
 		end 'eachEdgesConsumes'
 
 		self.bodyState.promiseConsumes = settled
+		self.assignPartialMoves(settledPartials)
 	end 'reconcileMovesAtMerge'
 
 	function positionsToReconcile(edges ReachingMoveEdgeArray) returns MoveSlotIndexColumn

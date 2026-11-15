@@ -7714,6 +7714,10 @@ extension Parser
 			return
 		end 'selfFieldAlias'
 
+		// Every read of a local counts here: a read that skipped it would leave a second name a fresh
+		// local's recovery into an isolated position cannot see.
+		self.noteFreshLocalRead(binding)
+
 		// ⭐⭐ **A SPENT GREEN THREAD IS REFUSED BEFORE ANYTHING ELSE ABOUT THE BINDING IS ASKED (E3142).**
 		// `await`/`try await`/`.cancel()` hand the thread's struct back to the scheduler, so ANY later use of a
 		// name that still spells it reads memory the free list owns. The question is asked of the VALUE and not
@@ -8481,6 +8485,15 @@ extension Parser
 			return true
 		end 'aClosureCarryingNothingTheCallerWrites'
 
+		if self.valueIsAServiceHandle(value) 'aHandleCarriesNoRegion'
+			return true
+		end 'aHandleCarriesNoRegion'
+
+		if self.bodyState.recoveringInitializer and self.freshLocalIsRecoverable(value) 'aFreshLocalTheDeclarationTakes'
+			self.noteFreshLocalRelied(value)
+			return true
+		end 'aFreshLocalTheDeclarationTakes'
+
 		let capability = self.effectiveCapabilityOf(value)
 		let isValueType = self.valueIsAValueType(value)
 		return isCleanInput(capability, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: capability, isValueType: isValueType))
@@ -9006,7 +9019,7 @@ extension Parser
 		return " at line {line}"
 	end 'mutableUseSuffix'
 
-	function settleBindingCapability(value ValueId, rhsStart ElementIndex, nameTok Token) throws SourceParseError
+	function settleBindingCapability(value ValueId, rhsStart ElementIndex, nameTok Token, readFloor ElementIndex) returns bool throws SourceParseError
 		let pending = self.bodyState.pendingLocalCapability
 		self.bodyState.pendingLocalCapability = ParamCapability.unmarked
 
@@ -9020,21 +9033,95 @@ extension Parser
 
 		if pending == ParamCapability.isolated 'declaredIsolated'
 			try self.recoverIsolated(value, startIndex: rhsStart, site: IsolatedRecoverySite.binding)
-			return
+			self.consumeFreshReadsFrom(readFloor)
+			return false
 		end 'declaredIsolated'
 
+		self.bodyState.freshReadsInInitializer.truncate(readFloor)
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: rhsStart, endIndex: self.pos, anchor: self.tokenAt(rhsStart))
 
 		if self.valueIsAValueType(value) 'aValue'
-			return
+			return false
 		end 'aValue'
+
+		var bornFresh = false
 
 		if self.effectiveCapabilityOf(value) == ValueCapability.temporary 'anOrdinaryLocal'
 			self.setValueCapability(value, capability: ValueCapability.mutable)
+			bornFresh = true
 		end 'anOrdinaryLocal'
 
 		self.noteMutableUse(value, line: nameTok.line)
+		return bornFresh
 	end 'settleBindingCapability'
+
+	function registerFreshLocal(value ValueId, binding VarInfo)
+		self.bodyState.freshLocals.upsert(value, value: FreshLocal.create(binding, loopDepth: self.bodyState.loops.count()))
+	end 'registerFreshLocal'
+
+	function noteFreshLocalRead(binding VarInfo)
+		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
+			return
+		end 'nothingIsFresh'
+
+		let fresh = try self.bodyState.freshLocals.get(binding.boundValue) otherwise return
+		fresh.noteRead()
+	end 'noteFreshLocalRead'
+
+	function noteFreshLocalRelied(value ValueId)
+		let fresh = try self.bodyState.freshLocals.get(value) otherwise return
+
+		if not partialMovesHold(self.bodyState.freshReadsInInitializer, binding: fresh.binding) 'notNotedYet'
+			self.bodyState.freshReadsInInitializer.push(fresh.binding)
+		end 'notNotedYet'
+	end 'noteFreshLocalRelied'
+
+	function freshLocalIsRecoverable(value ValueId) returns bool
+		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
+			return false
+		end 'nothingIsFresh'
+
+		let fresh = try self.bodyState.freshLocals.get(value) otherwise return false
+
+		if fresh.reads != 1 or fresh.binding.movedFrom or fresh.binding.partiallyMoved or fresh.loopDepth != self.bodyState.loops.count() 'readBeforeOrMovedOrInALoop'
+			return false
+		end 'readBeforeOrMovedOrInALoop'
+
+		return self.effectiveCapabilityOf(value) == ValueCapability.mutable
+	end 'freshLocalIsRecoverable'
+
+	function takeFreshLocal(value ValueId)
+		let fresh = try self.bodyState.freshLocals.get(value) otherwise return
+		self.notePartiallyMoved(fresh.binding, line: self.lineJustRead())
+		_ = self.bodyState.freshLocals.remove(value)
+	end 'takeFreshLocal'
+
+	function consumeFreshReadsFrom(readFloor ElementIndex)
+		for position in readFloor upto self.bodyState.freshReadsInInitializer.count() 'eachRead'
+			let read = try self.bodyState.freshReadsInInitializer.get(position) otherwise panic("consumeFreshReadsFrom: freshReadsInInitializer.get OOB at {position} below its own count")
+			self.takeFreshLocal(read.boundValue)
+		end 'eachRead'
+
+		self.bodyState.freshReadsInInitializer.truncate(readFloor)
+	end 'consumeFreshReadsFrom'
+
+	function initializerIsDeclaredIsolated(rhsStart ElementIndex) returns bool
+		var index = rhsStart
+		var nesting = 0 as NestingDepth
+
+		while not tokenKindEndsALine(self.kindAt(index)) 'eachToken'
+			let kind = self.kindAt(index)
+
+			if nesting == 0 and kind == TokenKind.as and self.paramCapabilityAt(index + 1) == ParamCapability.isolated 'theAnnotation'
+				return true
+			end 'theAnnotation'
+
+			nesting = groupNestingAfter(kind, nesting: nesting)
+			index = index + 1
+		end 'eachToken'
+
+		return false
+	end 'initializerIsDeclaredIsolated'
 
 	function requireHolderWritable(holderValue ValueId, holder ValueCapability, pathText String, action String, line LineNumber, column ColumnNumber) throws SourceParseError
 		try self.requireHolderCapabilityWritable(holder, pathText: pathText, action: action, joinedAtALoop: false, line: line, column: column)
@@ -9414,6 +9501,10 @@ extension Parser
 		let isValueType = self.valueIsAValueType(value)
 		let isSlotRead = self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType)
 
+		if slot == ParamCapability.isolated and not isSlotRead and self.freshLocalIsRecoverable(value) 'aFreshLocalTheSlotTakes'
+			return StoreVerdict.recovers
+		end 'aFreshLocalTheSlotTakes'
+
 		if slot != ParamCapability.isolated and not isSlotRead and self.valueSettlesAfterParsing(value) 'settledAfterParsing'
 			return StoreVerdict.fits
 		end 'settledAfterParsing'
@@ -9456,8 +9547,13 @@ extension Parser
 	end 'requireStoreVerdictFits'
 
 	function requireAssignmentFitsVariable(binding VarInfo, value ValueId, valueStart ElementIndex, valueEnd ElementIndex) throws SourceParseError
-		let given = self.effectiveCapabilityOf(value)
+		var given = self.effectiveCapabilityOf(value)
 		let isValueType = self.valueIsAValueType(value)
+
+		if self.capabilityOfValue(binding.boundValue) == ValueCapability.isolated and self.freshLocalIsRecoverable(value) 'aFreshLocalTheVariableTakes'
+			given = ValueCapability.temporary
+		end 'aFreshLocalTheVariableTakes'
+
 		let verdict = assignmentVerdict(self.capabilityOfValue(binding.boundValue), value: given, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType))
 		try self.requireStoreVerdictFits(verdict, fieldName: String.from(binding.name), value: value, valueStart: valueStart, valueEnd: valueEnd, joinedAtALoop: false)
 
@@ -9472,6 +9568,10 @@ extension Parser
 			let refusal = isolatedRecoveryRefusal("'{self.tokenTextFrom(startIndex, endIndex: endIndex)}'", advice: HandedBackReadOnlyAdvice)
 			self.fileResultUse(value, slot: ParamCapability.isolated, sends: false, judged: true, place: refusal, line: tok.line, column: tok.column)
 		end 'aResultAssumedFresh'
+
+		if self.freshLocalIsRecoverable(value) 'aFreshLocalTheRecoveryTakes'
+			self.takeFreshLocal(value)
+		end 'aFreshLocalTheRecoveryTakes'
 
 		self.setValueCapability(value, capability: ValueCapability.isolated)
 		self.forgetUndecidedResult(value)

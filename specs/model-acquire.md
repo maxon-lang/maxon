@@ -6841,7 +6841,7 @@ error E3201: <fragment>:29:8: one statement reaches through two isolated values,
 ```
 
 <!-- test: model-hand-ad-y-state-method-await-reply -->
-The model (`core-m3w-fa13`) refuses it by `R2-BLOCKWAIT`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `y-state-method-await-reply` of redteamAD.hand_ad8, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa13`) refuses it by `R2-BLOCKWAIT`; the compiler refuses it with E3205. Model program `y-state-method-await-reply` of redteamAD.hand_ad8, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6888,7 +6888,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:38:15: 'pl' is mutable outside 's'; a call into an isolated region takes values, immutable or isolated
+error E3205: <fragment>:38:13: cannot call 'y' inside 'a1'; it may wait (it awaits a reply from 'Pl' at line 29). Call it before or after the block
 ```
 
 <!-- test: model-hand-ae-w-for-state-array -->
@@ -7722,6 +7722,111 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ag-ac-modify-slot-keep -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ac-modify-slot-keep` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Ab
+	var n as Num
+	var item as isolated Wo
+	var plain as Bx
+	var hq as Hq
+
+	static function create(n Num, item isolated Wo, plain isolated Bx, hq isolated Hq) returns Self
+		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
+	end 'create'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Ab'
+
+function main() returns ExitCode
+	let s = spawn Ab.create(0, item: Wo.create(Bx.create(0), item: Bx.create(1)), plain: Bx.create(2), hq: Hq.create(Bx.create(3), q: Bx.create(4)))
+	let u = Mp.m1(Bx.create(1)) as isolated Mp
+	acquire s 'a1'
+		modify s.item 'm3'
+			match u 'x4'
+				m0(x) then x.fin(1)
+				m1(y) then s.item.keep = y
+			end 'x4'
+		end 'm3'
+	end 'a1' otherwise 's2'
+		match u 'x5'
+			m0(x) then x.fin(1)
+			m1(y) then y.n = 1
+		end 'x5'
+	end 's2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ag-ac-body-keep -->
 The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `ac-body-keep` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -8033,6 +8138,111 @@ end 'main'
 error E3201: <fragment>:86:25: 'y' is mutable outside 's'; a store into an isolated region takes values, immutable or isolated
 ```
 
+<!-- test: model-hand-ag-ac-modify-slot-iso-slot -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ac-modify-slot-iso-slot` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Ab
+	var n as Num
+	var item as isolated Wo
+	var plain as Bx
+	var hq as Hq
+
+	static function create(n Num, item isolated Wo, plain isolated Bx, hq isolated Hq) returns Self
+		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
+	end 'create'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Ab'
+
+function main() returns ExitCode
+	let s = spawn Ab.create(0, item: Wo.create(Bx.create(0), item: Bx.create(1)), plain: Bx.create(2), hq: Hq.create(Bx.create(3), q: Bx.create(4)))
+	let u = Mp.m1(Bx.create(1)) as isolated Mp
+	acquire s 'a1'
+		modify s.item 'm3'
+			match u 'x4'
+				m0(x) then x.fin(1)
+				m1(y) then s.item.item = y
+			end 'x4'
+		end 'm3'
+	end 'a1' otherwise 's2'
+		match u 'x5'
+			m0(x) then x.fin(1)
+			m1(y) then y.n = 1
+		end 'x5'
+	end 's2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ag-ac-body-iso-slot -->
 The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ac-body-iso-slot` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -8336,6 +8546,111 @@ function main() returns ExitCode
 			m0(x) then x.fin(1)
 			m1(y) then y.n = 1
 		end 'x4'
+	end 's2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-acr-modify-slot-keep-p -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `acr-modify-slot-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mr
+	m0(x Rl)
+	m1(y Hq)
+end 'Mr'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Ab
+	var n as Num
+	var item as isolated Wo
+	var plain as Bx
+	var hq as Hq
+
+	static function create(n Num, item isolated Wo, plain isolated Bx, hq isolated Hq) returns Self
+		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
+	end 'create'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Ab'
+
+function main() returns ExitCode
+	let s = spawn Ab.create(0, item: Wo.create(Bx.create(0), item: Bx.create(1)), plain: Bx.create(2), hq: Hq.create(Bx.create(3), q: Bx.create(4)))
+	let u = Mr.m1(Hq.create(Bx.create(1), q: Bx.create(2))) as isolated Mr
+	acquire s 'a1'
+		modify s.item 'm3'
+			match u 'x4'
+				m0(x) then x.fin(1)
+				m1(y) then s.item.keep = y.p
+			end 'x4'
+		end 'm3'
+	end 'a1' otherwise 's2'
+		match u 'x5'
+			m0(x) then x.fin(1)
+			m1(y) then y.q.n = 1
+		end 'x5'
 	end 's2'
 	return 0
 end 'main'
@@ -8970,6 +9285,112 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:89:23: 'y' is mutable outside 's'; a call into an isolated region takes values, immutable or isolated
+```
+
+<!-- test: model-hand-ag-acq-mp-keepi -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `acq-mp-keepI` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Ac
+	var n as Num
+	var item as isolated Bx
+	var plain as Bx
+	var hq as Hq
+
+	static function create(n Num, item isolated Bx, plain isolated Bx, hq isolated Hq) returns Self
+		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
+	end 'create'
+
+	function keepP(b Bx)
+		self.plain = b
+	end 'keepP'
+
+	function keepI(b isolated Bx)
+		self.item = b
+	end 'keepI'
+
+	function keepH(h Hq)
+		self.hq = h
+	end 'keepH'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Ac'
+
+function main() returns ExitCode
+	let s = spawn Ac.create(0, item: Bx.create(0), plain: Bx.create(1), hq: Hq.create(Bx.create(1), q: Bx.create(1)))
+	let u = Mp.m1(Bx.create(1)) as isolated Mp
+	acquire s 'a1'
+		match u 'x3'
+			m0(x) then x.fin(1)
+			m1(y) then s.keepI(y)
+		end 'x3'
+	end 'a1' otherwise 's2'
+		match u 'x4'
+			m0(x) then x.fin(1)
+			m1(y) then y.n = 1
+		end 'x4'
+	end 's2'
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: model-hand-ag-acq-mr-store-hq -->

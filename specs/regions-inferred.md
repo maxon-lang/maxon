@@ -2013,7 +2013,8 @@ function drain(rounds Tally) returns Tally
 
 	while i < rounds 'again'
 		sum = sum + size(merge e)
-		var fresh = Box.create(i)
+		let fresh = Box.create(i)
+		fresh.n = i + 1
 		e = fresh
 		i = i + 1
 	end 'again'
@@ -2027,7 +2028,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:24:7: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
+error E3200: <fragment>:25:7: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
 ```
 
 <!-- test: loop-freeze-of-an-isolated-variable-the-back-edge-assigns-data -->
@@ -2055,7 +2056,8 @@ function drain(rounds Tally) returns Tally
 
 	while i < rounds 'again'
 		sum = sum + read(freeze e)
-		var fresh = Box.create(i)
+		let fresh = Box.create(i)
+		fresh.n = i + 1
 		e = fresh
 		i = i + 1
 	end 'again'
@@ -2069,7 +2071,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:24:7: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
+error E3200: <fragment>:25:7: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
 ```
 
 <!-- test: loop-modify-of-an-isolated-variable-the-back-edge-assigns-data -->
@@ -2095,7 +2097,8 @@ function drain(rounds Tally) returns Tally
 			e.n = e.n + 1
 		end 'edit'
 
-		var fresh = Box.create(i)
+		let fresh = Box.create(i)
+		fresh.n = i + 1
 		e = fresh
 		i = i + 1
 	end 'again'
@@ -2109,7 +2112,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:22:7: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
+error E3200: <fragment>:23:7: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
 ```
 
 <!-- test: branch-assigning-data-to-an-isolated-variable-is-refused-at-the-assignment -->
@@ -2127,8 +2130,9 @@ type Box
 end 'Box'
 
 function pick(flag bool) returns Tally
-	var a = Box.create(1) as isolated Box
-	var spare = Box.create(5)
+	let a = Box.create(1) as isolated Box
+	let spare = Box.create(5)
+	spare.n = 6
 	var e = a
 
 	if flag 'swap'
@@ -2144,7 +2148,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:18:7: 'spare' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
+error E3200: <fragment>:19:7: 'spare' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Box`, or store a copy
 ```
 
 <!-- test: loop-reassigning-an-isolated-variable-a-fresh-call-stays-isolated -->

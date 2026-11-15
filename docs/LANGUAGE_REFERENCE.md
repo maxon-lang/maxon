@@ -5618,7 +5618,8 @@ either side could write, because the two green threads may run at the same time 
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
   keep it or write it.
-- An `isolated` argument must be a value no other name reaches: a fresh call result or an `isolated` local. A
+- An `isolated` argument must be a value no other name reaches: a fresh call result, an `isolated` local or a
+  local initialised from a fresh value that this send reads first. A
   value read out of a field or an element of a `var`, the source of an enclosing `for` loop, or an element a
   member hands back out of a field's container (`return self.queue.pop()`) is still held by its container, so
   it is not `isolated` (**E3200**); send a `.clone()`. An `isolated` local that an enclosing `for` iterates
@@ -6654,6 +6655,13 @@ variable of ordinary mutable data does not become `isolated` by being stored: it
 not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted;
 declare it `as isolated Bag`, or store a copy``).
 
+A local initialised from a fresh value (`let spare = Bag.create()`) goes into an `isolated` position the first
+time the program reads it: an `isolated` parameter or slot, the initializer of an `isolated` declaration
+(`let keep = Slot.holding(spare) as isolated Slot` reads it inside the union literal), `freeze` and `merge`.
+That read moves the local, so a later read is **E3102**. A local the program read earlier, one an enclosing loop
+reads on every lap, and one with a second name are ordinary mutable data and **E3200**
+(`specs/regions-recover.md`).
+
 `isolated` values are linear. Every use of an `isolated` local or parameter moves it except opening it, so
 `let b = a` moves `a` and a later read of `a` is **E3102**. An `isolated` parameter owns the region it is
 handed; `mutable isolated` is by reference, and the callee may open, swap or replace it, or lend it on to
@@ -6890,6 +6898,14 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
   `m`; a read of `m` after the `match` needs every arm to have refilled it, and a loop that matches `m` needs
   every path to the end of the lap, `continue` included, to have refilled it. A failed send hands a linear
   argument back in `mailboxFull` or `serviceStopped`, and the handler of the failure consumes it.
+- **A `match` consumes the union on its own path.** Each branch of an `if`, and the body and the handler of an
+  `acquire`, may match the same union, and a read after the join is **E3102** when any path matched it. The same
+  holds for a union with a managed payload that is not linear.
+- **A union held in an `isolated` local, an `isolated` parameter or a behaviour's message parameter is matched where
+  it stands.** The `match` hands its payloads over as fresh owned values: the lone plain payload of its case goes
+  where an `isolated` value goes (an `isolated` parameter or slot, `freeze`, `merge`), and inside an open `modify`
+  window it belongs to the window's region, so the arm may write it, keep it in a call, or store it into the
+  window's data. The linear argument a failed send hands back is `isolated` too (`specs/regions-recover.md`).
 - **A case that carries no linear value owes nothing.** A variable of a linear union that holds such a case
   (`Maybe.nothing`) on every path to a point is not a linear value there: assigning it, leaving its scope or
   leaving it live across a wait is not a drop. A branch, a loop lap or a `try` handler that can leave the linear

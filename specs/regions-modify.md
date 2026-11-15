@@ -1327,12 +1327,13 @@ end 'Holder'
 function main() returns ExitCode
 	var holder = Holder.create()
 	var spare = Bag.create()
+	spare.text = "changed"
 	holder.part = spare
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:23:16: 'spare' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Bag`, or store a copy
+error E3200: <fragment>:24:16: 'spare' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Bag`, or store a copy
 ```
 
 <!-- test: declared-immutable-result-is-frozen-in-a-file-with-no-region-word -->

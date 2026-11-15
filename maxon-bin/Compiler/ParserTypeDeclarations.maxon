@@ -7249,10 +7249,14 @@ extension Parser
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.consume(TokenKind.equals)
 		let rhsStart = self.pos
+		let outerRecovering = self.bodyState.recoveringInitializer
+		let readFloor = self.bodyState.freshReadsInInitializer.count()
+		self.bodyState.recoveringInitializer = self.initializerIsDeclaredIsolated(rhsStart)
 		let value = try self.parseBindingInitializer(func, block: block, kind: kind)
+		self.bodyState.recoveringInitializer = outerRecovering
 
 		try self.requireNoUniqueAlias(value, action: "bind '{String.from(nameTok.value)}' to", anchor: nameTok)
-		try self.settleBindingCapability(value, rhsStart: rhsStart, nameTok: nameTok)
+		let bornFresh = try self.settleBindingCapability(value, rhsStart: rhsStart, nameTok: nameTok, readFloor: readFloor)
 
 		try self.requireVarNotBornFromABareNumber(value, kind: kind, anchor: self.tokenAt(rhsStart))
 		try self.requireLetNotBornFromAnUnboundedNumber(value, kind: kind, anchor: self.tokenAt(rhsStart))
@@ -7276,6 +7280,11 @@ extension Parser
 		end 'anImmutableTuple'
 
 		try self.declareInitializedBinding(nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, kind: kind)
+
+		if bornFresh 'aFreshLocal'
+			let declared = self.bodyState.scope.getInfo(nameTok.value)
+			self.registerFreshLocal(declared.boundValue, binding: declared)
+		end 'aFreshLocal'
 
 		self.noteBodyBindingDeclared(nameTok, kind: kind, boundFromContainerLiteral: self.rhsIsAContainerLiteral(rhsStart))
 
@@ -9239,7 +9248,7 @@ extension Parser
 		self.recordDebugRebindByName(nameTok.value, value: value)
 		self.bodyState.scope.setValue(nameTok.value, value: value, ledger: self.bodyState.moveLedger)
 		binding.setMovedFrom(true, ledger: self.bodyState.moveLedger)
-		binding.partiallyMoved = false
+		self.forgetPartiallyMoved(binding)
 		self.releaseMatchConsumeOf(replaced)
 		self.removeFromPendingTemps(value)
 	end 'rebindToAValueOwningNothing'
@@ -9337,7 +9346,7 @@ extension Parser
 			// once (a re-armed promise is already in the set as a moved ghost; a non-promise binding first
 			// taking a promise — `var x = 5; x = async f()` — joins now).
 			binding.revive(self.bodyState.moveLedger)
-			binding.partiallyMoved = false
+			self.forgetPartiallyMoved(binding)
 
 			if not alreadyInSet 'enrolPromise'
 				self.enrolOwnedBinding(binding)
@@ -9441,7 +9450,7 @@ extension Parser
 		// (which rejects on EITHER flag) refusing every use of a reassigned `var` union — an over-rejection
 		// of a valid program.
 		binding.revive(self.bodyState.moveLedger)
-		binding.partiallyMoved = false
+		self.forgetPartiallyMoved(binding)
 		self.releaseMatchConsumeOf(oldValue)
 
 		if newIsOwned 'trackNew'

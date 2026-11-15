@@ -1323,6 +1323,10 @@ extension Parser
 		try self.requireNotAnAcquiredState(operand, verb: "merged", anchor: self.tokenAt(operandStart))
 		try self.requireNotAnIsolatedSlotRead(operand, startIndex: operandStart, endIndex: self.pos, anchor: opTok)
 
+		if not self.valueIsAValueType(operand) and self.effectiveCapabilityOf(operand) != ValueCapability.isolated and self.freshLocalIsRecoverable(operand) 'aFreshLocalTheMergeTakes'
+			self.recoverAsIsolated(operand, startIndex: operandStart, endIndex: self.pos)
+		end 'aFreshLocalTheMergeTakes'
+
 		if self.valueIsAValueType(operand) or self.effectiveCapabilityOf(operand) != ValueCapability.isolated 'notIsolated'
 			throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{self.pathTextOf(operandStart)}' is not an isolated value; `merge` moves an isolated region into the current one", line: opTok.line, column: opTok.column)
 		end 'notIsolated'
@@ -1581,8 +1585,12 @@ extension Parser
 		let facts = self.regionFactsForWrite()
 		facts.pendingCallOpen = PendingCallOpen.opened(firstValue, range: SourceRange.ofToken(firstTok), label: rootName)
 
+		let firstSource = 1 if receiverFirst else 0
+
 		for position in 0 upto args.count() 'eachOtherArgument'
-			if position == first or self.valueIsCleanIntoARegion(try args.get(position) otherwise panic("openIsolatedPositions: args.get OOB at {position}")) 'staysInsideOrIsClean'
+			let other = try args.get(position) otherwise panic("openIsolatedPositions: args.get OOB at {position}")
+
+			if position == first or self.valueIsCleanIntoARegion(other) or (position >= firstSource and self.declaredArgumentCapability(declaration, argColumn: (position - firstSource) as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText) == ParamCapability.isolated and self.freshLocalIsRecoverable(other)) 'staysInsideOrIsClean'
 				continue
 			end 'staysInsideOrIsClean'
 
@@ -2132,7 +2140,7 @@ extension Parser
 			return true
 		end 'alreadyIsolated'
 
-		if capability == ValueCapability.temporary 'aCleanTemporary'
+		if capability == ValueCapability.temporary or self.freshLocalIsRecoverable(value) 'aCleanTemporary'
 			self.recoverAsIsolated(value, startIndex: startIndex, endIndex: endIndex)
 			return true
 		end 'aCleanTemporary'

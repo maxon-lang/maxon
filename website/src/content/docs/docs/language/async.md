@@ -486,7 +486,8 @@ either side could write, because the two green threads may run at the same time 
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
   keep it or write it.
-- An `isolated` argument must be a value no other name reaches: a fresh call result or an `isolated` local. A
+- An `isolated` argument must be a value no other name reaches: a fresh call result, an `isolated` local or a
+  local initialised from a fresh value that this send reads first. A
   value read out of a field or an element of a `var`, the source of an enclosing `for` loop, or an element a
   member hands back out of a field's container (`return self.queue.pop()`) is still held by its container, so
   it is not `isolated` (**E3200**); send a `.clone()`. An `isolated` local that an enclosing `for` iterates

@@ -2950,9 +2950,8 @@ end 'tagIsAScalarWhateverIsDeclared'
 // drop is skipped there and it LEAKS. Reconciling this bit at each join (restore it around a sibling
 // branch, drop the value on the branches that kept it live) is what makes the drop path-sensitive.
 //
-// `partiallyMoved` is deliberately NOT snapshotted: it never SKIPS a drop (a partially-moved union box
-// still drops through its cascade), so leaking it across a branch only over-rejects a later read — sound
-// — while the value is always dropped correctly. Only `movedFrom` gates a drop, so only it needs this.
+// `partiallyMoved` rides beside the positional bits as `partials`, the bindings that carry it: a restore
+// assigns the list and a merge unions it, so a branch's match consumes the union on that branch only.
 //
 // Positional over `ownedBindings`, whose height is STABLE at every join point (a branch's own owned
 // bindings are declared above the join's owned floor and popped at the branch's `end` before the join
@@ -2969,8 +2968,10 @@ type MoveMark
 	// and every alias of it at once and there is no symbol table to walk.
 	export let consumes as PromiseConsumes
 
-	static function create(slots MoveSlots, consumes PromiseConsumes) returns MoveMark
-		return Self{slots: slots, consumes: consumes}
+	export let partials as VarInfoArray
+
+	static function create(slots MoveSlots, consumes PromiseConsumes, partials VarInfoArray) returns MoveMark
+		return Self{slots: slots, consumes: consumes, partials: partials}
 	end 'create'
 
 	function height() returns ElementIndex
@@ -3055,6 +3056,22 @@ union EnumAccessorLookup
 	notAnAccessor
 end 'EnumAccessorLookup'
 
+type FreshLocal
+	export let binding as VarInfo
+	export let loopDepth as ElementIndex
+	export var reads as ElementIndex
+
+	static function create(binding VarInfo, loopDepth ElementIndex) returns FreshLocal
+		return Self{binding: binding, loopDepth: loopDepth, reads: 0}
+	end 'create'
+
+	function noteRead()
+		self.reads = self.reads + 1
+	end 'noteRead'
+end 'FreshLocal'
+
+typealias FreshLocalMap = Map with (ValueId, FreshLocal)
+
 // The union of two move marks' `movedFrom` bits — the move state of a path that ran BOTH the moves `a`
 // records and the moves `b` records. Its one use is the inline-conditional's TRUE path: the true arm's
 // own moves (`a`), plus the unconditionally-evaluated condition's (`b`), which parse in the opposite
@@ -3084,8 +3101,94 @@ function orMoveMarks(a MoveMark, b MoveMark, ledger MoveLedger) returns MoveMark
 		values.push(b.valueAt(position))
 	end 'each'
 
-	return MoveMark.create(ledger.overlay(b.slots, height: b.height(), positions: differing, moved: moved, values: values), consumes: b.consumes.unioned(a.consumes))
+	return MoveMark.create(ledger.overlay(b.slots, height: b.height(), positions: differing, moved: moved, values: values), consumes: b.consumes.unioned(a.consumes), partials: partialMovesUnioned(b.partials, second: a.partials))
 end 'orMoveMarks'
+
+function partialMovesHold(list VarInfoArray, binding VarInfo) returns bool
+	for held in list 'eachHeld'
+		if held is binding 'theBinding'
+			return true
+		end 'theBinding'
+	end 'eachHeld'
+
+	return false
+end 'partialMovesHold'
+
+function partialMovesUnioned(first VarInfoArray, second VarInfoArray) returns VarInfoArray
+	var added = 0 as ElementIndex
+
+	for held in second 'countAdditions'
+		if not partialMovesHold(first, binding: held) 'anAddition'
+			added = added + 1
+		end 'anAddition'
+	end 'countAdditions'
+
+	if added == 0 'nothingToAdd'
+		return first
+	end 'nothingToAdd'
+
+	let merged = VarInfoArray.create(0)
+
+	for held in first 'eachFirst'
+		merged.push(held)
+	end 'eachFirst'
+
+	for held in second 'eachSecond'
+		if not partialMovesHold(first, binding: held) 'anAddition'
+			merged.push(held)
+		end 'anAddition'
+	end 'eachSecond'
+
+	return merged
+end 'partialMovesUnioned'
+
+function partialMovesBelow(list VarInfoArray, height ElementIndex) returns VarInfoArray
+	var droppedAny = false
+
+	for held in list 'findOneAbove'
+		if held.enrolledAt >= height 'anInnerBinding'
+			droppedAny = true
+		end 'anInnerBinding'
+	end 'findOneAbove'
+
+	if not droppedAny 'nothingAbove'
+		return list
+	end 'nothingAbove'
+
+	let kept = VarInfoArray.create(0)
+
+	for held in list 'eachHeld'
+		if held.enrolledAt < height 'anOuterBinding'
+			kept.push(held)
+		end 'anOuterBinding'
+	end 'eachHeld'
+
+	return kept
+end 'partialMovesBelow'
+
+function partialMovesStillEnrolled(list VarInfoArray) returns VarInfoArray
+	var droppedAny = false
+
+	for held in list 'findOneGone'
+		if not held.isEnrolled 'aGoneBinding'
+			droppedAny = true
+		end 'aGoneBinding'
+	end 'findOneGone'
+
+	if not droppedAny 'allEnrolled'
+		return list
+	end 'allEnrolled'
+
+	let kept = VarInfoArray.create(0)
+
+	for held in list 'eachHeld'
+		if held.isEnrolled 'stillThere'
+			kept.push(held)
+		end 'stillThere'
+	end 'eachHeld'
+
+	return kept
+end 'partialMovesStillEnrolled'
 
 // The sub-mark over the FIRST `height` owned bindings — the ones that OUTLIVE a construct whose own
 // bindings sit above `height`.
@@ -3102,7 +3205,7 @@ function moveMarkPrefix(mark MoveMark, height ElementIndex) returns MoveMark
 		panic("moveMarkPrefix: the mark holds {mark.height()} entries, fewer than the requested prefix of {height} — the owned-binding stack fell below the floor the construct recorded at entry")
 	end 'tooShort'
 
-	return MoveMark.create(mark.slots.truncated(height), consumes: mark.consumes)
+	return MoveMark.create(mark.slots.truncated(height), consumes: mark.consumes, partials: partialMovesBelow(mark.partials, height: height))
 end 'moveMarkPrefix'
 
 function positionsThatMayDiffer(a MoveMark, b MoveMark) returns MoveSlotIndexColumn
@@ -4224,7 +4327,7 @@ type TryBlockContext
 	export var holdsADeferredValue as bool
 
 	static function create(tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor ElementIndex, windowFloor ElementIndex) returns TryBlockContext
-		return Self{tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, windowFloor: windowFloor, members: TryBlockErrorMemberArray.create(0), routedEdges: RoutedErrorEdgeArray.create(0), unfusableMember: "", edgeMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumes.none()), conflictingMoveEdge: false, holdsADeferredValue: false}
+		return Self{tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, windowFloor: windowFloor, members: TryBlockErrorMemberArray.create(0), routedEdges: RoutedErrorEdgeArray.create(0), unfusableMember: "", edgeMoveMark: MoveMark.create(MoveSlots.empty(), consumes: PromiseConsumes.none(), partials: VarInfoArray.create(0)), conflictingMoveEdge: false, holdsADeferredValue: false}
 	end 'create'
 
 	export function throwsClause() returns ThrowsClause
@@ -8155,6 +8258,14 @@ type FunctionBodyState
 	// function's SSA space and nothing else.
 	export var promiseConsumes as PromiseConsumes
 
+	export var partialMoves as VarInfoArray
+
+	export var freshLocals as FreshLocalMap
+
+	export var freshReadsInInitializer as VarInfoArray
+
+	export var recoveringInitializer as bool
+
 	// ⭐ **THE ENUM-ACCESSOR READS THIS FUNCTION HAS EMITTED** (E3097). Fresh per function for
 	// `promiseConsumes`' reason: a `ValueId` means something else in the next body, so a record carried
 	// across would refuse a comparison in a program that has no accessor in it at all. Empty for every
@@ -9216,6 +9327,10 @@ type FunctionBodyState
 			unusedCandidates: UnusedBindingCandidateArray.create(0),
 			functionMintedValueAliases: false,
 			promiseConsumes: PromiseConsumes.none(),
+			partialMoves: VarInfoArray.create(0),
+			freshLocals: FreshLocalMap.create(),
+			freshReadsInInitializer: VarInfoArray.create(0),
+			recoveringInitializer: false,
 			enumAccessorReads: EnumAccessorReadArray.create(0),
 			nascentSelfWrites: NascentSelfWriteArray.create(0),
 			nascentSelfChecks: NascentSelfCheckArray.create(0),
