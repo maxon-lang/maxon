@@ -1327,3 +1327,95 @@ end 'main'
 ```maxoncstderr
 error E3197: <fragment>:25:4: cannot write 'a container' through 'a call result', which is read-only
 ```
+
+<!-- test: a-closure-built-by-a-clean-call-stays-callable-through-a-var-rebound-to-a-copy -->
+`relay` returns the closure `make` builds, so the closure is fresh on every path and a caller that calls it, rebinds a `var` to it or calls the `var` is calling writable data.
+
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Bump = function() returns Tally mutates captures
+
+type Total
+	var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump() returns Tally
+		self.n = self.n + 1
+		return self.n
+	end 'bump'
+end 'Total'
+
+function make() returns Bump
+	let total = Total.create()
+	return function() gives total.bump()
+end 'make'
+
+function relay() returns Bump
+	return make()
+end 'relay'
+
+function main() returns ExitCode
+	let b = relay()
+	var h = relay()
+	h = b
+	let first = b()
+	let second = h()
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-result-mixing-a-module-let-closure-with-a-fresh-one-is-not-callable-for-its-caller -->
+`pick` hands back a module `let` closure on one path and a closure `make` builds on the other, so its result is read-only for every caller and a `mutates captures` function cannot be called through it.
+
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Bump = function() returns Tally mutates captures
+
+type Total
+	var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump() returns Tally
+		self.n = self.n + 1
+		return self.n
+	end 'bump'
+end 'Total'
+
+function make() returns Bump
+	let total = Total.create()
+	return function() gives total.bump()
+end 'make'
+
+let Shared = function() gives 7 as Tally
+
+function pick(fresh bool) returns Bump
+	if fresh 'fresh'
+		return make()
+	end 'fresh'
+
+	return Shared
+end 'pick'
+
+function main() returns ExitCode
+	let f = pick(false)
+	let n = f()
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3211: <fragment>:35:11: 'Bump' mutates captures and cannot be called through read-only data
+```

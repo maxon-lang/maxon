@@ -249,7 +249,8 @@ is read-only (`specs/regions-soundness.md`).
 A function whose return paths mix frozen data (its own, such as an `immutable` field, a module `let` or a
 `static let`) with writable or fresh data hands back a read-only result to every caller, whatever the receiver
 or the arguments are: writing through it is **E3197**, passing it to a `mutable` parameter is **E3207**, and
-moving it into an `isolated` position is **E3200**. One `return` whose `if … else`, ternary or `match` joins
+moving it into an `isolated` position is **E3200**, and calling a `mutates captures` function value it hands
+back is **E3211**. One `return` whose `if … else`, ternary or `match` joins
 both counts too, and a function that returns a mixed result unchanged is mixed. Declare the function
 `returns immutable` when every path is frozen, or return a `.clone()` of the frozen path
 (`specs/settled-results-through-merges.md`).

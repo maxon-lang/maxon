@@ -863,7 +863,8 @@ release's version as its heading when the release is cut.
 - A function whose unmarked result mixes frozen data (a module `let`, a `static let`, an `immutable` field, or
   another mixed function's result it returns) with writable or fresh data hands every caller a read-only result,
   also when the call's arguments are all values or fresh data. Writing through it is E3197, passing it to a
-  `mutable` parameter is E3207, and moving it into an `isolated` slot is E3200. Until now such a call read as
+  `mutable` parameter is E3207, moving it into an `isolated` slot is E3200, and calling a `mutates captures`
+  function value it hands back is E3211. Until now such a call read as
   fresh, and a `push` on it compiled and crashed on the image data.
   Fix: write a copy (`get(false).clone()`) where the caller must write, or declare the result `returns immutable`
   when every path is frozen.

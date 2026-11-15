@@ -631,7 +631,7 @@ function checkFunctionValueCall(project Project, funcNames FunctionNameIndex, ki
 		default panic("checkFunctionValueCall: handed an op that is not an indirect call")
 	end 'op'
 
-	checkMutableFunctionCall(project, func: func, opIdx: opIdx, calleeValue: parts.0)
+	checkMutableFunctionCall(project, funcNames: funcNames, facts: facts, func: func, opIdx: opIdx, calleeValue: parts.0, memo: memo)
 	let shape = try declaredBoundaryShapeOf(project, func: func, value: parts.0) otherwise 'undeclaredBoundary'
 		let bodies = calls.functionValueBodiesCalledThrough(func, callee: parts.0)
 		checkLandingBodiesTakeTheArguments(project, funcNames: funcNames, kinds: kinds, facts: facts, func: func, opIdx: opIdx, bodies: bodies, args: parts.1, argImmutableNames: parts.2, memo: memo)
@@ -649,12 +649,12 @@ function checkFunctionValueCall(project Project, funcNames FunctionNameIndex, ki
 	end 'eachArg'
 end 'checkFunctionValueCall'
 
-function checkMutableFunctionCall(project Project, func IrFunction, opIdx ElementIndex, calleeValue ValueId)
+function checkMutableFunctionCall(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, calleeValue ValueId, memo SettledMemo)
 	if not functionValueIsMutable(project, func: func, value: calleeValue) 'aPlainFunction'
 		return
 	end 'aPlainFunction'
 
-	let capability = argumentCapabilityOf(project, func: func, argId: calleeValue)
+	let capability = settledArgumentCapability(project, funcNames: funcNames, facts: facts, func: func, argId: calleeValue, memo: memo)
 
 	if not capabilityIsReadOnly(capability) 'writableEnough'
 		return
