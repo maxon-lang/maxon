@@ -104,44 +104,42 @@ printf '//\n// Source: Go %s, %s classes.\n\n' "$gover" "$(printf '%s' "$sizes" 
 cat <<'DECL'
 // A class's slot size in bytes. Class 0 is Go's sentinel (size 0) and serves no allocation; it is kept
 // so a class id indexes its own slot with no off-by-one on any path.
-export typealias SlabClassSize = int(0 to 32768)
+typealias SlabClassSize = int(0 to 32768)
 
 // A class id. The range is the table's own bound, so a value that escaped the ladder cannot be stored.
-export typealias SlabClassIndex = int(0 to 67) implements ElementIndex
+typealias SlabClassIndex = int(0 to 67) implements ElementIndex
 
 // Pages in one span of a class. Go's table spans 1..10; 0 belongs to the sentinel class alone.
-export typealias SlabSpanPages = int(0 to 10)
-export typealias SlabClassSizeArray = Array with SlabClassSize
-export typealias SlabSpanPagesArray = Array with SlabSpanPages
+typealias SlabSpanPages = int(0 to 10)
+typealias SlabClassSizeArray = Array with SlabClassSize
+typealias SlabSpanPagesArray = Array with SlabSpanPages
 
 // Requests above this go OS-direct: one mapping each, released whole.
-export let SlabMaxSmallSize = 32768
+let SlabMaxSmallSize = 32768
 
 // The boundary between the two reverse-lookup tables, and their strides.
-export let SlabSmallSizeMax = 1024
-export let SlabSmallSizeDiv = 8
-export let SlabLargeSizeDiv = 128
+let SlabSmallSizeMax = 1024
+let SlabSmallSizeDiv = 8
+let SlabLargeSizeDiv = 128
 
 // One page. `SlabPageShift` and `SlabChunkBytes` are ONE fact written twice by necessity (a shift and
 // its value); `checkSlabClassTable` asserts they agree rather than trusting the pair.
-export let SlabPageShift = 13
-export let SlabChunkBytes = 8192
+let SlabPageShift = 13
+let SlabChunkBytes = 8192
 
 DECL
 # ⚠ The table is emitted as `.create()` + `.push()` and NOT as an array literal. A literal infers
 # `FullRangeIntArray`, which is E3005 against a ranged typealias return — and widening the return type to
 # match the literal would throw away the domain bound that keeps an out-of-table size unstorable.
 emit_table() {
-	printf '\tvar out = %s.create(0)\n' "$2"
-	printf '	out.reserve(%s)
-' "$(printf '%s' "$1" | awk -F, '{print NF}')"
+	printf '\tlet out = %s.create(%s, zeroed: false)\n' "$2" "$(printf '%s' "$1" | awk -F, '{print NF}')"
 	printf '%s' "$1" | tr ',' '\n' | awk '{ printf "\tout.push(%s)\n", $0 }'
 	printf '\treturn out\n'
 }
-printf "// Slot size per class. Go's \`SizeClassToSize\`, verbatim.\nexport function slabClassSizes() returns SlabClassSizeArray\n"
+printf "// Slot size per class. Go's \`SizeClassToSize\`, verbatim.\nfunction slabClassSizes() returns SlabClassSizeArray\n"
 emit_table "$sizes" SlabClassSizeArray
 printf "end 'slabClassSizes'\n\n"
-printf "// Pages per span per class. Go's \`SizeClassToNPages\`, verbatim. It is NOT constant, and that\n// variation IS the tail-waste term the header above says a waste bound alone cannot see.\nexport function slabClassPages() returns SlabSpanPagesArray\n"
+printf "// Pages per span per class. Go's \`SizeClassToNPages\`, verbatim. It is NOT constant, and that\n// variation IS the tail-waste term the header above says a waste bound alone cannot see.\nfunction slabClassPages() returns SlabSpanPagesArray\n"
 emit_table "$npages" SlabSpanPagesArray
 printf "end 'slabClassPages'\n"
 } > "$tmp"

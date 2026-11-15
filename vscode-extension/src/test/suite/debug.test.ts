@@ -170,10 +170,10 @@ const SourceFileName = 'doubling.maxon';
 const TestFileName = 'doubling.maxtest';
 
 const DoublingSource = [
-    'export typealias Small = int(0 to 100)',
-    'export typealias Doubled = int(0 to 200)',
+    'typealias Small = int(0 to 100)',
+    'typealias Doubled = int(0 to 200)',
     '',
-    'export function double(value Small) returns Doubled',
+    'function double(value Small) returns Doubled',
     `\t${DoublingAnnouncement}`,
     '\treturn value * 2',
     "end 'double'",

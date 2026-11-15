@@ -66,7 +66,7 @@ suite('Go to Definition', () => {
         this.timeout(corpusDeadlineMs);
 
         const dir = stageProject('definition-sibling', {
-            'helper.maxon': "export function sharedHelper() returns ExitCode\n\treturn 0\nend 'sharedHelper'\n",
+            'helper.maxon': "function sharedHelper() returns ExitCode\n\treturn 0\nend 'sharedHelper'\n",
             'main.maxon': "function main() returns ExitCode\n\treturn sharedHelper()\nend 'main'\n"
         });
         const doc = await openFixture(dir, 'main.maxon');

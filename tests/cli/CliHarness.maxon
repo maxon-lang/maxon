@@ -49,18 +49,16 @@ let CacheClearVerb = "clear"
 
 // ⚠ **THE VARIABLES BESIDE `CacheRootVariable` THE DRIVER CONSULTS FOR A CACHE ROOT, RESPELLED FOR THE
 // REASON ABOVE**, and it
-// reads a different set per host. `HomeDirectoryVariable` and `HostTempVariable` are exported because a
-// case fills the cache one of them names, or points two of them at one directory.
+// reads a different set per host.
 #if os(Windows)
-	export let HomeDirectoryVariable = "USERPROFILE"
+	let HomeDirectoryVariable = "USERPROFILE"
 	let WindowsCacheRootVariable = "LOCALAPPDATA"
 #else
 	let HomeDirectoryVariable = "HOME"
 #endif
 
 // What the driver owns under a HOME directory: its own directory beside the `bin/` and `stdlib/` an
-// install puts there, rather than a `maxon` directory in a scratch area. The install directory is
-// exported because a clear must stop at the `cache` below it.
+// install puts there, rather than a `maxon` directory in a scratch area.
 let MaxonUserDirName = ".maxon"
 let UserCacheDirName = "cache"
 
@@ -138,14 +136,7 @@ let OptionPrefix = "-"
 // after `=`, and the description column starts after a gap of two spaces or more.
 let LabelAlternativeSeparator = ", "
 
-// Declared in both arms because its reader outside this file is itself gated out on wasm32-wasi: exported
-// everywhere, it is an export with nothing to reference it on that lane, and E3092 refuses the whole
-// corpus there.
-#if not os(Wasi)
-	let OptionValueSeparator = "="
-#else
-	let OptionValueSeparator = "="
-#endif
+let OptionValueSeparator = "="
 
 let DescriptionColumnGap = "  "
 
@@ -809,26 +800,14 @@ function optionSpellingsIn(listing String) returns StringArray
 	return spellings
 end 'optionSpellingsIn'
 
-// Exported only where its outside reader is compiled, for `OptionValueSeparator`'s reason. The body is
-// one text, spelled once: `optionSpellingOf` below calls it on every lane.
-#if not os(Wasi)
-	function optionSpellingOf(alternative String) returns String
-		return spellingOfAlternative(alternative)
-	end 'optionSpellingOf'
-#else
-	function optionSpellingOf(alternative String) returns String
-		return spellingOfAlternative(alternative)
-	end 'optionSpellingOf'
-#endif
-
-function spellingOfAlternative(alternative String) returns String
+function optionSpellingOf(alternative String) returns String
 	if alternative.contains(OptionValueSeparator) 'takesAValue'
 		let name = try alternative.split(OptionValueSeparator).get(0) otherwise panic("CliHarness: a split of a string containing its separator has a first part")
 		return "{name}{OptionValueSeparator}"
 	end 'takesAValue'
 
 	return firstWordOf(alternative)
-end 'spellingOfAlternative'
+end 'optionSpellingOf'
 
 // ⭐ **THE UNITS AN OPTION IS SPELLED IN, READ OUT OF FREE TEXT**: maximal runs of letters, digits, `-` and
 // `_`, each carrying an `=` that directly follows it. Membership in this list is what "the text names

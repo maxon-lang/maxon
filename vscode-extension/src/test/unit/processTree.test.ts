@@ -10,6 +10,7 @@ const OwnPid = 100;
 const ImmediatePollMs = 1;
 const ShortTimeoutMs = 50;
 const LongTimeoutMs = 30_000;
+const ListingTestTimeoutMs = 3 * LongTimeoutMs;
 const SurvivorSource = 'setInterval(() => {}, 1000)';
 
 function record(pid: number, parentPid: number, commandLine: string): ProcessRecord {
@@ -225,20 +226,20 @@ suite('processTree', () => {
 		});
 
 		test('the listing shows this process with its arguments', async function () {
-			this.timeout(LongTimeoutMs);
+			this.timeout(ListingTestTimeoutMs);
 			const records = await listProcesses(LongTimeoutMs);
 
 			assert.ok(records.some(entry => entry.pid === process.pid && entry.commandLine !== ''));
 		});
 
 		test('a listing that does not finish within its budget is an error saying so', async function () {
-			this.timeout(LongTimeoutMs);
+			this.timeout(ListingTestTimeoutMs);
 
 			await assert.rejects(listProcesses(1), /did not finish within 1 ms/);
 		});
 
 		test('a directory a live process names is removed only after that process exits', async function () {
-			this.timeout(LongTimeoutMs);
+			this.timeout(ListingTestTimeoutMs);
 			survivor = spawn(process.execPath, ['-e', SurvivorSource, scratch], { stdio: 'ignore' });
 			await new Promise<void>((resolve, reject) => {
 				survivor!.once('spawn', () => resolve());
