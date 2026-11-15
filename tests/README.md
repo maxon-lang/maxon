@@ -150,6 +150,11 @@ tests/
     RelayHarness.maxon           the shared half of the `relay-*` cases: a checkout staged around a fake slot compiler, and the swap, crash, flood and oversize triggers it obeys
     fixtures/slotcompiler/main.maxon.fixture   the fake slot compiler: an `lsp-server` stand-in that reports its generation and whether it was started `--relayed`, and does what a trigger file names - stored name only, see rule 1
     relay-<case>.maxtest         one case of `lsp-server` serving a checkout through its slot compiler, one file each
+    QuickFixProbe.maxon          the shared half of the `quick-fix-*` cases: a session that publishes a buffer, asks for code actions at each published diagnostic, applies the chosen quick fix or fix-all edit to the buffer, sends it back and reads the diagnostics republished, for a lone buffer, through a staged project's project check, and over a staged project's buffer check alone
+    quick-fix-<case>.maxtest     one rule of the quick fixes the server offers, one file each: what is offered and for which diagnostic, its edit in UTF-16 units of the unsaved buffer, fix-all, and the `codeActionKinds` `initialize` advertises
+    quick-fix-a-buffer-differing-from-the-saved-file-only-in-a-comment-is-offered-no-repair.maxtest   a buffer whose tokens are the saved file's while its text is not publishes its self-assignment (E3067) with no quick fix, and the saved text itself publishes it with one; the project file is held running, so no project check replaces the buffer check's answer
+    quick-fix-a-buffer-whose-tokens-differ-from-the-saved-file-is-offered-the-repair-of-its-own-text.maxtest   a buffer that deleted the saved file's self-assignment and wrote another elsewhere publishes only its own, with a quick fix whose edit deletes the buffer's line exactly (applied, the buffer comes out with no self-assignment); the project file is held running, so no project check replaces the buffer check's answer
+    diagnostics-a-diagnostic-at-a-line-end-spans-the-whole-line-terminator.maxtest   a diagnostic anchored at a line's end underlines the whole terminator, `\n` or `\r\n`, to the start of the next line
     <area>.maxtest               one LSP method area per file
     diagnostics-project-declared-inputs-probe.maxtest   the shared half of the declared-input cases: a project file whose sources come from a file it reads, declared in `inputs` or not, delegating or with two targets, and a gate that holds its run until released
     diagnostics-project-<change>.maxtest   the cases built on it, one each: which change to a declared input, a delegated `.maxproj` or an undeclared read runs the project file again, and which keeps the held answer
@@ -653,8 +658,40 @@ tests/
     lint-reports-breaking-changes-since-the-last-build-on-stderr.maxtest   a target and `--tests` print the breaking changes on stderr, one `Linted` line on stdout, and leave the compiler-version record and the build records as they were
     lint-with-metrics-writes-the-checks-phase-rows.maxtest   `--metrics=` writes a table whose check phases allocated, whose code-generation phases read zero, and which holds no `code` row
     build-compiles-and-runs-a-program-whose-only-faults-are-lint-findings.maxtest   `build` compiles a program whose only faults are lint findings, it runs right, and `lint` refuses it; `build-compiles-and-runs-a-program-that-drops-runtime-reads-…` does the same for dropped runtime reads, intrinsics and composite results
+    build-compiles-and-runs-a-program-that-drops-runtime-reads-intrinsics-and-composite-results.maxtest   build compiles a program that drops runtime reads, intrinsics, unions, interface values and closures, the program runs right, and lint refuses it
     execute-runs-a-script-that-drops-a-result-and-leaves-a-function-unused.maxtest   `execute` runs a one-file script with a dropped pure result and an unused unexported function
     scale-test-measures-the-lint-checks-on-every-rung.maxtest   every rung's tables and result document carry the three `lint:` rows, measured from a `lint` of that rung
+    LintFixHarness.maxon                    the shared half of the `lint-fix-*` cases: `LintFixCase` stages a fixture's `before/` tree, runs `lint --fix` over it, and requires the `Fixed` lines, a tree byte-identical to `after/` (CRLF throughout, for a case that asks), the exit code and diagnostics a plain `lint` of that tree reports, a second `--fix` that rewrites nothing, and a program that still runs, builds or passes its tests
+    lint-fix-<repair>.maxtest               one repair `lint --fix` writes, one file each: the fixture `fixtures/lint-fix-<name>/{before,after}/` is the program before and after it
+    lint-fix-leaves-<finding>.maxtest       a finding with no single repair, or with none the compiler can place, is left as written and reported as `lint` reports it
+    lint-fix-of-a-clean-program-rewrites-nothing-and-says-linted.maxtest   a clean program prints no `Fixed` line and one `Linted` line; `-of-a-program-whose-only-finding-is-a-real-error-…`, `-fixes-what-is-reported-beside-a-real-error-…`, `-repeats-until-…`, `-fixes-discards-and-then-the-audit-they-hid`, `-of-a-manifest-…`, `-with-no-path-in-a-manifest-project-…`, `-with-tests-…`, `-edits-only-the-text-of-each-fix` and the two CRLF cases cover the rounds, the routes and the bytes kept
+    lint-fix-with-metrics-is-refused-as-a-usage-error.maxtest   `--fix` beside `--metrics=` is a usage error: no file rewritten, no table written
+    lint-for-a-target-of-a-manifest-is-refused.maxtest   lint --target= of a manifest file is refused as a usage error and lints nothing
+    lint-of-a-clean-manifest-says-linted.maxtest   lint of a clean manifest file, which declares no main, exits 0 and prints one Linted line
+    lint-of-a-directory-and-a-file-lints-them-as-one-program.maxtest   lint of a directory and a file named together lints them as one program
+    lint-of-a-manifest-beside-another-path-is-refused.maxtest   lint of a manifest file named beside another path is refused as a usage error and lints nothing
+    lint-of-a-manifest-declaring-no-target-is-refused.maxtest   lint of a manifest file that declares something but no target or task is refused, naming the file
+    lint-of-a-manifest-reports-an-unused-unexported-function.maxtest   lint of a manifest file lints the manifest program and reports an unexported function nothing live names
+    lint-of-a-manifest-with-a-define-is-refused.maxtest   lint of a manifest file with --define= is refused as a usage error, since the runner takes no defines
+    lint-of-a-task-file-reports-an-unused-unexported-function.maxtest   lint of a task file lints the task program and reports an unexported function nothing live names
+    lint-of-an-empty-manifest-says-linted.maxtest   lint of an empty manifest file, a bare project marker, exits 0 and prints one Linted line
+    lint-reports-a-dropped-impure-result.maxtest   lint reports a dropped impure result and writes no executable
+    lint-reports-an-unused-export.maxtest   lint reports an export only its own directory names and writes no executable
+    lint-reports-an-unused-unexported-declaration.maxtest   lint reports an unexported declaration nothing live in its directory names and writes no executable
+    lint-with-no-path-beside-several-targets-refuses-as-build-does.maxtest   lint with no path beside a manifest declaring several targets refuses as build does, listing them
+    lint-with-no-path-binds-the-targets-defines-and-the-command-lines.maxtest   lint with no path binds the target defines and the command line defines together, refusing an unknown name in either
+    lint-with-no-path-in-a-delegating-project-lints-the-delegates-program.maxtest   lint with no path in a project whose target delegates lints the program the delegated project builds
+    lint-with-no-path-in-a-manifest-project-lints-its-build-target.maxtest   lint with no path in a manifest project lints the sources its build target selects
+    lint-with-tests-and-a-define-is-refused.maxtest   lint --tests with --define= is refused as a usage error, since maxon test takes no defines
+    lint-with-tests-ends-with-the-exit-code-of-a-failing-runner.maxtest   lint --tests of a project whose build runner fails ends with the runner exit code, as the target route does
+    lint-with-tests-of-a-directory-with-no-tests-is-refused.maxtest   lint --tests of a directory holding no test declaration is refused, saying so
+    lint-with-tests-of-a-manifest-is-refused.maxtest   lint --tests of a manifest file is refused as a usage error and lints nothing
+    lint-with-tests-of-a-project-listing-sources-names-what-was-typed.maxtest   lint --tests of a project whose manifest lists sources names the project as it was typed
+    lint-with-tests-of-a-target-word-names-the-target.maxtest   lint --tests of a lone target word names the target it was typed as, and a target word with a directory names the directory
+    lint-with-tests-of-an-application-exempts-its-main.maxtest   lint --tests of an application project with tests exempts its main as the entry, as maxon test passes it
+    lint-with-tests-of-one-test-file-lints-that-files-test-program.maxtest   lint --tests of one test file lints that file alone with the test entry, as maxon test runs it
+    lint-with-tests-reports-a-discarded-pure-result-in-a-test-file.maxtest   lint --tests reports a pure result a test file drops, and lint without it and maxon test do not
+    lint-with-tests-reports-an-unused-unexported-function-in-support-code.maxtest   lint --tests reports an unexported function nothing live names in a test project, which maxon test still passes
     fixtures/lint-*/                        stored names only - see rule 1
     scratch-name-mints-distinct-names.maxtest               names one process mints one after another never repeat
     scratch-name-round-trips-through-its-parser.maxtest     a minted name gives back its stem and, on its own host, its owner
@@ -995,7 +1032,7 @@ Two independent reasons, and the second is the one that bites:
 `.maxtest` drivers.** `lsp/LspClient.maxon` is an ordinary source — a JSON-RPC client the `lsp/` tests
 import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/DapClient.maxon`,
 `coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
-`cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
+`cli/CliHarness.maxon`, `cli/LintFixHarness.maxon`, `lsp/QuickFixProbe.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
 `examples/ExamplesHarness.maxon`, `warmRebuild/WarmRebuildHarness.maxon`,
 `emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon` and `mcp/McpHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
 as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and

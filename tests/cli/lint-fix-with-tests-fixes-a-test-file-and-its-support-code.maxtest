@@ -1,0 +1,15 @@
+let LintFixTestsCaseDirName = "lint-fix-tests"
+let LintFixTestsFixture = "lint-fix-tests"
+let LintFixTestsSupportFile = "app/support.maxon"
+let LintFixTestsTestFile = "app/use.maxtest"
+let LintFixTestsFindingsEach = 1
+
+test 'lint --fix --tests fixes a dropped result in a test file and an unused function in its support code, and maxon test still passes'
+	let fixed = lintFixFixedFiles(LintFixTestsSupportFile, findings: LintFixTestsFindingsEach)
+	fixed.push(LintFixedFile.of(LintFixTestsTestFile, findings: LintFixTestsFindingsEach))
+
+	let proofs = LintFixProofArray.create(0)
+	proofs.push([TestCommandWord, AppDirName])
+
+	requireHeldOutsideCheckout(LintFixTestsCaseDirName, check: LintFixCase.of(LintFixTestsFixture, arguments: [LintTestsOption, AppDirName], fixed: fixed, outcome: LintFixOutcome.linted(AppDirName), proofs: proofs))
+end 'lint --fix --tests fixes a dropped result in a test file and an unused function in its support code, and maxon test still passes'

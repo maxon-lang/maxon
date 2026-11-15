@@ -14,7 +14,7 @@ Install **Maxon** from the
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
-highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
+highlighting, diagnostics with their [quick fixes](#maxon-lsp-server), hover, completion, go-to-definition, rename, formatting, the Compiler
 Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
 `.maxtest` test files are all Maxon documents, served by the language server.
 
@@ -181,8 +181,8 @@ project as `maxon build` does.
 
 **A document's uri may carry any scheme, and what the server can do with a document turns on the path
 that uri spells.** Every scheme is accepted, so an editor that forwards whatever uri a buffer carries is
-served. Document symbols, folding ranges, formatting, linked editing, rename and code actions read the
-buffer alone and answer for every open document. Semantic tokens answer for every open document too, and
+served. Document symbols, folding ranges, formatting, linked editing and rename read the buffer alone and
+answer for every open document; code actions answer from the document's published diagnostics. Semantic tokens answer for every open document too, and
 take the types a project declares from the project's files and `stdlib/` where the uri spells a path. The
 project half needs a path with a directory above it, and a document whose uri has one is the kind
 `maxon/listProjects` lists. An unsaved scratch buffer (`untitled:Untitled-1`) is checked and resolved
@@ -312,10 +312,11 @@ it as gone.
 `source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
 above have severity Information. A document is checked with the [lint rules](/docs/cli/#maxon-lint), and is
 published with a discarded result (E3064, E3065). "No `main` function" (E3001) and the
-unused-declaration diagnostics (E3092, E3219, E3062) are claims about the whole program, published by
-the command line alone: E3001 and E3062 in the output of `maxon build` and `maxon lint`, E3092 and E3219
-in `maxon lint`'s. When they are the only errors, a document is published with its unneeded casts
-(E3010) and target refusals (E3074, E3104).
+unused-declaration diagnostics (E3092, E3219, E3062) are claims about the whole program. The buffer
+check withholds all four. The project check below, which compiles the whole project, publishes E3092,
+E3219 and E3062 on the document they name, each with its quick fix, and E3001 is published by the
+command line alone, in the output of `maxon build` and `maxon lint`. When they are the only errors, a
+document is published with its unneeded casts (E3010) and target refusals (E3074, E3104).
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
 project check's.** This applies where the document's root is a directory holding a `.maxproj`. The
@@ -362,6 +363,31 @@ maxon: project check <uri> version <version> <outcome>
 | `abandoned` | a newer version arrived while the check ran, and the check stopped |
 | `superseded` | a newer version arrived before the check started or before its result was written, and the result was dropped |
 
+**Quick fixes.** `initialize` advertises `codeActionProvider` as an options object whose
+`codeActionKinds` is `["quickfix"]`. Every published diagnostic that carries a repair is offered as a
+quick fix built from that repair, the one [`maxon lint --fix`](/docs/cli/#maxon-lint) writes: the compiler computes
+it with the diagnostic, against the text the editor last sent, saved or not. A `textDocument/codeAction`
+request is answered from the set last published for the document's current version, the project
+check's once it has landed, so E3092, E3219 and E3062 get theirs from the project check; until the
+current version's set is published the answer is `[]`. Each diagnostic
+of that set whose range touches the requested range, and whose repair edits this document alone, is one
+action:
+
+- `kind` `quickfix`, a `title` naming what it does (`Discard the result of 'note'`,
+  `Delete the unneeded cast to 'Tally'`), `diagnostics` holding that diagnostic as it was published, and
+  `edit`, a `WorkspaceEdit` whose `changes` edit the document's uri, ranged in UTF-16 units of that
+  text.
+- When the answer holds one and the document has two or more repairs, one more action, titled
+  `Apply all <n> quick fixes in this file`, applies them all in one edit and names each diagnostic it
+  repairs. Where two repairs would edit overlapping text, the first is taken and the other waits for the
+  diagnostics the edited text publishes.
+
+A diagnostic with two or more reasonable repairs, one whose repair the compiler cannot place with
+certainty, one in `stdlib/`, `runtime/` or a scriptlib package, and one in a file that holds an `#if`
+publish with no repair, as `lint --fix` leaves them. A diagnostic the buffer check takes from the file on disk while the buffer differs from it
+is published without its repair. Only an action the user picks rewrites a document, and `quickfix` is the
+one kind advertised.
+
 **Requests served:**
 
 | Method | Result |
@@ -374,7 +400,7 @@ maxon: project check <uri> version <version> <outcome>
 | `textDocument/foldingRange` | Every closed block spanning more than one line |
 | `textDocument/linkedEditingRange` | A block's opening name and its `end '…'` label, edited together |
 | `textDocument/rename` | Renames a declaration's name and its matching `end '…'` label. References elsewhere are not renamed. |
-| `textDocument/codeAction` | A quick fix, "Remove unused variable", for a local `let`/`var` whose name appears nowhere else |
+| `textDocument/codeAction` | The quick fixes of the published diagnostics the requested range touches, and an action applying every quick fix of the document when it has two or more (see **Quick fixes** above) |
 | `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator`, `capability` and no modifiers. Every reference to a type is `type`: a type the project, a sibling file or `stdlib/` declares, a type the buffer declares, a type parameter, and the compiler's own `__Builtins`, `__Raw` and `__DebugStream` names and built-in managed types. A local or parameter named like a type is `variable`. `int`, `float`, `bool`, `cstring`, `byte`, the sized integer and float names and `Self` are `type`. The word `isolated`, `immutable` or `mutable` qualifying a type is `capability` |
 
 Any other request is answered with JSON-RPC error `-32601` (method not found).

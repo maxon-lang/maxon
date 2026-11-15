@@ -1,0 +1,29 @@
+let QuickFixOnceNamedUri = "file:///quick-fix-once-named-local.maxon"
+let QuickFixOnceNamedSource = "function main() returns ExitCode\n\tlet unused = 42\n\treturn 0\nend 'main'\n"
+let QuickFixOnceNamedLine = 1
+let QuickFixOnceNamedLineEnd = 16
+
+test 'every offered code action repairs a diagnostic the server published'
+	let session = runRangeCodeActionSession(QuickFixOnceNamedUri, text: QuickFixOnceNamedSource, range: LspRange.create(QuickFixOnceNamedLine, startCharacter: 0, endLine: QuickFixOnceNamedLine, endCharacter: QuickFixOnceNamedLineEnd))
+	let note = "the local `unused` is named once in the file. Whatever the compiler publishes for it decides what is offered on its line: every action in the answer is a `{QuickFixActionKind}` naming a diagnostic the server published for this document, with its code, range and message."
+	let record = try quickFixRangeRecordOf(session, note: note)
+
+	for action in record.answer 'eachAction'
+		try Expect.equal(action.kind.describe(), expected: QuickFixActionKind, message: "{note} The answer offered {codeActionsRendering(record.answer)}.")
+		try Expect.isFalse(action.diagnostics.isEmpty(), message: "{note} An action names no diagnostic it repairs: {codeActionsRendering(record.answer)}. The buffer published {projectDiagnosticsRendering(record.published)}.")
+
+		for named in action.diagnostics 'eachNamed'
+			try Expect.isTrue(publishedAmong(named, published: record.published), message: "{note} An action names {named.code.describe()} at {named.range.startLine}:{named.range.startCharacter}, which the server did not publish: {projectDiagnosticsRendering(record.published)}.")
+		end 'eachNamed'
+	end 'eachAction'
+end 'every offered code action repairs a diagnostic the server published'
+
+function publishedAmong(named RepairedDiagnostic, published PublishedDiagnosticArray) returns bool
+	for item in published 'eachItem'
+		if item.code.describe() == named.code.describe() and item.message == named.message and sameLspRange(item.range, other: named.range) 'published'
+			return true
+		end 'published'
+	end 'eachItem'
+
+	return false
+end 'publishedAmong'

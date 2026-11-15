@@ -1,0 +1,55 @@
+typealias Tally = int(0 to 1000)
+
+let QuietInput = 2
+let LoudInput = 3
+let Rounds = 2
+let Limit = 5
+
+enum RiskError implements Error
+	tooLarge
+end 'RiskError'
+
+union Shape
+	rect(width Tally, height Tally)
+end 'Shape'
+
+function doubled(n Tally) returns Tally
+	return n * 2
+end 'doubled'
+
+function announced(n Tally) returns Tally
+	print("announcing {n}\n")
+	return n
+end 'announced'
+
+function risky(n Tally) throws RiskError
+	if n > Limit 'tooLarge'
+		throw RiskError.tooLarge
+	end 'tooLarge'
+
+	print("risked {n}\n")
+end 'risky'
+
+function widthOf(shape Shape) returns Tally
+	let width = match shape 'kind'
+		rect(width, height) gives width
+	end 'kind'
+
+	return width
+end 'widthOf'
+
+function main() returns ExitCode
+	let quiet = doubled(QuietInput)
+	let loud = announced(LoudInput)
+
+	for round in 0 upto Rounds 'each'
+		print("tick\n")
+	end 'each'
+
+	try risky(LoudInput) otherwise (e) 'failed'
+		print("failed\n")
+	end 'failed'
+
+	print("{doubled(LoudInput)} {widthOf(Shape.rect(QuietInput, height: LoudInput))}\n")
+	return 0
+end 'main'

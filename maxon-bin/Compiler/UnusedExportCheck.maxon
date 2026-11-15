@@ -1412,7 +1412,9 @@ function emitForGlobalTier(project Project, decl TrackedDecl, demandedTier Visib
 	end 'aReachedSignatureAsksForThisTier'
 
 	if not decl.sawOutsideSubtree 'nothingOutsideItsDirectoryNamesIt'
-		reportPositioned(project, code: ErrorCode.semanticUnusedExportedSymbol, message: "exported {decl.noun} '{decl.displayName}' is never referenced outside its declaring directory", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path)
+		let fix = removeExportFix(project, filePath: decl.declFile.path, line: decl.nameLine, column: decl.nameColumn, name: decl.displayName)
+
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticUnusedExportedSymbol, message: "exported {decl.noun} '{decl.displayName}' is never referenced outside its declaring directory", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFile.path).withFix(fix))
 	end 'nothingOutsideItsDirectoryNamesIt'
 end 'emitForGlobalTier'
 

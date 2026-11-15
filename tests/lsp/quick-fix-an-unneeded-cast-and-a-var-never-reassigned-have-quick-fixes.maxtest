@@ -1,0 +1,36 @@
+let QuickFixVarUri = "file:///quick-fix-var-never-reassigned.maxon"
+let QuickFixVarSource = "function seed() returns ExitCode\n\treturn 3\nend 'seed'\n\nfunction main() returns ExitCode\n\tvar kept = seed()\n\treturn kept\nend 'main'\n"
+let QuickFixVarCode = "E3077"
+let QuickFixVarSubject = "kept"
+let QuickFixVarLine = 5
+let QuickFixVarStart = 1
+let QuickFixVarEnd = 4
+let QuickFixVarReplacement = "let"
+let QuickFixCastUri = "file:///quick-fix-unneeded-cast.maxon"
+let QuickFixCastSource = "typealias Tally = int(0 to 100)\n\nfunction capped(n Tally) returns Tally\n\treturn n\nend 'capped'\n\nfunction main() returns ExitCode\n\tif capped(1) > capped(5 as Tally) 'bigger'\n\t\treturn 1\n\tend 'bigger'\n\n\treturn 0\nend 'main'\n"
+let QuickFixCastCode = "E3010"
+let QuickFixCastSubject = "Tally"
+let QuickFixCastLine = 7
+let QuickFixCastStart = 24
+let QuickFixCastEnd = 33
+
+test 'an unneeded cast and a var never reassigned each have a quick fix'
+	let varSession = runQuickFixSession(QuickFixVarUri, texts: quickFixTexts(QuickFixVarSource), apply: QuickFixToApply.singleFixFor(QuickFixVarCode, line: QuickFixVarLine))
+	let castSession = runQuickFixSession(QuickFixCastUri, texts: quickFixTexts(QuickFixCastSource), apply: QuickFixToApply.singleFixFor(QuickFixCastCode, line: QuickFixCastLine))
+
+	let varNote = "`var kept` on line {QuickFixVarLine + 1} is never reassigned, which is {QuickFixVarCode}, a build-time finding whose one repair writes `{QuickFixVarReplacement}` over `var`."
+	try expectBuildTimeQuickFix(varSession, uri: QuickFixVarUri, code: QuickFixVarCode, line: QuickFixVarLine, expected: soleQuickFixEdit(QuickFixVarLine, startCharacter: QuickFixVarStart, endLine: QuickFixVarLine, endCharacter: QuickFixVarEnd, newText: QuickFixVarReplacement), subject: QuickFixVarSubject, note: varNote)
+
+	let castNote = "`5 as Tally` on line {QuickFixCastLine + 1} casts a literal to the type its parameter already declares, which is {QuickFixCastCode}, a build-time finding whose one repair deletes ` as Tally`."
+	try expectBuildTimeQuickFix(castSession, uri: QuickFixCastUri, code: QuickFixCastCode, line: QuickFixCastLine, expected: soleQuickFixEdit(QuickFixCastLine, startCharacter: QuickFixCastStart, endLine: QuickFixCastLine, endCharacter: QuickFixCastEnd, newText: ""), subject: QuickFixCastSubject, note: castNote)
+end 'an unneeded cast and a var never reassigned each have a quick fix'
+
+function expectBuildTimeQuickFix(session QuickFixSession, uri String, code String, line LspCoordinate, expected TextEditArray, subject String, note String) throws TestFailure
+	let record = try quickFixRecordOf(session, note: note)
+
+	let fix = try requiredSingleFix(record, code: code, line: line, note: note)
+	try expectQuickFixEdits(fix, uri: uri, expected: expected, subject: subject, note: note)
+
+	let result = try requiredApplied(record, note: note)
+	try expectNoPublishedCode(result.republished, code: code, note: note)
+end 'expectBuildTimeQuickFix'

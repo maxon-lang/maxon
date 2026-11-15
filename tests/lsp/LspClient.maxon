@@ -177,11 +177,41 @@ end 'FoldingRange'
 
 public type CodeActionItem
 	public var title as String
+	public var kind as CodeActionKindMember
+	public var diagnostics as RepairedDiagnosticArray
+	public var edits as TextEditArray
+	public var editedUris as StringArray
 
-	static function create(title String) returns CodeActionItem
-		return Self{title: title}
+	static function create(title String, kind CodeActionKindMember, diagnostics RepairedDiagnosticArray, edits TextEditArray, editedUris StringArray) returns CodeActionItem
+		return Self{title: title, kind: kind, diagnostics: diagnostics, edits: edits, editedUris: editedUris}
 	end 'create'
 end 'CodeActionItem'
+
+public union CodeActionKindMember
+	stated(value String)
+	absent
+
+	public function describe() returns String
+		return match self 'kind'
+			stated(value) gives value
+			absent gives AbsentCodeActionKindRendering
+		end 'kind'
+	end 'describe'
+end 'CodeActionKindMember'
+
+let AbsentCodeActionKindRendering = "no kind"
+
+public type RepairedDiagnostic
+	public var range as LspRange
+	public var code as PublishedDiagnosticCode
+	public var message as String
+
+	static function create(range LspRange, code PublishedDiagnosticCode, message String) returns RepairedDiagnostic
+		return Self{range: range, code: code, message: message}
+	end 'create'
+end 'RepairedDiagnostic'
+
+public typealias RepairedDiagnosticArray = Array with RepairedDiagnostic
 
 public union ServerIdentity
 	absent
@@ -221,6 +251,7 @@ public type InitializeResult
 	public var hasSemanticTokensProvider = false
 	public var hasWorkspaceFoldersSupported = false
 	public var hasWorkspaceFolderChangeNotifications = false
+	public var advertisedCodeActionKinds = StringArray.create(0)
 
 	static function create() returns InitializeResult
 		return Self{}
@@ -1189,13 +1220,19 @@ public type LspClient
 		return RenameResult.of(try readWorkspaceEdit(replyDoc, id: result, uri: uri))
 	end 'rename'
 
-	public function codeAction(uri String, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns CodeActionResult throws LspClientError
+	public function codeAction(uri String, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate, diagnostics PublishedDiagnosticArray = PublishedDiagnosticArray.create(0)) returns CodeActionResult throws LspClientError
 		let doc = JsonDoc.create()
 		let message = beginMessage(doc, method: MethodCodeAction)
 
+		let contextDiagnostics = JsonNodeIdArray.create(0)
+
+		for diagnostic in diagnostics 'eachDiagnostic'
+			contextDiagnostics.push(publishedDiagnosticNode(doc, diagnostic: diagnostic))
+		end 'eachDiagnostic'
+
 		// The context is required by LSP even when the client knows of no diagnostics at the range.
 		let context = JsonObjectBuilder.create(doc)
-		context.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(JsonNodeIdArray.create(0))))
+		context.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(contextDiagnostics)))
 
 		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
@@ -1207,7 +1244,7 @@ public type LspClient
 		let actions = CodeActionItemArray.create(0)
 
 		for element in try optionalElements(replyDoc, id: result) 'eachAction'
-			actions.push(CodeActionItem.create(try stringMember(replyDoc, of: element, key: TitleKey)))
+			actions.push(try readCodeAction(replyDoc, id: element, uri: uri))
 		end 'eachAction'
 
 		return CodeActionResult.of(actions)
@@ -1766,9 +1803,31 @@ function readAdvertised(replyDoc JsonDoc, result JsonNodeId) returns InitializeR
 	advertised.hasSemanticTokensProvider = advertises(replyDoc, capabilities: capabilities, key: SemanticTokensProviderKey)
 	advertised.hasWorkspaceFoldersSupported = advertisesWorkspaceFolders(replyDoc, capabilities: capabilities, key: WorkspaceFoldersSupportedKey)
 	advertised.hasWorkspaceFolderChangeNotifications = advertisesWorkspaceFolders(replyDoc, capabilities: capabilities, key: WorkspaceFoldersChangeNotificationsKey)
+	advertised.advertisedCodeActionKinds = try readCodeActionKinds(replyDoc, capabilities: capabilities)
 
 	return advertised
 end 'readAdvertised'
+
+function readCodeActionKinds(doc JsonDoc, capabilities JsonNodeId) returns StringArray throws LspClientError
+	let kinds = StringArray.create(0)
+	let provider = try doc.getChild(capabilities, key: CodeActionProviderKey) otherwise return kinds
+
+	if doc.get(provider).kind != JsonKind.jsonObject or not hasMember(doc, of: provider, key: CodeActionKindsKey) 'noKindsListed'
+		return kinds
+	end 'noKindsListed'
+
+	for element in try elementsOf(doc, id: try memberNode(doc, of: provider, key: CodeActionKindsKey)) 'eachKind'
+		let node = doc.get(element)
+
+		if node.kind != JsonKind.jsonString 'notAString'
+			throw LspClientError.malformedResponse("an entry of `codeActionProvider.codeActionKinds` is not a string")
+		end 'notAString'
+
+		kinds.push(node.stringValue)
+	end 'eachKind'
+
+	return kinds
+end 'readCodeActionKinds'
 
 function advertisesWorkspaceFolders(doc JsonDoc, capabilities JsonNodeId, key String) returns bool
 	let workspace = try doc.getChild(capabilities, key: WorkspaceKey) otherwise return false
@@ -2069,6 +2128,166 @@ function readWorkspaceEdit(doc JsonDoc, id JsonNodeId, uri String) returns TextE
 	return edits
 end 'readWorkspaceEdit'
 
+function readCodeAction(doc JsonDoc, id JsonNodeId, uri String) returns CodeActionItem throws LspClientError
+	let title = try stringMember(doc, of: id, key: TitleKey)
+	let kind = CodeActionKindMember.stated(try stringMember(doc, of: id, key: KindKey)) if hasMember(doc, of: id, key: KindKey) else CodeActionKindMember.absent
+	let repaired = RepairedDiagnosticArray.create(0)
+
+	if hasMember(doc, of: id, key: DiagnosticsKey) 'namesDiagnostics'
+		for element in try elementsOf(doc, id: try memberNode(doc, of: id, key: DiagnosticsKey)) 'eachDiagnostic'
+			let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
+			let code = try readDiagnosticCode(doc, of: element)
+			repaired.push(RepairedDiagnostic.create(range, code: code, message: try stringMember(doc, of: element, key: MessageKey)))
+		end 'eachDiagnostic'
+	end 'namesDiagnostics'
+
+	if not hasMember(doc, of: id, key: EditKey) 'noEdit'
+		return CodeActionItem.create(title, kind: kind, diagnostics: repaired, edits: TextEditArray.create(0), editedUris: StringArray.create(0))
+	end 'noEdit'
+
+	let edit = try memberNode(doc, of: id, key: EditKey)
+	let edits = try readWorkspaceEdit(doc, id: edit, uri: uri)
+
+	return CodeActionItem.create(title, kind: kind, diagnostics: repaired, edits: edits, editedUris: try workspaceEditUris(doc, id: edit))
+end 'readCodeAction'
+
+function workspaceEditUris(doc JsonDoc, id JsonNodeId) returns StringArray throws LspClientError
+	let uris = StringArray.create(0)
+
+	if isNull(doc, id: id) 'noEdit'
+		return uris
+	end 'noEdit'
+
+	if hasMember(doc, of: id, key: ChangesKey) 'byUri'
+		for key in doc.get(try memberNode(doc, of: id, key: ChangesKey)).keys 'eachUri'
+			uris.push(key.clone())
+		end 'eachUri'
+	end 'byUri'
+
+	if hasMember(doc, of: id, key: DocumentChangesKey) 'byDocument'
+		for element in try optionalElements(doc, id: try memberNode(doc, of: id, key: DocumentChangesKey)) 'eachDocument'
+			uris.push(try stringMember(doc, of: try memberNode(doc, of: element, key: TextDocumentKey), key: UriKey))
+		end 'eachDocument'
+	end 'byDocument'
+
+	return uris
+end 'workspaceEditUris'
+
+function publishedDiagnosticNode(doc JsonDoc, diagnostic PublishedDiagnostic) returns JsonNodeId
+	let node = JsonObjectBuilder.create(doc)
+	let range = diagnostic.range
+	node.putNode(RangeKey, value: rangeNode(doc, startLine: range.startLine, startCharacter: range.startCharacter, endLine: range.endLine, endCharacter: range.endCharacter))
+	node.putInt(SeverityKey, value: diagnostic.severity as JsonInteger)
+
+	match diagnostic.code 'code'
+		coded(value) then node.putString(CodeKey, value: value)
+		absent then break
+	end 'code'
+
+	node.putString(SourceKey, value: diagnostic.source)
+	node.putString(MessageKey, value: diagnostic.message)
+	return node.finish()
+end 'publishedDiagnosticNode'
+
+public function appliedEdits(text String, edits TextEditArray) returns String throws LspClientError
+	let resolved = ResolvedEditArray.create(0)
+
+	for edit in edits 'eachEdit'
+		let range = edit.range
+		let start = try byteOffsetOfPosition(text, line: range.startLine, character: range.startCharacter)
+		let finish = try byteOffsetOfPosition(text, line: range.endLine, character: range.endCharacter)
+
+		if finish < start 'backwards'
+			throw LspClientError.malformedResponse("an edit ends at {range.endLine}:{range.endCharacter}, before its start {range.startLine}:{range.startCharacter}")
+		end 'backwards'
+
+		resolved.push(ResolvedEdit.create(start, finish: finish, newText: edit.newText))
+	end 'eachEdit'
+
+	resolved.sortBy(function(a, b) gives a.start.compare(b.start))
+
+	let bytes = text.toByteArray()
+	var applied = ""
+	var copiedThrough = 0 as BytePos
+
+	for edit in resolved 'eachResolved'
+		if edit.start < copiedThrough 'overlapping'
+			throw LspClientError.malformedResponse("two edits of one change overlap at byte {edit.start}, and LSP requires a change's edits not to")
+		end 'overlapping'
+
+		applied.append(String.from(try bytes.slice(copiedThrough, endIndex: edit.start) otherwise panic("appliedEdits: both offsets were resolved inside this text")))
+		applied.append(edit.newText)
+		copiedThrough = edit.finish
+	end 'eachResolved'
+
+	applied.append(String.from(try bytes.slice(copiedThrough, endIndex: bytes.count()) otherwise panic("appliedEdits: the last offset was resolved inside this text")))
+	return applied
+end 'appliedEdits'
+
+type ResolvedEdit
+	let start as BytePos
+	let finish as BytePos
+	let newText as String
+
+	static function create(start BytePos, finish BytePos, newText String) returns ResolvedEdit
+		return Self{start: start, finish: finish, newText: newText}
+	end 'create'
+end 'ResolvedEdit'
+
+typealias ResolvedEditArray = Array with ResolvedEdit
+
+function byteOffsetOfPosition(text String, line LspCoordinate, character LspCoordinate) returns BytePos throws LspClientError
+	var atLine = 0 as LspCoordinate
+	var atCharacter = 0 as LspCoordinate
+	var offset = 0 as BytePos
+
+	for codepoint in text.codepoints() 'eachCodepoint'
+		if atLine == line and atCharacter == character 'reached'
+			return offset
+		end 'reached'
+
+		if atLine == line and (atCharacter > character or codepoint == LineFeedCodepoint) 'missedOnItsLine'
+			throw LspClientError.malformedResponse("position {line}:{character} is not a UTF-16 boundary on its line")
+		end 'missedOnItsLine'
+
+		offset = offset + utf8Width(codepoint)
+
+		if codepoint == LineFeedCodepoint 'nextLine'
+			atLine = atLine + 1
+			atCharacter = 0
+		end 'nextLine' else 'sameLine'
+			atCharacter = atCharacter + utf16Width(codepoint)
+		end 'sameLine'
+	end 'eachCodepoint'
+
+	if atLine == line and atCharacter == character 'atTheEnd'
+		return offset
+	end 'atTheEnd'
+
+	throw LspClientError.malformedResponse("position {line}:{character} lies outside the document")
+end 'byteOffsetOfPosition'
+
+function utf8Width(codepoint Codepoint) returns BytePos
+	if codepoint <= LastOneByteCodepoint 'oneByte'
+		return 1
+	end 'oneByte' else if codepoint <= LastTwoByteCodepoint 'twoBytes'
+		return 2
+	end 'twoBytes' else if codepoint <= LastBasicPlaneCodepoint 'threeBytes'
+		return 3
+	end 'threeBytes'
+
+	return 4
+end 'utf8Width'
+
+function utf16Width(codepoint Codepoint) returns LspCoordinate
+	return 1 if codepoint <= LastBasicPlaneCodepoint else 2
+end 'utf16Width'
+
+let LineFeedCodepoint = 10
+let LastOneByteCodepoint = 127
+let LastTwoByteCodepoint = 2047
+let LastBasicPlaneCodepoint = 65535
+
 // ============================================================================================
 // WIRE VOCABULARY
 // ============================================================================================
@@ -2209,6 +2428,8 @@ let TargetRangeKey = "targetRange"
 let ChangesKey = "changes"
 let DocumentChangesKey = "documentChanges"
 let EditsKey = "edits"
+let EditKey = "edit"
+let CodeActionKindsKey = "codeActionKinds"
 let FilenameKey = "filename"
 let IrKey = "ir"
 let ErrorsKey = "errors"

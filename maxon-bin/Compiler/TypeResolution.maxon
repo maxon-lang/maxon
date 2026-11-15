@@ -416,9 +416,8 @@ function reportDeferredNameDiagnostics(project Project, signatures ProgramSignat
 			continue
 		end 'namedWithinItsDirectory'
 
-		let line = entry.line
-		let column = entry.column
-		reportPositioned(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{String.from((try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")).name)}'", line: line, column: column, filePath: (try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")).filePath)
+		let name = String.from(entry.name)
+		reportPositioned(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{name}'", line: entry.line, column: entry.column, filePath: entry.filePath, fix: DiagnosticFix.described(FixRepair.typealiasDeleted(name)))
 	end 'eachUnused'
 
 	for hiddenIndex in 0 upto project.hiddenTypeNameDiagnostics.count() 'eachHidden'

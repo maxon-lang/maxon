@@ -1,0 +1,173 @@
+let TitleKey = "title"
+let EditKey = "edit"
+let CodeActionKindsKey = "codeActionKinds"
+let QuickFixActionKind = "quickfix"
+
+let MinimumFixesForFixAll = 2
+
+type LspFixOffers
+	let version as LspDocumentVersion
+	let fixable as DiagnosticArray
+
+	static function checked(version LspDocumentVersion, fixable DiagnosticArray) returns LspFixOffers
+		return Self{version: version, fixable: fixable}
+	end 'checked'
+
+	static function unchecked() returns LspFixOffers
+		return Self{version: LspNoDocumentVersion, fixable: DiagnosticArray.create(0)}
+	end 'unchecked'
+end 'LspFixOffers'
+
+typealias LspFixOffersCell = SharedValue with LspFixOffers
+
+function codeActionCapabilityOptions(doc JsonDoc) returns JsonNodeId
+	let kinds = JsonNodeIdArray.create(0)
+	kinds.push(doc.add(JsonNode.stringNode(QuickFixActionKind)))
+
+	let options = LspJsonObject.create(doc)
+	options.putNode(CodeActionKindsKey, value: doc.add(JsonNode.arrayNode(kinds)))
+	return options.finish()
+end 'codeActionCapabilityOptions'
+
+function publishFixOffers(cell LspFixOffersCell, version LspDocumentVersion, published DiagnosticArray, path FilePath)
+	let fixable = fixableIn(published, path: path)
+
+	while true 'untilLanded'
+		let held = cell.current()
+
+		if held.version > version 'aNewerCheckLanded'
+			return
+		end 'aNewerCheckLanded'
+
+		if cell.publish(LspFixOffers.checked(version, fixable: fixable.clone()), replacing: held) 'landed'
+			return
+		end 'landed'
+	end 'untilLanded'
+end 'publishFixOffers'
+
+function fixableIn(published DiagnosticArray, path FilePath) returns DiagnosticArray
+	let fixable = DiagnosticArray.create(0)
+
+	for diagnostic in published 'eachDiagnostic'
+		if diagnostic.offersAFix() and offeredEditsAreIn(diagnostic, path: path) 'aFixOfThisDocument'
+			fixable.push(diagnostic)
+		end 'aFixOfThisDocument'
+	end 'eachDiagnostic'
+
+	return fixable
+end 'fixableIn'
+
+function offeredEditsAreIn(diagnostic Diagnostic, path FilePath) returns bool
+	match diagnostic.fix 'fix'
+		offered(_, edits) then return editsAreIn(edits, path: path)
+		none or
+		described then panic("offeredEditsAreIn: {diagnostic.code.rawValue} was asked about its edits after `offersAFix` said it offers a fix")
+	end 'fix'
+end 'offeredEditsAreIn'
+
+function editsAreIn(edits TextEditArray, path FilePath) returns bool
+	for edit in edits 'eachEdit'
+		if not namesTheSameFile(edit.filePath, other: path) 'anotherFile'
+			return false
+		end 'anotherFile'
+	end 'eachEdit'
+
+	return true
+end 'editsAreIn'
+
+function codeActionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	let index = LspLineIndex.build(request.text)
+	let range = try lspMember(request.incoming, of: request.params, key: LspRangeKey)
+	let selectionStart = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspStartKey))
+	let selectionEnd = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspEndKey))
+
+	let doc = JsonDoc.create()
+	let rendering = LspQuickFixRendering.create(doc, uri: request.uri, text: request.text, index: index, tokens: lspDocumentTokens(request.text, keywords: request.keywords))
+	let offers = request.workspace.fixableAt(request.uri)
+	let actions = JsonNodeIdArray.create(0)
+
+	for diagnostic in offers 'eachOffer'
+		let span = rendering.spanOf(diagnostic)
+
+		if span.endByte < selectionStart or span.startByte > selectionEnd 'outsideTheSelection'
+			continue
+		end 'outsideTheSelection'
+
+		actions.push(rendering.singleFix(diagnostic))
+	end 'eachOffer'
+
+	if actions.isEmpty() 'nothingToOffer'
+		return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(actions)))
+	end 'nothingToOffer'
+
+	let plan = FixPlan.of(offers)
+
+	if plan.repaired.count() >= MinimumFixesForFixAll 'severalFixes'
+		actions.push(rendering.fixAll(plan))
+	end 'severalFixes'
+
+	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(actions)))
+end 'codeActionAnswer'
+
+type LspQuickFixRendering
+	let doc as JsonDoc
+	let uri as String
+	let text as String
+	let index as LspLineIndex
+	let tokens as TokenArray
+
+	static function create(doc JsonDoc, uri String, text String, index LspLineIndex, tokens TokenArray) returns LspQuickFixRendering
+		return Self{doc: doc, uri: uri, text: text, index: index, tokens: tokens}
+	end 'create'
+
+	function spanOf(diagnostic Diagnostic) returns LspSpan
+		return diagnosticSpan(diagnostic, source: self.text, index: self.index, tokens: self.tokens)
+	end 'spanOf'
+
+	function singleFix(diagnostic Diagnostic) returns JsonNodeId
+		let repaired = DiagnosticArray.create(1, zeroed: false)
+		repaired.push(diagnostic)
+
+		match diagnostic.fix 'fix'
+			offered(title, edits) then return self.action(title, repaired: repaired, edits: edits)
+			none or
+			described then panic("LspQuickFixRendering.singleFix: {diagnostic.code.rawValue} is among the offers, which hold only diagnostics with an offered fix")
+		end 'fix'
+	end 'singleFix'
+
+	function fixAll(plan FixPlan) returns JsonNodeId
+		let edits = TextEditArray.create(0)
+
+		for path in plan.roster.sorted() 'eachFile'
+			let planned = try plan.files.get(path) otherwise panic("LspQuickFixRendering.fixAll: {path} was listed from the files the plan indexes")
+			planned.inFileOrder()
+
+			for edit in planned.edits 'eachEdit'
+				edits.push(edit)
+			end 'eachEdit'
+		end 'eachFile'
+
+		return self.action("Apply all {plan.repaired.count()} quick fixes in this file", repaired: plan.repaired, edits: edits)
+	end 'fixAll'
+
+	function action(title String, repaired DiagnosticArray, edits TextEditArray) returns JsonNodeId
+		let named = JsonNodeIdArray.create(repaired.count(), zeroed: false)
+
+		for diagnostic in repaired 'eachRepaired'
+			named.push(diagnosticNode(self.doc, diagnostic: diagnostic, source: self.text, index: self.index, tokens: self.tokens))
+		end 'eachRepaired'
+
+		let changes = JsonNodeIdArray.create(edits.count(), zeroed: false)
+
+		for edit in edits 'eachEdit'
+			changes.push(textEditNode(self.doc, source: self.text, index: self.index, span: LspSpan.create(edit.startByte, endByte: edit.endByte), newText: edit.replacement))
+		end 'eachEdit'
+
+		let action = LspJsonObject.create(self.doc)
+		action.put(TitleKey, value: JsonNode.stringNode(title))
+		action.put(LspKindKey, value: JsonNode.stringNode(QuickFixActionKind))
+		action.putNode(DiagnosticsKey, value: self.doc.add(JsonNode.arrayNode(named)))
+		action.putNode(EditKey, value: workspaceEditNode(self.doc, uri: self.uri, edits: changes))
+		return action.finish()
+	end 'action'
+end 'LspQuickFixRendering'

@@ -1,0 +1,920 @@
+let DiscardPrefix = "_ = "
+let EmptyReplacement = ""
+let FirstLineNumber = 1 as LineNumber
+let FirstColumnNumber = 1 as ColumnNumber
+let LineFeedText = "\n"
+let CarriageReturnLineFeedText = "\r\n"
+let CarriageReturnLineFeedLength = 2 as ByteOffset
+
+typealias FixSourceByPath = Map with (String, FixSource)
+typealias TokenIndexByStart = Map with (ByteOffset, ElementIndex)
+typealias SpelledNameSet = Set with String
+
+type FixSource
+	let bytes as ByteArray
+	let lines as LspLineIndex
+	let contentHash as HashDigest
+	let tokens as TokenArray
+	let starts as ByteOffsetArray
+	let stops as ByteOffsetArray
+	let byStart as TokenIndexByStart
+	let codeLines as BoolArray
+	let continuedLines as BoolArray
+	let groups as ParenGroups
+
+	static function of(text String, contentHash HashDigest, tokens TokenArray) returns FixSource
+		let lines = LspLineIndex.build(text)
+		let bytes = text.toByteArray()
+		let length = bytes.count() as ByteOffset
+		let starts = ByteOffsetArray.create(tokens.count(), zeroed: false)
+		let stops = ByteOffsetArray.create(tokens.count(), zeroed: false)
+		let byStart = TokenIndexByStart.create()
+		let codeLines = BoolArray.create(lines.lineCount() as Count)
+		let continuedLines = BoolArray.create(lines.lineCount() as Count)
+
+		for (iter, token) in tokens.withIterator() 'eachToken'
+			if token.line < FirstLineNumber or token.line > lines.lineCount() as LineNumber 'pastTheText'
+				starts.push(length)
+				stops.push(length)
+				continue
+			end 'pastTheText'
+
+			let span = tokenSourceSpan(token, lines: lines, bytes: bytes)
+			let start = span.startByte
+			let stop = span.endByte
+			starts.push(start)
+			stops.push(stop)
+
+			if start >= length or tokenKindIsSkippedLayout(token.kind) or token.kind == TokenKind.eof 'carriesNoCode'
+				continue
+			end 'carriesNoCode'
+
+			byStart.upsert(start, value: iter.index())
+
+			let firstLine = lines.lineContaining(start)
+			let lastLine = lines.lineContaining(start if stop <= start else stop - 1)
+
+			for covered in firstLine upto lastLine + 1 'eachCoveredLine'
+				try codeLines.set(covered, value: true) otherwise panic("FixSource.of: line {covered} is outside the {lines.lineCount()} lines of the text")
+
+				if covered > firstLine 'aContinuation'
+					try continuedLines.set(covered, value: true) otherwise panic("FixSource.of: line {covered} is outside the {lines.lineCount()} lines of the text")
+				end 'aContinuation'
+			end 'eachCoveredLine'
+		end 'eachToken'
+
+		return Self{bytes: bytes, lines: lines, contentHash: contentHash, tokens: tokens, starts: starts, stops: stops, byStart: byStart, codeLines: codeLines, continuedLines: continuedLines, groups: ParenGroups.create()}
+	end 'of'
+
+	function length() returns ByteOffset
+		return self.bytes.count() as ByteOffset
+	end 'length'
+
+	function byteAt(at ByteOffset) returns Byte
+		return try self.bytes.get(at) otherwise panic("FixSource.byteAt: {at} is past the {self.bytes.count()} bytes the caller bounded it by")
+	end 'byteAt'
+
+	function isByte(at ByteOffset, expected Byte) returns bool
+		return at < self.length() and self.byteAt(at) == expected
+	end 'isByte'
+
+	function textOf(first ByteOffset, stop ByteOffset) returns String
+		return String.from(try self.bytes.slice(first, endIndex: stop) otherwise panic("FixSource.textOf: [{first}, {stop}) is outside the {self.bytes.count()} bytes the caller bounded it by"))
+	end 'textOf'
+
+	function hasLine(line LineNumber) returns bool
+		if line < FirstLineNumber or line > self.lines.lineCount() as LineNumber 'outsideTheText'
+			return false
+		end 'outsideTheText'
+
+		return self.lineStart(line) < self.length()
+	end 'hasLine'
+
+	function lineStart(line LineNumber) returns ByteOffset
+		return self.lines.startOfLine((line - FirstLineNumber) as LspLineNumber)
+	end 'lineStart'
+
+	function contentEnd(line LineNumber) returns ByteOffset
+		return self.lines.endOfLineContent((line - FirstLineNumber) as LspLineNumber)
+	end 'contentEnd'
+
+	function lineEnd(line LineNumber) returns ByteOffset
+		if line as LspLineNumber >= self.lines.lineCount() 'theLastLine'
+			return self.length()
+		end 'theLastLine'
+
+		return self.lines.startOfLine(line as LspLineNumber)
+	end 'lineEnd'
+
+	function terminatorOf(line LineNumber) returns String
+		let terminatorLength = self.lineEnd(line) - self.contentEnd(line)
+
+		if terminatorLength == CarriageReturnLineFeedLength 'carriageReturnLineFeed'
+			return CarriageReturnLineFeedText
+		end 'carriageReturnLineFeed'
+
+		if terminatorLength > 0 or line == FirstLineNumber 'aLineFeedOrNoPrecedent'
+			return LineFeedText
+		end 'aLineFeedOrNoPrecedent'
+
+		return self.terminatorOf(line - 1)
+	end 'terminatorOf'
+
+	function isBlankAt(at ByteOffset) returns bool
+		let found = self.byteAt(at)
+
+		return found == ' ' or found == '\t'
+	end 'isBlankAt'
+
+	function skipBlanks(at ByteOffset, stop ByteOffset) returns ByteOffset
+		var skipped = at
+
+		while skipped < stop and self.isBlankAt(skipped) 'eachBlank'
+			skipped = skipped + 1
+		end 'eachBlank'
+
+		return skipped
+	end 'skipBlanks'
+
+	function blankBetween(first ByteOffset, stop ByteOffset) returns bool
+		var at = first
+
+		while at < stop 'eachByte'
+			if not self.isBlankAt(at) 'notBlank'
+				return false
+			end 'notBlank'
+
+			at = at + 1
+		end 'eachByte'
+
+		return true
+	end 'blankBetween'
+
+	function sameBytes(first ByteOffset, second ByteOffset, length ByteOffset) returns bool
+		if first + length > self.length() or second + length > self.length() 'outsideTheText'
+			return false
+		end 'outsideTheText'
+
+		var offset = 0 as ByteOffset
+
+		while offset < length 'eachByte'
+			if self.byteAt(first + offset) != self.byteAt(second + offset) 'differs'
+				return false
+			end 'differs'
+
+			offset = offset + 1
+		end 'eachByte'
+
+		return true
+	end 'sameBytes'
+
+	function lineIsBlank(line LineNumber) returns bool
+		return self.hasLine(line) and self.blankBetween(self.lineStart(line), stop: self.contentEnd(line))
+	end 'lineIsBlank'
+
+	function firstContent(line LineNumber) returns ByteOffset
+		return self.skipBlanks(self.lineStart(line), stop: self.contentEnd(line))
+	end 'firstContent'
+
+	function indentationOf(line LineNumber) returns String
+		return self.textOf(self.lineStart(line), stop: self.firstContent(line))
+	end 'indentationOf'
+
+	function offsetOf(line LineNumber, column ColumnNumber) returns ByteOffset throws AbsentError
+		if not self.hasLine(line) or column < FirstColumnNumber 'noSuchPosition'
+			throw AbsentError.absent
+		end 'noSuchPosition'
+
+		let at = self.lineStart(line) + (column - FirstColumnNumber) as ByteOffset
+
+		if at > self.contentEnd(line) 'pastTheLine'
+			throw AbsentError.absent
+		end 'pastTheLine'
+
+		return at
+	end 'offsetOf'
+
+	function lineHasCode(line LineNumber) returns bool
+		return try self.codeLines.get((line - FirstLineNumber) as ElementIndex) otherwise false
+	end 'lineHasCode'
+
+	function lineContinuesAToken(line LineNumber) returns bool
+		return try self.continuedLines.get((line - FirstLineNumber) as ElementIndex) otherwise false
+	end 'lineContinuesAToken'
+
+	function lineIsAttachedComment(line LineNumber) returns bool
+		return self.hasLine(line) and not self.lineIsBlank(line) and not self.lineHasCode(line)
+	end 'lineIsAttachedComment'
+
+	function codeLinesIn(first LineNumber, last LineNumber) returns Count
+		var found = 0 as Count
+		var line = first
+
+		while line <= last 'eachLine'
+			if self.lineHasCode(line) 'aCodeLine'
+				found = found + 1
+			end 'aCodeLine'
+
+			line = line + 1
+		end 'eachLine'
+
+		return found
+	end 'codeLinesIn'
+
+	function kindAt(index ElementIndex) returns TokenKind
+		return tokenKindAt(self.tokens, index: index)
+	end 'kindAt'
+
+	function startOf(index ElementIndex) returns ByteOffset
+		return try self.starts.get(index) otherwise panic("FixSource.startOf: token {index} is outside the {self.starts.count()} the text holds")
+	end 'startOf'
+
+	function stopOf(index ElementIndex) returns ByteOffset
+		return try self.stops.get(index) otherwise panic("FixSource.stopOf: token {index} is outside the {self.stops.count()} the text holds")
+	end 'stopOf'
+
+	function lineOf(index ElementIndex) returns LineNumber
+		return (try self.tokens.get(index) otherwise panic("FixSource.lineOf: token {index} is outside the {self.tokens.count()} the text holds")).line
+	end 'lineOf'
+
+	function lineOfEnd(index ElementIndex) returns LineNumber
+		return (self.lines.lineContaining(self.stopOf(index) - 1) + 1) as LineNumber
+	end 'lineOfEnd'
+
+	function indexStartingAt(at ByteOffset) returns ElementIndex throws AbsentError
+		return try self.byStart.get(at) otherwise throw AbsentError.absent
+	end 'indexStartingAt'
+
+	function indexAtPosition(line LineNumber, column ColumnNumber) returns ElementIndex throws AbsentError
+		return try self.indexStartingAt(try self.offsetOf(line, column: column))
+	end 'indexAtPosition'
+
+	function hasTokenAt(index ElementIndex) returns bool
+		return index < self.tokens.count() and self.startOf(index) < self.length()
+	end 'hasTokenAt'
+
+	function adjoin(left ElementIndex, right ElementIndex) returns bool
+		return self.hasTokenAt(right) and self.stopOf(left) <= self.startOf(right) and self.blankBetween(self.stopOf(left), stop: self.startOf(right))
+	end 'adjoin'
+
+	function tokensSpellTheSame(left ElementIndex, right ElementIndex) returns bool
+		let width = self.stopOf(left) - self.startOf(left)
+
+		return self.kindAt(left) == self.kindAt(right) and width == self.stopOf(right) - self.startOf(right) and self.sameBytes(self.startOf(left), second: self.startOf(right), length: width)
+	end 'tokensSpellTheSame'
+
+	function startsItsStatement(index ElementIndex) returns bool
+		return index == 0 or self.kindAt(index - 1) == TokenKind.newline
+	end 'startsItsStatement'
+
+	function statementHeadOf(index ElementIndex) returns ElementIndex
+		var head = index
+
+		while not self.startsItsStatement(head) 'eachEarlierToken'
+			head = head - 1
+		end 'eachEarlierToken'
+
+		return head
+	end 'statementHeadOf'
+
+	function lastTokenOfStatement(first ElementIndex) returns ElementIndex
+		var last = first
+
+		while self.hasTokenAt(last + 1) and self.kindAt(last + 1) != TokenKind.newline 'eachLaterToken'
+			last = last + 1
+		end 'eachLaterToken'
+
+		return last
+	end 'lastTokenOfStatement'
+
+	function bracketCloseOf(open ElementIndex) returns ElementIndex throws AbsentError
+		var depth = 0 as BracketDepth
+		var at = open
+
+		while self.hasTokenAt(at) 'eachToken'
+			let kind = self.kindAt(at)
+
+			if tokenKindOpensABracket(kind) 'anOpener'
+				depth = depth + 1
+			end 'anOpener' else if tokenKindClosesABracket(kind) 'aCloser'
+				depth = depth - 1
+
+				if depth == 0 'theMatch'
+					return at
+				end 'theMatch'
+			end 'aCloser'
+
+			at = at + 1
+		end 'eachToken'
+
+		throw AbsentError.absent
+	end 'bracketCloseOf'
+
+	function enclosingBlockOf(index ElementIndex) returns ElementIndex throws AbsentError
+		var depth = 0 as BracketDepth
+		var at = index
+
+		while at > 0 'eachEarlierToken'
+			at = at - 1
+
+			if declarationOpensAtHeadColumn(self.tokens, index: at) 'theDeclarationOpens'
+				throw AbsentError.absent
+			end 'theDeclarationOpens'
+
+			if labelledBlockCloserAt(self.tokens, index: at) 'aBlockCloses'
+				depth = depth + 1
+			end 'aBlockCloses' else if opensAKeptBlock(self.tokens, groups: self.groups, index: at, atStatementLevel: true) 'aBlockOpens'
+				if depth == 0 'ourBlock'
+					return at
+				end 'ourBlock'
+
+				depth = depth - 1
+			end 'aBlockOpens'
+		end 'eachEarlierToken'
+
+		throw AbsentError.absent
+	end 'enclosingBlockOf'
+
+	function closerAfter(index ElementIndex) returns ElementIndex throws AbsentError
+		var depth = 0 as BracketDepth
+		var at = index
+
+		while self.hasTokenAt(at) 'eachLaterToken'
+			if declarationOpensAtHeadColumn(self.tokens, index: at) 'theDeclarationOpens'
+				throw AbsentError.absent
+			end 'theDeclarationOpens'
+
+			if labelledBlockCloserAt(self.tokens, index: at) 'aBlockCloses'
+				if depth == 0 'ourBlock'
+					return at
+				end 'ourBlock'
+
+				depth = depth - 1
+			end 'aBlockCloses' else if opensAKeptBlock(self.tokens, groups: self.groups, index: at, atStatementLevel: true) 'aBlockOpens'
+				depth = depth + 1
+			end 'aBlockOpens'
+
+			at = at + 1
+		end 'eachLaterToken'
+
+		throw AbsentError.absent
+	end 'closerAfter'
+
+	function statementOpensABlock(index ElementIndex) returns bool
+		let head = self.statementHeadOf(index)
+		let last = self.lastTokenOfStatement(head)
+
+		for at in head upto last + 1 'eachStatementToken'
+			if opensAKeptBlock(self.tokens, groups: self.groups, index: at, atStatementLevel: true) 'aBlockOpens'
+				return true
+			end 'aBlockOpens'
+		end 'eachStatementToken'
+
+		return false
+	end 'statementOpensABlock'
+
+	function declarationFirstTokenOf(index ElementIndex) returns ElementIndex
+		var first = index
+
+		while first > 0 and not declarationOpensAtHeadColumn(self.tokens, index: first) 'eachEarlierToken'
+			first = first - 1
+		end 'eachEarlierToken'
+
+		return first
+	end 'declarationFirstTokenOf'
+
+	function declarationLastTokenOf(index ElementIndex) returns ElementIndex
+		var last = index
+
+		while self.hasTokenAt(last + 1) and not declarationOpensAtHeadColumn(self.tokens, index: last + 1) 'eachLaterToken'
+			last = last + 1
+		end 'eachLaterToken'
+
+		return last
+	end 'declarationLastTokenOf'
+
+	function removalFrom(firstLine LineNumber, lastLine LineNumber) returns RemovedFromBlock throws AbsentError
+		let head = try self.indexStartingAt(self.firstContent(firstLine))
+		let opener = try self.enclosingBlockOf(head) otherwise return RemovedFromBlock.nothing
+		let closer = try self.closerAfter(opener + 1)
+		let interior = self.codeLinesIn(self.lineOf(opener) + 1, last: self.lineOf(closer) - 1)
+		let removed = self.codeLinesIn(firstLine, last: lastLine)
+
+		if removed >= interior 'itWouldEmptyTheBlock'
+			throw AbsentError.absent
+		end 'itWouldEmptyTheBlock'
+
+		return RemovedFromBlock.lines(self.startOf(closer), interior: interior, removed: removed)
+	end 'removalFrom'
+end 'FixSource'
+
+type FixSources
+	let held as FixSourceByPath
+
+	static function create() returns FixSources
+		return Self{held: FixSourceByPath.create()}
+	end 'create'
+
+	function sourceOf(project Project, path FilePath) returns FixSource throws AbsentError
+		let key = path.toString()
+		let entry = try sourceEntryOf(project, path: path) otherwise throw AbsentError.absent
+
+		if let known = try self.held.get(key) 'alreadyRead'
+			if known.contentHash == entry.contentHash 'stillCurrent'
+				return known
+			end 'stillCurrent'
+		end 'alreadyRead'
+
+		if isStdlibSourceFile(project, path: path) or isRuntimeSourceFile(project, path: path) or isScriptlibSourceFile(project, path: path) 'aLibraryFile'
+			throw AbsentError.absent
+		end 'aLibraryFile'
+
+		let tokens = try queryTokens(project, path: path) otherwise throw AbsentError.absent
+
+		// Another target compiles this text otherwise, so a repair proved against this compile
+		// could break that one.
+		if tokensHoldDirective(tokens) 'aConditionalFile'
+			throw AbsentError.absent
+		end 'aConditionalFile'
+
+		let source = FixSource.of(authoredPrefixOf(project, path: path, text: entry.content), contentHash: entry.contentHash, tokens: tokens)
+		self.held.upsert(key, value: source)
+
+		return source
+	end 'sourceOf'
+end 'FixSources'
+
+function authoredSourceText(project Project, path FilePath) returns String throws CompileError
+	return authoredPrefixOf(project, path: path, text: (try sourceEntryOf(project, path: path)).content)
+end 'authoredSourceText'
+
+function authoredPrefixOf(project Project, path FilePath, text String) returns String
+	let whole = text.byteLength() as ByteOffset
+	let authored = project.stagedSourceOrigins.authoredBytesOf(path, whole: whole)
+
+	if authored >= whole 'nothingWasAppended'
+		return text
+	end 'nothingWasAppended'
+
+	let prefix = try text.toByteArray().slice(0, endIndex: authored) otherwise panic("authoredPrefixOf: the {authored} authored bytes are past the {whole} the staged copy of {path.toString()} holds")
+
+	return String.from(prefix)
+end 'authoredPrefixOf'
+
+typealias LintedPathSet = Set with String
+
+function noteEditedSources(project Project, diagnostic Diagnostic, read LintedPathSet, into LintedSourceArray)
+	match diagnostic.fix 'fix'
+		none then return
+		offered(_, edits) then noteEditedSourcesOf(project, edits: edits, read: read, into: into)
+		described then panic("noteEditedSources: {diagnostic.code.rawValue} still carries the description of a repair, which `reportDiagnostic` resolves before a diagnostic is kept")
+	end 'fix'
+end 'noteEditedSources'
+
+function noteEditedSourcesOf(project Project, edits TextEditArray, read LintedPathSet, into LintedSourceArray)
+	for edit in edits 'eachEdit'
+		let key = edit.filePath.toString()
+
+		if read.contains(key) 'alreadyNoted'
+			continue
+		end 'alreadyNoted'
+
+		read.insert(key)
+
+		let text = try authoredSourceText(project, path: project.stagedSourceOrigins.compiledPathOf(edit.filePath)) otherwise panic("noteEditedSourcesOf: a fix edits {key}, which the compile that computed it read")
+		into.push(LintedSource.create(edit.filePath, text: text))
+	end 'eachEdit'
+end 'noteEditedSourcesOf'
+
+function offeredFix(title String, edits TextEditArray) returns DiagnosticFix
+	let frozen = TextEditArray.create(edits.count(), zeroed: false) as isolated TextEditArray
+
+	for edit in edits 'eachEdit'
+		frozen.push(edit)
+	end 'eachEdit'
+
+	return DiagnosticFix.offered(title, edits: freeze frozen)
+end 'offeredFix'
+
+function singleEditFix(title String, edit TextEdit) returns DiagnosticFix
+	let edits = TextEditArray.create(1, zeroed: false)
+	edits.push(edit)
+
+	return offeredFix(title, edits: edits)
+end 'singleEditFix'
+
+function deletionEdit(filePath FilePath, first ByteOffset, stop ByteOffset) returns TextEdit
+	return TextEdit.create(filePath, startByte: first, endByte: stop, replacement: EmptyReplacement)
+end 'deletionEdit'
+
+function deletedStatementFix(source FixSource, filePath FilePath, title String, firstLine LineNumber, lastLine LineNumber) returns DiagnosticFix
+	let removal = try source.removalFrom(firstLine, lastLine: lastLine) otherwise return DiagnosticFix.none
+
+	return singleEditFix(title, edit: TextEdit.create(filePath, startByte: source.lineStart(firstLine), endByte: source.lineEnd(lastLine), replacement: EmptyReplacement, removes: removal))
+end 'deletedStatementFix'
+
+function startsAfter(startLine LineNumber, startColumn ColumnNumber, line LineNumber, column ColumnNumber) returns bool
+	return startLine > line or (startLine == line and startColumn > column)
+end 'startsAfter'
+
+union OpEffect
+	free
+	hazardous
+	runtimeCall(callee immutable ByteArray)
+	declaredCall(callee immutable ByteArray)
+end 'OpEffect'
+
+union CalleeEffects
+	undecided
+	summarized(funcNames FunctionNameIndex, effectFree BoolArray, aborts AbortFacts)
+end 'CalleeEffects'
+
+typealias CalleeIndexArray = Array with ElementIndex
+typealias CalleeListArray = Array with CalleeIndexArray
+
+// Deleting a discarded call removes its abort with it, so a call whose callee can panic, directly
+// or through what it calls, is kept as the check it may be.
+type AbortFacts
+	let mayAbort as BoolArray
+
+	static function build(module MaxonModule, funcNames FunctionNameIndex) returns AbortFacts
+		let functions = funcNames.functions
+		let mayAbort = BoolArray.create(functions.count())
+		let callees = CalleeListArray.create(0)
+
+		for index in 0 upto functions.count() 'eachFunction'
+			let func = try functions.get(index) otherwise panic("AbortFacts.build: function {index} is outside the {functions.count()} the index holds")
+			let called = CalleeIndexArray.create(0)
+			var aborts = false
+
+			for blockRef in func.blockRefs 'eachBlock'
+				let block = try module.blocks.get(blockRef) otherwise panic("AbortFacts.build: blockRef from func.blockRefs not in module.blocks")
+
+				for opIndex in block.bodyOps() 'eachOp'
+					aborts = aborts or opMayAbort(module, opIndex: opIndex, funcNames: funcNames, into: called)
+				end 'eachOp'
+
+				if block.hasTerminatorOp() 'aTerminator'
+					aborts = aborts or opMayAbort(module, opIndex: block.terminatorIndex(), funcNames: funcNames, into: called)
+				end 'aTerminator'
+			end 'eachBlock'
+
+			try mayAbort.set(index, value: aborts) otherwise panic("AbortFacts.build: function {index} is outside the verdicts just sized to the index")
+			callees.push(called)
+		end 'eachFunction'
+
+		var changed = true
+
+		while changed 'untilSettled'
+			changed = false
+
+			for index in 0 upto functions.count() 'eachCaller'
+				if (try mayAbort.get(index) otherwise panic("AbortFacts.build: verdict {index} is outside the index")) or not calleesAbort(callees, caller: index, mayAbort: mayAbort) 'nothingNew'
+					continue
+				end 'nothingNew'
+
+				try mayAbort.set(index, value: true) otherwise panic("AbortFacts.build: verdict {index} is outside the index")
+				changed = true
+			end 'eachCaller'
+		end 'untilSettled'
+
+		return Self{mayAbort: mayAbort}
+	end 'build'
+
+	function cannotAbort(callee ElementIndex) returns bool
+		return not (try self.mayAbort.get(callee) otherwise panic("AbortFacts.cannotAbort: function {callee} is outside the {self.mayAbort.count()} the facts cover"))
+	end 'cannotAbort'
+end 'AbortFacts'
+
+function opMayAbort(module MaxonModule, opIndex ElementIndex, funcNames FunctionNameIndex, into CalleeIndexArray) returns bool
+	let op = try module.ops.get(opIndex) otherwise panic("opMayAbort: opIndex {opIndex} is outside the module's ops")
+
+	match effectOfOp(op) 'effect'
+		hazardous then return true
+		declaredCall(callee) then return not noteCallee(callee, funcNames: funcNames, into: into)
+		free or
+		runtimeCall then return false
+	end 'effect'
+end 'opMayAbort'
+
+function noteCallee(callee immutable ByteArray, funcNames FunctionNameIndex, into CalleeIndexArray) returns bool
+	let calleeIndex = try funcNames.byName.get(callee) otherwise return false
+	into.push(calleeIndex)
+
+	return true
+end 'noteCallee'
+
+function calleesAbort(callees CalleeListArray, caller ElementIndex, mayAbort BoolArray) returns bool
+	let called = try callees.get(caller) otherwise panic("calleesAbort: caller {caller} is outside the {callees.count()} lists")
+
+	for callee in called 'eachCallee'
+		if (try mayAbort.get(callee) otherwise panic("calleesAbort: callee {callee} is outside the verdicts")) 'itAborts'
+			return true
+		end 'itAborts'
+	end 'eachCallee'
+
+	return false
+end 'calleesAbort'
+
+union AbortFactsSlot
+	unbuilt
+	built(facts AbortFacts)
+end 'AbortFactsSlot'
+
+function effectOfOp(op MaxonOp) returns OpEffect
+	if opAbortsTheProcess(op) 'itCanAbort'
+		return OpEffect.hazardous
+	end 'itCanAbort'
+
+	if not opCallsOrSuspends(op) 'aValueComputation'
+		return OpEffect.free
+	end 'aValueComputation'
+
+	if opSuspends(op) 'waitsOnSomething'
+		return OpEffect.hazardous
+	end 'waitsOnSomething'
+
+	match maxonOpCalleeKind(op) 'kind'
+		direct then return runtimeOrDeclaredCall(maxonOpCalleeName(op))
+		functionValue or
+		noCallee then return OpEffect.hazardous
+	end 'kind'
+end 'effectOfOp'
+
+function runtimeOrDeclaredCall(callee immutable ByteArray) returns OpEffect
+	if wearsTheCompilerInternalPrefix(callee) 'aRuntimeEntry'
+		return OpEffect.runtimeCall(callee)
+	end 'aRuntimeEntry'
+
+	return OpEffect.declaredCall(callee)
+end 'runtimeOrDeclaredCall'
+
+function opIsFreeOfEffects(op MaxonOp, callees CalleeEffects) returns bool
+	match effectOfOp(op) 'effect'
+		free then return true
+		hazardous then return false
+		runtimeCall(callee) then return effectFreeRuntimeCallee(callee)
+		declaredCall(callee) then return declaredCalleeIsEffectFree(callee, callees: callees)
+	end 'effect'
+end 'opIsFreeOfEffects'
+
+function declaredCalleeIsEffectFree(callee immutable ByteArray, callees CalleeEffects) returns bool
+	match callees 'callees'
+		undecided then return false
+		summarized(funcNames, effectFree, aborts) then return summarizedCalleeIsEffectFree(callee, funcNames: funcNames, effectFree: effectFree, aborts: aborts)
+	end 'callees'
+end 'declaredCalleeIsEffectFree'
+
+function summarizedCalleeIsEffectFree(callee immutable ByteArray, funcNames FunctionNameIndex, effectFree BoolArray, aborts AbortFacts) returns bool
+	let calleeIndex = try funcNames.byName.get(callee) otherwise return false
+
+	return aborts.cannotAbort(calleeIndex) and (try effectFree.get(calleeIndex) otherwise panic("summarizedCalleeIsEffectFree: effectFree.get({calleeIndex}) is outside the {effectFree.count()} verdicts, which `siteReadsTheSummary` builds over `funcNames.functions` for any statement that calls a declared function"))
+end 'summarizedCalleeIsEffectFree'
+
+union ExemptCall
+	none
+	discardedBy(site PendingDiscardedResult)
+end 'ExemptCall'
+
+function opIsExempt(exempt ExemptCall, opIndex ElementIndex) returns bool
+	match exempt 'exempt'
+		none then return false
+		discardedBy(site) then return site.isProducedByOp(opIndex)
+	end 'exempt'
+end 'opIsExempt'
+
+function opsAreFreeOfEffects(module MaxonModule, firstOp ElementIndex, endOp ElementIndex, callees CalleeEffects, exempt ExemptCall) returns bool
+	let fresh = ValueIdSet.create()
+	let operands = ValueIdArray.create(0)
+
+	for opIndex in firstOp upto endOp 'eachOp'
+		let op = try module.ops.get(opIndex) otherwise panic("opsAreFreeOfEffects: ops.get({opIndex}) is outside the merged module the range was filed against")
+
+		if opIsExempt(exempt, opIndex: opIndex) 'theDiscardedCall'
+			if not discardedCalleeCannotAbort(op, callees: callees) 'itCanAbort'
+				return false
+			end 'itCanAbort'
+
+			continue
+		end 'theDiscardedCall'
+
+		if opBuildsAFreshContainer(op) 'aFreshContainer'
+			fresh.insert(try maxonOpDefinedValue(op) otherwise panic("opsAreFreeOfEffects: a container-creating call defines no value"))
+			continue
+		end 'aFreshContainer'
+
+		if opFillsAFreshContainer(op, fresh: fresh, operands: operands) 'itsFirstElementsGoIntoOneBuiltHere'
+			continue
+		end 'itsFirstElementsGoIntoOneBuiltHere'
+
+		if not opIsFreeOfEffects(op, callees: callees) 'anEffect'
+			return false
+		end 'anEffect'
+	end 'eachOp'
+
+	return true
+end 'opsAreFreeOfEffects'
+
+function discardedCalleeCannotAbort(op MaxonOp, callees CalleeEffects) returns bool
+	match effectOfOp(op) 'effect'
+		declaredCall(callee) then return declaredCalleeCannotAbort(callee, callees: callees)
+		free or
+		hazardous or
+		runtimeCall then return true
+	end 'effect'
+end 'discardedCalleeCannotAbort'
+
+function declaredCalleeCannotAbort(callee immutable ByteArray, callees CalleeEffects) returns bool
+	match callees 'callees'
+		undecided then return false
+		summarized(funcNames, _, aborts) then return abortFreeCallee(callee, funcNames: funcNames, aborts: aborts)
+	end 'callees'
+end 'declaredCalleeCannotAbort'
+
+function abortFreeCallee(callee immutable ByteArray, funcNames FunctionNameIndex, aborts AbortFacts) returns bool
+	let calleeIndex = try funcNames.byName.get(callee) otherwise return false
+
+	return aborts.cannotAbort(calleeIndex)
+end 'abortFreeCallee'
+
+function opBuildsAFreshContainer(op MaxonOp) returns bool
+	match effectOfOp(op) 'effect'
+		runtimeCall(callee) then return callee.equals(ManagedCreateName) or isManagedSizedCreateCallee(callee)
+		free or
+		hazardous or
+		declaredCall then return false
+	end 'effect'
+end 'opBuildsAFreshContainer'
+
+function opFillsAFreshContainer(op MaxonOp, fresh ValueIdSet, operands ValueIdArray) returns bool
+	match effectOfOp(op) 'effect'
+		runtimeCall(callee) then return callee.equals(ManagedPushName) and receiverIsIn(op, fresh: fresh, operands: operands)
+		free or
+		hazardous or
+		declaredCall then return false
+	end 'effect'
+end 'opFillsAFreshContainer'
+
+function receiverIsIn(op MaxonOp, fresh ValueIdSet, operands ValueIdArray) returns bool
+	maxonOpOperandValues(op, into: operands)
+
+	return fresh.contains(try operands.get(0) otherwise return false)
+end 'receiverIsIn'
+
+function rangeCallsADeclaredFunction(module MaxonModule, site PendingDiscardedResult, firstOp ElementIndex, endOp ElementIndex) returns bool
+	for opIndex in firstOp upto endOp 'eachOp'
+		if site.isProducedByOp(opIndex) 'theDiscardedCall'
+			continue
+		end 'theDiscardedCall'
+
+		let op = try module.ops.get(opIndex) otherwise panic("rangeCallsADeclaredFunction: ops.get({opIndex}) is outside the merged module the site was filed against")
+
+		match effectOfOp(op) 'effect'
+			declaredCall then return true
+			free or
+			hazardous or
+			runtimeCall then continue
+		end 'effect'
+	end 'eachOp'
+
+	return false
+end 'rangeCallsADeclaredFunction'
+
+type DiscardFixes
+	let module as MaxonModule
+	let funcNames as FunctionNameIndex
+	let effectFree as BoolArray
+	var aborts as AbortFactsSlot
+
+	static function create(module MaxonModule, funcNames FunctionNameIndex, effectFree BoolArray) returns DiscardFixes
+		return Self{module: module, funcNames: funcNames, effectFree: effectFree, aborts: AbortFactsSlot.unbuilt}
+	end 'create'
+
+	function abortFacts() returns AbortFacts
+		match self.aborts 'slot'
+			built(facts) then return facts
+			unbuilt then break
+		end 'slot'
+
+		let facts = AbortFacts.build(self.module, funcNames: self.funcNames)
+		self.aborts = AbortFactsSlot.built(facts)
+
+		return facts
+	end 'abortFacts'
+
+	function discarding(project Project, site PendingDiscardedResult, subject String) returns DiagnosticFix
+		match site.statement 'statement'
+			inCondition then return DiagnosticFix.none
+			standing(startLine, startColumn, _, _, _, _, _, _) then return self.discardingAt(project, site: site, subject: subject, startLine: startLine, startColumn: startColumn)
+		end 'statement'
+	end 'discarding'
+
+	function discardingAt(project Project, site PendingDiscardedResult, subject String, startLine LineNumber, startColumn ColumnNumber) returns DiagnosticFix
+		let source = try project.fixSources.sourceOf(project, path: site.filePath) otherwise return DiagnosticFix.none
+
+		if startsAfter(startLine, startColumn: startColumn, line: site.line, column: site.column) 'beyondTheCall'
+			return DiagnosticFix.none
+		end 'beyondTheCall'
+
+		let at = try source.offsetOf(startLine, column: startColumn) otherwise return DiagnosticFix.none
+
+		return singleEditFix("Discard the result of '{subject}'", edit: TextEdit.create(site.filePath, startByte: at, endByte: at, replacement: DiscardPrefix))
+	end 'discardingAt'
+
+	function deleting(project Project, site PendingDiscardedResult, subject String) returns DiagnosticFix
+		match site.statement 'statement'
+			inCondition then return DiagnosticFix.none
+			standing(startLine, startColumn, lastLine, endsItsLine, firstOp, endOp, deferredCalls, checked) then return self.deletingLines(project, site: site, subject: subject, startLine: startLine, startColumn: startColumn, lastLine: lastLine, wholeLines: endsItsLine and not deferredCalls and not checked, firstOp: firstOp, endOp: endOp)
+		end 'statement'
+	end 'deleting'
+
+	function deletingLines(project Project, site PendingDiscardedResult, subject String, startLine LineNumber, startColumn ColumnNumber, lastLine LineNumber, wholeLines bool, firstOp ElementIndex, endOp ElementIndex) returns DiagnosticFix
+		if not wholeLines 'sharesItsLineOrCanAbortOrCallsThroughADeferral'
+			return DiagnosticFix.none
+		end 'sharesItsLineOrCanAbortOrCallsThroughADeferral'
+
+		let source = try project.fixSources.sourceOf(project, path: site.filePath) otherwise return DiagnosticFix.none
+
+		if startsAfter(startLine, startColumn: startColumn, line: site.line, column: site.column) 'beyondTheCall'
+			return DiagnosticFix.none
+		end 'beyondTheCall'
+
+		let at = try source.offsetOf(startLine, column: startColumn) otherwise return DiagnosticFix.none
+
+		if not source.blankBetween(source.lineStart(startLine), stop: at) 'somethingPrecedesIt'
+			return DiagnosticFix.none
+		end 'somethingPrecedesIt'
+
+		if not self.freeOfEffects(site, firstOp: firstOp, endOp: endOp) 'anOperandHasAnEffect'
+			return DiagnosticFix.none
+		end 'anOperandHasAnEffect'
+
+		return deletedStatementFix(source, filePath: site.filePath, title: "Delete the call to '{subject}', whose result nothing uses", firstLine: startLine, lastLine: lastLine)
+	end 'deletingLines'
+
+	function freeOfEffects(site PendingDiscardedResult, firstOp ElementIndex, endOp ElementIndex) returns bool
+		return opsAreFreeOfEffects(self.module, firstOp: firstOp, endOp: endOp, callees: CalleeEffects.summarized(self.funcNames, effectFree: self.effectFree, aborts: self.abortFacts()), exempt: ExemptCall.discardedBy(site))
+	end 'freeOfEffects'
+end 'DiscardFixes'
+
+function removeExportFix(project Project, filePath FilePath, line LineNumber, column ColumnNumber, name String) returns DiagnosticFix
+	let source = try project.fixSources.sourceOf(project, path: filePath) otherwise return DiagnosticFix.none
+	let nameAt = try source.offsetOf(line, column: column) otherwise return DiagnosticFix.none
+	let nameIndex = try source.indexStartingAt(nameAt) otherwise return DiagnosticFix.none
+	let modifier = source.statementHeadOf(nameIndex)
+
+	if source.kindAt(modifier) != TokenKind.export or not source.adjoin(modifier, right: modifier + 1) 'noModifierToDrop'
+		return DiagnosticFix.none
+	end 'noModifierToDrop'
+
+	return singleEditFix("Remove 'export' from '{name}'", edit: deletionEdit(filePath, first: source.startOf(modifier), stop: source.startOf(modifier + 1)))
+end 'removeExportFix'
+
+function deleteDeclarationFix(project Project, filePath FilePath, firstLine LineNumber, lastLine LineNumber, noun String, name String) returns DiagnosticFix
+	let source = try project.fixSources.sourceOf(project, path: filePath) otherwise return DiagnosticFix.none
+
+	if not source.hasLine(firstLine) or not source.hasLine(lastLine) or lastLine < firstLine 'noSuchDeclaration'
+		return DiagnosticFix.none
+	end 'noSuchDeclaration'
+
+	var first = firstLine
+
+	while first > FirstLineNumber and source.lineIsAttachedComment(first - 1) 'attachedComments'
+		first = first - 1
+	end 'attachedComments'
+
+	var deletedFrom = source.lineStart(first)
+	var deletedUpTo = source.lineEnd(lastLine)
+
+	if source.lineIsBlank(lastLine + 1) 'aBlankLineFollows'
+		deletedUpTo = source.lineEnd(lastLine + 1)
+	end 'aBlankLineFollows' else if first > FirstLineNumber and source.lineIsBlank(first - 1) 'aBlankLinePrecedes'
+		deletedFrom = source.lineStart(first - 1)
+	end 'aBlankLinePrecedes'
+
+	return singleEditFix("Delete unused {noun} '{name}'", edit: deletionEdit(filePath, first: deletedFrom, stop: deletedUpTo))
+end 'deleteDeclarationFix'
+
+function tokenKindIsABinaryOperator(kind TokenKind) returns bool
+	return kind == TokenKind.plus or kind == TokenKind.minus or kind == TokenKind.star or kind == TokenKind.slash or kind == TokenKind.mod or kind == TokenKind.and or kind == TokenKind.or or kind == TokenKind.xor or kind == TokenKind.shl or kind == TokenKind.shr or kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals or kind == TokenKind.as or kind == TokenKind.is or kind == TokenKind.if or kind == TokenKind.else
+end 'tokenKindIsABinaryOperator'
+
+function operandEndsAt(kind TokenKind) returns bool
+	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.charLiteral or kind == TokenKind.identifier or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.true or kind == TokenKind.false or kind == TokenKind.rightParen or kind == TokenKind.rightBracket
+end 'operandEndsAt'
+
+function operandStartsAt(kind TokenKind) returns bool
+	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.charLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.identifier or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.true or kind == TokenKind.false
+end 'operandStartsAt'
+
+function fallbackMayHold(kind TokenKind, afterDot bool, atStart bool) returns bool
+	if afterDot or operandStartsAt(kind) 'aMemberNameOrAPrimary'
+		return true
+	end 'aMemberNameOrAPrimary'
+
+	if atStart and (kind == TokenKind.ignore or kind == TokenKind.break or kind == TokenKind.continue or kind == TokenKind.return or kind == TokenKind.panic or kind == TokenKind.throw) 'aHandlerStatement'
+		return true
+	end 'aHandlerStatement'
+
+	return tokenKindIsABinaryOperator(kind) or kind == TokenKind.dot or kind == TokenKind.not or kind == TokenKind.try or kind == TokenKind.otherwise or kind == TokenKind.async or kind == TokenKind.await or kind == TokenKind.from or kind == TokenKind.sizeof or kind == TokenKind.countof
+end 'fallbackMayHold'

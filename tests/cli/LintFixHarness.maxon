@@ -1,0 +1,309 @@
+let LintFixOption = "--fix"
+let LintFixBeforeDirName = "before"
+let LintFixAfterDirName = "after"
+let LintFixExpectedDirName = "expected-after"
+let LintFixFixedLinePrefix = "Fixed "
+let LintFixFixedLineMiddle = " finding(s) in "
+let LintFixCleanExit = 0
+let LintFixProofExit = 0
+let LintFixFirstLineNumber = 1
+let LintFixAppMainFile = "app/main.maxon"
+
+typealias LintFixFindingTally = int(1 to 100000)
+
+type LintFixedFile
+	let path as String
+	let findings as LintFixFindingTally
+
+	static function of(path String, findings LintFixFindingTally) returns LintFixedFile
+		return Self{path: path, findings: findings}
+	end 'of'
+
+	function line() returns String
+		return "{LintFixFixedLinePrefix}{self.findings}{LintFixFixedLineMiddle}{self.path}"
+	end 'line'
+end 'LintFixedFile'
+
+typealias LintFixedFileArray = Array with LintFixedFile
+typealias LintFixProofArray = Array with StringArray
+
+union LintFixOutcome
+	linted(subject String)
+	refused(remaining ExpectedDiagnosticArray)
+end 'LintFixOutcome'
+
+enum LintFixPlace
+	besideTheProject
+	insideTheProject
+end 'LintFixPlace'
+
+enum LintFixLineEndings
+	asStored
+	carriageReturnLineFeeds
+end 'LintFixLineEndings'
+
+union LintFixPrinted
+	unchecked
+	exactly(text String)
+end 'LintFixPrinted'
+
+let LintFixCarriageReturnLineFeed = "{CarriageReturn}{LineFeed}"
+let LintFixVisibleCarriageReturn = "\\r"
+
+function lintFixWrittenWithCarriageReturns(root FilePath)
+	for file in lintFixRelativeFiles(root) 'eachFile'
+		let path = lintFixPathIn(root, relative: file)
+		let text = withoutCarriageReturns(fileText(path)).replace(LineFeed, with: LintFixCarriageReturnLineFeed)
+
+		try File.writeText(path, content: text) otherwise panic("the gate could not run — could not rewrite {path.toString()} with CRLF line endings.")
+	end 'eachFile'
+end 'lintFixWrittenWithCarriageReturns'
+
+function lintFixVisible(line String) returns String
+	return line.replace(CarriageReturn, with: LintFixVisibleCarriageReturn)
+end 'lintFixVisible'
+
+function lintFixFixedFiles(path String, findings LintFixFindingTally) returns LintFixedFileArray
+	let files = LintFixedFileArray.create(0)
+	files.push(LintFixedFile.of(path, findings: findings))
+
+	return files
+end 'lintFixFixedFiles'
+
+function lintFixRefusedWith(diagnostic ExpectedDiagnostic) returns LintFixOutcome
+	let remaining = ExpectedDiagnosticArray.create(0)
+	remaining.push(diagnostic)
+
+	return LintFixOutcome.refused(remaining)
+end 'lintFixRefusedWith'
+
+function lintFixRunningCase(fixture String, findings LintFixFindingTally, lineEndings LintFixLineEndings = LintFixLineEndings.asStored, printed LintFixPrinted = LintFixPrinted.unchecked) returns LintFixCase
+	let proofs = LintFixProofArray.create(0)
+	proofs.push([ExecuteCommandWord, AppDirName])
+
+	return LintFixCase.of(fixture, arguments: [AppDirName], fixed: lintFixFixedFiles(LintFixAppMainFile, findings: findings), outcome: LintFixOutcome.linted(AppDirName), proofs: proofs, lineEndings: lineEndings, printed: printed)
+end 'lintFixRunningCase'
+
+function stagedLintFixTree(dir FilePath, fixture String, side String, into String) returns FilePath
+	let staged = stagingDir(dir.join(into).toString())
+	stageStoredTree(fixtureDir("{CliFixturesDir}{PortablePathSeparator}{fixture}{PortablePathSeparator}{side}"), into: staged)
+
+	return staged
+end 'stagedLintFixTree'
+
+function lintFixPortable(text String) returns String
+	return withoutCarriageReturns(text).replace(WindowsPathSeparator, with: PortablePathSeparator)
+end 'lintFixPortable'
+
+function lintFixStdoutLines(stdout String) returns StringArray
+	let lines = StringArray.create(0)
+
+	for line in outputLines(stdout) 'eachLine'
+		if not line.isEmpty() 'printed'
+			lines.push(lintFixPortable(line))
+		end 'printed'
+	end 'eachLine'
+
+	return lines
+end 'lintFixStdoutLines'
+
+function lintFixFilesUnder(root FilePath, prefix String, into StringArray)
+	for entry in listing(root) 'eachEntry'
+		let name = entry.filename()
+		let relative = name if prefix.isEmpty() else "{prefix}{PortablePathSeparator}{name}"
+
+		if Directory.isDirectory(entry) 'aDirectory'
+			if name == ProjectProductsDirName 'buildProducts'
+				continue
+			end 'buildProducts'
+
+			lintFixFilesUnder(entry, prefix: relative, into: into)
+			continue
+		end 'aDirectory'
+
+		into.push(relative)
+	end 'eachEntry'
+end 'lintFixFilesUnder'
+
+function lintFixRelativeFiles(root FilePath) returns StringArray
+	let files = StringArray.create(0)
+	lintFixFilesUnder(root, prefix: "", into: files)
+
+	return files
+end 'lintFixRelativeFiles'
+
+function lintFixPathIn(root FilePath, relative String) returns FilePath
+	var path = root
+
+	for component in relative.split(PortablePathSeparator) 'eachComponent'
+		path = path.join(component)
+	end 'eachComponent'
+
+	return path
+end 'lintFixPathIn'
+
+function lintFixFirstDifferingLine(actual String, expected String) returns String
+	let actualLines = actual.split(LineFeed)
+	let expectedLines = expected.split(LineFeed)
+
+	for (iter, wanted) in expectedLines.withIterator() 'eachLine'
+		let number = iter.index() + LintFixFirstLineNumber
+
+		if let found = try actualLines.get(iter.index()) 'present'
+			if found != wanted 'differs'
+				return "line {number} reads `{lintFixVisible(found)}` where `{lintFixVisible(wanted)}` is expected"
+			end 'differs'
+		end 'present' else 'missing'
+			return "the file ends before line {number}, which is expected to read `{lintFixVisible(wanted)}`"
+		end 'missing'
+	end 'eachLine'
+
+	if let extra = try actualLines.get(expectedLines.count()) 'pastTheEnd'
+		return "line {expectedLines.count() + LintFixFirstLineNumber} reads `{lintFixVisible(extra)}`, past the expected end of the file"
+	end 'pastTheEnd' else 'sameLines'
+		return "every line reads as expected, so the bytes differ in an encoding the lines do not show"
+	end 'sameLines'
+end 'lintFixFirstDifferingLine'
+
+function requireLintFixTreeMatches(project FilePath, expected FilePath, what String, said String) throws TestFailure
+	let actualFiles = lintFixRelativeFiles(project)
+	let expectedFiles = lintFixRelativeFiles(expected)
+
+	for file in expectedFiles 'eachExpected'
+		try Expect.isTrue(actualFiles.contains(file), message: "{what} left no `{file}` in {project.toString()}, which the expected tree holds. {said}")
+	end 'eachExpected'
+
+	for file in actualFiles 'eachActual'
+		try Expect.isTrue(expectedFiles.contains(file), message: "{what} left `{file}` in {project.toString()}, which the expected tree does not hold. {said}")
+	end 'eachActual'
+
+	for file in expectedFiles 'eachFile'
+		let actualPath = lintFixPathIn(project, relative: file)
+		let expectedPath = lintFixPathIn(expected, relative: file)
+
+		if not fileBytes(actualPath).equals(fileBytes(expectedPath)) 'differs'
+			let actualText = fileText(actualPath)
+			let difference = lintFixFirstDifferingLine(actualText, expected: fileText(expectedPath))
+
+			try Expect.fail("{what} left `{file}` other than expected: {difference}. It left the file reading:{LineFeed}{lintFixVisible(actualText)}{LineFeed}{said}")
+		end 'differs'
+	end 'eachFile'
+end 'requireLintFixTreeMatches'
+
+type LintFixCase implements OutsideCheckoutCase
+	let fixture as String
+	let arguments as StringArray
+	let fixed as LintFixedFileArray
+	let outcome as LintFixOutcome
+	let place as LintFixPlace
+	let proofs as LintFixProofArray
+	let lineEndings as LintFixLineEndings
+	let programPrints as LintFixPrinted
+
+	static function of(fixture String, arguments StringArray, fixed LintFixedFileArray, outcome LintFixOutcome, place LintFixPlace = LintFixPlace.besideTheProject, proofs LintFixProofArray = LintFixProofArray.create(0), lineEndings LintFixLineEndings = LintFixLineEndings.asStored, printed LintFixPrinted = LintFixPrinted.unchecked) returns LintFixCase
+		return Self{fixture: fixture, arguments: arguments, fixed: fixed, outcome: outcome, place: place, proofs: proofs, lineEndings: lineEndings, programPrints: printed}
+	end 'of'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let project = stagedCliFixture(dir, fixture: "{self.fixture}{PortablePathSeparator}{LintFixBeforeDirName}")
+		let expected = stagedLintFixTree(dir, fixture: self.fixture, side: LintFixAfterDirName, into: LintFixExpectedDirName)
+
+		if self.lineEndings == LintFixLineEndings.carriageReturnLineFeeds 'withCarriageReturns'
+			lintFixWrittenWithCarriageReturns(project)
+			lintFixWrittenWithCarriageReturns(expected)
+		end 'withCarriageReturns'
+
+		let workingDirectory = workingDirectoryFor(dir, project: project)
+		let cacheRoot = cacheRootIn(dir)
+
+		let fixArguments = StringArray.create(0)
+		fixArguments.push(LintFixOption)
+		fixArguments.append(self.arguments)
+
+		let first = LintRun.ran(workingDirectory, cacheRoot: cacheRoot, arguments: fixArguments)
+
+		try requireLintFixTreeMatches(project, expected: expected, what: first.typed, said: first.said())
+		try requireReported(first, project: project, reportedFixes: self.fixed)
+
+		let plain = LintRun.ran(workingDirectory, cacheRoot: cacheRoot, arguments: self.arguments)
+
+		try requireReportsAsLint(first, plain: plain, reportedFixes: self.fixed)
+
+		let second = LintRun.ran(workingDirectory, cacheRoot: cacheRoot, arguments: fixArguments)
+		let secondWhat = "a second {second.typed}, over the program the first one fixed,"
+
+		try requireLintFixTreeMatches(project, expected: expected, what: secondWhat, said: second.said())
+		try requireReported(second, project: project, reportedFixes: LintFixedFileArray.create(0))
+		try requireReportsAsLint(second, plain: plain, reportedFixes: LintFixedFileArray.create(0))
+
+		for proof in self.proofs 'eachProof'
+			let proved = runWithCacheRoot(proof, cacheRoot: cacheRoot, workingDirectory: workingDirectory)
+
+			try Expect.equal(proved.exitCode(), expected: LintFixProofExit, message: "`maxon {joined(proof, separator: Space)}` over the program {first.typed} fixed did not exit {LintFixProofExit}: a fix must leave the program working. It wrote to stdout: {proved.stdout} and to stderr: {proved.stderr}")
+			try requirePrinted(proved, proof: proof, fixedBy: first.typed)
+		end 'eachProof'
+	end 'requireHeldIn'
+
+	function requirePrinted(proved CollectedOutput, proof StringArray, fixedBy String) throws TestFailure
+		match self.programPrints 'printed'
+			unchecked then return
+			exactly(text) then try Expect.equal(lintFixVisible(withoutCarriageReturns(proved.stdout)), expected: lintFixVisible(text), message: "`maxon {joined(proof, separator: Space)}` over the program {fixedBy} fixed printed otherwise than the program as written prints: a fix must not change what the program does. It wrote to stderr: {proved.stderr}")
+		end 'printed'
+	end 'requirePrinted'
+
+	function workingDirectoryFor(dir FilePath, project FilePath) returns FilePath
+		match self.place 'where'
+			besideTheProject then return dir
+			insideTheProject then return project
+		end 'where'
+	end 'workingDirectoryFor'
+
+	function requireReported(run LintRun, project FilePath, reportedFixes LintFixedFileArray) throws TestFailure
+		match self.outcome 'outcome'
+			linted then try requireNothingStands(run, project: project)
+			refused(remaining) then try run.requireRefusedWithOnly(project, diagnostics: remaining)
+		end 'outcome'
+
+		let expectedLines = StringArray.create(0)
+
+		for file in reportedFixes 'eachFixed'
+			expectedLines.push(file.line())
+		end 'eachFixed'
+
+		expectedLines.append(self.lintedLines())
+
+		let printed = joined(lintFixStdoutLines(run.output.stdout), separator: LineFeed)
+		let wanted = joined(expectedLines, separator: LineFeed)
+
+		try Expect.equal(printed, expected: wanted, message: "{run.typed} printed the wrong lines on stdout: one `{LintFixFixedLinePrefix}<n>{LintFixFixedLineMiddle}<path>` line per file it rewrote, in path order, then what `maxon {LintCommandWord}` prints. {run.said()}")
+	end 'requireReported'
+
+	function lintedLines() returns StringArray
+		match self.outcome 'outcome'
+			linted(subject) then return StringArray from ["{LintedLinePrefix}{subject}"]
+			refused then return StringArray.create(0)
+		end 'outcome'
+	end 'lintedLines'
+
+	function requireNothingStands(run LintRun, project FilePath) throws TestFailure
+		try Expect.equal(run.output.exitCode(), expected: LintFixCleanExit, message: "{run.typed} did not exit {LintFixCleanExit}, though nothing it cannot fix stands. {run.said()}")
+		try Expect.isEmpty(run.output.stderr, message: "{run.typed} wrote to stderr, though nothing it cannot fix stands. {run.said()}")
+		try requireNothingBuiltFor(project, what: run.typed, said: run.said())
+	end 'requireNothingStands'
+
+	function requireReportsAsLint(run LintRun, plain LintRun, reportedFixes LintFixedFileArray) throws TestFailure
+		let said = "{run.said()} {plain.typed} wrote to stdout: {plain.output.stdout} and to stderr: {plain.output.stderr}"
+		let reported = lintFixStdoutLines(run.output.stdout)
+		let afterTheFixes = StringArray.create(0)
+
+		for (iter, line) in reported.withIterator() 'eachLine'
+			if iter.index() >= reportedFixes.count() 'pastTheFixedLines'
+				afterTheFixes.push(line)
+			end 'pastTheFixedLines'
+		end 'eachLine'
+
+		try Expect.equal(run.output.exitCode(), expected: plain.output.exitCode(), message: "{run.typed} exited otherwise than {plain.typed} over the program as it now stands. {said}")
+		try Expect.equal(lintFixPortable(run.output.stderr), expected: lintFixPortable(plain.output.stderr), message: "{run.typed} reported otherwise on stderr than {plain.typed} over the program as it now stands. {said}")
+		try Expect.equal(joined(afterTheFixes, separator: LineFeed), expected: joined(lintFixStdoutLines(plain.output.stdout), separator: LineFeed), message: "{run.typed} printed otherwise on stdout, after its `{LintFixFixedLinePrefix}` lines, than {plain.typed} over the program as it now stands. {said}")
+	end 'requireReportsAsLint'
+end 'LintFixCase'

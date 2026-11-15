@@ -72,15 +72,31 @@ type CandidatePool
 	end 'add'
 end 'CandidatePool'
 
+type DeclarationLines
+	let first as LineNumber
+	let last as LineNumber
+
+	static function create(first LineNumber, last LineNumber) returns DeclarationLines
+		return Self{first: first, last: last}
+	end 'create'
+end 'DeclarationLines'
+
+typealias DeclarationLinesMap = Map with (ElementIndex, DeclarationLines)
+
 type LocatedDeclarations
 	export let declarationAt as CandidateIndexByTokenByFileMap
 	export let candidatesNamed as CandidateIndexByNameMap
 	export let names as CandidateNameMap
 	export let limits as CandidateLimitMap
+	let lines as DeclarationLinesMap
 
 	static function create() returns LocatedDeclarations
-		return Self{declarationAt: CandidateIndexByTokenByFileMap.create(), candidatesNamed: CandidateIndexByNameMap.create(), names: CandidateNameMap.create(), limits: CandidateLimitMap.create()}
+		return Self{declarationAt: CandidateIndexByTokenByFileMap.create(), candidatesNamed: CandidateIndexByNameMap.create(), names: CandidateNameMap.create(), limits: CandidateLimitMap.create(), lines: DeclarationLinesMap.create()}
 	end 'create'
+
+	function linesOf(index ElementIndex) returns DeclarationLines
+		return try self.lines.get(index) otherwise panic("LocatedDeclarations.linesOf: candidate {index} has no declaration lines — locateDeclarations spans every candidate")
+	end 'linesOf'
 
 	function nameOf(index ElementIndex) returns immutable ByteArray
 		return try self.names.get(index) otherwise panic("LocatedDeclarations.nameOf: candidate {index} has no located name — locateDeclarations names every candidate")
@@ -177,10 +193,15 @@ type UnusedFinding
 	let filePath as FilePath
 	let nameLine as LineNumber
 	let nameColumn as ColumnNumber
+	let fix as DiagnosticFix
 
 	static function create(noun String, name String, filePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns UnusedFinding
-		return Self{noun: noun, name: name, filePath: filePath, nameLine: nameLine, nameColumn: nameColumn}
+		return Self{noun: noun, name: name, filePath: filePath, nameLine: nameLine, nameColumn: nameColumn, fix: DiagnosticFix.none}
 	end 'create'
+
+	function withFix(offered DiagnosticFix) returns UnusedFinding
+		return Self{noun: self.noun, name: self.name, filePath: self.filePath, nameLine: self.nameLine, nameColumn: self.nameColumn, fix: offered}
+	end 'withFix'
 end 'UnusedFinding'
 
 typealias UnusedFindingArray = Array with UnusedFinding
@@ -222,7 +243,7 @@ end 'libraryFindingsOf'
 
 function reportUnusedFindings(project Project, findings UnusedFindingArray)
 	for finding in findings 'eachFinding'
-		reportPositioned(project, code: ErrorCode.semanticUnusedUnexportedDeclaration, message: "unused {finding.noun}: '{finding.name}' is not exported and nothing live in its directory names it; delete it", line: finding.nameLine, column: finding.nameColumn, filePath: finding.filePath)
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticUnusedUnexportedDeclaration, message: "unused {finding.noun}: '{finding.name}' is not exported and nothing live in its directory names it; delete it", line: finding.nameLine, column: finding.nameColumn, filePath: finding.filePath).withFix(finding.fix))
 	end 'eachFinding'
 end 'reportUnusedFindings'
 
@@ -296,12 +317,20 @@ function auditUnexported(project Project, module MaxonModule, signatures Program
 			continue
 		end 'reached'
 
-		let candidate = try pool.candidates.get(index) otherwise panic("auditUnexported: candidate {index} is outside the {pool.candidates.count()} the pool holds")
-		findings.push(UnusedFinding.create(candidate.noun, name: String.from(located.nameOf(index)), filePath: candidate.filePath, nameLine: candidate.nameLine, nameColumn: candidate.nameColumn))
+		findings.push(unusedFindingOf(project, pool: pool, located: located, index: index))
 	end 'eachCandidate'
 
 	return findings
 end 'auditUnexported'
+
+function unusedFindingOf(project Project, pool CandidatePool, located LocatedDeclarations, index ElementIndex) returns UnusedFinding
+	let candidate = try pool.candidates.get(index) otherwise panic("unusedFindingOf: candidate {index} is outside the {pool.candidates.count()} the pool holds")
+	let name = String.from(located.nameOf(index))
+	let lines = located.linesOf(index)
+	let fix = deleteDeclarationFix(project, filePath: candidate.filePath, firstLine: lines.first, lastLine: lines.last, noun: candidate.noun, name: name)
+
+	return UnusedFinding.create(candidate.noun, name: name, filePath: candidate.filePath, nameLine: candidate.nameLine, nameColumn: candidate.nameColumn).withFix(fix)
+end 'unusedFindingOf'
 
 function gatherFunctionCandidates(module MaxonModule, signatures ProgramSignatures, entryPoints EntryPointNameSet, pool CandidatePool)
 	for func in module.functions 'eachFunc'
@@ -400,12 +429,18 @@ function locateInFile(project Project, signatures ProgramSignatures, path FilePa
 			located.candidatesNamed.upsert(token.value, value: named)
 			declarationAt.upsert(at, value: index)
 			located.names.upsert(index, value: token.value)
-			located.limits.upsert(index, value: extentLimitOf(candidate.extent, nameAt: at, tokens: tokens, reader: reader))
+			let limit = extentLimitOf(candidate.extent, nameAt: at, tokens: tokens, reader: reader)
+			located.limits.upsert(index, value: limit)
+			located.lines.upsert(index, value: DeclarationLines.create(lineOfToken(tokens, at: at - 1), last: lineOfToken(tokens, at: limit - 1)))
 		end 'eachOnThisLine'
 	end 'eachToken'
 
 	located.declarationAt.upsert(path.toString(), value: declarationAt)
 end 'locateInFile'
+
+function lineOfToken(tokens TokenArray, at ElementIndex) returns LineNumber
+	return (try tokens.get(at) otherwise panic("lineOfToken: token {at} is outside the {tokens.count()} the file holds")).line
+end 'lineOfToken'
 
 function candidateAt(pool CandidatePool, index ElementIndex) returns UnexportedCandidate
 	return try pool.candidates.get(index) otherwise panic("candidateAt: candidate {index} is outside the {pool.candidates.count()} the pool holds")

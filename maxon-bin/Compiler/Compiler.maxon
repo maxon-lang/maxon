@@ -94,6 +94,7 @@ export function compileToProduct(driver CompileDriver.handle, request immutable 
 		failed(error) then throw error
 		checked or
 		linted or
+		lintRefused or
 		warmed or
 		swept or
 		claimed then panic("compileToProduct: the driver answered a build with another kind of job")
@@ -115,11 +116,47 @@ export function lintOnDriver(driver CompileDriver.handle, request immutable Comp
 		failed(error) then throw error
 		built or
 		checked or
+		lintRefused or
 		warmed or
 		swept or
 		claimed then panic("lintOnDriver: the driver answered a lint with another kind of job")
 	end 'outcome'
 end 'lintOnDriver'
+
+export union LintRound
+	clean
+	standing(error CompileError, findings LintFindings)
+	failed(error CompileError)
+end 'LintRound'
+
+export function lintRoundOnDriver(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns LintRound
+	match request.work 'work'
+		lint(reading) then requireFixesAreRead(reading)
+		build or
+		check or
+		warm or
+		lexSweep or
+		claims then panic("lintRoundOnDriver: the request asks for the job '{request.work.word()}', which is not a lint")
+	end 'work'
+
+	match driverOutcomeOf(driver, request: request, session: session) 'outcome'
+		linted then return LintRound.clean
+		lintRefused(error, findings) then return LintRound.standing(error, findings: findings)
+		failed(error) then return LintRound.failed(error)
+		built or
+		checked or
+		warmed or
+		swept or
+		claimed then panic("lintRoundOnDriver: the driver answered a lint with another kind of job")
+	end 'outcome'
+end 'lintRoundOnDriver'
+
+function requireFixesAreRead(reading LintReading)
+	match reading 'reading'
+		withFixes then return
+		asPrinted then panic("lintRoundOnDriver: the lint reads no fixes, so no finding of it could come back as data")
+	end 'reading'
+end 'requireFixesAreRead'
 
 export function claimsOnDriver(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns SourceClaims throws CompileError
 	match driverOutcomeOf(driver, request: request, session: session) 'outcome'
@@ -128,6 +165,7 @@ export function claimsOnDriver(driver CompileDriver.handle, request immutable Co
 		built or
 		checked or
 		linted or
+		lintRefused or
 		warmed or
 		swept then panic("claimsOnDriver: the driver answered a claims pass with another kind of job")
 	end 'outcome'
@@ -146,6 +184,7 @@ function checkOnDriver(driver CompileDriver.handle, origin ProjectOrigin, inputP
 		failed(error) gives CheckAnswer.failed(error)
 		built or
 		linted or
+		lintRefused or
 		warmed or
 		swept or
 		claimed panic("checkOnDriver: the driver answered a check with another kind of job")
@@ -544,7 +583,7 @@ type JobRun
 		match self.spec.work 'work'
 			build then return self.buildFailed(failure)
 			check then return self.checkRefused()
-			lint then return self.failed(failure)
+			lint then return self.lintRefused(failure)
 			warm then return self.warmFailed(failure)
 			lexSweep or
 			claims then panic("JobRun.compileFailed: a lex sweep and a claims pass run no compile machine")
@@ -749,7 +788,7 @@ type JobRun
 		self.settledTotals()
 
 		if projectHasErrors(self.projects.held()) 'refused'
-			return self.failed(CompileError.compileError)
+			return self.lintRefused(CompileError.compileError)
 		end 'refused'
 
 		self.writeRequestedMetrics(CodeEmission.notEmitted)
@@ -757,6 +796,50 @@ type JobRun
 
 		return CompileStep.finished
 	end 'lintFinished'
+
+	function lintRefused(failure CompileError) returns CompileStep
+		match self.spec.work 'work'
+			lint(reading) then return self.lintRefusedReading(failure, reading: reading)
+			build or
+			check or
+			warm or
+			lexSweep or
+			claims then panic("JobRun.lintRefused: only a lint ends here")
+		end 'work'
+	end 'lintRefused'
+
+	function lintRefusedReading(failure CompileError, reading LintReading) returns CompileStep
+		match reading 'reading'
+			asPrinted then return self.failed(failure)
+			withFixes then break
+		end 'reading'
+
+		match failure.failure() 'failure'
+			reportedDiagnostics then break
+			abandoned or
+			driverFailed then return self.failed(failure)
+		end 'failure'
+
+		return self.ended(DriverOutcome.lintRefused(failure, findings: self.lintFindings()))
+	end 'lintRefusedReading'
+
+	function lintFindings() returns LintFindings
+		let project = self.projects.held()
+		let fixable = DiagnosticArray.create(0)
+		let sources = LintedSourceArray.create(0)
+		let read = LintedPathSet.create()
+
+		for diagnostic in diagnosticsInSourceOrder(project) 'eachDiagnostic'
+			if not diagnostic.offersAFix() 'nothingToApply'
+				continue
+			end 'nothingToApply'
+
+			fixable.push(diagnostic)
+			noteEditedSources(project, diagnostic: diagnostic, read: read, into: sources)
+		end 'eachDiagnostic'
+
+		return LintFindings.create(fixable, sources: sources)
+	end 'lintFindings'
 
 	function afterTotals() returns CompileStep
 		let tail = self.tails.held()
@@ -773,11 +856,15 @@ type JobRun
 	end 'afterTotals'
 
 	function failed(failure CompileError) returns CompileStep
+		return self.ended(DriverOutcome.failed(failure))
+	end 'failed'
+
+	function ended(outcome DriverOutcome) returns CompileStep
 		closeOpenPhaseSpans(self.spans, unit: self.unit)
-		self.outcomes.fill(DriverOutcome.failed(failure))
+		self.outcomes.fill(outcome)
 
 		return CompileStep.finished
-	end 'failed'
+	end 'ended'
 
 	function suspendWhole()
 		if self.wholeProbes.isFull() 'opened'
@@ -3470,32 +3557,52 @@ export type StagedSourceOrigin
 	// one place in this compiler that reads differently from every other command's.
 	export let reportedPath as FilePath
 
-	export static function create(stagedPath FilePath, reportedPath FilePath) returns StagedSourceOrigin
-		return Self{stagedPath: stagedPath, reportedPath: reportedPath}
+	export let authoredBytes as ByteOffset
+
+	export static function create(stagedPath FilePath, reportedPath FilePath, authoredBytes ByteOffset) returns StagedSourceOrigin
+		return Self{stagedPath: stagedPath, reportedPath: reportedPath, authoredBytes: authoredBytes}
 	end 'create'
 end 'StagedSourceOrigin'
 
 export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
 
 typealias ReportedPathMap = Map with (FilePath, FilePath)
+typealias AuthoredBytesMap = Map with (FilePath, ByteOffset)
 typealias MintedNamesByPath = Map with (FilePath, immutable NameRoster)
 
 export type StagedOriginIndex
 	let reportedPaths as ReportedPathMap
+	let authoredBytes as AuthoredBytesMap
 
 	export static function empty() returns StagedOriginIndex
-		return Self{reportedPaths: ReportedPathMap.create()}
+		return Self{reportedPaths: ReportedPathMap.create(), authoredBytes: AuthoredBytesMap.create()}
 	end 'empty'
 
 	export static function of(origins StagedSourceOriginArray) returns StagedOriginIndex
 		let reportedPaths = ReportedPathMap.create()
+		let authoredBytes = AuthoredBytesMap.create()
 
 		for origin in origins 'eachOrigin'
 			reportedPaths.upsert(origin.stagedPath, value: origin.reportedPath)
+			authoredBytes.upsert(origin.stagedPath, value: origin.authoredBytes)
 		end 'eachOrigin'
 
-		return Self{reportedPaths: reportedPaths}
+		return Self{reportedPaths: reportedPaths, authoredBytes: authoredBytes}
 	end 'of'
+
+	function authoredBytesOf(path FilePath, whole ByteOffset) returns ByteOffset
+		return try self.authoredBytes.get(path) otherwise whole
+	end 'authoredBytesOf'
+
+	function compiledPathOf(reported FilePath) returns FilePath
+		for (staged, authored) in self.reportedPaths 'eachCopy'
+			if authored.equals(reported) 'itsCopy'
+				return staged
+			end 'itsCopy'
+		end 'eachCopy'
+
+		return reported
+	end 'compiledPathOf'
 
 	export function stagesNothing() returns bool
 		return self.reportedPaths.count() == 0

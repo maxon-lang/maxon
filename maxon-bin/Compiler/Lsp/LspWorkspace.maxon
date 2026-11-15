@@ -452,9 +452,10 @@ end 'ProjectResolution'
 type LspDocumentCells
 	let version as LspVersionCell
 	let facts as LspEditorFactsCell
+	let fixes as LspFixOffersCell
 
 	static function create(version LspDocumentVersion) returns LspDocumentCells
-		return Self{version: LspVersionCell.create(version), facts: LspEditorFactsCell.create(LspEditorFacts.unchecked())}
+		return Self{version: LspVersionCell.create(version), facts: LspEditorFactsCell.create(LspEditorFacts.unchecked()), fixes: LspFixOffersCell.create(LspFixOffers.unchecked())}
 	end 'create'
 end 'LspDocumentCells'
 
@@ -528,6 +529,24 @@ type LspWorkspaceState
 		return LspEditorFactsAnswer.fresh(checked)
 	end 'editorFactsOf'
 
+	function noteFixOffers(uri String, version LspDocumentVersion, published DiagnosticArray, path FilePath)
+		let cells = try self.documentCells.get(uri) otherwise panic("LspWorkspaceState.noteFixOffers: a document's diagnostics are published after the session published its version, which is what makes its cells")
+
+		publishFixOffers(cells.fixes, version: version, published: published, path: path)
+	end 'noteFixOffers'
+
+	function fixableAt(uri String) returns DiagnosticArray
+		let cells = try self.documentCells.get(uri) otherwise return DiagnosticArray.create(0)
+		let offers = cells.fixes.current()
+
+		// An earlier version's repairs index text the editor no longer holds.
+		if offers.version != cells.version.current() 'checkedAnEarlierVersion'
+			return DiagnosticArray.create(0)
+		end 'checkedAnEarlierVersion'
+
+		return offers.fixable.clone()
+	end 'fixableAt'
+
 	function retireVersionCell(uri String)
 		if let cells = try self.documentCells.get(uri) 'known'
 			cells.version.publish(LspNoDocumentVersion)
@@ -551,21 +570,19 @@ type LspWorkspaceState
 	end 'requestProjectCheck'
 
 	function projectCheckSettled(request immutable LspProjectCheckRequest, interest CompileInterest)
-		let facts = try self.editorFactsCellOfTheCheck(request) otherwise 'unwanted'
+		let cells = try self.documentCellsOfTheCheck(request) otherwise 'unwanted'
 			reportProjectCheck(self.writer, request: request, outcome: ProjectCheckOutcome.superseded)
 			return
 		end 'unwanted'
 
-		self.checkers.submit(LspQueuedCheck.create(request, interest: interest, facts: facts))
+		self.checkers.submit(LspQueuedCheck.create(request, interest: interest, cells: cells))
 	end 'projectCheckSettled'
 
-	function editorFactsCellOfTheCheck(request immutable LspProjectCheckRequest) returns LspEditorFactsCell throws AbsentError
+	function documentCellsOfTheCheck(request immutable LspProjectCheckRequest) returns LspDocumentCells throws AbsentError
 		_ = try self.held.rootSpelledAs(request.root) otherwise throw AbsentError.absent
 
-		let cells = try self.documentCells.get(request.uri) otherwise throw AbsentError.absent
-
-		return cells.facts.clone()
-	end 'editorFactsCellOfTheCheck'
+		return try self.documentCells.get(request.uri) otherwise throw AbsentError.absent
+	end 'documentCellsOfTheCheck'
 
 	function nextArrival() returns LspArrival
 		let ready = self.arrivals.awaitAny()

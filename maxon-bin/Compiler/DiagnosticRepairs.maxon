@@ -1,0 +1,721 @@
+let FixDiscardName = "_"
+let FixLetWord = "let"
+let FixCloneCall = ".clone()"
+let FixQuote = "'"
+let FixDiscardNameByte = 95 as Byte
+
+function resolvedRepair(project Project, diagnostic Diagnostic) returns Diagnostic
+	match diagnostic.fix 'fix'
+		none or
+		offered then return diagnostic
+		described(repair) then return diagnostic.withFix(describedFix(project, diagnostic: diagnostic, repair: repair))
+	end 'fix'
+end 'resolvedRepair'
+
+function describedFix(project Project, diagnostic Diagnostic, repair FixRepair) returns DiagnosticFix
+	match diagnostic.anchor 'anchor'
+		at(filePath, line, column) then return repairedAt(project, filePath: filePath, line: line as LineNumber, column: column as ColumnNumber, repair: repair)
+		programWide or
+		file then panic("describedFix: {diagnostic.code.rawValue} describes a repair but is anchored at no source position")
+	end 'anchor'
+end 'describedFix'
+
+function repairedAt(project Project, filePath FilePath, line LineNumber, column ColumnNumber, repair FixRepair) returns DiagnosticFix
+	let source = try project.fixSources.sourceOf(project, path: filePath) otherwise return DiagnosticFix.none
+	let index = try source.indexAtPosition(line, column: column) otherwise return DiagnosticFix.none
+	let site = RepairSite.create(project, source: source, filePath: filePath, line: line, index: index)
+
+	match repair 'repair'
+		endLabelRenamed(expected) then return site.endLabelRenamed(expected)
+		controlLabelDropped then return site.controlLabelDropped()
+		argumentLabelDropped then return site.argumentLabelDropped()
+		caseQualifierDropped then return site.caseQualifierDropped()
+		discardedBindingsDropped then return site.discardedBindingsDropped()
+		orAlternativeBroken then return site.orAlternativeBroken()
+		singleValueRangeWrittenBare then return site.singleValueRangeWrittenBare()
+		tryDropped then return site.tryDropped()
+		tryBlockUnwrapped then return site.tryBlockUnwrapped()
+		unreachableStatementsDeleted then return site.unreachableStatementsDeleted()
+		selfAssignmentDeleted then return site.selfAssignmentDeleted()
+		castDropped then return site.castDropped()
+		unusedLocalDiscarded then return site.unusedLocalDiscarded()
+		unusedLocalDeleted(lastLine) then return site.unusedLocalDeleted(lastLine)
+		unusedBinderDiscarded then return site.unusedBinderDiscarded()
+		caughtBinderDropped then return site.caughtBinderDropped()
+		varBecomesLet then return site.varBecomesLet(LiteralEnd.none)
+		varBecomesLetOfClone(literalEndLine, literalEndColumn) then return site.varBecomesLet(LiteralEnd.at(literalEndLine, column: literalEndColumn))
+		throwsClauseDropped(declared) then return site.throwsClauseDropped(declared)
+		typealiasDeleted(name) then return site.typealiasDeleted(name)
+	end 'repair'
+end 'repairedAt'
+
+union LiteralEnd
+	none
+	at(line LineNumber, column ColumnNumber)
+end 'LiteralEnd'
+
+type RepairSite
+	let project as Project
+	let source as FixSource
+	let filePath as FilePath
+	let line as LineNumber
+	let index as ElementIndex
+
+	static function create(project Project, source FixSource, filePath FilePath, line LineNumber, index ElementIndex) returns RepairSite
+		return Self{project: project, source: source, filePath: filePath, line: line, index: index}
+	end 'create'
+
+	function kindAt(offset ElementIndex) returns TokenKind
+		return self.source.kindAt(self.index + offset)
+	end 'kindAt'
+
+	function textOfToken(token ElementIndex) returns String
+		return self.source.textOf(self.source.startOf(token), stop: self.source.stopOf(token))
+	end 'textOfToken'
+
+	function replacing(token ElementIndex, replacement String) returns TextEdit
+		return TextEdit.create(self.filePath, startByte: self.source.startOf(token), endByte: self.source.stopOf(token), replacement: replacement)
+	end 'replacing'
+
+	function endLabelRenamed(expected String) returns DiagnosticFix
+		var label = self.index
+
+		if self.kindAt(0) == TokenKind.end 'atTheEndKeyword'
+			label = self.index + 1
+		end 'atTheEndKeyword'
+
+		if self.source.kindAt(label) != TokenKind.charLiteral 'noLabelHere'
+			return DiagnosticFix.none
+		end 'noLabelHere'
+
+		return singleEditFix("Rename the end label {self.textOfToken(label)} to '{expected}'", edit: self.replacing(label, replacement: "{FixQuote}{expected}{FixQuote}"))
+	end 'endLabelRenamed'
+
+	function controlLabelDropped() returns DiagnosticFix
+		if self.kindAt(0) != TokenKind.charLiteral or self.index == 0 or not self.source.adjoin(self.index - 1, right: self.index) 'noLabelHere'
+			return DiagnosticFix.none
+		end 'noLabelHere'
+
+		return singleEditFix("Drop the label {self.textOfToken(self.index)} of the construct being left", edit: deletionEdit(self.filePath, first: self.source.stopOf(self.index - 1), stop: self.source.stopOf(self.index)))
+	end 'controlLabelDropped'
+
+	function argumentLabelDropped() returns DiagnosticFix
+		if self.kindAt(1) != TokenKind.colon or not self.source.adjoin(self.index, right: self.index + 1) or not self.source.adjoin(self.index + 1, right: self.index + 2) 'notALabel'
+			return DiagnosticFix.none
+		end 'notALabel'
+
+		return singleEditFix("Drop the label '{self.textOfToken(self.index)}' of the argument", edit: deletionEdit(self.filePath, first: self.source.startOf(self.index), stop: self.source.startOf(self.index + 2)))
+	end 'argumentLabelDropped'
+
+	function caseQualifierDropped() returns DiagnosticFix
+		if self.kindAt(1) != TokenKind.dot or not self.source.adjoin(self.index, right: self.index + 1) or not self.source.adjoin(self.index + 1, right: self.index + 2) 'notQualified'
+			return DiagnosticFix.none
+		end 'notQualified'
+
+		return singleEditFix("Write the case '{self.textOfToken(self.index + 2)}' without its type", edit: deletionEdit(self.filePath, first: self.source.startOf(self.index), stop: self.source.startOf(self.index + 2)))
+	end 'caseQualifierDropped'
+
+	function discardedBindingsDropped() returns DiagnosticFix
+		if self.kindAt(1) != TokenKind.leftParen or not self.source.adjoin(self.index, right: self.index + 1) 'noBindingList'
+			return DiagnosticFix.none
+		end 'noBindingList'
+
+		var at = self.index + 2
+
+		while self.source.hasTokenAt(at) 'eachBindingToken'
+			let kind = self.source.kindAt(at)
+
+			if kind == TokenKind.rightParen 'theListCloses'
+				return singleEditFix("Drop the binding list of '{self.textOfToken(self.index)}', which discards every value", edit: deletionEdit(self.filePath, first: self.source.stopOf(self.index), stop: self.source.stopOf(at)))
+			end 'theListCloses'
+
+			if kind != TokenKind.comma and not self.tokenIsTheDiscard(at) 'aBindingThatIsNotADiscard'
+				return DiagnosticFix.none
+			end 'aBindingThatIsNotADiscard'
+
+			at = at + 1
+		end 'eachBindingToken'
+
+		return DiagnosticFix.none
+	end 'discardedBindingsDropped'
+
+	function tokenIsTheDiscard(token ElementIndex) returns bool
+		return self.source.kindAt(token) == TokenKind.identifier and self.source.stopOf(token) - self.source.startOf(token) == 1 and self.source.isByte(self.source.startOf(token), expected: FixDiscardNameByte)
+	end 'tokenIsTheDiscard'
+
+	function orAlternativeBroken() returns DiagnosticFix
+		if self.index == 0 or self.source.kindAt(self.index - 1) != TokenKind.or or not self.source.adjoin(self.index - 1, right: self.index) 'noOrBefore'
+			return DiagnosticFix.none
+		end 'noOrBefore'
+
+		let lineBreak = "{self.source.terminatorOf(self.line)}{self.source.indentationOf(self.line)}"
+
+		return singleEditFix("Put the alternative '{self.textOfToken(self.index)}' on its own line", edit: TextEdit.create(self.filePath, startByte: self.source.stopOf(self.index - 1), endByte: self.source.startOf(self.index), replacement: lineBreak))
+	end 'orAlternativeBroken'
+
+	function singleValueRangeWrittenBare() returns DiagnosticFix
+		var toAt = self.index
+
+		while self.source.hasTokenAt(toAt) and self.source.kindAt(toAt) != TokenKind.to and not self.patternEndsAt(toAt) 'eachLowToken'
+			toAt = toAt + 1
+		end 'eachLowToken'
+
+		var highEnd = toAt + 1
+
+		while self.source.hasTokenAt(highEnd) and not self.patternEndsAt(highEnd) 'eachHighToken'
+			highEnd = highEnd + 1
+		end 'eachHighToken'
+
+		let width = toAt - self.index
+
+		if self.source.kindAt(toAt) != TokenKind.to or width == 0 or highEnd - (toAt + 1) != width 'notARepeatedValue'
+			return DiagnosticFix.none
+		end 'notARepeatedValue'
+
+		for offset in 0 upto width 'eachEnd'
+			if not self.source.tokensSpellTheSame(self.index + offset, right: toAt + 1 + offset) 'theEndsDiffer'
+				return DiagnosticFix.none
+			end 'theEndsDiffer'
+		end 'eachEnd'
+
+		if not self.source.adjoin(toAt - 1, right: toAt) 'splitAcrossLines'
+			return DiagnosticFix.none
+		end 'splitAcrossLines'
+
+		return singleEditFix("Write the range '{self.source.textOf(self.source.startOf(self.index), stop: self.source.stopOf(highEnd - 1))}' as its single value", edit: deletionEdit(self.filePath, first: self.source.stopOf(toAt - 1), stop: self.source.stopOf(highEnd - 1)))
+	end 'singleValueRangeWrittenBare'
+
+	function patternEndsAt(token ElementIndex) returns bool
+		let kind = self.source.kindAt(token)
+
+		return kind == TokenKind.then or kind == TokenKind.gives or kind == TokenKind.or or kind == TokenKind.newline or kind == TokenKind.eof
+	end 'patternEndsAt'
+
+	function tryDropped() returns DiagnosticFix
+		let text = self.source
+
+		if self.kindAt(0) != TokenKind.try or self.opensACatchingCondition() or not text.adjoin(self.index, right: self.index + 1) 'notADroppableTry'
+			return DiagnosticFix.none
+		end 'notADroppableTry'
+
+		let callEnd = try self.operandEndOf(self.index + 1) otherwise return DiagnosticFix.none
+		let edits = TextEditArray.create(2, zeroed: false)
+		edits.push(deletionEdit(self.filePath, first: text.startOf(self.index), stop: text.startOf(self.index + 1)))
+
+		if text.kindAt(callEnd + 1) == TokenKind.otherwise 'aFallbackFollows'
+			edits.push(try self.fallbackDeletion(callEnd) otherwise return DiagnosticFix.none)
+		end 'aFallbackFollows' else if not self.operandMayEndAt(callEnd + 1) 'somethingElseFollows'
+			return DiagnosticFix.none
+		end 'somethingElseFollows'
+
+		return offeredFix("Drop the 'try' of '{text.textOf(text.startOf(self.index + 1), stop: text.stopOf(callEnd))}', which cannot throw", edits: edits)
+	end 'tryDropped'
+
+	function kindBefore(distance ElementIndex) returns TokenKind
+		if self.index < distance 'beforeTheFile'
+			return TokenKind.eof
+		end 'beforeTheFile'
+
+		return self.source.kindAt(self.index - distance)
+	end 'kindBefore'
+
+	// In a condition `try` is the throw test itself: without it the branch would test the call's
+	// value.
+	function opensACatchingCondition() returns bool
+		let before = self.kindBefore(1)
+
+		if before == TokenKind.if or before == TokenKind.while 'aBareCondition'
+			return true
+		end 'aBareCondition'
+
+		let binding = self.kindBefore(3)
+		let condition = self.kindBefore(4)
+
+		return before == TokenKind.equals and self.kindBefore(2) == TokenKind.identifier and (binding == TokenKind.let or binding == TokenKind.var) and (condition == TokenKind.if or condition == TokenKind.while)
+	end 'opensACatchingCondition'
+
+	function operandEndOf(first ElementIndex) returns ElementIndex throws AbsentError
+		let primary = self.source.kindAt(first)
+		var last = first
+
+		if primary == TokenKind.leftBracket 'anArrayLiteral'
+			last = try self.source.bracketCloseOf(first)
+		end 'anArrayLiteral' else if primary != TokenKind.identifier and primary != TokenKind.self and primary != TokenKind.selfType 'notAPostfixChain'
+			throw AbsentError.absent
+		end 'notAPostfixChain'
+
+		while self.source.hasTokenAt(last + 1) 'eachPostfixLink'
+			let next = last + 1
+			let kind = self.source.kindAt(next)
+
+			if kind == TokenKind.dot and self.source.hasTokenAt(next + 1) 'aMemberLink'
+				last = next + 1
+			end 'aMemberLink' else if kind == TokenKind.leftParen or kind == TokenKind.leftBracket 'aGroupLink'
+				last = try self.source.bracketCloseOf(next)
+			end 'aGroupLink' else 'theChainEnds'
+				return last
+			end 'theChainEnds'
+		end 'eachPostfixLink'
+
+		return last
+	end 'operandEndOf'
+
+	function operandMayEndAt(next ElementIndex) returns bool
+		let kind = self.source.kindAt(next)
+
+		if kind == TokenKind.newline or kind == TokenKind.eof or kind == TokenKind.comma or kind == TokenKind.colon or kind == TokenKind.then or kind == TokenKind.gives or kind == TokenKind.charLiteral or tokenKindClosesAGroup(kind) 'theExpressionEnds'
+			return true
+		end 'theExpressionEnds'
+
+		if not tokenKindIsABinaryOperator(kind) 'notAnOperator'
+			return false
+		end 'notAnOperator'
+
+		return self.everyLaterOtherwiseHasATry(next)
+	end 'operandMayEndAt'
+
+	function everyLaterOtherwiseHasATry(first ElementIndex) returns bool
+		var depth = 0 as BracketDepth
+		var pending = 0 as Count
+		var at = first
+
+		while self.source.hasTokenAt(at) and self.source.kindAt(at) != TokenKind.newline and self.source.kindAt(at) != TokenKind.eof 'eachLaterToken'
+			let kind = self.source.kindAt(at)
+
+			if tokenKindOpensAGroup(kind) 'anOpener'
+				depth = depth + 1
+			end 'anOpener' else if tokenKindClosesAGroup(kind) 'aCloser'
+				if depth == 0 'theGroupEnds'
+					return true
+				end 'theGroupEnds'
+
+				depth = depth - 1
+			end 'aCloser' else if depth == 0 and kind == TokenKind.try 'aLaterTry'
+				pending = pending + 1
+			end 'aLaterTry' else if depth == 0 and kind == TokenKind.otherwise 'aLaterFallback'
+				if pending == 0 'noTryOwnsIt'
+					return false
+				end 'noTryOwnsIt'
+
+				pending = pending - 1
+			end 'aLaterFallback'
+
+			at = at + 1
+		end 'eachLaterToken'
+
+		return true
+	end 'everyLaterOtherwiseHasATry'
+
+	function fallbackDeletion(callEnd ElementIndex) returns TextEdit throws AbsentError
+		let otherwiseAt = callEnd + 1
+
+		if not self.source.adjoin(callEnd, right: otherwiseAt) 'somethingSitsBetween'
+			throw AbsentError.absent
+		end 'somethingSitsBetween'
+
+		if otherwiseOpensBlockIn(self.source.tokens, index: otherwiseAt) 'aHandlerBlock'
+			let closer = try self.source.closerAfter(otherwiseAt + 1)
+
+			if self.source.kindAt(closer + 1) != TokenKind.charLiteral or self.source.kindAt(closer + 2) != TokenKind.newline 'closerSharesItsLine'
+				throw AbsentError.absent
+			end 'closerSharesItsLine'
+
+			return deletionEdit(self.filePath, first: self.source.stopOf(callEnd), stop: self.source.stopOf(closer + 1))
+		end 'aHandlerBlock'
+
+		return deletionEdit(self.filePath, first: self.source.stopOf(callEnd), stop: self.source.stopOf(try self.clauseEndFrom(otherwiseAt + 1)))
+	end 'fallbackDeletion'
+
+	function clauseEndFrom(first ElementIndex) returns ElementIndex throws AbsentError
+		let text = self.source
+		let inForHeader = text.kindAt(text.statementHeadOf(first)) == TokenKind.for
+		var depth = 0 as BracketDepth
+		var pendingIfs = 0 as Count
+		var at = first
+
+		while text.hasTokenAt(at) and text.kindAt(at) != TokenKind.newline and text.kindAt(at) != TokenKind.eof 'eachClauseToken'
+			let kind = text.kindAt(at)
+
+			if tokenKindOpensAGroup(kind) 'anOpener'
+				depth = depth + 1
+			end 'anOpener' else if tokenKindClosesAGroup(kind) 'aCloser'
+				if depth == 0 'theGroupEnds'
+					break
+				end 'theGroupEnds'
+
+				depth = depth - 1
+			end 'aCloser' else if depth == 0 'atTheClausesOwnLevel'
+				if kind == TokenKind.comma or kind == TokenKind.colon or kind == TokenKind.then or kind == TokenKind.gives 'aSeparator'
+					break
+				end 'aSeparator'
+
+				if kind == TokenKind.to or kind == TokenKind.upto 'aRangeBound'
+					if not inForHeader 'itIsPartOfTheValue'
+						throw AbsentError.absent
+					end 'itIsPartOfTheValue'
+
+					break
+				end 'aRangeBound'
+
+				if kind == TokenKind.if 'aConditionOpens'
+					pendingIfs = pendingIfs + 1
+				end 'aConditionOpens' else if kind == TokenKind.else 'anAlternative'
+					if pendingIfs == 0 'itBelongsToTheEnclosingExpression'
+						break
+					end 'itBelongsToTheEnclosingExpression'
+
+					pendingIfs = pendingIfs - 1
+				end 'anAlternative'
+
+				if at > first and kind == TokenKind.charLiteral and operandEndsAt(text.kindAt(at - 1)) 'aLabelAfterTheValue'
+					if not text.statementOpensABlock(first) or text.kindAt(at + 1) != TokenKind.newline 'notABlockLabel'
+						throw AbsentError.absent
+					end 'notABlockLabel'
+
+					break
+				end 'aLabelAfterTheValue'
+
+				if at > first and operandStartsAt(kind) and operandEndsAt(text.kindAt(at - 1)) 'twoValuesSideBySide'
+					throw AbsentError.absent
+				end 'twoValuesSideBySide'
+
+				if not fallbackMayHold(kind, afterDot: at > first and text.kindAt(at - 1) == TokenKind.dot, atStart: at == first) 'notPartOfAnExpression'
+					throw AbsentError.absent
+				end 'notPartOfAnExpression'
+			end 'atTheClausesOwnLevel'
+
+			at = at + 1
+		end 'eachClauseToken'
+
+		if at == first or depth != 0 'nothingFollows'
+			throw AbsentError.absent
+		end 'nothingFollows'
+
+		return at - 1
+	end 'clauseEndFrom'
+
+	function tryBlockUnwrapped() returns DiagnosticFix
+		let text = self.source
+
+		if self.kindAt(0) != TokenKind.try or self.kindAt(1) != TokenKind.charLiteral or self.kindAt(2) != TokenKind.newline or not text.startsItsStatement(self.index) 'notABlockOpening'
+			return DiagnosticFix.none
+		end 'notABlockOpening'
+
+		let closer = try text.closerAfter(self.index + 1) otherwise return DiagnosticFix.none
+
+		if not text.startsItsStatement(closer) or text.kindAt(closer + 1) != TokenKind.charLiteral or not text.tokensSpellTheSame(self.index + 1, right: closer + 1) or text.kindAt(closer + 2) != TokenKind.newline 'notItsOwnEnd'
+			return DiagnosticFix.none
+		end 'notItsOwnEnd'
+
+		let lastRemoved = try self.handlerLastTokenOf(closer) otherwise return DiagnosticFix.none
+
+		if not self.bodyLocalsAreUnshared(closer, lastRemoved: lastRemoved) 'aLocalWouldShareAScope'
+			return DiagnosticFix.none
+		end 'aLocalWouldShareAScope'
+
+		let closingLine = text.lineOf(closer)
+		let edits = TextEditArray.create(0)
+		edits.push(deletionEdit(self.filePath, first: text.lineStart(self.line), stop: text.lineEnd(self.line)))
+
+		for bodyLine in self.line + 1 upto closingLine 'eachBodyLine'
+			// A line that begins inside a literal is the literal's own bytes; dedenting it changes
+			// the value.
+			if text.lineIsBlank(bodyLine) or text.lineContinuesAToken(bodyLine) 'nothingToIndent'
+				continue
+			end 'nothingToIndent'
+
+			if not text.isByte(text.lineStart(bodyLine), expected: TabByte) 'notIndentedByATab'
+				return DiagnosticFix.none
+			end 'notIndentedByATab'
+
+			edits.push(deletionEdit(self.filePath, first: text.lineStart(bodyLine), stop: text.lineStart(bodyLine) + 1))
+		end 'eachBodyLine'
+
+		edits.push(deletionEdit(self.filePath, first: text.lineStart(closingLine), stop: text.lineEnd(text.lineOfEnd(lastRemoved))))
+
+		return offeredFix("Unwrap the 'try' block {self.textOfToken(self.index + 1)}, which contains no throwing call", edits: edits)
+	end 'tryBlockUnwrapped'
+
+	function handlerLastTokenOf(closer ElementIndex) returns ElementIndex throws AbsentError
+		let text = self.source
+		var handler = closer + 3
+
+		while text.kindAt(handler) == TokenKind.newline 'eachBlankLine'
+			handler = handler + 1
+		end 'eachBlankLine'
+
+		if text.kindAt(handler) != TokenKind.otherwise or not text.startsItsStatement(handler) 'noHandler'
+			return closer + 1
+		end 'noHandler'
+
+		if not otherwiseOpensBlockIn(text.tokens, index: handler) 'aOneLineHandler'
+			return text.lastTokenOfStatement(handler)
+		end 'aOneLineHandler'
+
+		let handlerCloser = try text.closerAfter(handler + 1)
+
+		if not text.startsItsStatement(handlerCloser) or text.kindAt(handlerCloser + 1) != TokenKind.charLiteral or text.kindAt(handlerCloser + 2) != TokenKind.newline 'notItsOwnEnd'
+			throw AbsentError.absent
+		end 'notItsOwnEnd'
+
+		return handlerCloser + 1
+	end 'handlerLastTokenOf'
+
+	function bodyLocalsAreUnshared(closer ElementIndex, lastRemoved ElementIndex) returns bool
+		let text = self.source
+		let declared = SpelledNameSet.create()
+		var at = self.index + 3
+
+		while at < closer 'eachBodyToken'
+			if text.kindAt(at) == TokenKind.let or text.kindAt(at) == TokenKind.var 'aDeclaration'
+				self.noteDeclaredNames(at + 1, into: declared)
+			end 'aDeclaration'
+
+			at = at + 1
+		end 'eachBodyToken'
+
+		if declared.count() == 0 'nothingIsDeclared'
+			return true
+		end 'nothingIsDeclared'
+
+		let functionLast = text.declarationLastTokenOf(lastRemoved)
+		var outside = text.declarationFirstTokenOf(self.index)
+
+		while outside <= functionLast 'eachFunctionToken'
+			if outside == self.index 'theBlockItself'
+				outside = lastRemoved + 1
+				continue
+			end 'theBlockItself'
+
+			if text.kindAt(outside) == TokenKind.identifier and declared.contains(self.textOfToken(outside)) 'theNameIsSpelledOutside'
+				return false
+			end 'theNameIsSpelledOutside'
+
+			outside = outside + 1
+		end 'eachFunctionToken'
+
+		return true
+	end 'bodyLocalsAreUnshared'
+
+	function noteDeclaredNames(first ElementIndex, into SpelledNameSet)
+		let text = self.source
+
+		if text.kindAt(first) == TokenKind.identifier 'aSingleName'
+			into.insert(self.textOfToken(first))
+
+			return
+		end 'aSingleName'
+
+		let close = try text.bracketCloseOf(first) otherwise return
+
+		for at in first upto close 'eachTupleToken'
+			if text.kindAt(at) == TokenKind.identifier 'aName'
+				into.insert(self.textOfToken(at))
+			end 'aName'
+		end 'eachTupleToken'
+	end 'noteDeclaredNames'
+
+	function unreachableStatementsDeleted() returns DiagnosticFix
+		let text = self.source
+
+		if not text.startsItsStatement(self.index) 'sharesItsLine'
+			return DiagnosticFix.none
+		end 'sharesItsLine'
+
+		let blockEnd = try text.closerAfter(self.index) otherwise return DiagnosticFix.none
+
+		if not text.startsItsStatement(blockEnd) 'theBlockEndsMidLine'
+			return DiagnosticFix.none
+		end 'theBlockEndsMidLine'
+
+		var firstLine = self.line
+
+		while firstLine > FirstLineNumber and text.lineIsBlank(firstLine - 1) 'eachBlankLineBefore'
+			firstLine = firstLine - 1
+		end 'eachBlankLineBefore'
+
+		return singleEditFix("Delete the statements after the one that leaves the block", edit: deletionEdit(self.filePath, first: text.lineStart(firstLine), stop: text.lineStart(text.lineOf(blockEnd))))
+	end 'unreachableStatementsDeleted'
+
+	function selfAssignmentDeleted() returns DiagnosticFix
+		let text = self.source
+		var equals = self.index
+
+		while self.tokenIsPartOfAPlace(equals) 'eachPlaceToken'
+			equals = equals + 1
+		end 'eachPlaceToken'
+
+		let width = equals - self.index
+
+		if not text.startsItsStatement(self.index) or width == 0 or text.kindAt(equals) != TokenKind.equals or text.kindAt(equals + 1 + width) != TokenKind.newline 'notASelfAssignment'
+			return DiagnosticFix.none
+		end 'notASelfAssignment'
+
+		for offset in 0 upto width 'eachPlaceToken'
+			if not text.tokensSpellTheSame(self.index + offset, right: equals + 1 + offset) 'notTheSamePlace'
+				return DiagnosticFix.none
+			end 'notTheSamePlace'
+		end 'eachPlaceToken'
+
+		let place = text.textOf(text.startOf(self.index), stop: text.stopOf(equals - 1))
+
+		return deletedStatementFix(text, filePath: self.filePath, title: "Delete the assignment of '{place}' to itself", firstLine: self.line, lastLine: text.lineOf(equals + width))
+	end 'selfAssignmentDeleted'
+
+	function tokenIsPartOfAPlace(token ElementIndex) returns bool
+		let kind = self.source.kindAt(token)
+
+		return kind == TokenKind.identifier or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.dot
+	end 'tokenIsPartOfAPlace'
+
+	function castDropped() returns DiagnosticFix
+		let text = self.source
+
+		if self.kindAt(0) != TokenKind.as or self.index == 0 or not text.adjoin(self.index - 1, right: self.index) or not text.adjoin(self.index, right: self.index + 1) or self.kindAt(1) != TokenKind.identifier 'notACast'
+			return DiagnosticFix.none
+		end 'notACast'
+
+		var typeEnd = self.index + 1
+
+		while text.kindAt(typeEnd + 1) == TokenKind.dot and text.adjoin(typeEnd, right: typeEnd + 1) and text.adjoin(typeEnd + 1, right: typeEnd + 2) and text.kindAt(typeEnd + 2) == TokenKind.identifier 'eachQualifier'
+			typeEnd = typeEnd + 2
+		end 'eachQualifier'
+
+		let next = text.kindAt(typeEnd + 1)
+
+		if next == TokenKind.leftParen or next == TokenKind.leftBracket or next == TokenKind.identifier 'aWidthAnIndexOrAWord'
+			return DiagnosticFix.none
+		end 'aWidthAnIndexOrAWord'
+
+		return singleEditFix("Delete the unneeded cast to '{text.textOf(text.startOf(self.index + 1), stop: text.stopOf(typeEnd))}'", edit: deletionEdit(self.filePath, first: text.stopOf(self.index - 1), stop: text.stopOf(typeEnd)))
+	end 'castDropped'
+
+	function bindingKeywordBefore() returns ElementIndex throws AbsentError
+		if self.index == 0 or not self.source.adjoin(self.index - 1, right: self.index) 'noKeywordBefore'
+			throw AbsentError.absent
+		end 'noKeywordBefore'
+
+		let keyword = self.source.kindAt(self.index - 1)
+
+		if keyword != TokenKind.let and keyword != TokenKind.var 'notABinding'
+			throw AbsentError.absent
+		end 'notABinding'
+
+		return self.index - 1
+	end 'bindingKeywordBefore'
+
+	function unusedLocalDiscarded() returns DiagnosticFix
+		let keyword = try self.bindingKeywordBefore() otherwise return DiagnosticFix.none
+
+		if not self.source.startsItsStatement(keyword) 'somethingPrecedesIt'
+			return DiagnosticFix.none
+		end 'somethingPrecedesIt'
+
+		return singleEditFix("Discard the value of '{self.textOfToken(self.index)}'", edit: TextEdit.create(self.filePath, startByte: self.source.startOf(keyword), endByte: self.source.stopOf(self.index), replacement: FixDiscardName))
+	end 'unusedLocalDiscarded'
+
+	function unusedLocalDeleted(lastLine LineNumber) returns DiagnosticFix
+		let keyword = try self.bindingKeywordBefore() otherwise return DiagnosticFix.none
+
+		if not self.source.hasLine(lastLine) or lastLine < self.line or not self.source.startsItsStatement(keyword) 'noSuchStatement'
+			return DiagnosticFix.none
+		end 'noSuchStatement'
+
+		let declared = "{self.textOfToken(keyword)} {self.textOfToken(self.index)}"
+
+		return deletedStatementFix(self.source, filePath: self.filePath, title: "Delete the unused declaration '{declared}'", firstLine: self.source.lineOf(keyword), lastLine: lastLine)
+	end 'unusedLocalDeleted'
+
+	function unusedBinderDiscarded() returns DiagnosticFix
+		if self.kindAt(0) != TokenKind.identifier 'noNameHere'
+			return DiagnosticFix.none
+		end 'noNameHere'
+
+		return singleEditFix("Discard '{self.textOfToken(self.index)}'", edit: self.replacing(self.index, replacement: FixDiscardName))
+	end 'unusedBinderDiscarded'
+
+	function caughtBinderDropped() returns DiagnosticFix
+		let text = self.source
+
+		if self.index < 2 or text.kindAt(self.index - 1) != TokenKind.leftParen or text.kindAt(self.index + 1) != TokenKind.rightParen 'notABinderInParentheses'
+			return DiagnosticFix.none
+		end 'notABinderInParentheses'
+
+		let open = self.index - 1
+		let after = self.index + 2
+
+		if text.stopOf(open - 1) >= text.startOf(open) or not text.adjoin(open - 1, right: open) or not text.adjoin(self.index + 1, right: after) 'noRoomToCloseTheGap'
+			return DiagnosticFix.none
+		end 'noRoomToCloseTheGap'
+
+		return singleEditFix("Drop the unused error binder '{self.textOfToken(self.index)}'", edit: deletionEdit(self.filePath, first: text.startOf(open), stop: text.startOf(after)))
+	end 'caughtBinderDropped'
+
+	function varBecomesLet(literalEnd LiteralEnd) returns DiagnosticFix
+		if self.index == 0 or self.source.kindAt(self.index - 1) != TokenKind.var or not self.source.adjoin(self.index - 1, right: self.index) 'notAVar'
+			return DiagnosticFix.none
+		end 'notAVar'
+
+		let edits = TextEditArray.create(2, zeroed: false)
+		edits.push(self.replacing(self.index - 1, replacement: FixLetWord))
+
+		match literalEnd 'literalEndCase'
+			none then return offeredFix(self.varTitle(), edits: edits)
+			at(endLine, endColumn) then return self.withCloneAfter(edits, endLine: endLine, endColumn: endColumn)
+		end 'literalEndCase'
+	end 'varBecomesLet'
+
+	function varTitle() returns String
+		return "Declare '{self.textOfToken(self.index)}' with 'let'"
+	end 'varTitle'
+
+	function withCloneAfter(edits TextEditArray, endLine LineNumber, endColumn ColumnNumber) returns DiagnosticFix
+		let closing = try self.source.indexAtPosition(endLine, column: endColumn) otherwise return DiagnosticFix.none
+
+		if self.source.kindAt(closing) != TokenKind.rightBracket 'notTheLiteralsEnd'
+			return DiagnosticFix.none
+		end 'notTheLiteralsEnd'
+
+		edits.push(TextEdit.create(self.filePath, startByte: self.source.stopOf(closing), endByte: self.source.stopOf(closing), replacement: FixCloneCall))
+
+		return offeredFix(self.varTitle(), edits: edits)
+	end 'withCloneAfter'
+
+	function throwsClauseDropped(declared String) returns DiagnosticFix
+		let text = self.source
+
+		if self.kindAt(1) != TokenKind.leftParen 'noParameterList'
+			return DiagnosticFix.none
+		end 'noParameterList'
+
+		let parametersEnd = try text.bracketCloseOf(self.index + 1) otherwise return DiagnosticFix.none
+		let last = text.lastTokenOfStatement(self.index)
+		var throwsAt = parametersEnd + 1
+
+		while throwsAt < last and text.kindAt(throwsAt) != TokenKind.throws 'eachHeaderToken'
+			throwsAt = throwsAt + 1
+		end 'eachHeaderToken'
+
+		if text.kindAt(throwsAt) != TokenKind.throws or throwsAt >= last or not text.adjoin(throwsAt - 1, right: throwsAt) 'noClauseToDrop'
+			return DiagnosticFix.none
+		end 'noClauseToDrop'
+
+		if text.textOf(text.startOf(throwsAt + 1), stop: text.stopOf(last)) != declared 'notTheDeclaredClause'
+			return DiagnosticFix.none
+		end 'notTheDeclaredClause'
+
+		return singleEditFix("Remove the 'throws {declared}' clause", edit: deletionEdit(self.filePath, first: text.stopOf(throwsAt - 1), stop: text.stopOf(last)))
+	end 'throwsClauseDropped'
+
+	function typealiasDeleted(name String) returns DiagnosticFix
+		let text = self.source
+
+		if self.index == 0 or text.kindAt(self.index - 1) != TokenKind.typealias or not text.startsItsStatement(self.index - 1) or self.textOfToken(self.index) != name 'notTheDeclaration'
+			return DiagnosticFix.none
+		end 'notTheDeclaration'
+
+		let last = text.lastTokenOfStatement(self.index)
+
+		return deleteDeclarationFix(self.project, filePath: self.filePath, firstLine: self.line, lastLine: text.lineOf(last), noun: "typealias", name: name)
+	end 'typealiasDeleted'
+end 'RepairSite'

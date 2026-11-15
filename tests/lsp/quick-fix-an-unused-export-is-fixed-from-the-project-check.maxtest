@@ -1,0 +1,32 @@
+let QuickFixExportDirName = "quick-fix-unused-export"
+let QuickFixExportMainFileName = "main.maxon"
+let QuickFixExportMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let QuickFixExportFileName = "shapes/area.maxon"
+let QuickFixExportSource = "export function area() returns ExitCode\n\treturn 0\nend 'area'\n"
+let QuickFixExportCode = "E3092"
+let QuickFixExportSubject = "area"
+let QuickFixExportLine = 0
+let QuickFixExportKeywordEnd = 7
+
+test 'an unused export is published with its quick fix by the project check'
+	let root = stagedProjectDiagnosticsRoot(QuickFixExportDirName)
+	writeCorpusFile(root, fileName: QuickFixExportMainFileName, content: QuickFixExportMainSource)
+	writeCorpusFile(root, fileName: QuickFixExportFileName, content: QuickFixExportSource)
+
+	let uri = fileUriOf(root.join(QuickFixExportFileName))
+	let session = runProjectQuickFixSession(root, uri: uri, text: QuickFixExportSource, apply: QuickFixToApply.singleFixFor(QuickFixExportCode, line: QuickFixExportLine))
+	discardStagedDir(root)
+
+	let note = "`area` in the `shapes` directory is `export`ed and nothing outside `shapes` names it, which is {QuickFixExportCode}. Only the project check sees every reader, so it publishes {QuickFixExportCode} for this file with a quick fix deleting `export `, and the buffer's own check, which cannot know, publishes none."
+	let (buffer, checked) = try projectQuickFixRecords(session, note: note)
+
+	for item in buffer 'eachItem'
+		try Expect.notEqual(item.code.describe(), expected: QuickFixExportCode, message: "{note} The buffer's own check published {projectDiagnosticsRendering(buffer)}.")
+	end 'eachItem'
+
+	let fix = try requiredSingleFix(checked, code: QuickFixExportCode, line: QuickFixExportLine, note: note)
+	try expectQuickFixEdits(fix, uri: uri, expected: soleQuickFixEdit(QuickFixExportLine, startCharacter: 0, endLine: QuickFixExportLine, endCharacter: QuickFixExportKeywordEnd, newText: ""), subject: QuickFixExportSubject, note: note)
+
+	let result = try requiredApplied(checked, note: note)
+	try expectNoPublishedCode(result.republished, code: QuickFixExportCode, note: note)
+end 'an unused export is published with its quick fix by the project check'

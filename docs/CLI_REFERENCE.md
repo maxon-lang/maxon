@@ -26,7 +26,7 @@ agents, and reads back what a program did.
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon fmt [file\|directory]` | Re-print Maxon sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
-| `maxon lint [--tests] [<file\|directory\|target>...]` | Check a program with every rule, the [lint rules](#maxon-lint) included, and stop before code generation |
+| `maxon lint [--tests] [--fix] [<file\|directory\|target>...]` | Check a program with every rule, the [lint rules](#maxon-lint) included, and stop before code generation; `--fix` rewrites the sources with each finding's one repair |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](#editor-support)) |
 | `maxon mcp-server [--dev] [--http[=<port>]]` | Speak the Model Context Protocol over stdio, or over loopback HTTP ([MCP Server](#mcp-server)) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](#debugging-and-profiling)) |
@@ -588,9 +588,9 @@ Runs the front end and every check on a program, the lint rules included, and st
 generation. It writes no executable, no sidecar and no build record.
 
 ```bash
-maxon lint [<file|directory|target>...] [options]
-maxon lint --tests [<target>] [directory | file.maxtest]
-maxon lint <name>.maxproj | <name>.maxtasks
+maxon lint [--fix] [<file|directory|target>...] [options]
+maxon lint --tests [--fix] [<target>] [directory | file.maxtest]
+maxon lint [--fix] <name>.maxproj | <name>.maxtasks
 ```
 
 **The lint rules** are the checks `maxon build`, `maxon execute`, `maxon run`, `maxon test` and the
@@ -631,14 +631,82 @@ own `main` counts as used. The program is staged in `<project>/.maxon/lint/`, or
 Diagnostics name the files you wrote. A project that declares no `test` is refused, and so is `--define=`
 beside `--tests`.
 
+**`--fix`** rewrites the program's own source files in place with the repair of every finding that has
+exactly one mechanical repair, then lints again, round after round, until no finding it reports has one.
+Several rounds are normal: E3092 and E3219 are reported only once nothing else stands, and a repair can
+expose a finding, as dropping an `export` leaves its declaration unused and discarding an unused local
+leaves a pure call's result discarded. It takes `lint`'s arguments — `--tests`, a manifest named alone,
+`--define=` and `--target=` — and refuses `--metrics=` as a usage error, before anything is compiled.
+
+- **Only the bytes of each repair are written.** The rest of the file keeps its bytes, its layout and
+  line endings included, and a line break a repair inserts takes the file's own line ending, so a CRLF
+  file stays CRLF.
+- **The files written are the program's own.** A finding in `stdlib/`, `runtime/` or a
+  [scriptlib](#the-scriptlib-directory) package is reported as `lint` reports it, with no repair. With
+  `--tests`, the repairs go to the `.maxtest` files and sources you wrote, which the staged copies under
+  `.maxon/lint/` are made from; a manifest named alone is repaired in that `.maxproj` or `.maxtasks` file.
+- **A file that holds a conditional-compilation directive (`#if`) is left as written**, and every finding
+  in it is reported as `lint` reports it. `--fix` repairs the program as compiled for the lint's target,
+  the host's or `--target=`'s, and the text of such a file is compiled otherwise for another target.
+- **A finding with two or more reasonable repairs stays as written**, and so does one whose repair the
+  compiler cannot place with certainty in the text; each is reported as `lint` reports it. A duplicate
+  match pattern ([E2027](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2027)), an unused parameter
+  ([E3012](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3012)), and a discarded pure call whose
+  arguments have an effect of their own, which records a run-time check, or whose callee can panic — where
+  keeping the call for its effect or its abort is the second repair — are each of the first kind. A
+  repairable finding standing beside
+  an error that has no repair, such as a call to an undefined function, is repaired, and the error is
+  reported.
+- **A file whose bytes changed after the lint read it is refused**, with `error: <path> changed after lint
+  read it, so none of its repairs were written` and exit 1; a file that cannot be read or written, or a
+  repair naming bytes the file does not hold, is refused the same way, naming the file. Files are written
+  in path order, so the files ahead of a refused one are rewritten and listed. Repairs that keep undoing
+  one another end after 100 rounds with `error: lint --fix still found a finding with a repair after 100
+  rounds, so its repairs are undoing one another` and exit 1.
+
+**What `--fix` repairs.** The repair is the compiler's own, computed with the diagnostic; the
+[language server](#maxon-lsp-server) offers the same repairs as quick fixes.
+
+| Code | Finding | Repair |
+|------|---------|--------|
+| [E3065](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3065) | A bare call drops an impure function's result | `_ = ` is written before the call |
+| [E3064](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3064) | A pure function's result is discarded: a bare call, `_ = f()`, or a destructure into `_` alone | The statement is deleted, under the deletion rule below, when its arguments have no effect of their own, it records no run-time check (a range-checked narrowing, checked arithmetic), and the callee cannot panic, directly or through what it calls |
+| [E3092](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3092) | An `export` that no file outside its directory's subtree uses | `export` is removed |
+| [E3219](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3219) | An unmarked top-level declaration nothing live names | The declaration is deleted with the comment lines attached to it and one blank line |
+| [E3062](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3062) | An unused `typealias` | The same deletion as E3219 |
+| [E3012](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3012) | An unused local whose initializer makes a call | The binding becomes `_ = <initializer>` |
+| [E3012](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3012) | An unused local whose initializer makes no call and cannot abort | The declaration is deleted, under the deletion rule below. An initializer that can abort at run time, such as a range-checked cast `wide as Small` or checked arithmetic on a full-width unsigned type, is left and reported; a cast of a constant is deleted |
+| [E3012](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3012) | An unused loop variable or payload binder | The name becomes `_` |
+| [E3012](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3012) | An unused caught-error binder, `otherwise (e)` | `(e)` is dropped |
+| [E3081](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3081) | A match arm binds payload values it never reads | The binding list is dropped: `dot(_)` becomes `dot` |
+| [E3077](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3077) | A `var` that is never reassigned | `var` becomes `let`; a `var` bound to an array, map or tuple literal that is written through becomes a `let` of the literal's `.clone()` |
+| [E3010](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3010) | An unneeded cast | ` as <type>` is deleted |
+| [E3067](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3067) | A self-assignment, `x = x` | The statement is deleted, under the deletion rule below |
+| [E3071](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3071) | Statements after the one that leaves the block | Everything from the first unreachable statement, with the blank lines above it, through the last line before the block's `end` is deleted |
+| [E3055](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3055) | `try` on a call that cannot throw | `try` is dropped with exactly its own `otherwise` clause: a value, a string or a handler block. A second `try` on the line keeps its `otherwise`, and inside an interpolation or the head of a `match` or `for` the rest of the line, the block's label and a range's `to` or `upto` bound included, is kept, as is the `else` of a conditional expression. A `try` whose `otherwise` clause holds a token the repair cannot place, a `try` in an `if try`, `while try` or `if let x = try` condition, and one with a comment between the call and its `otherwise`, are left and reported |
+| [E3083](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3083) | A block-form `try` whose body cannot throw | The body moves one tab left into the enclosing block and the handler is deleted, a handler block or a one-line `otherwise panic(…)` or `otherwise throws …`; a line that begins inside a literal keeps its bytes. It is left and reported when a name the block declares is spelled elsewhere in the enclosing function, which unwrapping would put in one scope |
+| [E3168](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3168) | A `throws` clause nothing in the body throws through | The clause is dropped |
+| [E2048](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2048) | A `break` or `continue` names the construct it already leaves | The label is dropped |
+| [E2052](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2052), [E2067](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2067) | A positional argument carries a label | The label is dropped: `f(a: 1, b: 2)` becomes `f(1, b: 2)` |
+| [E3075](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3075) | A match arm names a case qualified, `Color.red` | The case is written bare, `red` |
+| [E2027](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2027) | A range arm covers a single value, `5 to 5` | The arm is written as the value, `5` |
+| [E3147](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3147) | An `or`-chain packs two alternatives onto one line | Each alternative goes on its own line after its `or`, at the arm's indentation |
+| [E2008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2008), [E2043](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2043) | An `end` label differs from the label its header opened | The `end` label is renamed to the header's |
+
+**The deletion rule.** A statement E3064, E3067 or E3012 deletes goes with every line it spans, and is
+deleted only when it stands alone on those lines and its labeled block keeps a statement. Comment lines
+are not statements, and the count is taken over every deletion of one round: of two statements that are
+all of their block, the first is deleted and the second is left and reported.
+
 **Options:**
 
 | Option | Description |
 |--------|-------------|
 | `--tests` | Lint the program `maxon test` compiles in place of the one `maxon build` compiles |
+| `--fix` | Rewrite the program's own sources with the repair of every finding that has exactly one, and lint again until none has one |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default, as for `maxon build`. See [Defines](#defines). |
 | `--target=<cpu>-<os>` | Lint the program as compiled for this target: `#if` branches, target refusals and the lint rules all read that target |
-| `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. |
+| `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. Refused beside `--fix`. |
 
 **Output.** Diagnostics go to stderr as `maxon build` prints them; E3092 and E3219 are reported once
 nothing else stands. A target, and `--tests` of a project, print the
@@ -647,6 +715,12 @@ project's compiler-version record is read and left as it is. A clean program pri
 `Linted <subjects>`, where `<subjects>`, separated by `, `, are the paths typed, else the sources the
 target lists, else the working directory; for `--tests`, the directory or file typed, else the target
 typed alone, else the working directory.
+
+With `--fix`, stdout starts with one line per file rewritten, `Fixed <n> finding(s) in <path>`, in path
+order, where `<path>` is the file as diagnostics name it and `<n>` counts the findings repaired in it over
+every round. What follows is what `lint` says of the program as `--fix` left it: the findings that stand,
+on stderr, and exit 1, or `Linted <subjects>` and exit 0. A program `--fix` has repaired is left as it is
+by the next `--fix`.
 
 | Code | Meaning |
 |------|---------|
@@ -661,6 +735,8 @@ maxon lint my-app --target=x64-linux # the target my_app, as compiled for x64-li
 maxon lint --tests                   # what `maxon test` compiles here
 maxon lint --tests src/lexer.maxtest # one test file's test program
 maxon lint maxon.maxtasks            # the task file, as its runner compiles it
+maxon lint --fix src/                # repair what has one repair, then report what stands
+maxon lint --tests --fix             # the same over what `maxon test` compiles
 ```
 
 ### `maxon cache`
@@ -2333,7 +2409,7 @@ Install **Maxon** from the
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
-highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
+highlighting, diagnostics with their [quick fixes](#maxon-lsp-server), hover, completion, go-to-definition, rename, formatting, the Compiler
 Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
 `.maxtest` test files are all Maxon documents, served by the language server.
 
@@ -2500,8 +2576,8 @@ project as `maxon build` does.
 
 **A document's uri may carry any scheme, and what the server can do with a document turns on the path
 that uri spells.** Every scheme is accepted, so an editor that forwards whatever uri a buffer carries is
-served. Document symbols, folding ranges, formatting, linked editing, rename and code actions read the
-buffer alone and answer for every open document. Semantic tokens answer for every open document too, and
+served. Document symbols, folding ranges, formatting, linked editing and rename read the buffer alone and
+answer for every open document; code actions answer from the document's published diagnostics. Semantic tokens answer for every open document too, and
 take the types a project declares from the project's files and `stdlib/` where the uri spells a path. The
 project half needs a path with a directory above it, and a document whose uri has one is the kind
 `maxon/listProjects` lists. An unsaved scratch buffer (`untitled:Untitled-1`) is checked and resolved
@@ -2631,10 +2707,11 @@ it as gone.
 `source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
 above have severity Information. A document is checked with the [lint rules](#maxon-lint), and is
 published with a discarded result (E3064, E3065). "No `main` function" (E3001) and the
-unused-declaration diagnostics (E3092, E3219, E3062) are claims about the whole program, published by
-the command line alone: E3001 and E3062 in the output of `maxon build` and `maxon lint`, E3092 and E3219
-in `maxon lint`'s. When they are the only errors, a document is published with its unneeded casts
-(E3010) and target refusals (E3074, E3104).
+unused-declaration diagnostics (E3092, E3219, E3062) are claims about the whole program. The buffer
+check withholds all four. The project check below, which compiles the whole project, publishes E3092,
+E3219 and E3062 on the document they name, each with its quick fix, and E3001 is published by the
+command line alone, in the output of `maxon build` and `maxon lint`. When they are the only errors, a
+document is published with its unneeded casts (E3010) and target refusals (E3074, E3104).
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
 project check's.** This applies where the document's root is a directory holding a `.maxproj`. The
@@ -2681,6 +2758,31 @@ maxon: project check <uri> version <version> <outcome>
 | `abandoned` | a newer version arrived while the check ran, and the check stopped |
 | `superseded` | a newer version arrived before the check started or before its result was written, and the result was dropped |
 
+**Quick fixes.** `initialize` advertises `codeActionProvider` as an options object whose
+`codeActionKinds` is `["quickfix"]`. Every published diagnostic that carries a repair is offered as a
+quick fix built from that repair, the one [`maxon lint --fix`](#maxon-lint) writes: the compiler computes
+it with the diagnostic, against the text the editor last sent, saved or not. A `textDocument/codeAction`
+request is answered from the set last published for the document's current version, the project
+check's once it has landed, so E3092, E3219 and E3062 get theirs from the project check; until the
+current version's set is published the answer is `[]`. Each diagnostic
+of that set whose range touches the requested range, and whose repair edits this document alone, is one
+action:
+
+- `kind` `quickfix`, a `title` naming what it does (`Discard the result of 'note'`,
+  `Delete the unneeded cast to 'Tally'`), `diagnostics` holding that diagnostic as it was published, and
+  `edit`, a `WorkspaceEdit` whose `changes` edit the document's uri, ranged in UTF-16 units of that
+  text.
+- When the answer holds one and the document has two or more repairs, one more action, titled
+  `Apply all <n> quick fixes in this file`, applies them all in one edit and names each diagnostic it
+  repairs. Where two repairs would edit overlapping text, the first is taken and the other waits for the
+  diagnostics the edited text publishes.
+
+A diagnostic with two or more reasonable repairs, one whose repair the compiler cannot place with
+certainty, one in `stdlib/`, `runtime/` or a scriptlib package, and one in a file that holds an `#if`
+publish with no repair, as `lint --fix` leaves them. A diagnostic the buffer check takes from the file on disk while the buffer differs from it
+is published without its repair. Only an action the user picks rewrites a document, and `quickfix` is the
+one kind advertised.
+
 **Requests served:**
 
 | Method | Result |
@@ -2693,7 +2795,7 @@ maxon: project check <uri> version <version> <outcome>
 | `textDocument/foldingRange` | Every closed block spanning more than one line |
 | `textDocument/linkedEditingRange` | A block's opening name and its `end '…'` label, edited together |
 | `textDocument/rename` | Renames a declaration's name and its matching `end '…'` label. References elsewhere are not renamed. |
-| `textDocument/codeAction` | A quick fix, "Remove unused variable", for a local `let`/`var` whose name appears nowhere else |
+| `textDocument/codeAction` | The quick fixes of the published diagnostics the requested range touches, and an action applying every quick fix of the document when it has two or more (see **Quick fixes** above) |
 | `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator`, `capability` and no modifiers. Every reference to a type is `type`: a type the project, a sibling file or `stdlib/` declares, a type the buffer declares, a type parameter, and the compiler's own `__Builtins`, `__Raw` and `__DebugStream` names and built-in managed types. A local or parameter named like a type is `variable`. `int`, `float`, `bool`, `cstring`, `byte`, the sized integer and float names and `Self` are `type`. The word `isolated`, `immutable` or `mutable` qualifying a type is `capability` |
 
 Any other request is answered with JSON-RPC error `-32601` (method not found).

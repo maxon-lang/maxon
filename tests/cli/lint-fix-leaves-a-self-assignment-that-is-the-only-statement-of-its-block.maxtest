@@ -1,0 +1,18 @@
+let LintFixSelfAssignmentAloneCaseDirName = "lint-fix-self-assignment-alone"
+let LintFixSelfAssignmentAloneFixture = "lint-fix-self-assignment-alone-in-a-block"
+let LintFixSelfAssignmentAloneCode = "E3067"
+let LintFixSelfAssignmentAloneMessage = "self-assignment has no effect: 'total = total'"
+let LintFixSelfAssignmentAloneInTheIfSite = "main.maxon:10:3"
+let LintFixSelfAssignmentAloneInTheElseSite = "main.maxon:22:3"
+let LintFixSelfAssignmentAloneInTheWhileSite = "main.maxon:33:3"
+let LintFixSelfAssignmentAloneInTheForSite = "main.maxon:44:3"
+
+test 'lint --fix leaves a self-assignment that is the only statement of an if, an else, a while or a for, whose deletion would empty the block, and reports each'
+	let remaining = ExpectedDiagnosticArray.create(0)
+
+	for site in [LintFixSelfAssignmentAloneInTheIfSite, LintFixSelfAssignmentAloneInTheElseSite, LintFixSelfAssignmentAloneInTheWhileSite, LintFixSelfAssignmentAloneInTheForSite] 'eachSite'
+		remaining.push(ExpectedDiagnostic.at(LintFixSelfAssignmentAloneCode, site: site, message: LintFixSelfAssignmentAloneMessage))
+	end 'eachSite'
+
+	requireHeldOutsideCheckout(LintFixSelfAssignmentAloneCaseDirName, check: LintFixCase.of(LintFixSelfAssignmentAloneFixture, arguments: [AppDirName], fixed: LintFixedFileArray.create(0), outcome: LintFixOutcome.refused(remaining)))
+end 'lint --fix leaves a self-assignment that is the only statement of an if, an else, a while or a for, whose deletion would empty the block, and reports each'

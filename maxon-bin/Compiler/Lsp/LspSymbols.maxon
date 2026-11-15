@@ -57,7 +57,7 @@ end 'LspBlockKind'
 typealias LspBlockDepth = int(0 to u64.max)
 
 union LspBlockClosing
-	spelled(nameSpan LspSpan)
+	spelled(label Token)
 	unterminated
 end 'LspBlockClosing'
 
@@ -111,6 +111,7 @@ end 'symbolsAnswer'
 function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) returns LspAnswer
 	let doc = JsonDoc.create()
 	let index = LspLineIndex.build(source)
+	let bytes = source.toByteArray()
 	let symbols = JsonNodeIdArray.create(0)
 
 	for block in blocks 'eachBlock'
@@ -129,7 +130,7 @@ function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) retur
 		let symbol = LspJsonObject.create(doc)
 		symbol.put(SymbolNameKey, value: JsonNode.stringNode(String.from(block.name)))
 		symbol.put(LspKindKey, value: JsonNode.numberNode(kind as JsonFloat))
-		symbol.putNode(LspRangeKey, value: blockRangeNode(doc, source: source, index: index, block: block))
+		symbol.putNode(LspRangeKey, value: blockRangeNode(doc, source: source, index: index, bytes: bytes, block: block))
 		symbol.putNode(SelectionRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: block.nameSpan))
 		symbols.push(symbol.finish())
 	end 'eachBlock'
@@ -182,11 +183,9 @@ function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
 end 'foldingRangeAnswer'
 
 // The whole block: from the start of its opening line to just past the quote that closes its `end`
-// label. The end is taken from the label rather than from the line's last token because a PUNCTUATOR
-// carries no byte offsets at all (`Token.startByte` is 0 for every one), so a line-final `)` cannot say
-// where it is.
-function blockRangeNode(doc JsonDoc, source String, index LspLineIndex, block LspDocumentBlock) returns JsonNodeId
-	let finish = index.positionOf(source, offset: lspBlockEndNameSpan(block).endByte + 1)
+// label.
+function blockRangeNode(doc JsonDoc, source String, index LspLineIndex, bytes ByteArray, block LspDocumentBlock) returns JsonNodeId
+	let finish = index.positionOf(source, offset: tokenSourceSpan(lspBlockEndLabel(block), lines: index, bytes: bytes).endByte)
 	return lspRangeNode(doc, startLine: block.startLine, startCharacter: 0, endLine: finish.line, endCharacter: finish.character)
 end 'blockRangeNode'
 
@@ -369,7 +368,7 @@ function closeMatching(open OpenBlockArray, closed LspDocumentBlockArray, label 
 
 		if candidate.name.equals(label.value) 'matched'
 			let endLine = lspLineOf(label.line)
-			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, closing: LspBlockClosing.spelled(LspSpan.create(label.startByte, endByte: label.endByte)), startLine: candidate.startLine, endLine: endLine, depth: depth as LspBlockDepth))
+			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, closing: LspBlockClosing.spelled(label), startLine: candidate.startLine, endLine: endLine, depth: depth as LspBlockDepth))
 			recordUnterminated(open, closed: closed, endLine: endLine, depth: (depth + 1) as LspBlockDepth)
 			_ = try open.pop() otherwise panic("closeMatching: the unwind stopped just above the match, so the match itself is still on the stack")
 			return
@@ -456,11 +455,17 @@ function lspBlockIsTerminated(block LspDocumentBlock) returns bool
 	end 'closing'
 end 'lspBlockIsTerminated'
 
-function lspBlockEndNameSpan(block LspDocumentBlock) returns LspSpan
+function lspBlockEndLabel(block LspDocumentBlock) returns Token
 	match block.closing 'closing'
-		spelled(nameSpan) then return nameSpan
-		unterminated then panic("lspBlockEndNameSpan: an unterminated block spells no `end` label — `lspBlockIsTerminated` is the gate, and every caller asks it before asking this")
+		spelled(label) then return label
+		unterminated then panic("lspBlockEndLabel: an unterminated block spells no `end` label — `lspBlockIsTerminated` is the gate, and every caller asks it before asking this")
 	end 'closing'
+end 'lspBlockEndLabel'
+
+function lspBlockEndNameSpan(block LspDocumentBlock) returns LspSpan
+	let label = lspBlockEndLabel(block)
+
+	return LspSpan.create(label.startByte, endByte: label.endByte)
 end 'lspBlockEndNameSpan'
 
 /// Does the cursor sit on this span? A cursor one past the last byte is still on it — an editor puts the

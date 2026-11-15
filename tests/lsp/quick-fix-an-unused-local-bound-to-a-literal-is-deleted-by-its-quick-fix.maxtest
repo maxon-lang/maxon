@@ -1,0 +1,20 @@
+let QuickFixUnusedLocalUri = "file:///quick-fix-unused-local.maxon"
+let QuickFixUnusedLocalSource = "function main() returns ExitCode\n\tlet spare = 42\n\treturn 0\nend 'main'\n"
+let QuickFixUnusedLocalFixedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let QuickFixUnusedLocalCode = "E3012"
+let QuickFixUnusedLocalSubject = "spare"
+let QuickFixUnusedLocalLine = 1
+let QuickFixUnusedLocalLineAfter = 2
+
+test 'an unused local bound to a literal is deleted by its quick fix'
+	let session = runQuickFixSession(QuickFixUnusedLocalUri, texts: quickFixTexts(QuickFixUnusedLocalSource), apply: QuickFixToApply.singleFixFor(QuickFixUnusedLocalCode, line: QuickFixUnusedLocalLine))
+	let note = "`let spare = 42` on line {QuickFixUnusedLocalLine + 1} is never read, which is {QuickFixUnusedLocalCode}; its initializer calls nothing, so `_ = 42` is no repair, and its one repair deletes the declaration's whole line: line {QuickFixUnusedLocalLine} up to line {QuickFixUnusedLocalLineAfter}."
+	let record = try quickFixRecordOf(session, note: note)
+
+	let fix = try requiredSingleFix(record, code: QuickFixUnusedLocalCode, line: QuickFixUnusedLocalLine, note: note)
+	try expectQuickFixEdits(fix, uri: QuickFixUnusedLocalUri, expected: soleQuickFixEdit(QuickFixUnusedLocalLine, startCharacter: 0, endLine: QuickFixUnusedLocalLineAfter, endCharacter: 0, newText: ""), subject: QuickFixUnusedLocalSubject, note: note)
+
+	let result = try requiredApplied(record, note: note)
+	try Expect.equal(result.fixedText, expected: QuickFixUnusedLocalFixedSource, message: "{note} Applying the quick fix's edits did not leave the function without that line.")
+	try expectNoPublishedCode(result.republished, code: QuickFixUnusedLocalCode, note: note)
+end 'an unused local bound to a literal is deleted by its quick fix'

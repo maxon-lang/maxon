@@ -4293,16 +4293,16 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement.
 		controlOutsideLoop(keyword, targets, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
-		labelTargetsOwnLoop(keyword, label, line, column) gives Diagnostic.create(ErrorCode.redundantControlLabel, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
-		labelTargetsOwnMatch(keyword, label, line, column) gives Diagnostic.create(ErrorCode.redundantControlLabel, message: "'{keyword}' with label '{label}' targets its own match; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
+		labelTargetsOwnLoop(keyword, label, line, column) gives Diagnostic.create(ErrorCode.redundantControlLabel, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.controlLabelDropped))
+		labelTargetsOwnMatch(keyword, label, line, column) gives Diagnostic.create(ErrorCode.redundantControlLabel, message: "'{keyword}' with label '{label}' targets its own match; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.controlLabelDropped))
 		unknownLoopLabel(keyword, targets, label, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
-		firstArgNamed(line, column) gives Diagnostic.create(ErrorCode.callFirstArgNamed, message: "the first argument cannot be named because its parameter has no default", line: line, column: column, filePath: path)
+		firstArgNamed(line, column) gives Diagnostic.create(ErrorCode.callFirstArgNamed, message: "the first argument cannot be named because its parameter has no default", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.argumentLabelDropped))
 		argMissingLabel(line, column) gives Diagnostic.create(ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
 
 		// The THIRD label verdict, and the one neither sentence above can carry: both speak of a callee
 		// whose parameters take 'name:' labels, which is false for a callee that has no declaration and
 		// therefore no parameters to name.
-		builtinArgNamed(line, column) gives Diagnostic.create(ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path)
+		builtinArgNamed(line, column) gives Diagnostic.create(ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.argumentLabelDropped))
 
 		// The three codes AND messages are the ones a DIRECT call's slotting failure gets, because it is
 		// the same rule met at a witness dispatch.
@@ -4437,7 +4437,7 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 		// different sentence from the one a declared function earns for the same situation, and why the
 		// difference is the REMEDY rather than the rule.
 		bareTryInAClosure(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "try without otherwise requires the enclosing function to have 'throws'", line: line, column: column, filePath: path)
-		mismatchedEndLabel(expected, got, line, column) gives Diagnostic.create(ErrorCode.parserMismatchedEndLabel, message: "Mismatched end label: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
+		mismatchedEndLabel(expected, got, line, column) gives Diagnostic.create(ErrorCode.parserMismatchedEndLabel, message: "Mismatched end label: expected '{expected}', got '{got}'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.endLabelRenamed(expected)))
 		testOutsideTestFile(fileName, testFileName, line, column) gives Diagnostic.create(ErrorCode.parserTestOutsideTestFile, message: "a 'test' declaration is only allowed in a file whose name ends in '{TestSourceExtension}'; rename '{fileName}' to '{testFileName}', or move this declaration into one", line: line, column: column, filePath: path)
 		testEmptyName(line, column) gives Diagnostic.create(ErrorCode.parserTestEmptyName, message: "a 'test' declaration's name cannot be empty", line: line, column: column, filePath: path)
 		duplicateTestName(first, second, symbol, line, column) gives Diagnostic.create(ErrorCode.semanticDuplicateTestName, message: "duplicate test name: '{first}' and '{second}' both compile to '{symbol}'", line: line, column: column, filePath: path)
@@ -4471,7 +4471,7 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 		matchPatternTypeMismatch(patternType, scrutineeType, line, column) gives Diagnostic.create(ErrorCode.matchTypeMismatch, message: "pattern type '{patternType}' does not match scrutinee type '{scrutineeType}'", line: line, column: column, filePath: path)
 		matchDefaultNotLast(line, column) gives Diagnostic.create(ErrorCode.matchDefaultNotLast, message: "'default' case must be the last case in match", line: line, column: column, filePath: path)
 		matchMissingBlockId(line, column) gives Diagnostic.create(ErrorCode.matchMissingBlockId, message: "missing block identifier", line: line, column: column, filePath: path)
-		matchMismatchedBlockId(expected, got, line, column) gives Diagnostic.create(ErrorCode.matchMismatchedBlockId, message: "block identifier mismatch: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
+		matchMismatchedBlockId(expected, got, line, column) gives Diagnostic.create(ErrorCode.matchMismatchedBlockId, message: "block identifier mismatch: expected '{expected}', got '{got}'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.endLabelRenamed(expected)))
 		matchBlockStatement(keyword, line, column) gives Diagnostic.create(ErrorCode.matchBlockStatement, message: "block-opening statement '{keyword}' is not allowed in a match arm; use a function call instead", line: line, column: column, filePath: path)
 
 		// The enum/union arms. For an ENUM every message is pinned byte-for-byte by
@@ -4493,8 +4493,8 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 		// E4006, and NOT the E3034 above it: refused in these exact words rather than as an unknown case.
 		// Its sibling `fromRawValue` is disposed differently; see `Parser.parseEnumLiteral`.
 		allCasesOnUnion(line, column) gives Diagnostic.create(ErrorCode.invalidFieldAccess, message: "allCases is not available on unions", line: line, column: column, filePath: path)
-		matchQualifiedCaseName(bare, qualified, line, column) gives Diagnostic.create(ErrorCode.matchQualifiedCaseName, message: "use '{bare}' instead of '{qualified}' in match", line: line, column: column, filePath: path)
-		matchDiscardedBindings(caseName, discardList, line, column) gives Diagnostic.create(ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseName}' instead of '{caseName}({discardList})' to ignore associated values", line: line, column: column, filePath: path)
+		matchQualifiedCaseName(bare, qualified, line, column) gives Diagnostic.create(ErrorCode.matchQualifiedCaseName, message: "use '{bare}' instead of '{qualified}' in match", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.caseQualifierDropped))
+		matchDiscardedBindings(caseName, discardList, line, column) gives Diagnostic.create(ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseName}' instead of '{caseName}({discardList})' to ignore associated values", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.discardedBindingsDropped))
 		matchDefaultEnumMustThrow(kindWord, typeName, line, column) gives Diagnostic.create(ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on {kindWord} '{typeName}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
 		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
 
@@ -4512,8 +4512,8 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 		errorMatchNotExactlyOnce(bindingName, reason, line, column) gives Diagnostic.create(ErrorCode.errorMatchNotExactlyOnce, message: "'{bindingName}' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match '{bindingName}' exactly once: {reason}. Match '{bindingName}' once, and bind in its arms whatever the rest of the handler needs", line: line, column: column, filePath: path)
 		matchOverlappingCase(caseName, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "overlapping pattern in match: '{caseName}' is already covered", line: line, column: column, filePath: path)
 		matchEnumCaseRange(pattern, line, column) gives Diagnostic.create(ErrorCode.matchEnumCaseRange, message: "'{pattern}' is not a match pattern: name each case in an 'or'-chain, one per line", line: line, column: column, filePath: path)
-		matchOrChainNeedsOwnLine(line, column) gives Diagnostic.create(ErrorCode.matchOrChainNeedsOwnLine, message: "each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'", line: line, column: column, filePath: path)
-		matchSingleValueRange(pattern, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "range pattern '{pattern}' covers a single value; use the bare value instead", line: line, column: column, filePath: path)
+		matchOrChainNeedsOwnLine(line, column) gives Diagnostic.create(ErrorCode.matchOrChainNeedsOwnLine, message: "each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.orAlternativeBroken))
+		matchSingleValueRange(pattern, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "range pattern '{pattern}' covers a single value; use the bare value instead", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.singleValueRangeWrittenBare))
 
 		// Pinned byte-for-byte by `enum-match-only.md` `maxoncstderr` blocks.
 		unionNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
@@ -4552,22 +4552,22 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 
 		// The two block-form `try` refusals. The first sentence is pinned byte-for-byte by
 		// `try-block.md`'s `maxoncstderr` block.
-		tryBlockNoThrows(label, line, column) gives Diagnostic.create(ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path)
+		tryBlockNoThrows(label, line, column) gives Diagnostic.create(ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.tryBlockUnwrapped))
 		tryBlockMissingOtherwise(missingBinding, line, column) gives Diagnostic.create(ErrorCode.otherwiseBlockMissingBinding, message: tryBlockMissingOtherwiseMessage(missingBinding), line: line, column: column, filePath: path)
-		tryOnNonThrowing(callee, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
+		tryOnNonThrowing(callee, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.tryDropped))
 		ifTryDiscardsResult(callee, line, column) gives Diagnostic.create(ErrorCode.ifTryDiscardsResult, message: "'if try' discards the result of '{callee}': only a call that returns nothing may be tested bare — bind the result with 'if let'", line: line, column: column, filePath: path)
 		redundantContainsGet(message, line, column) gives Diagnostic.create(ErrorCode.redundantContainsGet, message: message, line: line, column: column, filePath: path)
 
 		// The BUILTIN half of E3055 — one code, a second message: The compiler holds only the emitted runtime
 		// symbol (`__managed_count`), which is reserved namespace the user never wrote, so it names the
 		// class instead of the builtin.
-		tryOnNonThrowingBuiltin(line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this builtin call cannot fail", line: line, column: column, filePath: path)
+		tryOnNonThrowingBuiltin(line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this builtin call cannot fail", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.tryDropped))
 
 		// Names the OPERATOR and the reason the divide is total, because the divisor's range is the thing
 		// the author would have to change to make it fallible, and there is nothing here to catch.
-		tryOnTotalDivision(operator, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this `{operator}` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch", line: line, column: column, filePath: path)
+		tryOnTotalDivision(operator, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this `{operator}` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.tryDropped))
 
-		tryOnProvenFixedArrayAccess(accessor, count, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: provenFixedArrayTryMessage(accessor, count: count), line: line, column: column, filePath: path)
+		tryOnProvenFixedArrayAccess(accessor, count, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: provenFixedArrayTryMessage(accessor, count: count), line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.tryDropped))
 		fixedArrayIndexPastTheSize(value, count, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: fixedArrayIndexPastTheSizeMessage(scalarConstantText(value, isFloat: false), count: count), line: line, column: column, filePath: path)
 
 		// A plain `await` of a throwing promise (E3057), and a `try …` propagate whose error type differs
@@ -4636,13 +4636,13 @@ function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords Ke
 		// `return`, `break` and `continue` alike — the keyword is interpolated rather than the sentence
 		// written three times. Raised from the parser for `emptyBlock`'s reason: the statement-list loop
 		// is the one place that knows a terminator was not the last statement of its block.
-		unreachableCode(terminator, line, column) gives Diagnostic.create(ErrorCode.semanticUnreachableCode, message: "unreachable code after '{terminator}'", line: line, column: column, filePath: path)
+		unreachableCode(terminator, line, column) gives Diagnostic.create(ErrorCode.semanticUnreachableCode, message: "unreachable code after '{terminator}'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.unreachableStatementsDeleted))
 
 		// E3067's two messages, pinned by `self-assignment.md`. ONE code, TWO sentences: the mistake is
 		// one — a statement that computes nothing — but what the author has to change differs, so a
 		// single sentence could only describe one of them. One door each:
 		// `Parser.rejectDegenerateAssignment` and `Parser.parseAssignment`'s `_` arm.
-		selfAssignmentHasNoEffect(place, line, column) gives Diagnostic.create(ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path)
+		selfAssignmentHasNoEffect(place, line, column) gives Diagnostic.create(ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path).withFix(DiagnosticFix.described(FixRepair.selfAssignmentDeleted))
 		discardExpectsACall(line, column) gives Diagnostic.create(ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
 
 		// A SECURITY guard, since the label is a file name. The message names the table the intrinsic

@@ -1,7 +1,7 @@
 // Diagnostics — the compiler's user-facing error channel, plus the driver-level
 // `CompileError` the query/build pipeline throws.
 //
-// A `Diagnostic` is a code + message + optional source position, accumulated on
+// A `Diagnostic` is a code + message + optional source position + optional repair, accumulated on
 // `Project.diagnostics` by every reporting pass. The driver prints them and bails.
 //
 // The `ErrorCode` enum itself is NOT here: `ErrorCodeRegistry.maxon` is the single
@@ -826,6 +826,7 @@ function cacheReadFrozenPositionedNoteArray(reader LibraryCacheReader) returns i
 end 'cacheReadFrozenPositionedNoteArray'
 
 // @generated library-cache end
+
 typealias NoteMapping = function(PositionedNote) returns PositionedNote mutates captures
 
 function singleNote(note PositionedNote) returns PositionedNoteArray
@@ -834,11 +835,333 @@ function singleNote(note PositionedNote) returns PositionedNoteArray
 	return single
 end 'singleNote'
 
+// Lets a fix plan count deletions from one block across repairs: two that each leave the block a
+// statement can still empty it together.
+export union RemovedFromBlock
+	nothing
+	lines(closerAt ByteOffset, interior Count, removed Count)
+end 'RemovedFromBlock'
+
+// @generated library-cache begin
+function cacheWriteRemovedFromBlock(writer LibraryCacheWriter, value RemovedFromBlock)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		nothing then break
+		lines(a0, a1, a2) then cacheWriteRemovedFromBlockLines(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteRemovedFromBlock'
+
+function cacheWriteRemovedFromBlockLines(writer LibraryCacheWriter, a0 ByteOffset, a1 Count, a2 Count)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteRemovedFromBlockLines'
+
+function cacheReadRemovedFromBlock(reader LibraryCacheReader) returns RemovedFromBlock throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives RemovedFromBlock.nothing
+		1 gives try cacheReadRemovedFromBlockLines(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadRemovedFromBlock'
+
+function cacheReadRemovedFromBlockLines(reader LibraryCacheReader) returns RemovedFromBlock throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ByteOffset
+	let a1 = (try reader.unsigned()) as Count
+	let a2 = (try reader.unsigned()) as Count
+
+	return RemovedFromBlock.lines(a0, interior: a1, removed: a2)
+end 'cacheReadRemovedFromBlockLines'
+
+// @generated library-cache end
+
+export type TextEdit
+	export let filePath as FilePath
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
+	export let replacement as String
+	export let removes as RemovedFromBlock
+
+	export static function create(filePath FilePath, startByte ByteOffset, endByte ByteOffset, replacement String, removes RemovedFromBlock = RemovedFromBlock.nothing) returns TextEdit
+		if endByte < startByte 'backwards'
+			panic("TextEdit.create: the range [{startByte}, {endByte}) of {filePath.toString()} ends before it starts")
+		end 'backwards'
+
+		return Self{filePath: filePath, startByte: startByte, endByte: endByte, replacement: replacement, removes: removes}
+	end 'create'
+
+	export function reportedUnder(origins StagedOriginIndex) returns TextEdit
+		return Self{filePath: origins.authoredPathOf(self.filePath), startByte: self.startByte, endByte: self.endByte, replacement: self.replacement, removes: self.removes}
+	end 'reportedUnder'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.filePath.toString())
+		writer.unsigned(self.startByte as CacheUnsigned)
+		writer.unsigned(self.endByte as CacheUnsigned)
+		writer.text(self.replacement)
+		cacheWriteRemovedFromBlock(writer, value: self.removes)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns TextEdit throws LibraryCacheDamage
+		let f_filePath = try reader.path()
+		let f_startByte = (try reader.unsigned()) as ByteOffset
+		let f_endByte = (try reader.unsigned()) as ByteOffset
+		let f_replacement = try reader.text()
+		let f_removes = try cacheReadRemovedFromBlock(reader)
+
+		return Self{filePath: f_filePath, startByte: f_startByte, endByte: f_endByte, replacement: f_replacement, removes: f_removes}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(TextEdit) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'TextEdit'
+
+export typealias TextEditArray = Array with TextEdit
+
+// @generated library-cache begin
+function cacheWriteTextEditArray(writer LibraryCacheWriter, value TextEditArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteTextEditArray'
+
+// @generated library-cache end
+
+// @generated library-cache begin
+function cacheReadFrozenTextEditArray(reader LibraryCacheReader) returns immutable TextEditArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = TextEditArray.create(count, zeroed: false) as isolated TextEditArray
+
+	for _ in 0 upto count 'eachItem'
+		let item = try TextEdit.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return freeze result
+end 'cacheReadFrozenTextEditArray'
+
+// @generated library-cache end
+
+export union FixRepair
+	endLabelRenamed(expected String)
+	controlLabelDropped
+	argumentLabelDropped
+	caseQualifierDropped
+	discardedBindingsDropped
+	orAlternativeBroken
+	singleValueRangeWrittenBare
+	tryDropped
+	tryBlockUnwrapped
+	unreachableStatementsDeleted
+	selfAssignmentDeleted
+	castDropped
+	unusedLocalDiscarded
+	unusedLocalDeleted(lastLine LineNumber)
+	unusedBinderDiscarded
+	caughtBinderDropped
+	varBecomesLet
+	varBecomesLetOfClone(literalEndLine LineNumber, literalEndColumn ColumnNumber)
+	throwsClauseDropped(declared String)
+	typealiasDeleted(name String)
+end 'FixRepair'
+
+// @generated library-cache begin
+function cacheWriteFixRepair(writer LibraryCacheWriter, value FixRepair)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		endLabelRenamed(a0) then cacheWriteFixRepairEndLabelRenamed(writer, a0: a0)
+		controlLabelDropped then break
+		argumentLabelDropped then break
+		caseQualifierDropped then break
+		discardedBindingsDropped then break
+		orAlternativeBroken then break
+		singleValueRangeWrittenBare then break
+		tryDropped then break
+		tryBlockUnwrapped then break
+		unreachableStatementsDeleted then break
+		selfAssignmentDeleted then break
+		castDropped then break
+		unusedLocalDiscarded then break
+		unusedLocalDeleted(a0) then cacheWriteFixRepairUnusedLocalDeleted(writer, a0: a0)
+		unusedBinderDiscarded then break
+		caughtBinderDropped then break
+		varBecomesLet then break
+		varBecomesLetOfClone(a0, a1) then cacheWriteFixRepairVarBecomesLetOfClone(writer, a0: a0, a1: a1)
+		throwsClauseDropped(a0) then cacheWriteFixRepairThrowsClauseDropped(writer, a0: a0)
+		typealiasDeleted(a0) then cacheWriteFixRepairTypealiasDeleted(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteFixRepair'
+
+function cacheWriteFixRepairEndLabelRenamed(writer LibraryCacheWriter, a0 String)
+	writer.text(a0)
+end 'cacheWriteFixRepairEndLabelRenamed'
+
+function cacheWriteFixRepairUnusedLocalDeleted(writer LibraryCacheWriter, a0 LineNumber)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteFixRepairUnusedLocalDeleted'
+
+function cacheWriteFixRepairVarBecomesLetOfClone(writer LibraryCacheWriter, a0 LineNumber, a1 ColumnNumber)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+end 'cacheWriteFixRepairVarBecomesLetOfClone'
+
+function cacheWriteFixRepairThrowsClauseDropped(writer LibraryCacheWriter, a0 String)
+	writer.text(a0)
+end 'cacheWriteFixRepairThrowsClauseDropped'
+
+function cacheWriteFixRepairTypealiasDeleted(writer LibraryCacheWriter, a0 String)
+	writer.text(a0)
+end 'cacheWriteFixRepairTypealiasDeleted'
+
+function cacheReadFixRepair(reader LibraryCacheReader) returns FixRepair throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadFixRepairEndLabelRenamed(reader)
+		1 gives FixRepair.controlLabelDropped
+		2 gives FixRepair.argumentLabelDropped
+		3 gives FixRepair.caseQualifierDropped
+		4 gives FixRepair.discardedBindingsDropped
+		5 gives FixRepair.orAlternativeBroken
+		6 gives FixRepair.singleValueRangeWrittenBare
+		7 gives FixRepair.tryDropped
+		8 gives FixRepair.tryBlockUnwrapped
+		9 gives FixRepair.unreachableStatementsDeleted
+		10 gives FixRepair.selfAssignmentDeleted
+		11 gives FixRepair.castDropped
+		12 gives FixRepair.unusedLocalDiscarded
+		13 gives try cacheReadFixRepairUnusedLocalDeleted(reader)
+		14 gives FixRepair.unusedBinderDiscarded
+		15 gives FixRepair.caughtBinderDropped
+		16 gives FixRepair.varBecomesLet
+		17 gives try cacheReadFixRepairVarBecomesLetOfClone(reader)
+		18 gives try cacheReadFixRepairThrowsClauseDropped(reader)
+		19 gives try cacheReadFixRepairTypealiasDeleted(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadFixRepair'
+
+function cacheReadFixRepairEndLabelRenamed(reader LibraryCacheReader) returns FixRepair throws LibraryCacheDamage
+	let a0 = try reader.text()
+
+	return FixRepair.endLabelRenamed(a0)
+end 'cacheReadFixRepairEndLabelRenamed'
+
+function cacheReadFixRepairUnusedLocalDeleted(reader LibraryCacheReader) returns FixRepair throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+
+	return FixRepair.unusedLocalDeleted(a0)
+end 'cacheReadFixRepairUnusedLocalDeleted'
+
+function cacheReadFixRepairVarBecomesLetOfClone(reader LibraryCacheReader) returns FixRepair throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+	let a1 = (try reader.unsigned()) as ColumnNumber
+
+	return FixRepair.varBecomesLetOfClone(a0, literalEndColumn: a1)
+end 'cacheReadFixRepairVarBecomesLetOfClone'
+
+function cacheReadFixRepairThrowsClauseDropped(reader LibraryCacheReader) returns FixRepair throws LibraryCacheDamage
+	let a0 = try reader.text()
+
+	return FixRepair.throwsClauseDropped(a0)
+end 'cacheReadFixRepairThrowsClauseDropped'
+
+function cacheReadFixRepairTypealiasDeleted(reader LibraryCacheReader) returns FixRepair throws LibraryCacheDamage
+	let a0 = try reader.text()
+
+	return FixRepair.typealiasDeleted(a0)
+end 'cacheReadFixRepairTypealiasDeleted'
+
+// @generated library-cache end
+
+// `lint --fix` and the editor apply `offered` edits unread, so a repair is exact or `none`.
+// `described` is resolved against the file's text by `reportDiagnostic` and reaches no consumer.
+export union DiagnosticFix
+	none
+	offered(title String, edits immutable TextEditArray)
+	described(repair FixRepair)
+
+	function reportedUnder(origins StagedOriginIndex) returns DiagnosticFix
+		return match self 'fix'
+			none gives DiagnosticFix.none
+			offered(title, edits) gives DiagnosticFix.offered(title, edits: reportedEditsUnder(edits, origins: origins))
+			described(repair) gives DiagnosticFix.described(repair)
+		end 'fix'
+	end 'reportedUnder'
+end 'DiagnosticFix'
+
+// @generated library-cache begin
+function cacheWriteDiagnosticFix(writer LibraryCacheWriter, value DiagnosticFix)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break
+		offered(a0, a1) then cacheWriteDiagnosticFixOffered(writer, a0: a0, a1: a1)
+		described(a0) then cacheWriteDiagnosticFixDescribed(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDiagnosticFix'
+
+function cacheWriteDiagnosticFixOffered(writer LibraryCacheWriter, a0 String, a1 immutable TextEditArray)
+	writer.text(a0)
+	cacheWriteTextEditArray(writer, value: a1)
+end 'cacheWriteDiagnosticFixOffered'
+
+function cacheWriteDiagnosticFixDescribed(writer LibraryCacheWriter, a0 FixRepair)
+	cacheWriteFixRepair(writer, value: a0)
+end 'cacheWriteDiagnosticFixDescribed'
+
+function cacheReadDiagnosticFix(reader LibraryCacheReader) returns DiagnosticFix throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DiagnosticFix.none
+		1 gives try cacheReadDiagnosticFixOffered(reader)
+		2 gives try cacheReadDiagnosticFixDescribed(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiagnosticFix'
+
+function cacheReadDiagnosticFixOffered(reader LibraryCacheReader) returns DiagnosticFix throws LibraryCacheDamage
+	let a0 = try reader.text()
+	let a1 = try cacheReadFrozenTextEditArray(reader)
+
+	return DiagnosticFix.offered(a0, edits: a1)
+end 'cacheReadDiagnosticFixOffered'
+
+function cacheReadDiagnosticFixDescribed(reader LibraryCacheReader) returns DiagnosticFix throws LibraryCacheDamage
+	let a0 = try cacheReadFixRepair(reader)
+
+	return DiagnosticFix.described(a0)
+end 'cacheReadDiagnosticFixDescribed'
+
+// @generated library-cache end
+
+function reportedEditsUnder(edits TextEditArray, origins StagedOriginIndex) returns immutable TextEditArray
+	let reported = TextEditArray.create(edits.count(), zeroed: false) as isolated TextEditArray
+
+	for edit in edits 'eachEdit'
+		reported.push(edit.reportedUnder(origins))
+	end 'eachEdit'
+
+	return freeze reported
+end 'reportedEditsUnder'
+
 export type Diagnostic
 	export let code as ErrorCode
 	export let message as String
 	export let anchor as DiagnosticAnchor
 	export let notes as immutable PositionedNoteArray
+	export let fix as DiagnosticFix
 
 	export static function programWide(code ErrorCode, message String) returns Diagnostic
 		return Self.anchored(code, message: message, anchor: DiagnosticAnchor.programWide)
@@ -861,13 +1184,13 @@ export type Diagnostic
 	end 'create'
 
 	static function anchored(code ErrorCode, message String, anchor DiagnosticAnchor) returns Diagnostic
-		return Self{code: code, message: message, anchor: anchor, notes: freeze PositionedNoteArray.create(0)}
+		return Self{code: code, message: message, anchor: anchor, notes: freeze PositionedNoteArray.create(0), fix: DiagnosticFix.none}
 	end 'anchored'
 
 	export function blamedAt(blame LibraryBlame) returns Diagnostic
 		match blame 'blame'
 			unblamed then return self
-			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, anchor: DiagnosticAnchor.at(blamedPath, line: blamedLine as DiagnosticLine, column: blamedColumn as DiagnosticColumn), notes: self.notes}.withNotes(singleNote(self.libraryBlameNote()))
+			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, anchor: DiagnosticAnchor.at(blamedPath, line: blamedLine as DiagnosticLine, column: blamedColumn as DiagnosticColumn), notes: self.notes, fix: self.fix}.withNotes(singleNote(self.libraryBlameNote()))
 		end 'blame'
 	end 'blamedAt'
 
@@ -890,21 +1213,33 @@ export type Diagnostic
 			extended.push(note)
 		end 'eachAdded'
 
-		return Self{code: self.code, message: self.message, anchor: self.anchor, notes: freeze extended}
+		return Self{code: self.code, message: self.message, anchor: self.anchor, notes: freeze extended, fix: self.fix}
 	end 'withNotes'
 
-	// Applied by the sink `reportDiagnostic` after `blamedAt`, so both slots a blame swap produces are
-	// rewritten and neither keeps a staged path.
+	export function withFix(offered DiagnosticFix) returns Diagnostic
+		return Self{code: self.code, message: self.message, anchor: self.anchor, notes: self.notes, fix: offered}
+	end 'withFix'
+
+	function offersAFix() returns bool
+		match self.fix 'fix'
+			none then return false
+			offered then return true
+			described then panic("Diagnostic.offersAFix: {self.code.rawValue} still carries the description of a repair, which `reportDiagnostic` resolves against the file's text before any consumer reads a fix")
+		end 'fix'
+	end 'offersAFix'
+
+	// Applied by the sink `reportDiagnostic` after `blamedAt`, so both slots a blame swap produces,
+	// and the edits of the repair resolved before it, are rewritten and none keeps a staged path.
 	export function reportedUnder(origins StagedOriginIndex) returns Diagnostic
 		if origins.stagesNothing() 'nothingWasStaged'
 			return self
 		end 'nothingWasStaged'
 
-		return Self{code: self.code, message: self.message, anchor: self.anchor.reportedUnder(origins), notes: self.notesMapped(function(note) gives note.reportedUnder(origins))}
+		return Self{code: self.code, message: self.message, anchor: self.anchor.reportedUnder(origins), notes: self.notesMapped(function(note) gives note.reportedUnder(origins)), fix: self.fix.reportedUnder(origins)}
 	end 'reportedUnder'
 
 	export function respelledFor(programWide ShadowRespellings, respellingsOf ShadowRespellingsOf) returns Diagnostic
-		return Self{code: self.code, message: self.anchor.respellings(programWide, respellingsOf: respellingsOf).respell(self.message), anchor: self.anchor, notes: self.notesMapped(function(note) gives note.respelledFor(respellingsOf))}
+		return Self{code: self.code, message: self.anchor.respellings(programWide, respellingsOf: respellingsOf).respell(self.message), anchor: self.anchor, notes: self.notesMapped(function(note) gives note.respelledFor(respellingsOf)), fix: self.fix}
 	end 'respelledFor'
 
 	function notesMapped(through NoteMapping) returns immutable PositionedNoteArray
@@ -944,6 +1279,7 @@ export type Diagnostic
 		writer.text(self.message)
 		cacheWriteDiagnosticAnchor(writer, value: self.anchor)
 		cacheWritePositionedNoteArray(writer, value: self.notes)
+		cacheWriteDiagnosticFix(writer, value: self.fix)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns Diagnostic throws LibraryCacheDamage
@@ -951,12 +1287,13 @@ export type Diagnostic
 		let f_message = try reader.text()
 		let f_anchor = try cacheReadDiagnosticAnchor(reader)
 		let f_notes = try cacheReadFrozenPositionedNoteArray(reader)
+		let f_fix = try cacheReadDiagnosticFix(reader)
 
-		return Self{code: f_code, message: f_message, anchor: f_anchor, notes: f_notes}
+		return Self{code: f_code, message: f_message, anchor: f_anchor, notes: f_notes, fix: f_fix}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(Diagnostic) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(Diagnostic) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1098,8 +1435,8 @@ export enum CompileFailure
 	driverFailed
 end 'CompileFailure'
 
-function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
-	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
+function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath, fix DiagnosticFix = DiagnosticFix.none)
+	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withFix(fix))
 end 'reportPositioned'
 
 enum SecondaryFlush
@@ -1130,8 +1467,8 @@ function isTargetRefusal(code ErrorCode) returns bool
 	return code == ErrorCode.targetUnsupportedConstruct or code == ErrorCode.semanticSubprocessUnsupportedTarget
 end 'isTargetRefusal'
 
-function fileSecondary(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
-	fileSecondaryFinding(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
+function fileSecondary(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath, fix DiagnosticFix = DiagnosticFix.none)
+	fileSecondaryFinding(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withFix(fix))
 end 'fileSecondary'
 
 function fileSecondaryFinding(project Project, diagnostic Diagnostic)
@@ -1207,8 +1544,8 @@ function closureSiteDisplay(authoredPath FilePath, line LineNumber, column Colum
 	return FunctionDisplay.closure("the closure at {authoredPath.toString()}:{line}:{column}")
 end 'closureSiteDisplay'
 
-function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)
-	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String, fix DiagnosticFix = DiagnosticFix.none)
+	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath, fix: fix)
 end 'reportAtFunctionName'
 
 function letReassignedMessage(name String) returns String
@@ -1357,8 +1694,8 @@ end 'Project'
 // author is editing. "This program declares no entry point" would sit on the first line of every
 // library file an editor opens. The unused-declaration family (E3092, E3219, E3062) says nothing else in
 // the program references a declaration, and none of the program's other files is in this compile. The
-// corpus does not rescue either: it is lexed and folded, never checked. `attributedTo` reads this same
-// filter, so the project check withholds these codes too.
+// corpus does not rescue either: it is lexed and folded, never checked. The project check compiles
+// every file, so it withholds only the missing-`main` claim (`withholdsAsAWholeProgramClaim`).
 //
 // ⚠ A member is added by measurement, never by guessing. Suppressing a diagnostic that is genuinely
 // about this file hides a real error, which is worse than the squiggle it removes; the leading digit

@@ -1823,15 +1823,21 @@ end 'UnusedBindingKind'
 // precedence between the two rules structural rather than stated: "an unused `var` reports as UNUSED, not
 // as should-be-let" is one list scanned twice in a fixed order, not two lists that could disagree about
 // which declarations exist.
+union BindingInitializer
+	absent
+	destructured
+	written(firstToken ElementIndex, lastToken ElementIndex, firstOp ElementIndex, endOp ElementIndex, checked bool)
+end 'BindingInitializer'
+
 type UnusedBindingCandidate
 	export var binding as VarInfo
 	export let nameRange as SourceRange
 	export let kind as UnusedBindingKind
 	export let declToken as ElementIndex
-	export let boundFromContainerLiteral as bool
+	export let initializer as BindingInitializer
 
-	static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind, declToken ElementIndex, boundFromContainerLiteral bool = false) returns UnusedBindingCandidate
-		return Self{binding: binding, nameRange: nameRange, kind: kind, declToken: declToken, boundFromContainerLiteral: boundFromContainerLiteral}
+	static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind, declToken ElementIndex, initializer BindingInitializer = BindingInitializer.absent) returns UnusedBindingCandidate
+		return Self{binding: binding, nameRange: nameRange, kind: kind, declToken: declToken, initializer: initializer}
 	end 'create'
 end 'UnusedBindingCandidate'
 
@@ -12118,6 +12124,64 @@ end 'cacheReadDiscardedProducerCall'
 
 // @generated library-cache end
 
+export union DiscardedStatement
+	inCondition
+	standing(startLine LineNumber, startColumn ColumnNumber, lastLine LineNumber, endsItsLine bool, firstOp ElementIndex, endOp ElementIndex, deferredCalls bool, checked bool)
+
+	export function relocated(offset ElementIndex) returns DiscardedStatement
+		return match self 'statement'
+			inCondition gives DiscardedStatement.inCondition
+			standing(startLine, startColumn, lastLine, endsItsLine, firstOp, endOp, deferredCalls, checked) gives DiscardedStatement.standing(startLine, startColumn: startColumn, lastLine: lastLine, endsItsLine: endsItsLine, firstOp: firstOp + offset, endOp: endOp + offset, deferredCalls: deferredCalls, checked: checked)
+		end 'statement'
+	end 'relocated'
+end 'DiscardedStatement'
+
+// @generated library-cache begin
+function cacheWriteDiscardedStatement(writer LibraryCacheWriter, value DiscardedStatement)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		inCondition then break
+		standing(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteDiscardedStatementStanding(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
+	end 'payload'
+end 'cacheWriteDiscardedStatement'
+
+function cacheWriteDiscardedStatementStanding(writer LibraryCacheWriter, a0 LineNumber, a1 ColumnNumber, a2 LineNumber, a3 bool, a4 ElementIndex, a5 ElementIndex, a6 bool, a7 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.flag(a3)
+	writer.unsigned(a4 as CacheUnsigned)
+	writer.unsigned(a5 as CacheUnsigned)
+	writer.flag(a6)
+	writer.flag(a7)
+end 'cacheWriteDiscardedStatementStanding'
+
+function cacheReadDiscardedStatement(reader LibraryCacheReader) returns DiscardedStatement throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DiscardedStatement.inCondition
+		1 gives try cacheReadDiscardedStatementStanding(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiscardedStatement'
+
+function cacheReadDiscardedStatementStanding(reader LibraryCacheReader) returns DiscardedStatement throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+	let a1 = (try reader.unsigned()) as ColumnNumber
+	let a2 = (try reader.unsigned()) as LineNumber
+	let a3 = try reader.flag()
+	let a4 = (try reader.unsigned()) as ElementIndex
+	let a5 = (try reader.unsigned()) as ElementIndex
+	let a6 = try reader.flag()
+	let a7 = try reader.flag()
+
+	return DiscardedStatement.standing(a0, startColumn: a1, lastLine: a2, endsItsLine: a3, firstOp: a4, endOp: a5, deferredCalls: a6, checked: a7)
+end 'cacheReadDiscardedStatementStanding'
+
+// @generated library-cache end
+
 // ⭐⭐ **A SITE THAT USES NONE OF A CALL'S RESULT, AWAITING THE WHOLE-PROGRAM VERDICT ON WHETHER THE CALLEE
 // HAD ANY OTHER REASON TO RUN (E3064, `specs/tuple-assign.md`).** Recorded rather than checked in place for
 // `PendingFunctionTypeDoor`'s reason and a sharper one of its own: whether a callee is PURE is a property of
@@ -12146,23 +12210,33 @@ export type PendingDiscardedResult
 	export var line as LineNumber
 	export var column as ColumnNumber
 	export var filePath as FilePath
+	export let statement as DiscardedStatement
 
-	export static function create(opIndex ElementIndex, door DiscardDoor, subject DiscardSubject, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{producer: DiscardedProducer.call(opIndex), door: door, subject: subject, line: line, column: column, filePath: filePath}
+	export static function create(opIndex ElementIndex, door DiscardDoor, subject DiscardSubject, line LineNumber, column ColumnNumber, filePath FilePath, statement DiscardedStatement) returns PendingDiscardedResult
+		return Self{producer: DiscardedProducer.call(opIndex), door: door, subject: subject, line: line, column: column, filePath: filePath, statement: statement}
 	end 'create'
 
 	// An intrinsic is recognized in CALL position, and the only call position that takes nothing is a bare
 	// statement — so its door is settled here rather than passed in.
-	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{producer: DiscardedProducer.intrinsic(callee), door: DiscardDoor.statement, subject: DiscardSubject.none, line: line, column: column, filePath: filePath}
+	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath, statement DiscardedStatement) returns PendingDiscardedResult
+		return Self{producer: DiscardedProducer.intrinsic(callee), door: DiscardDoor.statement, subject: DiscardSubject.none, line: line, column: column, filePath: filePath, statement: statement}
 	end 'createForIntrinsic'
 
 	export function relocated(offset ElementIndex) returns PendingDiscardedResult
-		return match self.producer 'producer'
-			intrinsic gives self.clone()
-			call(opIndex) gives Self{producer: DiscardedProducer.call(opIndex + offset), door: self.door, subject: self.subject, line: self.line, column: self.column, filePath: self.filePath}
+		let relocatedProducer = match self.producer 'producer'
+			intrinsic(callee) gives DiscardedProducer.intrinsic(callee)
+			call(opIndex) gives DiscardedProducer.call(opIndex + offset)
 		end 'producer'
+
+		return Self{producer: relocatedProducer, door: self.door, subject: self.subject, line: self.line, column: self.column, filePath: self.filePath, statement: self.statement.relocated(offset)}
 	end 'relocated'
+
+	function isProducedByOp(opIndex ElementIndex) returns bool
+		return match self.producer 'producer'
+			intrinsic gives false
+			call(callIndex) gives callIndex == opIndex
+		end 'producer'
+	end 'isProducedByOp'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -12172,6 +12246,7 @@ export type PendingDiscardedResult
 		writer.unsigned(self.line as CacheUnsigned)
 		writer.unsigned(self.column as CacheUnsigned)
 		writer.text(self.filePath.toString())
+		cacheWriteDiscardedStatement(writer, value: self.statement)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns PendingDiscardedResult throws LibraryCacheDamage
@@ -12181,12 +12256,13 @@ export type PendingDiscardedResult
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
 		let f_filePath = try reader.path()
+		let f_statement = try cacheReadDiscardedStatement(reader)
 
-		return Self{producer: f_producer, door: f_door, subject: f_subject, line: f_line, column: f_column, filePath: f_filePath}
+		return Self{producer: f_producer, door: f_door, subject: f_subject, line: f_line, column: f_column, filePath: f_filePath, statement: f_statement}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize48
-		return sizeof(PendingDiscardedResult) as CacheSize48
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(PendingDiscardedResult) as CacheSize56
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -12894,6 +12970,8 @@ export type Project
 	export var shadowRoster as ShadowSpellingRoster
 	export var shadowRespellingMemos as ShadowRespellingMemoMap
 
+	let fixSources as FixSources
+
 	// ⭐ The SOURCE TEXT of every `async <call>` spawn, keyed by its `asyncCall` op index — what E3073 quotes
 	// back at the author (`'async heavyCompute(5)'`). SPARSE, unlike `opRanges`: only spawn sites have an
 	// entry, so it is a map rather than a parallel array.
@@ -13194,6 +13272,7 @@ export type Project
 			retainedEntries: NameRoster.create(0),
 			shadowRoster: ShadowSpellingRoster.none(),
 			shadowRespellingMemos: ShadowRespellingMemoMap.create(),
+			fixSources: FixSources.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			synthesizedOpFiles: SynthesizedOpFileMap.create(),
 			registryUseSites: RegistryUseSiteMap.create(),
@@ -13403,8 +13482,9 @@ function reportDiagnostic(project Project, diagnostic Diagnostic)
 
 	// AFTER the blame swap, never before: `blamedAt` moves one location into the note and promotes
 	// another into the primary slot, so a rewrite applied first would leave whichever path it moved
-	// still spelled as the staged copy.
-	project.diagnostics.push(respelledForItsReaders(project, diagnostic: diagnostic.blamedAt(project.libraryBlame)).reportedUnder(project.stagedSourceOrigins))
+	// still spelled as the staged copy. The repair is resolved before both, at the anchor that
+	// raised it and against the compiled file's text.
+	project.diagnostics.push(respelledForItsReaders(project, diagnostic: resolvedRepair(project, diagnostic: diagnostic).blamedAt(project.libraryBlame)).reportedUnder(project.stagedSourceOrigins))
 end 'reportDiagnostic'
 
 function diagnosticLeavesTheTypeUniverseUnreadable(code ErrorCode) returns bool

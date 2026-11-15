@@ -1,0 +1,21 @@
+let LineEndLineFeedDocument = "function main() returns ExitCode\n\tlet total =\n\treturn 0\nend 'main'\n"
+let LineEndCarriageReturnDocument = "function main() returns ExitCode\r\n\tlet total =\r\n\treturn 0\r\nend 'main'\r\n"
+let LineEndStartLine = 1 as LspCoordinate
+let LineEndStartCharacter = 12 as LspCoordinate
+let LineEndEndLine = 2 as LspCoordinate
+let LineEndEndCharacter = 0 as LspCoordinate
+
+test 'a diagnostic anchored at the end of a line spans the whole line terminator, whether it is a line feed or a carriage return and a line feed'
+	let lineFeed = try onlyPublishedDiagnostic(LineEndLineFeedDocument, what: "opening a document whose second line ends before its initializer, with LF line endings")
+	let carriageReturn = try onlyPublishedDiagnostic(LineEndCarriageReturnDocument, what: "opening the same document with CRLF line endings")
+
+	try expectLineEndRange(lineFeed, terminator: "LF")
+	try expectLineEndRange(carriageReturn, terminator: "CRLF")
+end 'a diagnostic anchored at the end of a line spans the whole line terminator, whether it is a line feed or a carriage return and a line feed'
+
+function expectLineEndRange(reported PublishedDiagnostic, terminator String) throws TestFailure
+	let range = reported.range
+	let published = "{range.startLine}:{range.startCharacter}-{range.endLine}:{range.endCharacter}"
+
+	try Expect.equal(published, expected: "{LineEndStartLine}:{LineEndStartCharacter}-{LineEndEndLine}:{LineEndEndCharacter}", message: "`let total =` ends its line with nothing after the `=`, so the error is anchored at the end of the line. With {terminator} line endings the range must start where the line's content stops and end where the next line begins, so a client underlines the whole terminator and no more. A server that spans a CRLF as the carriage return alone ends the range one character short, inside the line.")
+end 'expectLineEndRange'

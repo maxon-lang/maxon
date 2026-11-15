@@ -1,0 +1,43 @@
+let QuickFixTypedDirName = "quick-fix-buffer-tokens-differ-from-the-saved-file"
+let QuickFixTypedFileName = "main.maxon"
+let QuickFixTypedSavedSource = "typealias Tally = int(0 to 1000)\n\nfunction first() returns Tally\n\tvar total = 1 as Tally\n\ttotal = total + 1\n\ttotal = total\n\treturn total\nend 'first'\n\nfunction main() returns ExitCode\n\tvar count = 1 as Tally\n\tcount = count + 1\n\treturn first() as ExitCode\nend 'main'\n"
+let QuickFixTypedBufferSource = "typealias Tally = int(0 to 1000)\n\nfunction first() returns Tally\n\tvar total = 1 as Tally\n\ttotal = total + 1\n\treturn total\nend 'first'\n\nfunction main() returns ExitCode\n\tvar count = 1 as Tally\n\tcount = count + 1\n\tcount = count\n\treturn first() as ExitCode\nend 'main'\n"
+let QuickFixTypedFixedSource = "typealias Tally = int(0 to 1000)\n\nfunction first() returns Tally\n\tvar total = 1 as Tally\n\ttotal = total + 1\n\treturn total\nend 'first'\n\nfunction main() returns ExitCode\n\tvar count = 1 as Tally\n\tcount = count + 1\n\treturn first() as ExitCode\nend 'main'\n"
+let QuickFixTypedCode = "E3067"
+let QuickFixTypedSubject = "count"
+let QuickFixTypedSavedLine = 5
+let QuickFixTypedBufferLine = 11
+
+test 'a buffer whose tokens differ from the saved file is published with the repair of its own text, and with none of the saved file'
+	let root = freshOutsideCheckoutDir(QuickFixTypedDirName)
+	writeCorpusFile(root, fileName: GatedManifestFileName, content: GatedManifestSource)
+	writeCorpusFile(root, fileName: QuickFixTypedFileName, content: QuickFixTypedSavedSource)
+
+	let uri = fileUriOf(root.join(QuickFixTypedFileName))
+	let client = LspClient.start()
+
+	if let record = try askedWhileTheProjectFileRuns(client, root: root, uri: uri, text: QuickFixTypedBufferSource) 'answered'
+		releaseGatedManifest(root)
+		client.release()
+		discardStagedDir(root)
+
+		let note = "The file on disk assigns `total` to itself on line {QuickFixTypedSavedLine + 1}, which is {QuickFixTypedCode}. The buffer has deleted that statement and written `count = count` on line {QuickFixTypedBufferLine + 1} instead, so its tokens are no longer the saved file's and the saved file's finding is gone. The project file of the staged project is still running, so no project check has replaced the buffer check's answer."
+
+		try Expect.equal(record.published.count(), expected: 1, message: "{note} The buffer holds exactly one self-assignment, so it must publish exactly one diagnostic. Published: {projectDiagnosticsRendering(record.published)}")
+
+		let published = try record.published.get(0) otherwise panic("the count above was 1")
+
+		try Expect.equal(published.code.describe(), expected: QuickFixTypedCode, message: "{note} Published: {projectDiagnosticsRendering(record.published)}")
+		try Expect.equal(published.range.startLine, expected: QuickFixTypedBufferLine, message: "{note} The diagnostic must name the buffer's own line, not the saved file's. Published: {projectDiagnosticsRendering(record.published)}")
+
+		let fix = try requiredSingleFix(record, code: QuickFixTypedCode, line: QuickFixTypedBufferLine, note: note)
+		try expectQuickFixEdits(fix, uri: uri, expected: soleQuickFixEdit(QuickFixTypedBufferLine, startCharacter: 0, endLine: QuickFixTypedBufferLine + 1, endCharacter: 0, newText: ""), subject: QuickFixTypedSubject, note: note)
+
+		let fixedText = try appliedEdits(QuickFixTypedBufferSource, edits: fix.edits)
+
+		try Expect.equal(fixedText, expected: QuickFixTypedFixedSource, message: "{note} Applying the offered edits to the buffer must delete exactly its own `count = count` and leave every other line standing. An edit computed against the saved file would delete the buffer's line {QuickFixTypedSavedLine + 1}, `return total`.")
+	end 'answered' else (e) 'failed'
+		releaseGatedManifest(root)
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the session over the buffer whose tokens differ did not complete")
+	end 'failed'
+end 'a buffer whose tokens differ from the saved file is published with the repair of its own text, and with none of the saved file'

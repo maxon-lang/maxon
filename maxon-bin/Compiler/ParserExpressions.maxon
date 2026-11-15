@@ -552,7 +552,7 @@ extension Parser
 			return
 		end 'theDestinationDeclaresAnotherType'
 
-		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), range: cast.asRange)
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), range: cast.asRange, fix: DiagnosticFix.described(FixRepair.castDropped))
 	end 'reportUnneededLiteralCast'
 
 	function noteLiteralCastArgument(value ValueId, passed ValueId, first ElementIndex)
@@ -3494,7 +3494,7 @@ extension Parser
 		match door 'door'
 			handleWidened then break
 			rebrand then break
-			namesOwnType(ownType) then self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(ownType, targetName: ownType), range: SourceRange.ofToken(asTok))
+			namesOwnType(ownType) then self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(ownType, targetName: ownType), range: SourceRange.ofToken(asTok), fix: DiagnosticFix.described(FixRepair.castDropped))
 			conversion(targetAlias) then self.recordUnneededConversion(value, targetAlias: targetAlias, targetType: targetType, asTok: asTok)
 		end 'door'
 	end 'recordUnneededCast'
@@ -4085,7 +4085,7 @@ extension Parser
 			return
 		end 'aDoorBetweenTwoTypes'
 
-		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(source.name, targetName: target.name), range: SourceRange.ofToken(asTok))
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(source.name, targetName: target.name), range: SourceRange.ofToken(asTok), fix: DiagnosticFix.described(FixRepair.castDropped))
 	end 'reportUnneededCastBetween'
 
 	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the

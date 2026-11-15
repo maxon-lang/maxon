@@ -3757,7 +3757,7 @@ extension Parser
 				continue
 			end 'contractDictatedTheList'
 
-			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
+			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange, fix: self.unusedBindingFix(candidate))
 			reportedAny = true
 		end 'eachCandidate'
 
@@ -3784,7 +3784,7 @@ extension Parser
 				continue
 			end 'notACandidate'
 
-			self.recordArtifactDiagnostic(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(candidate.binding.name), boundFromContainerLiteral: candidate.boundFromContainerLiteral), range: candidate.nameRange)
+			self.recordArtifactDiagnostic(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(candidate.binding.name), boundFromContainerLiteral: self.boundFromContainerLiteral(candidate)), range: candidate.nameRange, fix: self.varBecomesLetFix(candidate))
 		end 'eachCandidate'
 	end 'reportVarShouldBeLet'
 
@@ -3795,6 +3795,118 @@ extension Parser
 
 		return not candidate.binding.mutabilityExercised and not self.nameIsListed(self.bodyState.mutabilityExercisedNames, name: candidate.binding.name)
 	end 'isVarShouldBeLetCandidate'
+
+	function unusedBindingFix(candidate UnusedBindingCandidate) returns DiagnosticFix
+		match candidate.kind 'kind'
+			parameter then return DiagnosticFix.none
+			loopVariable or
+			payloadBinding then return DiagnosticFix.described(FixRepair.unusedBinderDiscarded)
+			caughtError then return DiagnosticFix.described(FixRepair.caughtBinderDropped)
+			mutableLocal or
+			immutableLocal then return self.unusedLocalFix(candidate.initializer)
+		end 'kind'
+	end 'unusedBindingFix'
+
+	function unusedLocalFix(initializer BindingInitializer) returns DiagnosticFix
+		match initializer 'initializer'
+			absent then panic("unusedLocalFix: a body binding is enrolled with the initializer it was declared from")
+			destructured then return DiagnosticFix.described(FixRepair.unusedBinderDiscarded)
+			written(_, lastToken, firstOp, endOp, checked) then return self.unusedLocalFixOf(lastToken, firstOp: firstOp, endOp: endOp, checked: checked)
+		end 'initializer'
+	end 'unusedLocalFix'
+
+	function unusedLocalFixOf(lastToken ElementIndex, firstOp ElementIndex, endOp ElementIndex, checked bool) returns DiagnosticFix
+		var calls = false
+
+		for opIndex in firstOp upto endOp 'eachOp'
+			let op = try self.artifact.module.ops.get(opIndex) otherwise panic("unusedLocalFixOf: opRef {opIndex} of the initializer is not in module.ops")
+
+			if opSuspends(op) 'aSuspension'
+				return DiagnosticFix.none
+			end 'aSuspension'
+
+			if opCallsOrSuspends(op) 'aCall'
+				calls = true
+			end 'aCall'
+		end 'eachOp'
+
+		if not checked and opsAreFreeOfEffects(self.artifact.module, firstOp: firstOp, endOp: endOp, callees: CalleeEffects.undecided, exempt: ExemptCall.none) 'aDeletion'
+			return self.unusedLocalDeletion(lastToken)
+		end 'aDeletion'
+
+		if calls 'aDiscard'
+			return DiagnosticFix.described(FixRepair.unusedLocalDiscarded)
+		end 'aDiscard'
+
+		return DiagnosticFix.none
+	end 'unusedLocalFixOf'
+
+	function unusedLocalDeletion(lastToken ElementIndex) returns DiagnosticFix
+		let terminator = self.tokenAt(lastToken + 1)
+
+		if terminator.kind != TokenKind.newline 'sharesItsLastLine'
+			return DiagnosticFix.none
+		end 'sharesItsLastLine'
+
+		return DiagnosticFix.described(FixRepair.unusedLocalDeleted(terminator.line))
+	end 'unusedLocalDeletion'
+
+	function statementRecordedACheck() returns bool
+		return self.bodyState.runtimeChecks > self.bodyState.statementCheckFloor
+	end 'statementRecordedACheck'
+
+	function boundFromContainerLiteral(candidate UnusedBindingCandidate) returns bool
+		match candidate.initializer 'initializer'
+			absent or
+			destructured then return false
+			written(firstToken, _, _, _, _) then return self.rhsIsAContainerLiteral(firstToken)
+		end 'initializer'
+	end 'boundFromContainerLiteral'
+
+	function varBecomesLetFix(candidate UnusedBindingCandidate) returns DiagnosticFix
+		match candidate.initializer 'initializer'
+			absent then panic("varBecomesLetFix: a `var` candidate is enrolled with the initializer it was declared from")
+			destructured then return DiagnosticFix.none
+			written(firstToken, lastToken, _, _, _) then return self.varBecomesLetOf(firstToken, lastToken: lastToken)
+		end 'initializer'
+	end 'varBecomesLetFix'
+
+	function varBecomesLetOf(firstToken ElementIndex, lastToken ElementIndex) returns DiagnosticFix
+		if not self.rhsIsAContainerLiteral(firstToken) or not self.literalIsTheWholeInitializer(firstToken, lastToken: lastToken) 'noLiteralToClone'
+			return DiagnosticFix.described(FixRepair.varBecomesLet)
+		end 'noLiteralToClone'
+
+		let closing = self.tokenAt(lastToken)
+
+		return DiagnosticFix.described(FixRepair.varBecomesLetOfClone(closing.line, literalEndColumn: closing.column))
+	end 'varBecomesLetOf'
+
+	function literalIsTheWholeInitializer(firstToken ElementIndex, lastToken ElementIndex) returns bool
+		var depth = 0 as BracketDepth
+		var index = firstToken
+
+		if self.kindAt(firstToken) != TokenKind.leftBracket 'aTypedHead'
+			index = firstToken + 2
+		end 'aTypedHead'
+
+		while index <= lastToken 'eachToken'
+			let kind = self.kindAt(index)
+
+			if kind == TokenKind.leftBracket 'anOpener'
+				depth = depth + 1
+			end 'anOpener' else if kind == TokenKind.rightBracket 'aCloser'
+				depth = depth - 1
+
+				if depth == 0 'theLiteralCloses'
+					return index == lastToken
+				end 'theLiteralCloses'
+			end 'aCloser'
+
+			index = index + 1
+		end 'eachToken'
+
+		return false
+	end 'literalIsTheWholeInitializer'
 
 	// Was the NAME this binding declared mentioned anywhere in the function being parsed? The per-binding
 	// bit first, then the name-scoped half — see `referencedNames` for why the second question exists and
@@ -6580,7 +6692,16 @@ extension Parser
 	function parseStatement(func IrFunction, block IrBlock, head StatementHead) returns IrBlock throws SourceParseError
 		let windowFloor = self.statementWindowFloor()
 		self.bodyState.operandOrder.enterStatement()
+		// A statement holding a block reads its head and floors after its nested statements parse.
+		let enclosingHead = self.bodyState.statementHead
+		let enclosingOpFloor = self.bodyState.statementOpFloor
+		let enclosingDeferralFloor = self.bodyState.statementDeferralFloor
+		let enclosingCheckFloor = self.bodyState.statementCheckFloor
 		let next = try self.parseStatementBody(func, block: block, head: head)
+		self.bodyState.statementHead = enclosingHead
+		self.bodyState.statementOpFloor = enclosingOpFloor
+		self.bodyState.statementDeferralFloor = enclosingDeferralFloor
+		self.bodyState.statementCheckFloor = enclosingCheckFloor
 		self.bodyState.operandOrder.leaveStatement()
 		try self.requireNoDeferredRefusal()
 		self.closeWindowsTo(windowFloor)
@@ -6603,6 +6724,10 @@ extension Parser
 		self.bodyState.currentBlock = block
 		let lateFloor = self.bodyState.lateReads.count()
 		self.bodyState.statementStart = self.pos
+		self.bodyState.statementHead = self.pos
+		self.bodyState.statementOpFloor = self.artifact.module.ops.count()
+		self.bodyState.statementDeferralFloor = self.artifact.deferredChains.count()
+		self.bodyState.statementCheckFloor = self.bodyState.runtimeChecks
 		self.forgetStatementFacts()
 
 		// The statement's first token — the anchor `drainPendingTemps` gives the drops it emits (no source
@@ -7274,7 +7399,7 @@ extension Parser
 			self.registerFreshLocal(declared.boundValue, binding: declared)
 		end 'aFreshLocal'
 
-		self.noteBodyBindingDeclared(nameTok, kind: kind, boundFromContainerLiteral: self.rhsIsAContainerLiteral(rhsStart))
+		self.noteBodyBindingDeclared(nameTok, kind: kind, initializer: BindingInitializer.written(rhsStart, lastToken: self.pos - 1, firstOp: self.bodyState.statementOpFloor, endOp: self.artifact.module.ops.count(), checked: self.statementRecordedACheck()))
 
 		if kind == BindingKind.let 'aConstantCandidate'
 			self.registerLetCast(nameTok, initializer: value, first: rhsStart)
@@ -7602,13 +7727,13 @@ extension Parser
 	// directly, so a bound-then `var` is a candidate for NEITHER rule. That is the safe direction — a missed
 	// diagnostic, never a refused program — and it is written down here because "two doors" reads like an
 	// exhaustive claim otherwise.
-	function noteBodyBindingDeclared(nameTok Token, kind BindingKind, boundFromContainerLiteral bool)
+	function noteBodyBindingDeclared(nameTok Token, kind BindingKind, initializer BindingInitializer)
 		if nameTok.value.equals(DiscardBindingName) 'notACandidateName'
 			return
 		end 'notACandidateName'
 
 		let unusedKind = UnusedBindingKind.mutableLocal if kind == BindingKind.var else UnusedBindingKind.immutableLocal
-		self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(self.bodyState.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: unusedKind, declToken: self.pos, boundFromContainerLiteral: boundFromContainerLiteral))
+		self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(self.bodyState.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: unusedKind, declToken: self.pos, initializer: initializer))
 	end 'noteBodyBindingDeclared'
 
 	function rhsIsAContainerLiteral(rhsStart ElementIndex) returns bool
@@ -7974,7 +8099,7 @@ extension Parser
 			table.destructuredUniques.insert(self.bodyState.scope.getInfo(nameTok.value).boundValue)
 		end 'aLentUnique'
 
-		self.noteBodyBindingDeclared(nameTok, kind: kind, boundFromContainerLiteral: false)
+		self.noteBodyBindingDeclared(nameTok, kind: kind, initializer: BindingInitializer.destructured)
 	end 'declareDestructuredElement'
 
 	// ⭐⭐ **`(x, let y) = makePair(10, b: 32)` — STATEMENT-LEVEL TUPLE ASSIGNMENT (`specs/tuple-assign.md`),
@@ -8080,7 +8205,7 @@ extension Parser
 			deferred then break
 		end 'source'
 
-		self.recordDiscardOf(discardedCallee, anchor: openTok, door: DiscardDoor.explicitDiscard)
+		self.recordDiscardOf(discardedCallee, anchor: openTok, door: DiscardDoor.explicitDiscard, standing: DiscardStanding.statement)
 
 		// WHICH local the right-hand side reached into, read once for the whole statement — the temp's move
 		// source, and the root every DECLARING target reaches a field of (see `declareDestructuredElement`).
@@ -8258,7 +8383,7 @@ extension Parser
 			return
 		end 'theCallPromisedNothing'
 
-		self.recordDiscardOf(producer, anchor: anchor, door: door)
+		self.recordDiscardOf(producer, anchor: anchor, door: door, standing: DiscardStanding.statement)
 	end 'recordDiscardedCallResult'
 
 	// File a probed producer, if it was a call at all. The ANCHOR is the statement's own token — where the
@@ -8268,12 +8393,24 @@ extension Parser
 	// The SUBJECT is the source member behind a lowered runtime read (`lastRuntimeRead`) and
 	// `DiscardSubject.none` for every other producer: a declared callee is its
 	// own subject and `SemanticCheck.checkDiscardedResults` reports it under the name it is keyed by.
-	function recordDiscardOf(producer DiscardedCallee, anchor Token, door DiscardDoor)
+	function recordDiscardOf(producer DiscardedCallee, anchor Token, door DiscardDoor, standing DiscardStanding)
 		match producer 'usedNothing'
-			named(_, result, opIndex) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(opIndex, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.job.path))
+			named(_, result, opIndex) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(opIndex, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.job.path, statement: self.discardedStatementOf(standing)))
 			notACall then break
 		end 'usedNothing'
 	end 'recordDiscardOf'
+
+	function discardedStatementOf(standing DiscardStanding) returns DiscardedStatement
+		match standing 'standing'
+			condition then return DiscardedStatement.inCondition
+			statement then break
+		end 'standing'
+
+		let head = self.tokenAt(self.bodyState.statementHead)
+		let last = self.tokenAt(self.pos - 1)
+
+		return DiscardedStatement.standing(head.line, startColumn: head.column, lastLine: last.line, endsItsLine: tokenKindEndsALine(self.kindAt(self.pos)), firstOp: self.bodyState.statementOpFloor, endOp: self.artifact.module.ops.count(), deferredCalls: self.artifact.deferredChains.recordsACallAbove(self.bodyState.statementDeferralFloor), checked: self.statementRecordedACheck())
+	end 'discardedStatementOf'
 
 	// ⭐⭐ **WHERE E3064 POINTS AT A CALL STATEMENT — THE CALLED NAME, WHICH IS THE LAST NAME OF THE
 	// CHAIN THE `(` FOLLOWS.** One rule for every call-statement door, dotted or not: `arr.count()`

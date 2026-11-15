@@ -1,0 +1,13 @@
+let LintFixLocalThatCanAbortCaseDirName = "lint-fix-local-that-can-abort"
+let LintFixLocalThatCanAbortFixture = "lint-fix-unused-local-that-can-abort"
+let LintFixLocalThatCanAbortFile = "app/main.maxon"
+let LintFixLocalThatCanAbortFindings = 1
+let LintFixLocalThatCanAbortCode = "E3012"
+let LintFixLocalThatCanAbortSite = "main.maxon:7:6"
+let LintFixLocalThatCanAbortMessage = "unused variable: 'small'"
+
+test 'lint --fix deletes an unused local bound to a constant cast, leaves one bound to a range-checked cast of a parameter, which can abort, and reports it'
+	let fixed = lintFixFixedFiles(LintFixLocalThatCanAbortFile, findings: LintFixLocalThatCanAbortFindings)
+	let outcome = lintFixRefusedWith(ExpectedDiagnostic.at(LintFixLocalThatCanAbortCode, site: LintFixLocalThatCanAbortSite, message: LintFixLocalThatCanAbortMessage))
+	requireHeldOutsideCheckout(LintFixLocalThatCanAbortCaseDirName, check: LintFixCase.of(LintFixLocalThatCanAbortFixture, arguments: [AppDirName], fixed: fixed, outcome: outcome))
+end 'lint --fix deletes an unused local bound to a constant cast, leaves one bound to a range-checked cast of a parameter, which can abort, and reports it'

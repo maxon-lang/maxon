@@ -1,0 +1,12 @@
+let LintFixMixedTiersCaseDirName = "lint-fix-mixed-tiers"
+let LintFixMixedTiersFixture = "lint-fix-mixed-tiers"
+let LintFixMixedTiersFirstFile = "app/a.maxon"
+let LintFixMixedTiersFirstFindings = 2
+let LintFixMixedTiersSecondFile = "app/b.maxon"
+let LintFixMixedTiersSecondFindings = 1
+
+test 'lint --fix fixes the dropped results in one file and then the unused export they hid in another, in one command'
+	let fixed = lintFixFixedFiles(LintFixMixedTiersFirstFile, findings: LintFixMixedTiersFirstFindings)
+	fixed.push(LintFixedFile.of(LintFixMixedTiersSecondFile, findings: LintFixMixedTiersSecondFindings))
+	requireHeldOutsideCheckout(LintFixMixedTiersCaseDirName, check: LintFixCase.of(LintFixMixedTiersFixture, arguments: [AppDirName], fixed: fixed, outcome: LintFixOutcome.linted(AppDirName)))
+end 'lint --fix fixes the dropped results in one file and then the unused export they hid in another, in one command'

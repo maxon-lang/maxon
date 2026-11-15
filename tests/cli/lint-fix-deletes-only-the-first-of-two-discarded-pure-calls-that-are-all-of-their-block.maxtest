@@ -1,0 +1,12 @@
+let LintFixTwoPureCallsCaseDirName = "lint-fix-two-pure-calls-in-a-block"
+let LintFixTwoPureCallsFixture = "lint-fix-two-discarded-pure-calls-alone-in-a-block"
+let LintFixTwoPureCallsFile = "app/main.maxon"
+let LintFixTwoPureCallsFindings = 1
+let LintFixTwoPureCallsLeftSite = "main.maxon:11:3"
+let LintFixTwoPureCallsLeftMessage = "result of pure function 'doubled' must be used"
+
+test 'lint --fix deletes the first of two discarded pure calls that are all of a while block, then leaves the second, now its only statement, and reports it'
+	let fixed = lintFixFixedFiles(LintFixTwoPureCallsFile, findings: LintFixTwoPureCallsFindings)
+	let outcome = lintFixRefusedWith(ExpectedDiagnostic.at(DiscardedPureResultCode, site: LintFixTwoPureCallsLeftSite, message: LintFixTwoPureCallsLeftMessage))
+	requireHeldOutsideCheckout(LintFixTwoPureCallsCaseDirName, check: LintFixCase.of(LintFixTwoPureCallsFixture, arguments: [AppDirName], fixed: fixed, outcome: outcome))
+end 'lint --fix deletes the first of two discarded pure calls that are all of a while block, then leaves the second, now its only statement, and reports it'

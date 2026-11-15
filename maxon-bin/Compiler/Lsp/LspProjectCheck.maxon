@@ -41,10 +41,10 @@ end 'LspProjectCheckRequest'
 type LspQueuedCheck
 	let request as immutable LspProjectCheckRequest
 	let interest as CompileInterest
-	let facts as LspEditorFactsCell
+	let cells as LspDocumentCells
 
-	static function create(request immutable LspProjectCheckRequest, interest CompileInterest, facts LspEditorFactsCell) returns LspQueuedCheck
-		return Self{request: request, interest: interest, facts: facts}
+	static function create(request immutable LspProjectCheckRequest, interest CompileInterest, cells LspDocumentCells) returns LspQueuedCheck
+		return Self{request: request, interest: interest, cells: cells}
 	end 'create'
 end 'LspQueuedCheck'
 
@@ -160,7 +160,7 @@ type LspProjectChecker implements CompileReceiver
 	function settle(running RunningCheck, step CompileStep, receiver CompileReceiver.handle)
 		match step 'step'
 			awaiting then return
-			finished then self.finish(running.work, check: running.project.checkedAfterFrontEnd(running.work.request, facts: running.work.facts), receiver: receiver)
+			finished then self.finish(running.work, check: running.project.checkedAfterFrontEnd(running.work.request, cells: running.work.cells), receiver: receiver)
 		end 'step'
 	end 'settle'
 
@@ -292,7 +292,7 @@ end 'publishProjectCheck'
 
 function publishProjectDiagnostics(writer LspStdoutWriter.handle, request LspProjectCheckRequest, diagnostics DiagnosticArray, unbuilt StringArray, outcome ProjectCheckOutcome)
 	let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
-	let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create(0))
+	let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, published: diagnostics, unbuilt: unbuilt, notices: StringArray.create(0))
 
 	postToLspWriter(writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
 end 'publishProjectDiagnostics'
@@ -344,13 +344,14 @@ extension Project
 		return CheckPreparation.ready(self)
 	end 'preparedWithTheBuffer'
 
-	function checkedAfterFrontEnd(request LspProjectCheckRequest, facts LspEditorFactsCell) returns ProjectCheck
+	function checkedAfterFrontEnd(request LspProjectCheckRequest, cells LspDocumentCells) returns ProjectCheck
 		self.reportSecondaryFindingsBesideClaims()
 
 		// Published before the check's diagnostics, so a hover that follows them finds these facts.
-		facts.publish(LspEditorFacts.checked(request.version, facts: editorFactsOfTheCheck(self)))
+		cells.facts.publish(LspEditorFacts.checked(request.version, facts: editorFactsOfTheCheck(self)))
 
 		let attributed = attributedTo(diagnosticsInSourceOrder(self), path: request.path, alone: request.alone)
+		publishFixOffers(cells.fixes, version: request.version, published: attributed, path: request.path)
 
 		return ProjectCheck.checked(attributed.clone())
 	end 'checkedAfterFrontEnd'

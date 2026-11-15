@@ -1,0 +1,17 @@
+let LintFixPureAloneCaseDirName = "lint-fix-pure-alone-in-a-block"
+let LintFixPureAloneFixture = "lint-fix-discarded-pure-call-alone-in-a-block"
+let LintFixPureAloneMessage = "result of pure function 'doubled' must be used"
+let LintFixPureAloneInTheIfSite = "main.maxon:11:3"
+let LintFixPureAloneInTheElseSite = "main.maxon:13:3"
+let LintFixPureAloneInTheWhileSite = "main.maxon:17:3"
+let LintFixPureAloneInTheForSite = "main.maxon:21:3"
+
+test 'lint --fix leaves a discarded pure call that is the only statement of an if, an else, a while or a for, whose deletion would empty the block, and reports each as lint does'
+	let remaining = ExpectedDiagnosticArray.create(0)
+
+	for site in [LintFixPureAloneInTheIfSite, LintFixPureAloneInTheElseSite, LintFixPureAloneInTheWhileSite, LintFixPureAloneInTheForSite] 'eachSite'
+		remaining.push(ExpectedDiagnostic.at(DiscardedPureResultCode, site: site, message: LintFixPureAloneMessage))
+	end 'eachSite'
+
+	requireHeldOutsideCheckout(LintFixPureAloneCaseDirName, check: LintFixCase.of(LintFixPureAloneFixture, arguments: [AppDirName], fixed: LintFixedFileArray.create(0), outcome: LintFixOutcome.refused(remaining)))
+end 'lint --fix leaves a discarded pure call that is the only statement of an if, an else, a while or a for, whose deletion would empty the block, and reports each as lint does'

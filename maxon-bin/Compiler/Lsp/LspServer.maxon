@@ -281,6 +281,7 @@ type LspSession
 	end 'documentArrived'
 
 	function publishedFor(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot)
+		self.workspace.noteFixOffers(uri, version: version, published: alone, path: path)
 		self.requestProjectCheck(uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, reader: reader, root: root)
 
 		match root 'root'
@@ -651,6 +652,7 @@ function providerValueNode(doc JsonDoc, shape LspProviderValue) returns JsonNode
 		flag gives doc.add(JsonNode.boolNode(true))
 		completionOptions gives completionCapabilityOptions(doc)
 		semanticTokensOptions gives semanticTokensCapabilityOptions(doc)
+		codeActionOptions gives codeActionCapabilityOptions(doc)
 	end 'shape'
 end 'providerValueNode'
 

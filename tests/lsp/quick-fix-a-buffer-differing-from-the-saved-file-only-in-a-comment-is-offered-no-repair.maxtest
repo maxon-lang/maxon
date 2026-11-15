@@ -1,0 +1,55 @@
+let QuickFixSavedDirName = "quick-fix-buffer-differs-from-the-saved-file"
+let QuickFixEditedDirName = "quick-fix-buffer-differs-from-the-saved-file-edited"
+let QuickFixSavedFileName = "main.maxon"
+let QuickFixSavedSource = "// saved\ntypealias Tally = int(0 to 1000)\n\nfunction main() returns ExitCode\n\tvar total = 1 as Tally\n\ttotal = total + 1\n\ttotal = total\n\tprint(\"\{total}\\n\")\n\treturn 0\nend 'main'\n"
+let QuickFixEditedCommentSource = "// stale\ntypealias Tally = int(0 to 1000)\n\nfunction main() returns ExitCode\n\tvar total = 1 as Tally\n\ttotal = total + 1\n\ttotal = total\n\tprint(\"\{total}\\n\")\n\treturn 0\nend 'main'\n"
+let QuickFixSavedCode = "E3067"
+let QuickFixSavedSubject = "total"
+let QuickFixSavedLine = 6
+
+test 'a buffer that differs from the saved file only in a comment publishes a self-assignment with no quick fix, and the saved text itself publishes it with one'
+	let savedRoot = stagedProjectDiagnosticsRoot(QuickFixSavedDirName)
+	writeCorpusFile(savedRoot, fileName: QuickFixSavedFileName, content: QuickFixSavedSource)
+
+	let savedUri = fileUriOf(savedRoot.join(QuickFixSavedFileName))
+	let saved = runProjectBufferQuickFixSession(savedRoot, uri: savedUri, text: QuickFixSavedSource)
+	discardStagedDir(savedRoot)
+
+	let note = "`total = total` on line {QuickFixSavedLine + 1} assigns a variable to itself, which is {QuickFixSavedCode}. The parse that finds it reads the file on disk, so the repair it carries is a deletion computed against the saved bytes."
+	let savedRecord = try quickFixRecordOf(saved, note: "{note} The buffer holds exactly the saved text, so that deletion edits the right bytes and is offered.")
+	let fix = try requiredSingleFix(savedRecord, code: QuickFixSavedCode, line: QuickFixSavedLine, note: note)
+	try expectQuickFixEdits(fix, uri: savedUri, expected: soleQuickFixEdit(QuickFixSavedLine, startCharacter: 0, endLine: QuickFixSavedLine + 1, endCharacter: 0, newText: ""), subject: QuickFixSavedSubject, note: note)
+
+	let editedRoot = freshOutsideCheckoutDir(QuickFixEditedDirName)
+	writeCorpusFile(editedRoot, fileName: GatedManifestFileName, content: GatedManifestSource)
+	writeCorpusFile(editedRoot, fileName: QuickFixSavedFileName, content: QuickFixSavedSource)
+
+	let editedUri = fileUriOf(editedRoot.join(QuickFixSavedFileName))
+	let client = LspClient.start()
+
+	if let edited = try askedWhileTheProjectFileRuns(client, root: editedRoot, uri: editedUri, text: QuickFixEditedCommentSource) 'answered'
+		releaseGatedManifest(editedRoot)
+		client.release()
+		discardStagedDir(editedRoot)
+
+		let editedNote = "{note} The buffer's first line is a comment the author has changed to one of the same length and not saved, so its tokens are the saved file's while its text is not, and applying a deletion computed against the saved bytes could rewrite the wrong text. The project file of the staged project is still running, so no project check has replaced the buffer's own check's answer."
+		let asked = try askedFor(edited, code: QuickFixSavedCode, line: QuickFixSavedLine, note: editedNote)
+
+		try Expect.equal(codeActionsRendering(asked.answer), expected: QuickFixNothingRendering, message: "{editedNote} The diagnostic is still published, but offering its repair is not safe: {codeActionsRendering(asked.answer)}")
+	end 'answered' else (e) 'failed'
+		releaseGatedManifest(editedRoot)
+		abandonedStagedSession(client, staged: editedRoot, failure: e, doing: "the session over the edited buffer did not complete")
+	end 'failed'
+end 'a buffer that differs from the saved file only in a comment publishes a self-assignment with no quick fix, and the saved text itself publishes it with one'
+
+function askedWhileTheProjectFileRuns(client LspClient, root FilePath, uri String, text String) returns QuickFixRecord throws LspClientError
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: text)
+	try awaitGatedManifestRunning(root)
+
+	let published = (try client.awaitPublishedDiagnostics(uri)).items
+	let asked = try askedAtEachDiagnostic(client, uri: uri, published: published)
+
+	return QuickFixRecord.create(published, asked: asked, applied: QuickFixApplied.notApplied(QuickFixNothingAppliedReason))
+end 'askedWhileTheProjectFileRuns'

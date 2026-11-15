@@ -1,0 +1,480 @@
+let QuickFixActionKind = "quickfix"
+let QuickFixFixAllActionKind = "source.fixAll"
+let QuickFixNothingRendering = "no action at all"
+let QuickFixNothingAppliedReason = "the case applies no action"
+
+type QuickFixAsked
+	export let diagnostic as PublishedDiagnostic
+	export let answer as CodeActionItemArray
+
+	static function create(diagnostic PublishedDiagnostic, answer CodeActionItemArray) returns QuickFixAsked
+		return Self{diagnostic: diagnostic, answer: answer}
+	end 'create'
+end 'QuickFixAsked'
+
+typealias QuickFixAskedArray = Array with QuickFixAsked
+
+union QuickFixToApply
+	singleFixFor(code String, line LspCoordinate)
+	fixAll(fixableCount Count)
+	nothing
+end 'QuickFixToApply'
+
+type QuickFixResult
+	export let fix as CodeActionItem
+	export let fixedText as String
+	export let republished as PublishedDiagnosticArray
+
+	static function create(fix CodeActionItem, fixedText String, republished PublishedDiagnosticArray) returns QuickFixResult
+		return Self{fix: fix, fixedText: fixedText, republished: republished}
+	end 'create'
+end 'QuickFixResult'
+
+union QuickFixApplied
+	applied(result QuickFixResult)
+	notApplied(reason String)
+end 'QuickFixApplied'
+
+type QuickFixRecord
+	export let published as PublishedDiagnosticArray
+	export let asked as QuickFixAskedArray
+	export let applied as QuickFixApplied
+
+	static function create(published PublishedDiagnosticArray, asked QuickFixAskedArray, applied QuickFixApplied) returns QuickFixRecord
+		return Self{published: published, asked: asked, applied: applied}
+	end 'create'
+end 'QuickFixRecord'
+
+union QuickFixSession
+	recorded(record QuickFixRecord)
+	broke(detail String)
+end 'QuickFixSession'
+
+function runQuickFixSession(uri String, texts StringArray, apply QuickFixToApply) returns QuickFixSession
+	let client = LspClient.start()
+	let session = collectQuickFixSession(client, uri: uri, texts: texts, apply: apply)
+	client.release()
+
+	return session
+end 'runQuickFixSession'
+
+function collectQuickFixSession(client LspClient, uri String, texts StringArray, apply QuickFixToApply) returns QuickFixSession
+	if let record = try quickFixSession(client, uri: uri, texts: texts, apply: apply) 'answered'
+		return QuickFixSession.recorded(record)
+	end 'answered' else (e) 'failed'
+		return QuickFixSession.broke(e.explained())
+	end 'failed'
+end 'collectQuickFixSession'
+
+function quickFixSession(client LspClient, uri String, texts StringArray, apply QuickFixToApply) returns QuickFixRecord throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+
+	var version = InitialDocumentVersion
+	var text = ""
+	var published = PublishedDiagnosticArray.create(0)
+
+	for (position, sent) in texts.withIterator() 'eachText'
+		if position.index() == 0 'opening'
+			try client.openDocument(uri, content: sent)
+		end 'opening' else 'changing'
+			version = version + 1
+			try client.changeDocument(uri, content: sent, version: version)
+		end 'changing'
+
+		text = sent.clone()
+		published = (try client.awaitPublishedDiagnostics(uri)).items
+	end 'eachText'
+
+	let asked = try askedAtEachDiagnostic(client, uri: uri, published: published)
+	let applied = try appliedQuickFix(client, uri: uri, text: text, asked: asked, apply: apply, version: version + 1, recheck: QuickFixRecheck.buffer)
+
+	return QuickFixRecord.create(published, asked: asked, applied: applied)
+end 'quickFixSession'
+
+function askedAtEachDiagnostic(client LspClient, uri String, published PublishedDiagnosticArray) returns QuickFixAskedArray throws LspClientError
+	let asked = QuickFixAskedArray.create(0)
+
+	for diagnostic in published 'eachDiagnostic'
+		let range = diagnostic.range
+		let context = PublishedDiagnosticArray.create(0)
+		context.push(diagnostic)
+
+		let answer = try client.codeAction(uri, startLine: range.startLine, startCharacter: range.startCharacter, endLine: range.endLine, endCharacter: range.endCharacter, diagnostics: context)
+		asked.push(QuickFixAsked.create(diagnostic, answer: answer.actions))
+	end 'eachDiagnostic'
+
+	return asked
+end 'askedAtEachDiagnostic'
+
+function appliedQuickFix(client LspClient, uri String, text String, asked QuickFixAskedArray, apply QuickFixToApply, version DocumentVersion, recheck QuickFixRecheck) returns QuickFixApplied throws LspClientError
+	let chosen = chosenQuickFix(asked, apply: apply)
+
+	match chosen 'chosen'
+		found(fix) then return try sentBackFixed(client, uri: uri, text: text, fix: fix, version: version, recheck: recheck)
+		none(reason) then return QuickFixApplied.notApplied(reason)
+	end 'chosen'
+end 'appliedQuickFix'
+
+function sentBackFixed(client LspClient, uri String, text String, fix CodeActionItem, version DocumentVersion, recheck QuickFixRecheck) returns QuickFixApplied throws LspClientError
+	let fixedText = try appliedEdits(text, edits: fix.edits)
+	try client.changeDocument(uri, content: fixedText, version: version)
+
+	let republished = try rechecked(client, uri: uri, recheck: recheck)
+
+	return QuickFixApplied.applied(QuickFixResult.create(fix, fixedText: fixedText, republished: republished.items))
+end 'sentBackFixed'
+
+enum QuickFixRecheck
+	buffer
+	project
+end 'QuickFixRecheck'
+
+function rechecked(client LspClient, uri String, recheck QuickFixRecheck) returns PublishedDiagnostics throws LspClientError
+	match recheck 'recheck'
+		buffer then return try client.awaitPublishedDiagnostics(uri)
+		project then return try client.awaitProjectCheckPublish(uri)
+	end 'recheck'
+end 'rechecked'
+
+union QuickFixProjectSession
+	recorded(buffer PublishedDiagnosticArray, checked QuickFixRecord)
+	broke(detail String)
+end 'QuickFixProjectSession'
+
+function runProjectQuickFixSession(root FilePath, uri String, text String, apply QuickFixToApply) returns QuickFixProjectSession
+	let client = LspClient.start()
+	let session = collectProjectQuickFixSession(client, root: root, uri: uri, text: text, apply: apply)
+	client.release()
+
+	return session
+end 'runProjectQuickFixSession'
+
+function collectProjectQuickFixSession(client LspClient, root FilePath, uri String, text String, apply QuickFixToApply) returns QuickFixProjectSession
+	if let session = try projectQuickFixSession(client, root: root, uri: uri, text: text, apply: apply) 'answered'
+		return session
+	end 'answered' else (e) 'failed'
+		return QuickFixProjectSession.broke(e.explained())
+	end 'failed'
+end 'collectProjectQuickFixSession'
+
+function projectQuickFixSession(client LspClient, root FilePath, uri String, text String, apply QuickFixToApply) returns QuickFixProjectSession throws LspClientError
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: text)
+
+	let buffer = try client.awaitPublishedDiagnostics(uri)
+	let checked = try client.awaitProjectCheckPublishAfterTheFastOne(uri)
+	let asked = try askedAtEachDiagnostic(client, uri: uri, published: checked.items)
+	let applied = try appliedQuickFix(client, uri: uri, text: text, asked: asked, apply: apply, version: InitialDocumentVersion + 1, recheck: QuickFixRecheck.project)
+
+	return QuickFixProjectSession.recorded(buffer.items, checked: QuickFixRecord.create(checked.items, asked: asked, applied: applied))
+end 'projectQuickFixSession'
+
+function runProjectBufferQuickFixSession(root FilePath, uri String, text String) returns QuickFixSession
+	let client = LspClient.start()
+	let session = collectProjectBufferQuickFixSession(client, root: root, uri: uri, text: text)
+	client.release()
+
+	return session
+end 'runProjectBufferQuickFixSession'
+
+function collectProjectBufferQuickFixSession(client LspClient, root FilePath, uri String, text String) returns QuickFixSession
+	if let record = try projectBufferQuickFixSession(client, root: root, uri: uri, text: text) 'answered'
+		return QuickFixSession.recorded(record)
+	end 'answered' else (e) 'failed'
+		return QuickFixSession.broke(e.explained())
+	end 'failed'
+end 'collectProjectBufferQuickFixSession'
+
+function projectBufferQuickFixSession(client LspClient, root FilePath, uri String, text String) returns QuickFixRecord throws LspClientError
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: text)
+
+	let published = (try client.awaitPublishedDiagnostics(uri)).items
+	let asked = try askedAtEachDiagnostic(client, uri: uri, published: published)
+
+	return QuickFixRecord.create(published, asked: asked, applied: QuickFixApplied.notApplied(QuickFixNothingAppliedReason))
+end 'projectBufferQuickFixSession'
+
+function projectQuickFixRecords(session QuickFixProjectSession, note String) returns (PublishedDiagnosticArray, QuickFixRecord) throws TestFailure
+	match session 'session'
+		recorded(buffer, checked) then return (buffer, checked)
+		broke(detail) then try Expect.fail("{note} The session broke before the quick fix could be observed: {detail}")
+	end 'session'
+
+	panic("projectQuickFixRecords: the `broke` arm always throws")
+end 'projectQuickFixRecords'
+
+union QuickFixSearch
+	found(fix CodeActionItem)
+	none(reason String)
+end 'QuickFixSearch'
+
+function chosenQuickFix(asked QuickFixAskedArray, apply QuickFixToApply) returns QuickFixSearch
+	match apply 'apply'
+		singleFixFor(code, line) then return singleFixAmongAsked(asked, code: code, line: line)
+		fixAll(fixableCount) then return fixAllAmongAsked(asked, fixableCount: fixableCount)
+		nothing then return QuickFixSearch.none(QuickFixNothingAppliedReason)
+	end 'apply'
+end 'chosenQuickFix'
+
+function singleFixAmongAsked(asked QuickFixAskedArray, code String, line LspCoordinate) returns QuickFixSearch
+	for one in asked 'eachAsked'
+		if isPublishedAt(one.diagnostic, code: code, line: line) 'theDiagnostic'
+			return singleFixIn(one.answer, diagnostic: one.diagnostic)
+		end 'theDiagnostic'
+	end 'eachAsked'
+
+	return QuickFixSearch.none("no {code} was published on line {line}, so no code action was asked for one")
+end 'singleFixAmongAsked'
+
+function fixAllAmongAsked(asked QuickFixAskedArray, fixableCount Count) returns QuickFixSearch
+	for one in asked 'eachAsked'
+		match fixAllIn(one.answer, fixableCount: fixableCount) 'search'
+			found(fix) then return QuickFixSearch.found(fix)
+			none then continue
+		end 'search'
+	end 'eachAsked'
+
+	return QuickFixSearch.none("no answer for any published diagnostic's range held a fix-all action")
+end 'fixAllAmongAsked'
+
+function singleFixIn(answer CodeActionItemArray, diagnostic PublishedDiagnostic) returns QuickFixSearch
+	for action in answer 'eachAction'
+		if isQuickFix(action) and action.diagnostics.count() == 1 and namesDiagnostic(action, diagnostic: diagnostic) 'theFix'
+			return QuickFixSearch.found(action)
+		end 'theFix'
+	end 'eachAction'
+
+	return QuickFixSearch.none("the answer for the range of {diagnostic.code.describe()} at {diagnostic.range.startLine}:{diagnostic.range.startCharacter} held no `{QuickFixActionKind}` action naming exactly that diagnostic: {codeActionsRendering(answer)}")
+end 'singleFixIn'
+
+function fixAllIn(answer CodeActionItemArray, fixableCount Count) returns QuickFixSearch
+	for action in answer 'eachAction'
+		let namesAll = action.diagnostics.isEmpty() or action.diagnostics.count() == fixableCount
+
+		if isQuickFix(action) and namesAll 'theFixAll'
+			return QuickFixSearch.found(action)
+		end 'theFixAll'
+	end 'eachAction'
+
+	return QuickFixSearch.none("the answer held no `{QuickFixActionKind}` action naming none or all {fixableCount} fixable diagnostics: {codeActionsRendering(answer)}")
+end 'fixAllIn'
+
+function isQuickFix(action CodeActionItem) returns bool
+	return action.kind.describe() == QuickFixActionKind
+end 'isQuickFix'
+
+function namesDiagnostic(action CodeActionItem, diagnostic PublishedDiagnostic) returns bool
+	for named in action.diagnostics 'eachNamed'
+		if named.code.describe() == diagnostic.code.describe() and named.message == diagnostic.message and sameLspRange(named.range, other: diagnostic.range) 'match'
+			return true
+		end 'match'
+	end 'eachNamed'
+
+	return false
+end 'namesDiagnostic'
+
+function isPublishedAt(diagnostic PublishedDiagnostic, code String, line LspCoordinate) returns bool
+	return diagnostic.code.describe() == code and diagnostic.range.startLine == line
+end 'isPublishedAt'
+
+function sameLspRange(range LspRange, other LspRange) returns bool
+	return range.startLine == other.startLine and range.startCharacter == other.startCharacter and range.endLine == other.endLine and range.endCharacter == other.endCharacter
+end 'sameLspRange'
+
+function quickFixRecordOf(session QuickFixSession, note String) returns QuickFixRecord throws TestFailure
+	match session 'session'
+		recorded(record) then return record
+		broke(detail) then try Expect.fail("{note} The session broke before the quick fix could be observed: {detail}")
+	end 'session'
+
+	panic("quickFixRecordOf: the `broke` arm always throws")
+end 'quickFixRecordOf'
+
+function askedFor(record QuickFixRecord, code String, line LspCoordinate, note String) returns QuickFixAsked throws TestFailure
+	for one in record.asked 'eachAsked'
+		if isPublishedAt(one.diagnostic, code: code, line: line) 'theDiagnostic'
+			return one
+		end 'theDiagnostic'
+	end 'eachAsked'
+
+	try Expect.fail("{note} The published set held no {code} on line {line}, so its quick fix cannot be asked for. Published: {projectDiagnosticsRendering(record.published)}")
+	panic("askedFor: `Expect.fail` always throws")
+end 'askedFor'
+
+function requiredSingleFix(record QuickFixRecord, code String, line LspCoordinate, note String) returns CodeActionItem throws TestFailure
+	let asked = try askedFor(record, code: code, line: line, note: note)
+
+	match singleFixIn(asked.answer, diagnostic: asked.diagnostic) 'search'
+		found(fix) then return fix
+		none(reason) then try Expect.fail("{note} {reason}")
+	end 'search'
+
+	panic("requiredSingleFix: the `none` arm always throws")
+end 'requiredSingleFix'
+
+function requiredFixAll(answer CodeActionItemArray, fixableCount Count, note String) returns CodeActionItem throws TestFailure
+	match fixAllIn(answer, fixableCount: fixableCount) 'search'
+		found(fix) then return fix
+		none(reason) then try Expect.fail("{note} {reason}")
+	end 'search'
+
+	panic("requiredFixAll: the `none` arm always throws")
+end 'requiredFixAll'
+
+function requiredApplied(record QuickFixRecord, note String) returns QuickFixResult throws TestFailure
+	match record.applied 'applied'
+		applied(result) then return result
+		notApplied(reason) then try Expect.fail("{note} No fix was applied: {reason}")
+	end 'applied'
+
+	panic("requiredApplied: the `notApplied` arm always throws")
+end 'requiredApplied'
+
+function expectQuickFixEdits(fix CodeActionItem, uri String, expected TextEditArray, subject String, note String) throws TestFailure
+	try Expect.isFalse(fix.title.trim().isEmpty(), message: "{note} The quick fix has an empty title.")
+	try Expect.contains(fix.title, needle: subject, message: "{note} The quick fix's title `{fix.title}` does not name `{subject}`, the thing it fixes.")
+	try Expect.equal(editedUrisRendering(fix.editedUris), expected: uri, message: "{note} The quick fix's edit must change only the document it was asked about.")
+	try Expect.equal(textEditsRendering(fix.edits), expected: textEditsRendering(expected), message: "{note} The quick fix's edits are not exactly the repair.")
+end 'expectQuickFixEdits'
+
+function expectNoPublishedCode(published PublishedDiagnosticArray, code String, note String) throws TestFailure
+	for item in published 'eachItem'
+		try Expect.notEqual(item.code.describe(), expected: code, message: "{note} After the fix was applied and the buffer sent back, the next publish still held {code}: {projectDiagnosticsRendering(published)}")
+	end 'eachItem'
+end 'expectNoPublishedCode'
+
+function soleQuickFixEdit(startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate, newText String) returns TextEditArray
+	let edits = TextEditArray.create(0)
+	edits.push(TextEdit.create(LspRange.create(startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: endCharacter), newText: newText))
+
+	return edits
+end 'soleQuickFixEdit'
+
+function textEditsRendering(edits TextEditArray) returns String
+	var rendered = ""
+
+	for edit in edits 'eachEdit'
+		let range = edit.range
+		rendered.append("[{range.startLine}:{range.startCharacter}-{range.endLine}:{range.endCharacter} `{edit.newText}`]")
+	end 'eachEdit'
+
+	return rendered
+end 'textEditsRendering'
+
+function editedUrisRendering(uris StringArray) returns String
+	var rendered = ""
+	var separator = ""
+
+	for uri in uris 'eachUri'
+		rendered.append("{separator}{uri}")
+		separator = " "
+	end 'eachUri'
+
+	return rendered
+end 'editedUrisRendering'
+
+function codeActionsRendering(answer CodeActionItemArray) returns String
+	if answer.isEmpty() 'nothing'
+		return QuickFixNothingRendering
+	end 'nothing'
+
+	var rendered = ""
+
+	for action in answer 'eachAction'
+		var named = ""
+
+		for diagnostic in action.diagnostics 'eachNamed'
+			named.append(" {diagnostic.code.describe()}@{diagnostic.range.startLine}:{diagnostic.range.startCharacter}")
+		end 'eachNamed'
+
+		rendered.append("\{title `{action.title}`, kind {action.kind.describe()}, diagnostics [{named.trim()}], edits {textEditsRendering(action.edits)}\} ")
+	end 'eachAction'
+
+	return rendered.trim()
+end 'codeActionsRendering'
+
+type QuickFixRangeRecord
+	export let published as PublishedDiagnosticArray
+	export let answer as CodeActionItemArray
+
+	static function create(published PublishedDiagnosticArray, answer CodeActionItemArray) returns QuickFixRangeRecord
+		return Self{published: published, answer: answer}
+	end 'create'
+end 'QuickFixRangeRecord'
+
+union QuickFixRangeSession
+	recorded(record QuickFixRangeRecord)
+	broke(detail String)
+end 'QuickFixRangeSession'
+
+function runRangeCodeActionSession(uri String, text String, range LspRange) returns QuickFixRangeSession
+	let client = LspClient.start()
+	let session = collectRangeCodeActionSession(client, uri: uri, text: text, range: range)
+	client.release()
+
+	return session
+end 'runRangeCodeActionSession'
+
+function collectRangeCodeActionSession(client LspClient, uri String, text String, range LspRange) returns QuickFixRangeSession
+	if let record = try rangeCodeActionSession(client, uri: uri, text: text, range: range) 'answered'
+		return QuickFixRangeSession.recorded(record)
+	end 'answered' else (e) 'failed'
+		return QuickFixRangeSession.broke(e.explained())
+	end 'failed'
+end 'collectRangeCodeActionSession'
+
+function rangeCodeActionSession(client LspClient, uri String, text String, range LspRange) returns QuickFixRangeRecord throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(uri, content: text)
+
+	let published = (try client.awaitPublishedDiagnostics(uri)).items
+	let touching = PublishedDiagnosticArray.create(0)
+
+	for diagnostic in published 'eachDiagnostic'
+		if rangesTouch(diagnostic.range, other: range) 'touches'
+			touching.push(diagnostic)
+		end 'touches'
+	end 'eachDiagnostic'
+
+	let answer = try client.codeAction(uri, startLine: range.startLine, startCharacter: range.startCharacter, endLine: range.endLine, endCharacter: range.endCharacter, diagnostics: touching)
+
+	return QuickFixRangeRecord.create(published, answer: answer.actions)
+end 'rangeCodeActionSession'
+
+function rangesTouch(range LspRange, other LspRange) returns bool
+	let endsBefore = positionPrecedes(range.endLine, character: range.endCharacter, otherLine: other.startLine, otherCharacter: other.startCharacter)
+	let startsAfter = positionPrecedes(other.endLine, character: other.endCharacter, otherLine: range.startLine, otherCharacter: range.startCharacter)
+
+	return not endsBefore and not startsAfter
+end 'rangesTouch'
+
+function positionPrecedes(line LspCoordinate, character LspCoordinate, otherLine LspCoordinate, otherCharacter LspCoordinate) returns bool
+	return line < otherLine or (line == otherLine and character < otherCharacter)
+end 'positionPrecedes'
+
+function quickFixRangeRecordOf(session QuickFixRangeSession, note String) returns QuickFixRangeRecord throws TestFailure
+	match session 'session'
+		recorded(record) then return record
+		broke(detail) then try Expect.fail("{note} The session broke before the code actions could be observed: {detail}")
+	end 'session'
+
+	panic("quickFixRangeRecordOf: the `broke` arm always throws")
+end 'quickFixRangeRecordOf'
+
+function expectNoActionAtRange(session QuickFixRangeSession, note String) throws TestFailure
+	let record = try quickFixRangeRecordOf(session, note: note)
+
+	try Expect.equal(codeActionsRendering(record.answer), expected: QuickFixNothingRendering, message: "{note} The buffer published {projectDiagnosticsRendering(record.published)}, and the code-action answer was not empty.")
+end 'expectNoActionAtRange'
+
+function quickFixTexts(opened String) returns StringArray
+	let texts = StringArray.create(0)
+	texts.push(opened)
+
+	return texts
+end 'quickFixTexts'

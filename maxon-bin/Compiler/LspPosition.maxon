@@ -231,8 +231,9 @@ end 'LspSpan'
 // and ownership error still one character wide — the majority of what an editor shows.
 //
 // ⇒ **Re-lexing answers it for ALL diagnostics uniformly.** A server already holds the document text,
-// `tokenize` is exported, and the token it returns carries `startByte`/`endByte` exactly. One rule,
-// one code path, every diagnostic.
+// `tokenize` is exported, and `tokenContentSpan` gives the extent of the token it returns: the token's
+// own span, or, for one the lexer gave none, its anchor placed by the line index. One rule, one code
+// path, every diagnostic.
 //
 // Takes the compiler's 1-BASED line and column, because that is what a `Diagnostic` holds; the caller
 // converts the result to LSP's 0-based positions through `positionOf`, which is the one place that
@@ -250,7 +251,7 @@ end 'LspSpan'
 // ⚠ A binary search, so a publish is O(diagnostics × log tokens). It is sound because `tokenize` pushes
 // every token at the position its scan started and scans never overlap, so anchors never decrease; two
 // tokens may share one (an empty string fragment and the `{` after it), and the FIRST of them answers.
-function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
+function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber, lines LspLineIndex) returns LspSpan
 	var low = 0 as Count
 	var high = tokens.count()
 
@@ -271,7 +272,7 @@ function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) re
 		return LspSpan.none()
 	end 'noTokenAnchoredHere'
 
-	return LspSpan.create(found.startByte, endByte: found.endByte)
+	return tokenContentSpan(found, lines: lines)
 end 'tokenSpanAt'
 
 // The line terminator bytes. Named because `10` and `13` in a scan loop say nothing about why.

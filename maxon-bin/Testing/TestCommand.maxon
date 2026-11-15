@@ -161,36 +161,47 @@ function recordProjectRelease(subject TestSubject)
 	end 'where'
 end 'recordProjectRelease'
 
-export function lintedTests(args MaxonArgs, target Target, voice ManifestVoice) returns ExitCode
+export function lintedTests(args MaxonArgs, target Target, voice ManifestVoice) returns LintStart
 	if refusedPositionalBeyond(args, allowed: TestPositionalBudget, usage: lintUsageLine()) 'tooManyPaths'
-		return OwnFailureExit
+		return LintStart.ended(OwnFailureExit)
 	end 'tooManyPaths'
 
 	let place = try testPlace(args, voice: voice) otherwise (e) 'badSubject'
-		return refusedLint(subjectRefusalReason(e))
+		return LintStart.ended(refusedLint(subjectRefusalReason(e)))
 	end 'badSubject'
 
 	let compiled = try testsToCompile(place, target: target, voice: voice, logOverridden: args.logOverridden) otherwise (e) 'notCompilable'
-		return lintRefusedBy(e, voice: voice)
+		return LintStart.ended(lintRefusedBy(e, voice: voice))
 	end 'notCompilable'
 
 	if compiled.tests.isEmpty() 'noTestsAtAll'
-		return refusedLint(noTestsFoundReason(compiled.subject))
+		return LintStart.ended(refusedLint(noTestsFoundReason(compiled.subject)))
 	end 'noTestsAtAll'
 
 	if refusedByVersionRecord(compiled.subject, onto: ReportStream.standardError) 'refusedRecord'
-		return OwnFailureExit
+		return LintStart.ended(OwnFailureExit)
 	end 'refusedRecord'
 
-	let prepared = try preparedTestBuild(compiled.subject, target: target, groups: compiled.groups, purpose: StagingPurpose.linting) otherwise (e) 'stagingRefused'
-		return refusedLint(stagingRefusalReason(e))
-	end 'stagingRefused'
-
-	let session = DriverSession.printing()
-	let request = stagedTestRequest(DriverWork.lint, staged: prepared.staged, target: target, session: session, outputOverride: StatedText.unstated, debugInfo: false, metrics: args.metrics)
-
-	return lintedRequest(request, session: session, subjects: place.typedSubjects())
+	return LintStart.program(LintProgram.tests(TestsLintStaging.create(compiled.subject, groups: compiled.groups, target: target)), subjects: place.typedSubjects())
 end 'lintedTests'
+
+export type TestsLintStaging
+	let subject as TestSubject
+	let groups as TestFileGroupArray
+	let target as Target
+
+	static function create(subject TestSubject, groups TestFileGroupArray, target Target) returns TestsLintStaging
+		return Self{subject: subject, groups: groups, target: target}
+	end 'create'
+
+	export function request(reading LintReading, metrics StatedText, session DriverSession) returns LintRequest
+		let prepared = try preparedTestBuild(self.subject, target: self.target, groups: self.groups, purpose: StagingPurpose.linting) otherwise (e) 'stagingRefused'
+			return LintRequest.refused(refusedLint(stagingRefusalReason(e)))
+		end 'stagingRefused'
+
+		return LintRequest.ready(stagedTestRequest(DriverWork.lint(reading), staged: prepared.staged, target: self.target, session: session, outputOverride: StatedText.unstated, debugInfo: false, metrics: metrics))
+	end 'request'
+end 'TestsLintStaging'
 
 type TestsToCompile
 	let subject as TestSubject

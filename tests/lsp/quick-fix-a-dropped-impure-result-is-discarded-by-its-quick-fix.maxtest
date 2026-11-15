@@ -1,0 +1,19 @@
+let QuickFixDroppedUri = "file:///quick-fix-dropped-impure-result.maxon"
+let QuickFixDroppedSource = "function note() returns ExitCode\n\tprint(\"noted\\n\")\n\treturn 0\nend 'note'\n\nfunction main() returns ExitCode\n\tnote()\n\treturn 0\nend 'main'\n"
+let QuickFixDroppedCode = "E3065"
+let QuickFixDroppedSubject = "note"
+let QuickFixDroppedLine = 6
+let QuickFixDroppedCharacter = 1
+let QuickFixDroppedInsertion = "_ = "
+
+test 'a dropped impure result is discarded by its quick fix'
+	let session = runQuickFixSession(QuickFixDroppedUri, texts: quickFixTexts(QuickFixDroppedSource), apply: QuickFixToApply.singleFixFor(QuickFixDroppedCode, line: QuickFixDroppedLine))
+	let note = "`note()` on line {QuickFixDroppedLine + 1} drops the result of an impure function, which is {QuickFixDroppedCode}; its one repair inserts `{QuickFixDroppedInsertion}` where the statement starts."
+	let record = try quickFixRecordOf(session, note: note)
+
+	let fix = try requiredSingleFix(record, code: QuickFixDroppedCode, line: QuickFixDroppedLine, note: note)
+	try expectQuickFixEdits(fix, uri: QuickFixDroppedUri, expected: soleQuickFixEdit(QuickFixDroppedLine, startCharacter: QuickFixDroppedCharacter, endLine: QuickFixDroppedLine, endCharacter: QuickFixDroppedCharacter, newText: QuickFixDroppedInsertion), subject: QuickFixDroppedSubject, note: note)
+
+	let result = try requiredApplied(record, note: note)
+	try expectNoPublishedCode(result.republished, code: QuickFixDroppedCode, note: note)
+end 'a dropped impure result is discarded by its quick fix'

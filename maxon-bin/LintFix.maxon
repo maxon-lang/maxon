@@ -1,0 +1,358 @@
+typealias LintFixRoundCount = int(0 to 100)
+typealias RepairTally = int(0 to u64.max)
+typealias RepairedFileMap = Map with (String, RepairedFile)
+typealias PlannedFileMap = Map with (String, PlannedFile)
+typealias PlannedPathSet = Set with String
+typealias BlockRemovalMap = Map with (ByteOffset, Count)
+
+let MaxLintFixRounds = 100 as LintFixRoundCount
+let RepairedLinePrefix = "Fixed "
+let RepairedLineMiddle = " finding(s) in "
+let FirstRepair = 1 as RepairTally
+
+union FixRound
+	repeat
+	stop(code ExitCode)
+end 'FixRound'
+
+union FixEnding
+	clean(subjects String)
+	refused(error CompileError)
+end 'FixEnding'
+
+union LintFixRefusal implements Error
+	unreadable(path FilePath)
+	changed(path FilePath)
+	outsideTheText(path FilePath)
+	unwritable(path FilePath)
+
+	function message() returns String
+		return match self 'refusal'
+			unreadable(path) gives "could not read {path.toString()}, so none of its repairs were written"
+			changed(path) gives "{path.toString()} changed after {LintCommandName} read it, so none of its repairs were written"
+			outsideTheText(path) gives "a repair names bytes that {path.toString()} does not hold, so none of its repairs were written"
+			unwritable(path) gives "could not write {path.toString()}"
+		end 'refusal'
+	end 'message'
+end 'LintFixRefusal'
+
+type RepairedFile
+	let filePath as FilePath
+	var findings as RepairTally
+
+	static function first(filePath FilePath, findings RepairTally) returns RepairedFile
+		return Self{filePath: filePath, findings: findings}
+	end 'first'
+
+	function line() returns String
+		return "{RepairedLinePrefix}{self.findings}{RepairedLineMiddle}{self.filePath.toString()}"
+	end 'line'
+end 'RepairedFile'
+
+type PathRoster
+	let seen as PlannedPathSet
+	let paths as StringArray
+
+	static function create() returns PathRoster
+		return Self{seen: PlannedPathSet.create(), paths: StringArray.create(0)}
+	end 'create'
+
+	function note(path String)
+		if self.seen.contains(path) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.seen.insert(path)
+		self.paths.push(path)
+	end 'note'
+
+	function sorted() returns StringArray
+		let ordered = self.paths.clone()
+		ordered.sort()
+
+		return ordered
+	end 'sorted'
+end 'PathRoster'
+
+type RepairedFiles
+	let files as RepairedFileMap
+	let roster as PathRoster
+
+	static function create() returns RepairedFiles
+		return Self{files: RepairedFileMap.create(), roster: PathRoster.create()}
+	end 'create'
+
+	function credit(filePath FilePath, findings RepairTally)
+		let key = filePath.toString()
+
+		if let known = try self.files.get(key) 'repairedBefore'
+			known.findings = known.findings + findings
+		end 'repairedBefore' else 'firstRepair'
+			self.files.upsert(key, value: RepairedFile.first(filePath, findings: findings))
+			self.roster.note(key)
+		end 'firstRepair'
+	end 'credit'
+
+	function printLines()
+		for path in self.roster.sorted() 'eachPath'
+			let file = try self.files.get(path) otherwise panic("RepairedFiles.printLines: {path} was listed from the files it indexes")
+			print("{file.line()}\n")
+		end 'eachPath'
+	end 'printLines'
+end 'RepairedFiles'
+
+type PlannedFile
+	let filePath as FilePath
+	let edits as TextEditArray
+	let removals as BlockRemovalMap
+	var findings as RepairTally
+
+	static function opening(filePath FilePath) returns PlannedFile
+		return Self{filePath: filePath, edits: TextEditArray.create(0), removals: BlockRemovalMap.create(), findings: 0}
+	end 'opening'
+
+	function removedFrom(closerAt ByteOffset) returns Count
+		return try self.removals.get(closerAt) otherwise 0
+	end 'removedFrom'
+
+	function noteRemoval(edit TextEdit)
+		match edit.removes 'removal'
+			nothing then return
+			lines(closerAt, _, removed) then self.removals.upsert(closerAt, value: self.removedFrom(closerAt) + removed)
+		end 'removal'
+	end 'noteRemoval'
+
+	function leavesBlockEmpty(edit TextEdit) returns bool
+		match edit.removes 'removal'
+			nothing then return false
+			lines(closerAt, interior, removed) then return self.removedFrom(closerAt) + removed >= interior
+		end 'removal'
+	end 'leavesBlockEmpty'
+
+	function inFileOrder()
+		self.edits.sortBy(function(left TextEdit, right TextEdit) gives compareEdits(left, right: right))
+	end 'inFileOrder'
+end 'PlannedFile'
+
+type FixPlan
+	let files as PlannedFileMap
+	let repaired as DiagnosticArray
+	let roster as PathRoster
+
+	static function of(fixable DiagnosticArray) returns FixPlan
+		let plan = Self{files: PlannedFileMap.create(), repaired: DiagnosticArray.create(0), roster: PathRoster.create()}
+
+		for diagnostic in fixable 'eachFinding'
+			match diagnostic.fix 'fix'
+				none then continue
+				offered(_, edits) then plan.admitFixOf(diagnostic, edits: edits)
+				described then panic("FixPlan.of: {diagnostic.code.rawValue} was kept with the description of a repair, which `reportDiagnostic` resolves before a diagnostic is kept")
+			end 'fix'
+		end 'eachFinding'
+
+		return plan
+	end 'of'
+
+	function isEmpty() returns bool
+		return self.files.count() == 0
+	end 'isEmpty'
+
+	// A repair that collides with an admitted one waits for the next round, which recomputes it
+	// against the rewritten text; dropping it here would report a finding that still has a repair.
+	function admitFixOf(diagnostic Diagnostic, edits TextEditArray)
+		for edit in edits 'eachEdit'
+			if self.conflictsWithAnAdmittedEdit(edit) or self.emptiesABlockWithTheAdmitted(edit) 'overlapsOrEmptiesWhatAnotherRepairLeft'
+				return
+			end 'overlapsOrEmptiesWhatAnotherRepairLeft'
+		end 'eachEdit'
+
+		let credited = PlannedPathSet.create()
+
+		for edit in edits 'eachAdmitted'
+			let planned = self.plannedFor(edit.filePath)
+			planned.edits.push(edit)
+			planned.noteRemoval(edit)
+
+			if not credited.contains(edit.filePath.toString()) 'firstEditInThisFile'
+				credited.insert(edit.filePath.toString())
+				planned.findings = planned.findings + FirstRepair
+			end 'firstEditInThisFile'
+		end 'eachAdmitted'
+
+		self.repaired.push(diagnostic)
+	end 'admitFixOf'
+
+	function emptiesABlockWithTheAdmitted(edit TextEdit) returns bool
+		let planned = try self.files.get(edit.filePath.toString()) otherwise return false
+
+		return planned.leavesBlockEmpty(edit)
+	end 'emptiesABlockWithTheAdmitted'
+
+	function conflictsWithAnAdmittedEdit(edit TextEdit) returns bool
+		let planned = try self.files.get(edit.filePath.toString()) otherwise return false
+
+		for admitted in planned.edits 'eachAdmitted'
+			if editsOverlap(admitted, second: edit) 'overlaps'
+				return true
+			end 'overlaps'
+		end 'eachAdmitted'
+
+		return false
+	end 'conflictsWithAnAdmittedEdit'
+
+	function plannedFor(filePath FilePath) returns PlannedFile
+		let key = filePath.toString()
+
+		if let known = try self.files.get(key) 'alreadyPlanned'
+			return known
+		end 'alreadyPlanned'
+
+		let opened = PlannedFile.opening(filePath)
+		self.files.upsert(key, value: opened)
+		self.roster.note(key)
+
+		return opened
+	end 'plannedFor'
+end 'FixPlan'
+
+function editsOverlap(first TextEdit, second TextEdit) returns bool
+	// Two insertions at one offset would land in an order neither repair chose.
+	if first.startByte == first.endByte and second.startByte == second.endByte 'twoInsertions'
+		return first.startByte == second.startByte
+	end 'twoInsertions'
+
+	return first.startByte < second.endByte and second.startByte < first.endByte
+end 'editsOverlap'
+
+function compareEdits(left TextEdit, right TextEdit) returns Ordering
+	let byStart = left.startByte.compare(right.startByte)
+
+	if byStart != Ordering.equalTo 'startsDiffer'
+		return byStart
+	end 'startsDiffer'
+
+	return left.endByte.compare(right.endByte)
+end 'compareEdits'
+
+function spliced(original ByteArray, edits TextEditArray) returns ByteArray throws AbsentError
+	let edited = ByteArray.create(original.count(), zeroed: false)
+	let length = original.count() as ByteOffset
+	var copied = 0 as ByteOffset
+
+	for edit in edits 'eachEdit'
+		if edit.startByte < copied or edit.endByte > length 'outsideTheText'
+			throw AbsentError.absent
+		end 'outsideTheText'
+
+		edited.append(try original.slice(copied, endIndex: edit.startByte) otherwise throw AbsentError.absent)
+		edited.append(edit.replacement.toByteArray())
+		copied = edit.endByte
+	end 'eachEdit'
+
+	edited.append(try original.slice(copied, endIndex: length) otherwise throw AbsentError.absent)
+
+	return edited
+end 'spliced'
+
+function lintReadText(sources LintedSourceArray, filePath FilePath) returns String
+	for source in sources 'eachSource'
+		if source.filePath.equals(filePath) 'itsSource'
+			return source.text
+		end 'itsSource'
+	end 'eachSource'
+
+	panic("lintReadText: no text of {filePath.toString()} came back with the repairs that edit it")
+end 'lintReadText'
+
+function rewritten(planned PlannedFile, lintRead String) throws LintFixRefusal
+	let expected = lintRead.toByteArray()
+	// Every edit's offsets index the bytes the lint read, so any other bytes are refused.
+	let onDisk = try File.readBinary(planned.filePath) otherwise throw LintFixRefusal.unreadable(planned.filePath)
+
+	if not onDisk.equals(expected) 'changedSinceTheLint'
+		throw LintFixRefusal.changed(planned.filePath)
+	end 'changedSinceTheLint'
+
+	planned.inFileOrder()
+
+	let edited = try spliced(expected, edits: planned.edits) otherwise throw LintFixRefusal.outsideTheText(planned.filePath)
+	try File.writeBinary(planned.filePath, content: edited) otherwise throw LintFixRefusal.unwritable(planned.filePath)
+end 'rewritten'
+
+function appliedPlan(plan FixPlan, sources LintedSourceArray, repaired RepairedFiles) throws LintFixRefusal
+	for path in plan.roster.sorted() 'eachFile'
+		let planned = try plan.files.get(path) otherwise panic("appliedPlan: {path} was listed from the files the plan indexes")
+
+		try rewritten(planned, lintRead: lintReadText(sources, filePath: planned.filePath))
+		repaired.credit(planned.filePath, findings: planned.findings)
+	end 'eachFile'
+end 'appliedPlan'
+
+function fixedLint(program LintProgram, subjects String) returns ExitCode
+	let repaired = RepairedFiles.create()
+
+	for _ in 0 upto MaxLintFixRounds 'eachRound'
+		match fixRound(program, subjects: subjects, repaired: repaired) 'round'
+			repeat then continue
+			stop(code) then return code
+		end 'round'
+	end 'eachRound'
+
+	repaired.printLines()
+	printError("error: {LintCommandName} {LintFixFlag} still found a finding with a repair after {MaxLintFixRounds} rounds, so its repairs are undoing one another\n")
+
+	return OwnFailureExit
+end 'fixedLint'
+
+function fixRound(program LintProgram, subjects String, repaired RepairedFiles) returns FixRound
+	let session = DriverSession.capturing()
+
+	match program.request(LintReading.withFixes, metrics: StatedText.unstated, session: session) 'requested'
+		ready(request) then return answeredRound(request, session: session, subjects: subjects, repaired: repaired)
+		refused(code) then return endedAfter(repaired, code: code)
+	end 'requested'
+end 'fixRound'
+
+function answeredRound(request immutable CompileRequest, session DriverSession, subjects String, repaired RepairedFiles) returns FixRound
+	match lintRoundOnDriver(freshCompileDriver(), request: request, session: session) 'answer'
+		clean then return finishedWith(repaired, session: session, ending: FixEnding.clean(subjects))
+		failed(error) then return finishedWith(repaired, session: session, ending: FixEnding.refused(error))
+		standing(error, findings) then return repairedRound(findings, error: error, session: session, repaired: repaired)
+	end 'answer'
+end 'answeredRound'
+
+function repairedRound(findings LintFindings, error CompileError, session DriverSession, repaired RepairedFiles) returns FixRound
+	let plan = FixPlan.of(findings.fixable)
+
+	if plan.isEmpty() 'nothingHasARepair'
+		return finishedWith(repaired, session: session, ending: FixEnding.refused(error))
+	end 'nothingHasARepair'
+
+	try appliedPlan(plan, sources: findings.sources, repaired: repaired) otherwise (refusal) 'refused'
+		return endedAfter(repaired, code: refusedRepair(refusal))
+	end 'refused'
+
+	return FixRound.repeat
+end 'repairedRound'
+
+function finishedWith(repaired RepairedFiles, session DriverSession, ending FixEnding) returns FixRound
+	repaired.printLines()
+	DiagnosticSink.printing().absorb(session.diagnostics.emitted())
+
+	match ending 'ending'
+		clean(subjects) then return FixRound.stop(lintedClean(subjects))
+		refused(error) then return FixRound.stop(reportedFailure(error))
+	end 'ending'
+end 'finishedWith'
+
+function endedAfter(repaired RepairedFiles, code ExitCode) returns FixRound
+	repaired.printLines()
+
+	return FixRound.stop(code)
+end 'endedAfter'
+
+function refusedRepair(refusal LintFixRefusal) returns ExitCode
+	printError("error: {refusal.message()}\n")
+
+	return OwnFailureExit
+end 'refusedRepair'

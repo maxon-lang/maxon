@@ -1,8 +1,9 @@
-// `textDocument/linkedEditingRange`, `textDocument/rename` and `textDocument/codeAction`.
+// `textDocument/linkedEditingRange` and `textDocument/rename`; `textDocument/codeAction` is routed
+// from here to `LspQuickFixes`.
 //
-// They share a file because they share a question: which spans of this document must change together. A
-// rename edits them, a linked-editing range hands them to the editor to change as the author types, and
-// a code action packages an edit behind a title.
+// They share a file because they share a question: which spans of this document must change
+// together. A rename edits them, and a linked-editing range hands them to the editor to change as the
+// author types.
 //
 // ⭐⭐ **AND IN THIS LANGUAGE THAT QUESTION HAS A STRUCTURAL ANSWER, WHICH IS WHY `linkedEditingRange`
 // EXISTS HERE AT ALL.** Maxon closes every block with `end '<the very name it was opened with>'`, so a
@@ -20,16 +21,6 @@
 let NewNameKey = "newName"
 let RangesKey = "ranges"
 let ChangesKey = "changes"
-let EditKey = "edit"
-let TitleKey = "title"
-
-// LSP's `CodeActionKind` for a fix. It is the protocol's own string and an editor groups by it — a
-// "quickfix" is offered on the lightbulb, a refactor is not.
-let QuickFixActionKind = "quickfix"
-
-// How many identifiers spell one word. Only 0 and 1 are ever acted on; the count is carried whole so the
-// condition below reads as the claim it is.
-typealias BindingUseTally = int(0 to u64.max)
 
 function editsServedMethods() returns LspMethodArray
 	let served = LspMethodArray.create(0)
@@ -40,12 +31,11 @@ function editsServedMethods() returns LspMethodArray
 end 'editsServedMethods'
 
 function editsAnswer(request LspRequest) returns LspAnswer throws LspParamsError
-	let tokens = lspDocumentTokens(request.text, keywords: request.keywords)
-	let blocks = lspDocumentBlocks(tokens)
-
 	if request.method == LspMethod.codeAction 'fixes'
-		return try codeActionAnswer(request, tokens: tokens, blocks: blocks)
+		return try codeActionAnswer(request)
 	end 'fixes'
+
+	let blocks = lspDocumentBlocks(lspDocumentTokens(request.text, keywords: request.keywords))
 
 	// Both remaining methods ask the same thing of the same position: which declaration pair is the
 	// cursor sitting on. They differ only in what they build from it.
@@ -140,153 +130,3 @@ function workspaceEditNode(doc JsonDoc, uri String, edits JsonNodeIdArray) retur
 	workspaceEdit.putNode(ChangesKey, value: byUri.finish())
 	return workspaceEdit.finish()
 end 'workspaceEditNode'
-
-// --- codeAction -------------------------------------------------------------------------------
-
-// ⭐ **ONE ACTION, AND ITS CONDITION IS SUFFICIENT RATHER THAN COMPLETE.** A local binding whose name
-// occurs EXACTLY ONCE in the whole document cannot be read anywhere, whatever it shadows and whatever
-// scope it is in — so offering the fix is always right. The converse does not hold: a name that occurs
-// twice may still be unused (the second occurrence could be an unrelated field), and that case is simply
-// not offered. A quick fix that fails CLOSED costs an author one keystroke; one that fails open deletes
-// a binding something reads.
-//
-// ⛔ It is not a second implementation of E3012, and it must not become one. E3012 is a VERDICT the
-// compiler reaches over a resolved program; this is an OFFER an editor draws a lightbulb for, on a
-// document that in general does not compile at all.
-function codeActionAnswer(request LspRequest, tokens TokenArray, blocks LspDocumentBlockArray) returns LspAnswer throws LspParamsError
-	let index = LspLineIndex.build(request.text)
-	let range = try lspMember(request.incoming, of: request.params, key: LspRangeKey)
-	let selectionStart = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspStartKey))
-	let selectionEnd = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspEndKey))
-
-	let doc = JsonDoc.create()
-	let unused = unusedLocalNamesIn(tokens, blocks: blocks, selectionStart: selectionStart, selectionEnd: selectionEnd)
-	let actions = JsonNodeIdArray.create(unused.count(), zeroed: false)
-
-	for name in unused 'eachUnused'
-		actions.push(removeBindingActionNode(doc, uri: request.uri, name: name))
-	end 'eachUnused'
-
-	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(actions)))
-end 'codeActionAnswer'
-
-// The NAME token of a local binding the requested range covers, and nothing else about it: the line it
-// sits on is what the fix deletes.
-type UnusedLocalName
-	export let text as String
-	export let line as LspLineNumber
-
-	static function create(text String, line LspLineNumber) returns UnusedLocalName
-		return Self{text: text, line: line}
-	end 'create'
-end 'UnusedLocalName'
-
-typealias UnusedLocalNameArray = Array with UnusedLocalName
-
-function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, selectionStart ByteOffset, selectionEnd ByteOffset) returns UnusedLocalNameArray
-	let found = UnusedLocalNameArray.create(0)
-
-	for binding in localBindingsIn(tokens, blocks: blocks) 'eachBinding'
-		// The requested range is a SELECTION, so a binding it merely touches is one the author has the
-		// cursor on — an editor sends a zero-width range for a bare caret.
-		if binding.endByte < selectionStart or binding.startByte > selectionEnd 'outsideTheSelection'
-			continue
-		end 'outsideTheSelection'
-
-		let name = try tokens.get(binding.tokenIndex) otherwise panic("unusedLocalNamesIn: a binding's token index came from this same stream")
-
-		if identifiersSpelling(tokens, word: name.value) != 1 'namedSomewhereElse'
-			continue
-		end 'namedSomewhereElse'
-
-		found.push(UnusedLocalName.create(String.from(name.value), line: lspLineOf(name.line)))
-	end 'eachBinding'
-
-	return found
-end 'unusedLocalNamesIn'
-
-// One `let`/`var` binding written inside a block, named by its NAME token.
-type LocalBinding
-	export let tokenIndex as ElementIndex
-	export let startByte as ByteOffset
-	export let endByte as ByteOffset
-
-	static function create(tokenIndex ElementIndex, startByte ByteOffset, endByte ByteOffset) returns LocalBinding
-		return Self{tokenIndex: tokenIndex, startByte: startByte, endByte: endByte}
-	end 'create'
-end 'LocalBinding'
-
-typealias LocalBindingArray = Array with LocalBinding
-
-// ⚠ **INSIDE A BLOCK, WHICH IS WHAT MAKES IT LOCAL.** A top-level `let` is module storage — deleting one
-// is a change to the program's interface rather than a tidy-up — and `blocks` is what tells the two
-// apart without a parse.
-function localBindingsIn(tokens TokenArray, blocks LspDocumentBlockArray) returns LocalBindingArray
-	let bindings = LocalBindingArray.create(0)
-	let scopes = LspLineScopes.of(blocks)
-
-	for (position, token) in tokens.withIterator() 'eachToken'
-		if not bindingKeywordSpells(token.kind) 'notABinding'
-			continue
-		end 'notABinding'
-
-		let index = position.index()
-
-		if index + 1 >= tokens.count() 'nothingFollows'
-			continue
-		end 'nothingFollows'
-
-		let name = lspTokenAt(tokens, index: index + 1)
-
-		if name.kind != TokenKind.identifier 'noNameFollows'
-			continue
-		end 'noNameFollows'
-
-		// A binding declared at module level is not a LOCAL, and deleting one is a change to the file's
-		// interface rather than a tidy-up.
-		let insideABlock = match scopes.innermostKindAt(lspLineOf(token.line)) 'scope'
-			found gives true
-			absent gives false
-		end 'scope'
-
-		if not insideABlock 'moduleStorage'
-			continue
-		end 'moduleStorage'
-
-		bindings.push(LocalBinding.create(index + 1, startByte: name.startByte, endByte: name.endByte))
-	end 'eachToken'
-
-	return bindings
-end 'localBindingsIn'
-
-// How many IDENTIFIER tokens spell this word. Keywords and labels are deliberately not counted: a
-// binding is read through an identifier, and a character literal that happens to hold the same letters
-// is a block label rather than a use.
-function identifiersSpelling(tokens TokenArray, word ByteArray) returns BindingUseTally
-	var seen = 0 as BindingUseTally
-
-	for token in tokens 'eachToken'
-		if token.kind == TokenKind.identifier and token.value.equals(word) 'aUse'
-			seen = seen + 1
-		end 'aUse'
-	end 'eachToken'
-
-	return seen
-end 'identifiersSpelling'
-
-// The fix deletes the binding's whole line — from its first column to the first column of the next one,
-// which is what takes the line break with it and leaves no blank line behind.
-function removeBindingActionNode(doc JsonDoc, uri String, name UnusedLocalName) returns JsonNodeId
-	let edit = LspJsonObject.create(doc)
-	edit.putNode(LspRangeKey, value: lspRangeNode(doc, startLine: name.line, startCharacter: 0, endLine: name.line + 1, endCharacter: 0))
-	edit.put(LspNewTextKey, value: JsonNode.stringNode(""))
-
-	let edits = JsonNodeIdArray.create(0)
-	edits.push(edit.finish())
-
-	let action = LspJsonObject.create(doc)
-	action.put(TitleKey, value: JsonNode.stringNode("Remove unused variable '{name.text}'"))
-	action.put(LspKindKey, value: JsonNode.stringNode(QuickFixActionKind))
-	action.putNode(EditKey, value: workspaceEditNode(doc, uri: uri, edits: edits))
-	return action.finish()
-end 'removeBindingActionNode'

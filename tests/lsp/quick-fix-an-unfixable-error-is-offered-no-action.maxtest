@@ -1,0 +1,9 @@
+let QuickFixUnfixableUri = "file:///quick-fix-unfixable-error.maxon"
+let QuickFixUnfixableSource = "function main() returns ExitCode\n\tlet unused = 42\n\treturn missing()\nend 'main'\n"
+let QuickFixUnfixableLines = 4
+
+test 'an unfixable error is offered no quick fix'
+	let session = runRangeCodeActionSession(QuickFixUnfixableUri, text: QuickFixUnfixableSource, range: LspRange.create(0, startCharacter: 0, endLine: QuickFixUnfixableLines, endCharacter: 0))
+
+	try expectNoActionAtRange(session, note: "the document calls `missing`, which nothing declares: an error with no mechanical repair. The local `unused` is named once in the file, but the compiler reports only the undefined call while it stands, so no published diagnostic carries a fix and the answer over the whole document must be empty. A quick fix the compiler did not compute is a fix for something it never reported.")
+end 'an unfixable error is offered no quick fix'

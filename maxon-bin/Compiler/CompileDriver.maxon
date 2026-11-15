@@ -22,10 +22,35 @@ export enum LintRules
 	end 'auditPasses'
 end 'LintRules'
 
+export enum LintReading
+	asPrinted
+	withFixes
+end 'LintReading'
+
+export type LintedSource
+	export let filePath as FilePath
+	export let text as String
+
+	export static function create(filePath FilePath, text String) returns LintedSource
+		return Self{filePath: filePath, text: text}
+	end 'create'
+end 'LintedSource'
+
+export typealias LintedSourceArray = Array with LintedSource
+
+export type LintFindings
+	export let fixable as DiagnosticArray
+	export let sources as LintedSourceArray
+
+	export static function create(fixable DiagnosticArray, sources LintedSourceArray) returns LintFindings
+		return Self{fixable: fixable, sources: sources}
+	end 'create'
+end 'LintFindings'
+
 export union DriverWork
 	build(lintRules LintRules)
 	check(rendersTargetIr bool, reading CheckedDiagnostics)
-	lint
+	lint(reading LintReading)
 	warm(step WarmStep)
 	lexSweep(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray)
 	claims
@@ -88,6 +113,7 @@ export union DriverOutcome
 	built(product CompileProduct)
 	checked(compiled bool, diagnostics DiagnosticArray, irText String)
 	linted
+	lintRefused(error CompileError, findings LintFindings)
 	warmed(reading WarmReading)
 	swept(outcomes LexLandedArray)
 	claimed(claims SourceClaims)

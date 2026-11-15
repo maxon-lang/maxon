@@ -1,0 +1,13 @@
+let LintFixCallFreeLocalsCaseDirName = "lint-fix-call-free-locals"
+let LintFixCallFreeLocalsFixture = "lint-fix-unused-call-free-locals"
+let LintFixCallFreeLocalsFile = "app/main.maxon"
+let LintFixCallFreeLocalsFindings = 5
+let LintFixCallFreeLocalsCode = "E3012"
+let LintFixCallFreeLocalsAloneSite = "main.maxon:10:7"
+let LintFixCallFreeLocalsAloneMessage = "unused variable: 'lonely'"
+
+test 'lint --fix deletes every line of each unused local whose initializer calls nothing, keeps the used locals between them, and leaves and reports the one that is the only statement of its if'
+	let fixed = lintFixFixedFiles(LintFixCallFreeLocalsFile, findings: LintFixCallFreeLocalsFindings)
+	let outcome = lintFixRefusedWith(ExpectedDiagnostic.at(LintFixCallFreeLocalsCode, site: LintFixCallFreeLocalsAloneSite, message: LintFixCallFreeLocalsAloneMessage))
+	requireHeldOutsideCheckout(LintFixCallFreeLocalsCaseDirName, check: LintFixCase.of(LintFixCallFreeLocalsFixture, arguments: [AppDirName], fixed: fixed, outcome: outcome))
+end 'lint --fix deletes every line of each unused local whose initializer calls nothing, keeps the used locals between them, and leaves and reports the one that is the only statement of its if'

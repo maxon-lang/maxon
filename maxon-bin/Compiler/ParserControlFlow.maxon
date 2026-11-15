@@ -228,7 +228,7 @@ extension Parser
 			return
 		end 'aNamedBinding'
 
-		self.recordDiscardOf(self.tryChannelCallAbove(opFloor, wanted: TryChannelResult.anyValue), anchor: nameTok, door: DiscardDoor.explicitDiscard)
+		self.recordDiscardOf(self.tryChannelCallAbove(opFloor, wanted: TryChannelResult.anyValue), anchor: nameTok, door: DiscardDoor.explicitDiscard, standing: DiscardStanding.condition)
 	end 'recordDiscardedBinderResult'
 
 	// Parse the then branch's body, giving a catching `if`'s success value the home its condition could not.
@@ -1626,7 +1626,23 @@ extension Parser
 
 	function recordResolvedRangeCheckSite(value ValueId, target RangeCheckSiteTarget, line LineNumber, column ColumnNumber)
 		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, target: target, block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.bodyOpCount(), line: line, column: column))
+
+		if self.siteCanTrapAtRunTime(value, target: target) 'aRunTimeCheck'
+			self.bodyState.runtimeChecks = self.bodyState.runtimeChecks + 1
+		end 'aRunTimeCheck'
 	end 'recordResolvedRangeCheckSite'
+
+	// A check that can fail at run time is an abort a deleting repair would remove with its
+	// statement (`statementRecordedACheck`); one settled at compile time is not.
+	function siteCanTrapAtRunTime(value ValueId, target RangeCheckSiteTarget) returns bool
+		match target 'target'
+			alias then return not self.constIsKnown(value) and not self.floatConstIsKnown(value)
+			arithmetic then return true
+			callArgument(_, _, _, sourceMayBeNegative) then return sourceMayBeNegative and not self.constIsKnown(value)
+			literalUse or
+			foldedArithmetic then return false
+		end 'target'
+	end 'siteCanTrapAtRunTime'
 
 	// The body counter and the edge that feeds it, shared by the two bound shapes above so the interval
 	// is recorded against the body's own value in one place rather than each shape minting its own.

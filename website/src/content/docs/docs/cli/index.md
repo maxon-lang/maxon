@@ -29,7 +29,7 @@ agents, and reads back what a program did.
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon fmt [file\|directory]` | Re-print Maxon sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
-| `maxon lint [--tests] [<file\|directory\|target>...]` | Check a program with every rule, the [lint rules](#maxon-lint) included, and stop before code generation |
+| `maxon lint [--tests] [--fix] [<file\|directory\|target>...]` | Check a program with every rule, the [lint rules](#maxon-lint) included, and stop before code generation; `--fix` rewrites the sources with each finding's one repair |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
 | `maxon mcp-server [--dev] [--http[=<port>]]` | Speak the Model Context Protocol over stdio, or over loopback HTTP ([MCP Server](/docs/cli/mcp-server/)) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](/docs/cli/debugging/)) |
@@ -591,9 +591,9 @@ Runs the front end and every check on a program, the lint rules included, and st
 generation. It writes no executable, no sidecar and no build record.
 
 ```bash
-maxon lint [<file|directory|target>...] [options]
-maxon lint --tests [<target>] [directory | file.maxtest]
-maxon lint <name>.maxproj | <name>.maxtasks
+maxon lint [--fix] [<file|directory|target>...] [options]
+maxon lint --tests [--fix] [<target>] [directory | file.maxtest]
+maxon lint [--fix] <name>.maxproj | <name>.maxtasks
 ```
 
 **The lint rules** are the checks `maxon build`, `maxon execute`, `maxon run`, `maxon test` and the
@@ -634,14 +634,82 @@ own `main` counts as used. The program is staged in `<project>/.maxon/lint/`, or
 Diagnostics name the files you wrote. A project that declares no `test` is refused, and so is `--define=`
 beside `--tests`.
 
+**`--fix`** rewrites the program's own source files in place with the repair of every finding that has
+exactly one mechanical repair, then lints again, round after round, until no finding it reports has one.
+Several rounds are normal: E3092 and E3219 are reported only once nothing else stands, and a repair can
+expose a finding, as dropping an `export` leaves its declaration unused and discarding an unused local
+leaves a pure call's result discarded. It takes `lint`'s arguments — `--tests`, a manifest named alone,
+`--define=` and `--target=` — and refuses `--metrics=` as a usage error, before anything is compiled.
+
+- **Only the bytes of each repair are written.** The rest of the file keeps its bytes, its layout and
+  line endings included, and a line break a repair inserts takes the file's own line ending, so a CRLF
+  file stays CRLF.
+- **The files written are the program's own.** A finding in `stdlib/`, `runtime/` or a
+  [scriptlib](#the-scriptlib-directory) package is reported as `lint` reports it, with no repair. With
+  `--tests`, the repairs go to the `.maxtest` files and sources you wrote, which the staged copies under
+  `.maxon/lint/` are made from; a manifest named alone is repaired in that `.maxproj` or `.maxtasks` file.
+- **A file that holds a conditional-compilation directive (`#if`) is left as written**, and every finding
+  in it is reported as `lint` reports it. `--fix` repairs the program as compiled for the lint's target,
+  the host's or `--target=`'s, and the text of such a file is compiled otherwise for another target.
+- **A finding with two or more reasonable repairs stays as written**, and so does one whose repair the
+  compiler cannot place with certainty in the text; each is reported as `lint` reports it. A duplicate
+  match pattern ([E2027](/docs/cli/error-codes/#e2027--matchduplicatepattern)), an unused parameter
+  ([E3012](/docs/cli/error-codes/#e3012--semanticunusedvariable)), and a discarded pure call whose
+  arguments have an effect of their own, which records a run-time check, or whose callee can panic — where
+  keeping the call for its effect or its abort is the second repair — are each of the first kind. A
+  repairable finding standing beside
+  an error that has no repair, such as a call to an undefined function, is repaired, and the error is
+  reported.
+- **A file whose bytes changed after the lint read it is refused**, with `error: <path> changed after lint
+  read it, so none of its repairs were written` and exit 1; a file that cannot be read or written, or a
+  repair naming bytes the file does not hold, is refused the same way, naming the file. Files are written
+  in path order, so the files ahead of a refused one are rewritten and listed. Repairs that keep undoing
+  one another end after 100 rounds with `error: lint --fix still found a finding with a repair after 100
+  rounds, so its repairs are undoing one another` and exit 1.
+
+**What `--fix` repairs.** The repair is the compiler's own, computed with the diagnostic; the
+[language server](/docs/cli/editor/#maxon-lsp-server) offers the same repairs as quick fixes.
+
+| Code | Finding | Repair |
+|------|---------|--------|
+| [E3065](/docs/cli/error-codes/#e3065--semanticdiscardedimpureresult) | A bare call drops an impure function's result | `_ = ` is written before the call |
+| [E3064](/docs/cli/error-codes/#e3064--semanticdiscardedpureresult) | A pure function's result is discarded: a bare call, `_ = f()`, or a destructure into `_` alone | The statement is deleted, under the deletion rule below, when its arguments have no effect of their own, it records no run-time check (a range-checked narrowing, checked arithmetic), and the callee cannot panic, directly or through what it calls |
+| [E3092](/docs/cli/error-codes/#e3092--semanticunusedexportedsymbol) | An `export` that no file outside its directory's subtree uses | `export` is removed |
+| [E3219](/docs/cli/error-codes/#e3219--semanticunusedunexporteddeclaration) | An unmarked top-level declaration nothing live names | The declaration is deleted with the comment lines attached to it and one blank line |
+| [E3062](/docs/cli/error-codes/#e3062--semanticunusedtypealias) | An unused `typealias` | The same deletion as E3219 |
+| [E3012](/docs/cli/error-codes/#e3012--semanticunusedvariable) | An unused local whose initializer makes a call | The binding becomes `_ = <initializer>` |
+| [E3012](/docs/cli/error-codes/#e3012--semanticunusedvariable) | An unused local whose initializer makes no call and cannot abort | The declaration is deleted, under the deletion rule below. An initializer that can abort at run time, such as a range-checked cast `wide as Small` or checked arithmetic on a full-width unsigned type, is left and reported; a cast of a constant is deleted |
+| [E3012](/docs/cli/error-codes/#e3012--semanticunusedvariable) | An unused loop variable or payload binder | The name becomes `_` |
+| [E3012](/docs/cli/error-codes/#e3012--semanticunusedvariable) | An unused caught-error binder, `otherwise (e)` | `(e)` is dropped |
+| [E3081](/docs/cli/error-codes/#e3081--semanticmatchdiscardedbindings) | A match arm binds payload values it never reads | The binding list is dropped: `dot(_)` becomes `dot` |
+| [E3077](/docs/cli/error-codes/#e3077--semanticvarshouldbelet) | A `var` that is never reassigned | `var` becomes `let`; a `var` bound to an array, map or tuple literal that is written through becomes a `let` of the literal's `.clone()` |
+| [E3010](/docs/cli/error-codes/#e3010--semanticunneededcast) | An unneeded cast | ` as <type>` is deleted |
+| [E3067](/docs/cli/error-codes/#e3067--semanticselfassignment) | A self-assignment, `x = x` | The statement is deleted, under the deletion rule below |
+| [E3071](/docs/cli/error-codes/#e3071--semanticunreachablecode) | Statements after the one that leaves the block | Everything from the first unreachable statement, with the blank lines above it, through the last line before the block's `end` is deleted |
+| [E3055](/docs/cli/error-codes/#e3055--tryrequiresthrowingfunction) | `try` on a call that cannot throw | `try` is dropped with exactly its own `otherwise` clause: a value, a string or a handler block. A second `try` on the line keeps its `otherwise`, and inside an interpolation or the head of a `match` or `for` the rest of the line, the block's label and a range's `to` or `upto` bound included, is kept, as is the `else` of a conditional expression. A `try` whose `otherwise` clause holds a token the repair cannot place, a `try` in an `if try`, `while try` or `if let x = try` condition, and one with a comment between the call and its `otherwise`, are left and reported |
+| [E3083](/docs/cli/error-codes/#e3083--tryblocknothrows) | A block-form `try` whose body cannot throw | The body moves one tab left into the enclosing block and the handler is deleted, a handler block or a one-line `otherwise panic(…)` or `otherwise throws …`; a line that begins inside a literal keeps its bytes. It is left and reported when a name the block declares is spelled elsewhere in the enclosing function, which unwrapping would put in one scope |
+| [E3168](/docs/cli/error-codes/#e3168--throwsfunctionneverthrows) | A `throws` clause nothing in the body throws through | The clause is dropped |
+| [E2048](/docs/cli/error-codes/#e2048--redundantcontrollabel) | A `break` or `continue` names the construct it already leaves | The label is dropped |
+| [E2052](/docs/cli/error-codes/#e2052--callfirstargnamed), [E2067](/docs/cli/error-codes/#e2067--builtinargnamed) | A positional argument carries a label | The label is dropped: `f(a: 1, b: 2)` becomes `f(1, b: 2)` |
+| [E3075](/docs/cli/error-codes/#e3075--matchqualifiedcasename) | A match arm names a case qualified, `Color.red` | The case is written bare, `red` |
+| [E2027](/docs/cli/error-codes/#e2027--matchduplicatepattern) | A range arm covers a single value, `5 to 5` | The arm is written as the value, `5` |
+| [E3147](/docs/cli/error-codes/#e3147--matchorchainneedsownline) | An `or`-chain packs two alternatives onto one line | Each alternative goes on its own line after its `or`, at the arm's indentation |
+| [E2008](/docs/cli/error-codes/#e2008--parsermismatchedendlabel), [E2043](/docs/cli/error-codes/#e2043--matchmismatchedblockid) | An `end` label differs from the label its header opened | The `end` label is renamed to the header's |
+
+**The deletion rule.** A statement E3064, E3067 or E3012 deletes goes with every line it spans, and is
+deleted only when it stands alone on those lines and its labeled block keeps a statement. Comment lines
+are not statements, and the count is taken over every deletion of one round: of two statements that are
+all of their block, the first is deleted and the second is left and reported.
+
 **Options:**
 
 | Option | Description |
 |--------|-------------|
 | `--tests` | Lint the program `maxon test` compiles in place of the one `maxon build` compiles |
+| `--fix` | Rewrite the program's own sources with the repair of every finding that has exactly one, and lint again until none has one |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default, as for `maxon build`. See [Defines](#defines). |
 | `--target=<cpu>-<os>` | Lint the program as compiled for this target: `#if` branches, target refusals and the lint rules all read that target |
-| `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. |
+| `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. Refused beside `--fix`. |
 
 **Output.** Diagnostics go to stderr as `maxon build` prints them; E3092 and E3219 are reported once
 nothing else stands. A target, and `--tests` of a project, print the
@@ -650,6 +718,12 @@ project's compiler-version record is read and left as it is. A clean program pri
 `Linted <subjects>`, where `<subjects>`, separated by `, `, are the paths typed, else the sources the
 target lists, else the working directory; for `--tests`, the directory or file typed, else the target
 typed alone, else the working directory.
+
+With `--fix`, stdout starts with one line per file rewritten, `Fixed <n> finding(s) in <path>`, in path
+order, where `<path>` is the file as diagnostics name it and `<n>` counts the findings repaired in it over
+every round. What follows is what `lint` says of the program as `--fix` left it: the findings that stand,
+on stderr, and exit 1, or `Linted <subjects>` and exit 0. A program `--fix` has repaired is left as it is
+by the next `--fix`.
 
 | Code | Meaning |
 |------|---------|
@@ -664,6 +738,8 @@ maxon lint my-app --target=x64-linux # the target my_app, as compiled for x64-li
 maxon lint --tests                   # what `maxon test` compiles here
 maxon lint --tests src/lexer.maxtest # one test file's test program
 maxon lint maxon.maxtasks            # the task file, as its runner compiles it
+maxon lint --fix src/                # repair what has one repair, then report what stands
+maxon lint --tests --fix             # the same over what `maxon test` compiles
 ```
 
 ## `maxon cache`

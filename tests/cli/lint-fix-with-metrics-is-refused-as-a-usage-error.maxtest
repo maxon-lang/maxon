@@ -1,0 +1,29 @@
+let LintFixWithMetricsCaseDirName = "lint-fix-with-metrics"
+let LintFixWithMetricsFixture = "lint-fix-dropped-impure-result"
+let LintFixWithMetricsFileName = "fix-metrics.tsv"
+let LintFixWithMetricsHeldDirName = "held-before"
+
+test 'lint --fix with --metrics= is refused as a usage error, rewrites no file and writes no metrics'
+	requireHeldOutsideCheckout(LintFixWithMetricsCaseDirName, check: LintFixWithMetricsRefusal.create())
+end 'lint --fix with --metrics= is refused as a usage error, rewrites no file and writes no metrics'
+
+type LintFixWithMetricsRefusal implements OutsideCheckoutCase
+	static function create() returns LintFixWithMetricsRefusal
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let metricsOption = "{MetricsOptionPrefix}{LintFixWithMetricsFileName}"
+		let typed = "`maxon {LintCommandWord} {LintFixOption} {metricsOption}`"
+		let refusal = LintUsageRefusalCase.of("{LintFixWithMetricsFixture}{PortablePathSeparator}{LintFixBeforeDirName}", arguments: [LintFixOption, metricsOption], words: [MetricsOptionPrefix, LintFixOption])
+
+		try refusal.requireHeldIn(dir)
+
+		let project = dir.join(AppDirName)
+		let held = stagedLintFixTree(dir, fixture: LintFixWithMetricsFixture, side: LintFixBeforeDirName, into: LintFixWithMetricsHeldDirName)
+		let metrics = project.join(LintFixWithMetricsFileName)
+
+		try Expect.isFalse(File.exists(metrics), message: "{typed} wrote {metrics.toString()}, though it was refused before anything was compiled.")
+		try requireLintFixTreeMatches(project, expected: held, what: typed, said: "A refused command rewrites no source.")
+	end 'requireHeldIn'
+end 'LintFixWithMetricsRefusal'

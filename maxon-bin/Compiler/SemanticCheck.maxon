@@ -432,7 +432,7 @@ type UnthrownClauses
 
 			self.settle(site)
 			let clause = try self.clauses.get(index) otherwise panic("reportUnsettled: index {index} is below clauses.count()")
-			reportAtFunctionName(project, func: clause.func, code: ErrorCode.throwsFunctionNeverThrows, message: "'throws {clause.declared}' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause")
+			reportAtFunctionName(project, func: clause.func, code: ErrorCode.throwsFunctionNeverThrows, message: "'throws {clause.declared}' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause", fix: DiagnosticFix.described(FixRepair.throwsClauseDropped(clause.declared)))
 		end 'eachClause'
 	end 'reportUnsettled'
 end 'UnthrownClauses'
@@ -3869,11 +3869,12 @@ function checkDiscardedResults(project Project, module MaxonModule, signatures P
 	// which is when it is the only thing left to say.
 	let sites = unrefusedDiscardSites(project)
 	let effectFree = effectFreeSummaryIfConsulted(project, module: module, signatures: signatures, funcNames: funcNames, sites: sites)
+	let fixes = DiscardFixes.create(module, funcNames: funcNames, effectFree: effectFree)
 
 	for siteIndex in sites 'eachSite'
 		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
-			settled(verdict) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: verdict)
-			purityOf(calleeIndex, callee) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: declaredCalleeVerdict(project, siteIndex: siteIndex, calleeIndex: calleeIndex, callee: callee, effectFree: effectFree))
+			settled(verdict) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: verdict, fixes: fixes)
+			purityOf(calleeIndex, callee) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: declaredCalleeVerdict(project, siteIndex: siteIndex, calleeIndex: calleeIndex, callee: callee, effectFree: effectFree), fixes: fixes)
 		end 'resolved'
 	end 'eachSite'
 end 'checkDiscardedResults'
@@ -3907,16 +3908,39 @@ end 'unrefusedDiscardSites'
 // — next to the summary build it lets most compiles skip entirely.
 function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, sites DiscardSiteIndexArray) returns BoolArray
 	for siteIndex in sites 'eachSite'
-		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
-			settled then break
-			purityOf then return buildEffectFreeSummary(project, module: module, signatures: signatures, funcNames: funcNames)
-		end 'resolved'
+		if siteReadsTheSummary(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'someSiteAsksForIt'
+			return buildEffectFreeSummary(project, module: module, signatures: signatures, funcNames: funcNames)
+		end 'someSiteAsksForIt'
 	end 'eachSite'
 
 	// Nothing indexes this. The loop above resolved every site without one reaching the purity question, and
 	// a resolution reads only facts a diagnostic cannot change, so the drain resolves each site the same way.
 	return BoolArray.create(0)
 end 'effectFreeSummaryIfConsulted'
+
+function siteReadsTheSummary(project Project, module MaxonModule, siteIndex ElementIndex, funcNames FunctionNameIndex) returns bool
+	match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
+		settled(verdict) then return verdictOffersADeletion(verdict) and statementCallsADeclaredFunction(project, module: module, siteIndex: siteIndex)
+		purityOf then return true
+	end 'resolved'
+end 'siteReadsTheSummary'
+
+function verdictOffersADeletion(verdict DiscardVerdict) returns bool
+	return match verdict 'earned'
+		pureResultUnused gives true
+		none or
+		impureResultUnused gives false
+	end 'earned'
+end 'verdictOffersADeletion'
+
+function statementCallsADeclaredFunction(project Project, module MaxonModule, siteIndex ElementIndex) returns bool
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("statementCallsADeclaredFunction: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+
+	return match site.statement 'statement'
+		inCondition gives false
+		standing(_, _, _, _, firstOp, endOp, _, _) gives rangeCallsADeclaredFunction(module, site: site, firstOp: firstOp, endOp: endOp)
+	end 'statement'
+end 'statementCallsADeclaredFunction'
 
 // ⭐⭐ **WHICH DIAGNOSTIC ONE FILED SITE EARNS, AND UNDER WHICH NAME.** Three provenances reach this, and
 // they differ in WHO can answer whether the callee had another reason to run:
@@ -4003,21 +4027,20 @@ end 'runtimeReadVerdict'
 
 // What one site's verdict is SAID as — the two codes and their messages, and silence for the site that
 // earned neither.
-function reportDiscardVerdict(project Project, siteIndex ElementIndex, verdict DiscardVerdict)
+function reportDiscardVerdict(project Project, siteIndex ElementIndex, verdict DiscardVerdict, fixes DiscardFixes)
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportDiscardVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+
 	match verdict 'earned'
 		none then break
-		pureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used")
-		impureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedImpureResult, message: "result of '{subject}' is not used (use '_ = expr' to discard)")
+		pureResultUnused(subject) then reportAtDiscardSite(project, site: site, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used", fix: fixes.deleting(project, site: site, subject: subject))
+		impureResultUnused(subject) then reportAtDiscardSite(project, site: site, code: ErrorCode.semanticDiscardedImpureResult, message: "result of '{subject}' is not used (use '_ = expr' to discard)", fix: fixes.discarding(project, site: site, subject: subject))
 	end 'earned'
 end 'reportDiscardVerdict'
 
 // Where a discard diagnostic points, for either code — the site's own anchor, which is the position the two
 // arms share.
-function reportAtDiscardSite(project Project, siteIndex ElementIndex, code ErrorCode, message String)
-	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
-	let line = site.line
-	let column = site.column
-	reportPositioned(project, code: code, message: message, line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
+function reportAtDiscardSite(project Project, site PendingDiscardedResult, code ErrorCode, message String, fix DiagnosticFix)
+	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: site.line, column: site.column, filePath: site.filePath).withFix(fix))
 end 'reportAtDiscardSite'
 
 // ⭐⭐ **A CHAINABLE METHOD'S RESULT MAY BE DROPPED FREELY** — `specs/discarded-results.md`'s third rule
@@ -6829,7 +6852,7 @@ function reportUnneededLiteralCastArgument(project Project, cast LiteralCast, de
 		return
 	end 'theParameterDeclaresAnotherType'
 
-	fileSecondary(project, code: ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), line: cast.asRange.line, column: cast.asRange.column, filePath: filePath)
+	fileSecondary(project, code: ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), line: cast.asRange.line, column: cast.asRange.column, filePath: filePath, fix: DiagnosticFix.described(FixRepair.castDropped))
 end 'reportUnneededLiteralCastArgument'
 
 function calleeParamAlias(project Project, callee ByteArray, position ParamCount) returns RangedTypeAlias throws MapError

@@ -1,0 +1,36 @@
+let QuickFixAllUri = "file:///quick-fix-fix-all.maxon"
+let QuickFixAllSource = "function note() returns ExitCode\n\tprint(\"noted\\n\")\n\treturn 0\nend 'note'\n\nfunction twice(n ExitCode) returns ExitCode\n\treturn n\nend 'twice'\n\nfunction main() returns ExitCode\n\tnote()\n\ttwice(1)\n\tnote()\n\treturn twice(0)\nend 'main'\n"
+let QuickFixAllFixable = 3
+let QuickFixAllDroppedCode = "E3065"
+let QuickFixAllFirstDroppedLine = 10
+let QuickFixAllPureCode = "E3064"
+let QuickFixAllPureLine = 11
+let QuickFixAllSecondDroppedLine = 12
+
+test 'fix all in this file applies every quick fix of the document'
+	let session = runQuickFixSession(QuickFixAllUri, texts: quickFixTexts(QuickFixAllSource), apply: QuickFixToApply.fixAll(QuickFixAllFixable))
+	let note = "the buffer holds three fixable findings: `note()` dropping an impure result on lines {QuickFixAllFirstDroppedLine + 1} and {QuickFixAllSecondDroppedLine + 1} ({QuickFixAllDroppedCode}) and `twice(1)` discarding a pure result with an effect-free argument on line {QuickFixAllPureLine + 1} ({QuickFixAllPureCode}). Each range's answer holds that finding's quick fix and one `{QuickFixActionKind}` action that fixes all three."
+	let record = try quickFixRecordOf(session, note: note)
+
+	let singleFixes = CodeActionItemArray.create(0)
+	singleFixes.push(try requiredSingleFix(record, code: QuickFixAllDroppedCode, line: QuickFixAllFirstDroppedLine, note: note))
+	singleFixes.push(try requiredSingleFix(record, code: QuickFixAllPureCode, line: QuickFixAllPureLine, note: note))
+	singleFixes.push(try requiredSingleFix(record, code: QuickFixAllDroppedCode, line: QuickFixAllSecondDroppedLine, note: note))
+
+	try expectFixAllAt(record, code: QuickFixAllDroppedCode, line: QuickFixAllFirstDroppedLine, singleFixes: singleFixes, note: note)
+	try expectFixAllAt(record, code: QuickFixAllPureCode, line: QuickFixAllPureLine, singleFixes: singleFixes, note: note)
+	try expectFixAllAt(record, code: QuickFixAllDroppedCode, line: QuickFixAllSecondDroppedLine, singleFixes: singleFixes, note: note)
+
+	let result = try requiredApplied(record, note: note)
+	try Expect.equal(projectDiagnosticsRendering(result.republished), expected: ProjectDiagnosticsNothingRendering, message: "{note} Applying the fix-all edit {textEditsRendering(result.fix.edits)} and sending the buffer back must clear all three; the buffer sent was:\n{result.fixedText}")
+end 'fix all in this file applies every quick fix of the document'
+
+function expectFixAllAt(record QuickFixRecord, code String, line LspCoordinate, singleFixes CodeActionItemArray, note String) throws TestFailure
+	let asked = try askedFor(record, code: code, line: line, note: note)
+	let fixAll = try requiredFixAll(asked.answer, fixableCount: QuickFixAllFixable, note: "{note} The answer for {code}'s range on line {line + 1}:")
+	let held = textEditsRendering(fixAll.edits)
+
+	for single in singleFixes 'eachSingle'
+		try Expect.contains(held, needle: textEditsRendering(single.edits), message: "{note} The fix-all action `{fixAll.title}` offered at {code}'s range on line {line + 1} must hold the edit of `{single.title}`; it holds {held}.")
+	end 'eachSingle'
+end 'expectFixAllAt'

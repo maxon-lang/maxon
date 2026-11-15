@@ -25,6 +25,11 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
   shows the errors `maxon build`'s checks report on it. Outside `stdlib/` and `runtime/`, a file with no
   `.maxproj` in or above its directory is checked alone. Each project check writes an outcome line to the
   **Maxon Language Server** output channel.
+- **Quick fixes**: a diagnostic the compiler has one mechanical repair for — a dropped result, an unneeded
+  cast, a `var` never reassigned, an unused declaration or `export`, among others — carries a lightbulb
+  that applies it to the unsaved buffer, and **Apply all *n* quick fixes in this file** applies every one
+  at once. These are the repairs `maxon lint --fix` writes from the command line, and only a quick fix you
+  pick edits the file.
 - **Breaking changes on the `.maxproj`**: a project's `.maxproj` shows one information diagnostic for each
   breaking change made since the compiler release that last built the project, each with its fix.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs

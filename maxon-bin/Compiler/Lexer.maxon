@@ -977,6 +977,74 @@ function tokenSourceSpelling(token Token) returns String
 	return tokenDisplayText(token)
 end 'tokenSourceSpelling'
 
+// A punctuator carries no byte offsets, and a quoted literal's span covers its content without the
+// quotes, so both are rebuilt from the token's line and column.
+function tokenSourceSpan(token Token, lines LspLineIndex, bytes ByteArray) returns LspSpan
+	if token.kind == TokenKind.charLiteral 'singleQuoted'
+		return LspSpan.create(tokenAnchor(token, lines: lines), endByte: stopAfterClosing(token, closing: AsciiByte.quote, bytes: bytes))
+	end 'singleQuoted'
+
+	if token.kind == TokenKind.stringLiteral or token.kind == TokenKind.byteStringLiteral 'doubleQuoted'
+		return LspSpan.create(tokenAnchor(token, lines: lines), endByte: stopAfterClosing(token, closing: AsciiByte.dquote, bytes: bytes))
+	end 'doubleQuoted'
+
+	return tokenContentSpan(token, lines: lines)
+end 'tokenSourceSpan'
+
+function tokenContentSpan(token Token, lines LspLineIndex) returns LspSpan
+	if token.endByte > token.startByte or token.kind == TokenKind.stringFormatSpec or token.kind == TokenKind.charLiteral or token.kind == TokenKind.stringLiteral or token.kind == TokenKind.byteStringLiteral 'carriesItsSpan'
+		return LspSpan.create(token.startByte, endByte: token.endByte)
+	end 'carriesItsSpan'
+
+	let anchor = tokenAnchor(token, lines: lines)
+
+	match token.kind 'kind'
+		identifier then return LspSpan.create(anchor, endByte: anchor + token.value.count() as ByteOffset)
+		leftParen or
+		rightParen or
+		leftBrace or
+		rightBrace or
+		leftBracket or
+		rightBracket or
+		plus or
+		minus or
+		star or
+		slash or
+		colon or
+		equals or
+		lessThan or
+		greaterThan or
+		dot or
+		comma or
+		at or
+		stringInterpStart or
+		stringInterpEnd then return LspSpan.create(anchor, endByte: anchor + 1)
+		equalsEquals or
+		bangEquals or
+		lessEquals or
+		greaterEquals then return LspSpan.create(anchor, endByte: anchor + 2)
+		newline then return lineTerminatorOf(token, lines: lines)
+		eof then return LspSpan.create(anchor, endByte: anchor)
+		default panic("tokenContentSpan: a {token.kind.name} token carries no span of its own and has no fixed width")
+	end 'kind'
+end 'tokenContentSpan'
+
+function tokenAnchor(token Token, lines LspLineIndex) returns ByteOffset
+	return lines.startOfLine((token.line - 1) as LspLineNumber) + (token.column - 1) as ByteOffset
+end 'tokenAnchor'
+
+function lineTerminatorOf(token Token, lines LspLineIndex) returns LspSpan
+	let line = (token.line - 1) as LspLineNumber
+
+	return LspSpan.create(lines.endOfLineContent(line), endByte: lines.startOfLine(line + 1))
+end 'lineTerminatorOf'
+
+function stopAfterClosing(token Token, closing AsciiByte, bytes ByteArray) returns ByteOffset
+	let closes = token.endByte < bytes.count() as ByteOffset and (try bytes.get(token.endByte) otherwise panic("stopAfterClosing: byte {token.endByte} is inside the {bytes.count()} the source holds")) == closing
+
+	return token.endByte + 1 if closes else token.endByte
+end 'stopAfterClosing'
+
 // What E2004 prints in place of a token when the source wrote no operand AT ALL. A WIRE VALUE rather
 // than a phrasing choice: `specs/expected-expression-error.md` pins these exact bytes.
 let AbsentOperandText = "(empty)"

@@ -1,0 +1,23 @@
+test 'initialize advertises quick-fix code actions and no fix-all source action'
+	let client = LspClient.start()
+
+	let advertised = try client.initialize() otherwise (e) 'initFailed'
+		client.release()
+		Expect.fail("the session could not be initialized: {e.explained()}")
+		return
+	end 'initFailed'
+
+	client.release()
+
+	var kinds = ""
+
+	for kind in advertised.advertisedCodeActionKinds 'eachKind'
+		kinds.append(" `{kind}`")
+	end 'eachKind'
+
+	let note = "`codeActionProvider` must be an options object whose `codeActionKinds` lists `{QuickFixActionKind}`, the kind of every fix the compiler computes, and not `{QuickFixFixAllActionKind}`: nothing is rewritten on save. It listed [{kinds.trim()}]."
+
+	try Expect.isTrue(advertised.hasCodeActionProvider, message: note)
+	try Expect.isTrue(advertised.advertisedCodeActionKinds.contains(QuickFixActionKind), message: note)
+	try Expect.isFalse(advertised.advertisedCodeActionKinds.contains(QuickFixFixAllActionKind), message: note)
+end 'initialize advertises quick-fix code actions and no fix-all source action'

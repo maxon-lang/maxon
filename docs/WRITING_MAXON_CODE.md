@@ -12,7 +12,8 @@ When a build or test run reports breaking changes since the project was last bui
 `maxon build` leaves the [lint rules](CLI_REFERENCE.md#maxon-lint) to `maxon lint`: a discarded result
 (**E3064**, **E3065**), an unused `export` (**E3092**) and an unused unexported declaration (**E3219**).
 Before handing code back, run `maxon lint` on the program, and `maxon lint --tests` on a project's tests,
-or call the MCP `check` tool, which enforces them too.
+or call the MCP `check` tool, which enforces them too. `maxon lint --fix` rewrites the files with the repair
+of every finding that has exactly one, and reports the rest.
 
 ---
 

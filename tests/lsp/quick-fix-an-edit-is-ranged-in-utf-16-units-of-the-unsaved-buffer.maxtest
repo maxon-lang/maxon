@@ -1,0 +1,28 @@
+let QuickFixUnsavedUri = "file:///quick-fix-unsaved-buffer.maxon"
+let QuickFixUnsavedHead = "typealias Tally = int(0 to 100)\n\nfunction weigh(label String, n Tally) returns Tally\n\tprint(label)\n\treturn n\nend 'weigh'\n\nfunction main() returns ExitCode\n"
+let QuickFixUnsavedOpenedLine = "\t_ = weigh(\"plain\", n: 5 as Tally)\n"
+let QuickFixUnsavedEditedLine = "\t_ = weigh(\"héllo 😀\", n: 5 as Tally)\n"
+let QuickFixUnsavedFixedLine = "\t_ = weigh(\"héllo 😀\", n: 5)\n"
+let QuickFixUnsavedTail = "\treturn 0\nend 'main'\n"
+let QuickFixUnsavedCode = "E3010"
+let QuickFixUnsavedSubject = "Tally"
+let QuickFixUnsavedLine = 8
+let QuickFixUnsavedCastStart = 27
+let QuickFixUnsavedCastEnd = 36
+
+test 'a quick fix edit is ranged in UTF-16 units of the unsaved buffer'
+	let texts = StringArray.create(0)
+	texts.push("{QuickFixUnsavedHead}{QuickFixUnsavedOpenedLine}{QuickFixUnsavedTail}")
+	texts.push("{QuickFixUnsavedHead}{QuickFixUnsavedEditedLine}{QuickFixUnsavedTail}")
+
+	let session = runQuickFixSession(QuickFixUnsavedUri, texts: texts, apply: QuickFixToApply.singleFixFor(QuickFixUnsavedCode, line: QuickFixUnsavedLine))
+	let note = "the document was opened with `5 as Tally` after an ASCII string and then changed, unsaved, to put `héllo 😀` before it on the same line. `é` is one UTF-16 unit and two UTF-8 bytes, `😀` two UTF-16 units, four bytes and one codepoint, so ` as Tally` spans characters {QuickFixUnsavedCastStart} to {QuickFixUnsavedCastEnd} of line {QuickFixUnsavedLine} in the buffer last sent, and nowhere else."
+	let record = try quickFixRecordOf(session, note: note)
+
+	let fix = try requiredSingleFix(record, code: QuickFixUnsavedCode, line: QuickFixUnsavedLine, note: note)
+	try expectQuickFixEdits(fix, uri: QuickFixUnsavedUri, expected: soleQuickFixEdit(QuickFixUnsavedLine, startCharacter: QuickFixUnsavedCastStart, endLine: QuickFixUnsavedLine, endCharacter: QuickFixUnsavedCastEnd, newText: ""), subject: QuickFixUnsavedSubject, note: note)
+
+	let result = try requiredApplied(record, note: note)
+	try Expect.equal(result.fixedText, expected: "{QuickFixUnsavedHead}{QuickFixUnsavedFixedLine}{QuickFixUnsavedTail}", message: "{note} Applying {textEditsRendering(fix.edits)} to the buffer must delete exactly ` as Tally`.")
+	try expectNoPublishedCode(result.republished, code: QuickFixUnsavedCode, note: note)
+end 'a quick fix edit is ranged in UTF-16 units of the unsaved buffer'

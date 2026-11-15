@@ -1,0 +1,39 @@
+let QuickFixPureUri = "file:///quick-fix-discarded-pure-result.maxon"
+let QuickFixPureHead = "function twice(n ExitCode) returns ExitCode\n\treturn n\nend 'twice'\n\nfunction noisy() returns ExitCode\n\tprint(\"noisy\\n\")\n\treturn 1\nend 'noisy'\n\nfunction main() returns ExitCode\n"
+let QuickFixPureEffectFreeStatement = "\ttwice(1)\n"
+let QuickFixPureTail = "\ttwice(noisy())\n\treturn 0\nend 'main'\n"
+let QuickFixPureCode = "E3064"
+let QuickFixPureSubject = "twice"
+let QuickFixPureEffectFreeLine = 10
+let QuickFixPureEffectfulLine = 11
+let QuickFixPureRemaining = 1
+
+test 'a discarded pure result is deleted by its quick fix only when its arguments have no effects'
+	let source = "{QuickFixPureHead}{QuickFixPureEffectFreeStatement}{QuickFixPureTail}"
+	let session = runQuickFixSession(QuickFixPureUri, texts: quickFixTexts(source), apply: QuickFixToApply.singleFixFor(QuickFixPureCode, line: QuickFixPureEffectFreeLine))
+	let note = "`twice(1)` on line {QuickFixPureEffectFreeLine + 1} and `twice(noisy())` on line {QuickFixPureEffectfulLine + 1} both discard the result of the pure `twice`, which is {QuickFixPureCode}. The first statement's argument has no effect, so its repair deletes the statement; the second's argument prints, so deleting it would change what the program does and it has no quick fix."
+	let record = try quickFixRecordOf(session, note: note)
+
+	let effectful = try askedFor(record, code: QuickFixPureCode, line: QuickFixPureEffectfulLine, note: note)
+
+	for action in effectful.answer 'eachAction'
+		try Expect.isFalse(namesDiagnostic(action, diagnostic: effectful.diagnostic), message: "{note} The answer for the second statement's range offered an action naming it: {codeActionsRendering(effectful.answer)}")
+	end 'eachAction'
+
+	let fix = try requiredSingleFix(record, code: QuickFixPureCode, line: QuickFixPureEffectFreeLine, note: note)
+	try Expect.contains(fix.title, needle: QuickFixPureSubject, message: "{note} The quick fix's title `{fix.title}` does not name `{QuickFixPureSubject}`, the call it deletes.")
+	try Expect.equal(editedUrisRendering(fix.editedUris), expected: QuickFixPureUri, message: "{note} The quick fix's edit must change only the document it was asked about.")
+
+	let result = try requiredApplied(record, note: note)
+	try Expect.equal(result.fixedText, expected: "{QuickFixPureHead}{QuickFixPureTail}", message: "{note} Applying the quick fix's edits {textEditsRendering(fix.edits)} must leave the buffer exactly as it was with the first statement's line gone.")
+
+	var remaining = 0 as Count
+
+	for item in result.republished 'eachItem'
+		if item.code.describe() == QuickFixPureCode 'stillDiscarded'
+			remaining = remaining + 1
+		end 'stillDiscarded'
+	end 'eachItem'
+
+	try Expect.equal(remaining, expected: QuickFixPureRemaining, message: "{note} After the fix the second statement alone discards a pure result: {projectDiagnosticsRendering(result.republished)}")
+end 'a discarded pure result is deleted by its quick fix only when its arguments have no effects'

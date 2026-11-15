@@ -1,0 +1,26 @@
+let QuickFixUnusedDirName = "quick-fix-unused-declaration"
+let QuickFixUnusedFileName = "main.maxon"
+let QuickFixUnusedSource = "// Answers what nobody asks.\n// Kept for a caller that never came.\nfunction spare() returns ExitCode\n\treturn 1\nend 'spare'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let QuickFixUnusedCode = "E3219"
+let QuickFixUnusedSubject = "spare"
+let QuickFixUnusedFirstLine = 0
+let QuickFixUnusedLineAfterTheBlankLine = 6
+let QuickFixUnusedDeclarationLine = 2
+
+test 'an unused declaration is deleted with its comment by its quick fix'
+	let root = stagedProjectDiagnosticsRoot(QuickFixUnusedDirName)
+	writeCorpusFile(root, fileName: QuickFixUnusedFileName, content: QuickFixUnusedSource)
+
+	let uri = fileUriOf(root.join(QuickFixUnusedFileName))
+	let session = runProjectQuickFixSession(root, uri: uri, text: QuickFixUnusedSource, apply: QuickFixToApply.singleFixFor(QuickFixUnusedCode, line: QuickFixUnusedDeclarationLine))
+	discardStagedDir(root)
+
+	let note = "`spare` is unexported and nothing in its directory names it, which is {QuickFixUnusedCode}; the project check, which sees the whole directory, publishes it with one repair deleting the two comment lines above it, the declaration and the blank line after it: lines {QuickFixUnusedFirstLine} up to {QuickFixUnusedLineAfterTheBlankLine}, whole."
+	let (_, checked) = try projectQuickFixRecords(session, note: note)
+
+	let fix = try requiredSingleFix(checked, code: QuickFixUnusedCode, line: QuickFixUnusedDeclarationLine, note: note)
+	try expectQuickFixEdits(fix, uri: uri, expected: soleQuickFixEdit(QuickFixUnusedFirstLine, startCharacter: 0, endLine: QuickFixUnusedLineAfterTheBlankLine, endCharacter: 0, newText: ""), subject: QuickFixUnusedSubject, note: note)
+
+	let result = try requiredApplied(checked, note: note)
+	try expectNoPublishedCode(result.republished, code: QuickFixUnusedCode, note: note)
+end 'an unused declaration is deleted with its comment by its quick fix'
