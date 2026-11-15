@@ -276,6 +276,35 @@ end 'main'
 error E3012: specs/var-should-be-let/unused-takes-precedence.maxon:4:6: unused variable: 'x'
 ```
 
+<!-- test: an-unused-let-silences-a-read-var-never-reassigned -->
+A function that reports an unused variable reports no `var` that should be `let`: `x` is read and never
+reassigned, and only `unused` is reported.
+```maxon
+
+function main() returns ExitCode
+	let unused = 1
+	var x = 10 as FullRangeInt
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/var-should-be-let/an-unused-let-silences-a-read-var-never-reassigned.maxon:4:6: unused variable: 'unused'
+```
+
+<!-- test: two-unused-vars-are-each-unused-not-should-be-let -->
+```maxon
+
+function main() returns ExitCode
+	var x = 10 as FullRangeInt
+	var y = 20 as FullRangeInt
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/var-should-be-let/two-unused-vars-are-each-unused-not-should-be-let.maxon:4:6: unused variable: 'x'
+error E3012: specs/var-should-be-let/two-unused-vars-are-each-unused-not-should-be-let.maxon:5:6: unused variable: 'y'
+```
+
 <!-- test: returned-alias-of-a-let-string-field -->
 A call's result may be a second reference to an argument's storage. `pass` hands back its borrowed argument,
 and a `String` a name does not own is copied when it is bound to a `var`, so `x` holds a record of its own: the

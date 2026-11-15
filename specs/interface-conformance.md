@@ -766,6 +766,40 @@ end 'main'
 error E3012: specs/interface-conformance/interface-method-local-var-still-errors.maxon:13:7: unused variable: 'unusedLocal'
 ```
 
+<!-- test: interface-method-reports-every-unused-local-and-no-waived-parameter -->
+The contract waives `volume` and `pitch`, which go unread; the two unread locals are each reported.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(volume Integer, pitch Integer) returns Integer
+end 'Greeter'
+
+type Silent implements Greeter
+	let value as Integer
+
+	function greet(volume Integer, pitch Integer) returns Integer
+		let first = 1
+		let second = 2
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Silent'
+
+function main() returns ExitCode
+	let s = Silent.create(1)
+	return s.greet(0, pitch: 0)
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/interface-conformance/interface-method-reports-every-unused-local-and-no-waived-parameter.maxon:13:7: unused variable: 'first'
+error E3012: specs/interface-conformance/interface-method-reports-every-unused-local-and-no-waived-parameter.maxon:14:7: unused variable: 'second'
+```
+
 <!-- test: interface-method-loop-variable-still-errors -->
 ⭐ **THE WAIVER IS ABOUT PARAMETERS, AND A `for` BINDING IS NOT ONE**. `interface-method-may-leave-a-required-parameter-unread` above is the positive control that the waiver is live at all; this is the line it stops at. A contract can force an implementer to DECLARE a parameter it has no use for, and it has nothing whatever to say about a loop variable the author wrote inside the body — so the loop binding is still refused, and `for _ in` is the spelling that fixes it.
 

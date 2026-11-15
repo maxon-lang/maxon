@@ -153,8 +153,8 @@ and [Constant Data](/docs/language/regions/#constant-data)).
   an array, map or tuple literal that is written through is written `let items = [..].clone()`: a plain `let`
   of a literal is constant data, and writing through it is **E3207**.
 - **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
-  bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
-  times in one pattern (`for (_, _) in pairs`). A parameter named `_` takes its argument unnamed, so
+  bindings and closure parameters. Every unused variable of a function is reported, in source order.
+  The name `_` discards: it creates no binding and may appear several times in one pattern (`for (_, _) in pairs`). A parameter named `_` takes its argument unnamed, so
   reading `_` in the body is **E2004**, and one signature may declare several. In a destructuring, `_`
   discards its element: `let (a, _) = t` declares `a` alone, and `(let _, let b) = t` declares `b`
   alone. Names such as `_x` are ordinary variables. A method that

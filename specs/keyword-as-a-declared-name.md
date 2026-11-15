@@ -275,8 +275,8 @@ parameter is `E3012` (see `unused-parameters`), which no spelling of these three
 delete the very thing under test. But E3012 is raised in the SEMANTIC stage, so reaching it is proof the
 token stream was counted correctly and the declaration PARSED — a miscount would produce a spurious closer
 and a parse error instead, which is the regression this case exists to catch. The capability is
-tested one stage before any exit code could test it: `E3012 … unused variable: 'while'`,
-at the declared name's own position.
+tested one stage before any exit code could test it: `E3012 … unused variable:` for `while`, `for` and
+`match`, each at the declared name's own position.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -305,6 +305,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3012: specs/keyword-as-a-declared-name/block-keywords-as-parameter-names-beside-real-blocks.maxon:4:16: unused variable: 'while'
+error E3012: specs/keyword-as-a-declared-name/block-keywords-as-parameter-names-beside-real-blocks.maxon:4:31: unused variable: 'for'
+error E3012: specs/keyword-as-a-declared-name/block-keywords-as-parameter-names-beside-real-blocks.maxon:4:44: unused variable: 'match'
 ```
 
 <!-- test: error.a-bare-read-of-a-block-keyword-parameter -->

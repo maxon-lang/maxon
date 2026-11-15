@@ -78,6 +78,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3012: specs/unused-parameters/multiple-unused.maxon:5:26: unused variable: 'b'
+error E3012: specs/unused-parameters/multiple-unused.maxon:5:37: unused variable: 'c'
 ```
 
 <!-- test: all-used-ok -->

@@ -3699,20 +3699,14 @@ extension Parser
 		return self.kindAt(index) == TokenKind.if and index > 0 and self.kindAt(index - 1) == TokenKind.then and not self.keywordIsAName(index)
 	end 'armBlockIfAt'
 
-	// ⭐⭐ **E3012 — THE FIRST BINDING THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
+	// ⭐⭐ **E3012 — EVERY BINDING THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
 	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE
-	// body and about no smaller part of it. A candidate is a PARAMETER, a `for` binding or a body
-	// `var`, which is why the list is walked with a `continue` and its kind is asked at the waiver below
-	// rather than once before the loop.
+	// body and about no smaller part of it.
 	//
 	// ⭐⭐ **BODY `var`s ARE IN, AND NO DISCARD RULE BLOCKS THAT.** A value that must be neither bound nor read
 	// always has a spelling — `_ = <call>` (`parseAssignment`'s `DiscardBindingName` arm) — so enrolling a body
 	// `var` here cannot leave an author with nowhere to put one. E3064 refuses that spelling only for a
 	// callee the effect summary proves pure, which is a rule about the CALLEE and not about this candidate.
-	//
-	// ⚠ **THE UNUSED-`let` HALF COSTS 82 CASES OF THIS SUITE, in EXPRESSIVENESS rather than tidiness.**
-	// See `UnusedBindingKind.mutableLocal`, which carries the measurement and says which spec owns it.
-	// A body `var` rides because E3077 owes it.
 	//
 	// ⇒ **it returns a VERDICT, because E3077 rides behind it** (`reportVarShouldBeLet`): "an unused
 	// `var` reports as UNUSED, not as should-be-let" is the two scans' ORDER over one list.
@@ -3720,25 +3714,16 @@ extension Parser
 	// ⭐⭐ **"REFERENCED" IS A FACT ABOUT THE NAME, NOT ABOUT THE BINDING**, so the verdict asks TWO questions
 	// and the second is the one a per-binding bit cannot answer: two sequential `for i` loops mint two
 	// `VarInfo`s, and the oracle ACCEPTS the pair when only the second reads `i` (its `_referencedVars` is a
-	// per-function `HashSet<string>`). See `referencedNames`, which is where that half lives, and
-	// `specs/unused-variable-name-scope.md`, which pins it.
-	//
-	// ⭐ **ONE DIAGNOSTIC PER FUNCTION, AND IT IS THE EARLIEST DECLARATION.** `unusedCandidates` is in
-	// declaration order — parameters as `bindParameters` mints them, then each `for` binding and each
-	// body `var` as the body reaches it — so a forward scan reports the leftmost unused one. The scan
-	// stops there because the rest are the same fact about the same edit, and `multiple-unused` (two
-	// unused parameters) pins exactly one line.
-	//
-	// ⚠ **THE CANDIDATE LIST IS IN TRUE SOURCE ORDER, WITH NOTHING TO PIN IT.** Pushing every
-	// parameter and then every local would make an unused parameter outrank an unused local declared
-	// above it. No case in the suite declares an unused parameter and an unused local in one function,
-	// and source order is the rule the header above already states.
+	// per-function `HashSet<string>`). See `referencedNames`, which is where that half lives, and the
+	// `unused-variable-name-scope` spec, which pins it.
 	//
 	// ⚠ **A FUNCTION WHOSE BODY FAILED TO PARSE NEVER REACHES HERE**: a `SourceParseError` unwinds past this
 	// call, and the parse that follows skips the abandoned body whole, so a body with a real error
 	// never also reports its unused names as cascade noise. The suppression is structural and needs no
 	// rule of its own.
 	function reportUnusedBindings(methodName ByteArray) returns bool
+		var reportedAny = false
+
 		for candidateIndex in 0 upto self.bodyState.unusedCandidates.count() 'eachCandidate'
 			let candidate = try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")
 
@@ -3751,8 +3736,8 @@ extension Parser
 			// `error E3012: unused variable: 'i'`, and so is an unread body `let`. The oracle draws the same
 			// line structurally — its `skipParamCheck` skips the parameter loop and never the locals loop.
 			//
-			// A `continue` rather than a `return`: with three candidate kinds in one list, a
-			// waived parameter must not suppress a later declaration the contract has no say over. Asked
+			// A `continue`: every kind of binding shares one list, so a waived parameter must not suppress a
+			// later declaration the contract has no say over. Asked
 			// here rather than before the loop because it walks two registries, and the overwhelming majority
 			// of functions never reach it; `and` short-circuits, so a non-parameter never pays for it.
 			let waivable = match candidate.kind 'candidateKind'
@@ -3772,14 +3757,14 @@ extension Parser
 				continue
 			end 'contractDictatedTheList'
 
-			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from((try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")).binding.name)}'", range: (try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")).nameRange)
-			return true
+			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
+			reportedAny = true
 		end 'eachCandidate'
 
-		return false
+		return reportedAny
 	end 'reportUnusedBindings'
 
-	// ⭐⭐ **E3077 — THE FIRST `var` THIS FUNCTION DECLARED AND NEVER NEEDED WRITABLE.** The twin of the
+	// ⭐⭐ **E3077 — EVERY `var` THIS FUNCTION DECLARED AND NEVER NEEDED WRITABLE.** The twin of the
 	// scan above, over the SAME candidate list, run only when that one reported nothing — which is the
 	// whole of "E3012 takes precedence" (`unused-takes-precedence`: `var x = 10` + `return 0` is the
 	// unused diagnostic, not this one).
@@ -3789,36 +3774,31 @@ extension Parser
 	// binder takes its mutability from the SCRUTINEE (`declarePayloadBindings`), so a writable `value(n)` the
 	// arm never reassigns would be told to "use `let`" for a `var` its author never wrote.
 	//
-	// ⚠ **A `var` NOTHING MENTIONED IS SKIPPED RATHER THAN REPORTED, and that is not the same as the
-	// precedence above.** The precedence covers one function reaching both rules; this covers the
-	// SECOND unused declaration, which E3012 deliberately did not report (one diagnostic per
-	// function). Reporting it here would say "use `let`" about a binding whose real fix is deletion.
+	// Every `var` this scan meets was mentioned: E3012 reports each unmentioned one, so run anywhere but
+	// behind its verdict, this would say "use `let`" about a binding whose fix is deletion.
 	function reportVarShouldBeLet()
 		for candidateIndex in 0 upto self.bodyState.unusedCandidates.count() 'eachCandidate'
-			if not self.isVarShouldBeLetCandidate(candidateIndex) 'notACandidate'
+			let candidate = try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")
+
+			if not self.isVarShouldBeLetCandidate(candidate) 'notACandidate'
 				continue
 			end 'notACandidate'
 
-			let candidate = try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")
 			self.recordArtifactDiagnostic(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(candidate.binding.name), boundFromContainerLiteral: candidate.boundFromContainerLiteral), range: candidate.nameRange)
 		end 'eachCandidate'
 	end 'reportVarShouldBeLet'
 
-	function isVarShouldBeLetCandidate(candidateIndex ElementIndex) returns bool
-		let candidate = try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("isVarShouldBeLetCandidate: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")
-
-		if candidate.kind != UnusedBindingKind.mutableLocal or not self.bindingNameWasMentioned(candidate.binding) 'notAVarOrUnusedIsE3012sToReport'
+	function isVarShouldBeLetCandidate(candidate UnusedBindingCandidate) returns bool
+		if candidate.kind != UnusedBindingKind.mutableLocal 'notAVar'
 			return false
-		end 'notAVarOrUnusedIsE3012sToReport'
+		end 'notAVar'
 
 		return not candidate.binding.mutabilityExercised and not self.nameIsListed(self.bodyState.mutabilityExercisedNames, name: candidate.binding.name)
 	end 'isVarShouldBeLetCandidate'
 
 	// Was the NAME this binding declared mentioned anywhere in the function being parsed? The per-binding
 	// bit first, then the name-scoped half — see `referencedNames` for why the second question exists and
-	// why a per-binding bit structurally cannot answer it. The scan is reached only by a declaration one of
-	// the two scans above is about to report or excuse, so a function whose bindings are all used never
-	// walks the list at all.
+	// why a per-binding bit structurally cannot answer it.
 	function bindingNameWasMentioned(binding VarInfo) returns bool
 		return binding.referenced or self.nameIsListed(self.bodyState.referencedNames, name: binding.name)
 	end 'bindingNameWasMentioned'
@@ -3912,8 +3892,8 @@ extension Parser
 	// in `specs/interface-conformance.md`. And it waives the PARAMETERS only: a `for` binding inside an
 	// interface method is the author's own, so it stays checked.
 	//
-	// ⚠ **"WAIVES THE PARAMETERS ONLY" IS A CONDITION SOMETHING HAS TO ASK.** `unusedCandidates` carries two kinds,
-	// so the caller tests `candidate.kind` and `continue`s: a waived parameter must not end the scan before a
+	// ⚠ **"WAIVES THE PARAMETERS ONLY" IS A CONDITION SOMETHING HAS TO ASK.** `unusedCandidates` carries every kind
+	// of binding, so the caller tests `candidate.kind` and `continue`s: a waived parameter must not end the scan before a
 	// loop binding the contract has no say over. `interface-conformance.md`'s
 	// `interface-method-loop-variable-still-errors` is red both ways round.
 	//

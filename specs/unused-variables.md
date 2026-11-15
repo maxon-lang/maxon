@@ -9,7 +9,7 @@ category: diagnostics
 
 ## Documentation
 
-Maxon requires all local variables to be used. Declaring a variable with `var` or `let` and never referencing it causes a compilation error.
+Maxon requires all local variables to be used. Declaring a variable with `var` or `let` and never referencing it causes a compilation error. Every unused variable of a function is reported, in source order.
 
 ### Example Error
 
@@ -136,7 +136,7 @@ end 'main'
 error E3012: specs/unused-variables/tuple-destructuring-unused.maxon:10:10: unused variable: 'b'
 ```
 
-<!-- test: multiple-unused-first-reported -->
+<!-- test: multiple-unused-each-reported -->
 ```maxon
 
 function main() returns ExitCode
@@ -146,7 +146,85 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/unused-variables/multiple-unused-first-reported.maxon:4:6: unused variable: 'x'
+error E3012: specs/unused-variables/multiple-unused-each-reported.maxon:4:6: unused variable: 'x'
+error E3012: specs/unused-variables/multiple-unused-each-reported.maxon:5:6: unused variable: 'y'
+```
+
+<!-- test: every-unused-kind-in-one-function-is-reported -->
+An unused parameter, body `let`, body `var`, loop variable, caught `(e)` and match-arm payload binder in one
+function are each reported, in source order.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function tally(limit Integer) returns Integer
+	let spare = 7
+	var idle = 0 as Integer
+	var count = 0 as Integer
+	for i in 0 upto 3 'loop'
+		count = count + 1
+	end 'loop'
+	try mayFail() otherwise (e) 'handler'
+		count = count + 10
+	end 'handler'
+	let c = Container.value(42)
+	match c 'check'
+		empty then count = count + 100
+		value(n) then count = count + 1000
+	end 'check'
+	return count
+end 'tally'
+
+function main() returns ExitCode
+	return tally(3)
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/unused-variables/every-unused-kind-in-one-function-is-reported.maxon:18:16: unused variable: 'limit'
+error E3012: specs/unused-variables/every-unused-kind-in-one-function-is-reported.maxon:19:6: unused variable: 'spare'
+error E3012: specs/unused-variables/every-unused-kind-in-one-function-is-reported.maxon:20:6: unused variable: 'idle'
+error E3012: specs/unused-variables/every-unused-kind-in-one-function-is-reported.maxon:22:6: unused variable: 'i'
+error E3012: specs/unused-variables/every-unused-kind-in-one-function-is-reported.maxon:25:27: unused variable: 'e'
+error E3012: specs/unused-variables/every-unused-kind-in-one-function-is-reported.maxon:31:9: unused variable: 'n'
+```
+
+<!-- test: two-functions-each-report-their-own-unused-locals -->
+```maxon
+
+function first() returns ExitCode
+	let a = 1
+	let b = 2
+	return 0
+end 'first'
+
+function second() returns ExitCode
+	let c = 3
+	let d = 4
+	return first()
+end 'second'
+
+function main() returns ExitCode
+	return second()
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/unused-variables/two-functions-each-report-their-own-unused-locals.maxon:4:6: unused variable: 'a'
+error E3012: specs/unused-variables/two-functions-each-report-their-own-unused-locals.maxon:5:6: unused variable: 'b'
+error E3012: specs/unused-variables/two-functions-each-report-their-own-unused-locals.maxon:10:6: unused variable: 'c'
+error E3012: specs/unused-variables/two-functions-each-report-their-own-unused-locals.maxon:11:6: unused variable: 'd'
 ```
 
 <!-- test: unused-for-in-variable -->
