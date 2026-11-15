@@ -38,14 +38,22 @@ type PromiseChunk
 	end 'holdingBeyond'
 
 	function recording(slot ElementIndex, kind PromiseConsume) returns PromiseChunk
+		return self.settingSlot(slot, kind: kind, holding: self.occupied + 1)
+	end 'recording'
+
+	function releasing(slot ElementIndex) returns PromiseChunk
+		return self.settingSlot(slot, kind: PromiseConsume.notConsumed, holding: self.occupied - 1)
+	end 'releasing'
+
+	function settingSlot(slot ElementIndex, kind PromiseConsume, holding ElementIndex) returns PromiseChunk
 		let column = PromiseKindColumn.create(ChunkWidth, zeroed: false)
 
 		for position in 0 upto ChunkWidth 'eachSlot'
 			column.push(kind if position == slot else self.kindAt(position))
 		end 'eachSlot'
 
-		return Self.create(column, occupied: self.occupied + 1)
-	end 'recording'
+		return Self.create(column, occupied: holding)
+	end 'settingSlot'
 
 	function firstWinning(other PromiseChunk) returns PromiseChunk
 		var added = 0 as ElementIndex
@@ -114,6 +122,18 @@ type PromiseConsumes
 
 		return Self.create(column, consumed: self.consumed + 1)
 	end 'recorded'
+
+	function releasing(promise ValueId, kind PromiseConsume) returns PromiseConsumes
+		if self.kindOf(promise) != kind 'nothingToRelease'
+			return self
+		end 'nothingToRelease'
+
+		let position = promise as ElementIndex
+		let index = chunkIndexOf(position)
+		let column = self.chunks.replacing(index, chunk: self.chunks.chunkAt(index).releasing(slotInChunk(position)), filler: PromiseChunk.unset())
+
+		return Self.create(column, consumed: self.consumed - 1)
+	end 'releasing'
 
 	function unioned(other PromiseConsumes) returns PromiseConsumes
 		if other.consumed == 0 or other.chunks.shares(self.chunks) 'nothingToAdd'

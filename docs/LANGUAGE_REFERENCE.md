@@ -6869,7 +6869,8 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
 - **A union with a linear payload is linear.** A `match` over one consumes it: every arm for a case with a
   linear payload binds it to a name and consumes it, and a `default` arm cannot cover such a case (E3224). An
   arm may assign the variable it matched once the payload is consumed, so `some(r) then m = recycle(r)` refills
-  `m`; a read of `m` after the `match` needs every arm to have refilled it. A failed send hands a linear
+  `m`; a read of `m` after the `match` needs every arm to have refilled it, and a loop that matches `m` needs
+  every path to the end of the lap, `continue` included, to have refilled it. A failed send hands a linear
   argument back in `mailboxFull` or `serviceStopped`, and the handler of the failure consumes it.
 - **A case that carries no linear value owes nothing.** A variable of a linear union that holds such a case
   (`Maybe.nothing`) on every path to a point is not a linear value there: assigning it, leaving its scope or

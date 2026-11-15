@@ -4980,3 +4980,469 @@ end 'main'
 error E3223: <fragment>:33:3: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 error E3012: <fragment>:33:8: unused variable: 'r'
 ```
+
+<!-- test: a-loop-refills-the-union-it-matched-in-every-arm -->
+Every arm gives `m` a new value before the lap ends, so the next lap matches a live union.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	for _ in 0 upto 2 'lap'
+		match m 'm'
+			some(r) then m = recycle(r)
+			nothing then m = Maybe.nothing
+		end 'm'
+	end 'lap'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 9
+fin 9
+```
+```exitcode
+0
+```
+
+<!-- test: a-loop-refills-the-union-it-matched-in-only-one-arm -->
+Only the `some` arm refills `m`, so the `nothing` arm leaves it consumed at the end of the lap.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	for _ in 0 upto 2 'lap'
+		match m 'm'
+			some(r) then m = recycle(r)
+			nothing then print("nothing\n")
+		end 'm'
+	end 'lap'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:38:9: use of moved value 'm': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-loop-continues-before-refilling-the-union-it-matched -->
+The `continue` leaves the lap with `m` consumed, and the refill below it is skipped.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	for i in 0 upto 3 'lap'
+		match m 'm'
+			some(r) then r.fin()
+			nothing then print("nothing\n")
+		end 'm'
+
+		if i == 0 'first'
+			continue
+		end 'first'
+
+		m = Maybe.some(Resp.create(2))
+	end 'lap'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:33:9: use of moved value 'm': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-loop-continues-after-refilling-the-union-it-matched -->
+The refill comes before the `continue`, so both ways out of the lap leave `m` live.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	for i in 0 upto 3 'lap'
+		match m 'm'
+			some(r) then m = recycle(r)
+			nothing then m = Maybe.nothing
+		end 'm'
+
+		if i == 0 'first'
+			continue
+		end 'first'
+
+		print("lap {i}\n")
+	end 'lap'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 9
+lap 1
+fin 9
+lap 2
+fin 9
+```
+```exitcode
+0
+```
+
+<!-- test: a-while-loop-refills-the-union-it-matched-in-every-arm -->
+The same refill under a `while`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+	var laps = 0 as Code
+
+	while laps < 2 'again'
+		match m 'm'
+			some(r) then m = recycle(r)
+			nothing then m = Maybe.nothing
+		end 'm'
+
+		laps = laps + 1
+	end 'again'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 9
+fin 9
+```
+```exitcode
+0
+```
+
+<!-- test: a-while-loop-refills-the-union-it-matched-in-only-one-arm -->
+Only the `some` arm refills `m`, so the `nothing` arm leaves it consumed at the end of the lap.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+	var laps = 0 as Code
+
+	while laps < 2 'again'
+		match m 'm'
+			some(r) then m = recycle(r)
+			nothing then print("nothing\n")
+		end 'm'
+
+		laps = laps + 1
+	end 'again'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:39:9: use of moved value 'm': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-nested-loop-refills-the-union-it-matched-in-every-arm -->
+The match sits in the inner loop and the union lives across both.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	for _ in 0 upto 2 'outer'
+		for _ in 0 upto 2 'inner'
+			match m 'm'
+				some(r) then m = recycle(r)
+				nothing then m = Maybe.nothing
+			end 'm'
+		end 'inner'
+	end 'outer'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 9
+fin 9
+fin 9
+fin 9
+```
+```exitcode
+0
+```
+
+<!-- test: a-nested-loop-refills-the-union-it-matched-in-only-one-arm -->
+The inner loop's `nothing` arm leaves `m` consumed when the lap ends.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	for _ in 0 upto 2 'outer'
+		for _ in 0 upto 2 'inner'
+			match m 'm'
+				some(r) then m = recycle(r)
+				nothing then print("nothing\n")
+			end 'm'
+		end 'inner'
+	end 'outer'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:39:10: use of moved value 'm': it was moved in an earlier iteration of this loop
+```

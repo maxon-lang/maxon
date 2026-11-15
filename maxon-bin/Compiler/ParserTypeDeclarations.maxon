@@ -9235,10 +9235,12 @@ extension Parser
 	// (A consume record an earlier `await` made is keyed on the OLD value and stays there — correctly,
 	// since an alias may still name that thread.)
 	function rebindToAValueOwningNothing(binding VarInfo, nameTok Token, value ValueId)
+		let replaced = binding.boundValue
 		self.recordDebugRebindByName(nameTok.value, value: value)
 		self.bodyState.scope.setValue(nameTok.value, value: value, ledger: self.bodyState.moveLedger)
 		binding.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 		binding.partiallyMoved = false
+		self.releaseMatchConsumeOf(replaced)
 		self.removeFromPendingTemps(value)
 	end 'rebindToAValueOwningNothing'
 
@@ -9440,6 +9442,7 @@ extension Parser
 		// of a valid program.
 		binding.revive(self.bodyState.moveLedger)
 		binding.partiallyMoved = false
+		self.releaseMatchConsumeOf(oldValue)
 
 		if newIsOwned 'trackNew'
 			if not inOwnedSet 'borrowedToOwned'

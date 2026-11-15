@@ -8927,11 +8927,18 @@ extension Parser
 		owned.markMovedAt(self.lineJustRead(), ledger: self.bodyState.moveLedger)
 	end 'consumePromiseThread'
 
-	// The one writer of `promiseConsumes`, and FIRST WINS: a door that reclaimed the thread must not be
-	// overwritten by a later record, or E3142 quotes a door that is not where the thread went.
+	// The one door that records into `promiseConsumes`, and FIRST WINS: a door that reclaimed the
+	// thread must not be overwritten by a later record, or E3142 quotes a door that is not where the
+	// thread went.
 	function recordPromiseConsume(promise ValueId, kind PromiseConsume)
 		self.bodyState.promiseConsumes = self.bodyState.promiseConsumes.recorded(promise, kind: kind)
 	end 'recordPromiseConsume'
+
+	// Only a match's consume is released: an await's record stays on the replaced value, which an
+	// alias may still name.
+	function releaseMatchConsumeOf(replaced ValueId)
+		self.bodyState.promiseConsumes = self.bodyState.promiseConsumes.releasing(replaced, kind: PromiseConsume.consumedByMatch)
+	end 'releaseMatchConsumeOf'
 
 	// ⭐ **RECORD THAT `value` WAS READ OUT OF `container[index]` — the read half of a move out of a slot.**
 	// Called at the container-read door for a green-thread element only; every other element is a borrow or a
