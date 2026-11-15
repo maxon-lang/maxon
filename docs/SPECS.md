@@ -703,3 +703,49 @@ What a case must pin:
   disturbed attempt and retrying to a cap, so a real regression fails every attempt (`sched-preempt`'s
   `a-main-preempted-between-two-spawns-runs-the-earlier-one-first`, `netpoll-socket`'s
   `n-concurrent-reads-do-not-serialise`). Never loosen the pin to a tolerance.
+
+## Model-derived specs
+
+`specs/model-*.md` are written by the generator below. Their programs come from **capmodel**, the executable model of
+the region and capability design (a Python repository outside this tree), and each case is pinned to the model's
+verdict on it: a program the model accepts runs and exits 0, and one it refuses fails to compile with the
+compiler's own diagnostic. A case's prose names the model rule, the model program and the red-team report it comes
+from. The files are grouped by what the program exercises: acquired states, windows over isolated regions, linear
+values, services, unions, and records and frozen data.
+
+A case is written only where the model and the compiler agree, so the suite goes red the day the compiler stops
+agreeing with a verdict the model pinned. A program they disagree on is in no spec: the generator's report lists
+it, and it joins the specs the day the disagreement closes. A refusal of a linear value that reaches a service is
+decided after the target check, so its case carries `<!-- unsupported-targets: wasm32-wasi -->`.
+
+```text
+python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa13]
+```
+
+The generator judges every program of the corpora with the model (the hand corpora and the minimal programs of the
+red teams that `--hands` and `--findings` name), reduces each to the declarations `main` reaches and judges the
+reduction again, translates it to Maxon (`mx_translate.py`), compiles every translation as a one-case spec in a
+scratch directory with the compiler in this tree's slot (`--compiler` names another), sorts the results, writes
+`specs/model-*.md`, and runs the written specs once. It exits non-zero unless every written case passes and the
+harness ran as many cases as the files hold markers. `--work` names the scratch directory that keeps `report.md`
+and `entries.json`, `--cache` and `--compile-cache` name files that keep the model's verdicts and the compiler's
+answers between runs (each goes stale by itself when the model or the compiler binary changes), and `--no-write`
+classifies and reports without touching `specs/`. Re-run it when the model moves to a new rule set, and read the
+diff.
+
+The report sorts every translated program:
+
+| Bucket | Meaning |
+|--------|---------|
+| agree | the model and the compiler both accept, or both refuse; the case is written |
+| model refuses, compiler accepts | a soundness candidate; the report gives the program, the model's rule and the model's oracle on the program as written |
+| model accepts, compiler refuses | a wrong refusal, or a rule the compiler has not followed the model to yet |
+| the compiler crashed or did not terminate | a defect; the report names the panic |
+| the model's oracle flags the accept | the model's own hole: the program is not pinned |
+| the translation is unfaithful | the compiler refused the translation for a reason that is not a capability rule (a name, an unused binding); the translator is wrong |
+
+A program the translator cannot express is skipped, and the report counts the skips by reason. The Maxon spelling
+of a construct decides the reason: a `match` arm holds one statement, an `Array` of `isolated` elements has no
+spelling, and generics, closures, coroutines, interfaces and `throw` are not translated. `rules.py` maps each
+model rule to the diagnostics it is expected to produce and names the diagnostics that count as the compiler
+refusing for a capability reason at all; a refusal outside the expectation is pinned and noted in its prose.
