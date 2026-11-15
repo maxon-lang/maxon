@@ -145,8 +145,13 @@ The library cache's codecs are generated into the compiler's sources, between
 `// @generated library-cache` markers. After editing a type the cache stores, a hand-written codec
 (`maxon-bin/Compiler/ContentHash.maxon`, `LibraryCacheCodecs.maxon` or `LibraryCacheFormat.maxon` —
 comments included, since the schema fingerprint hashes those files whole) or anything under
-`scripts/library-cache/`, run `python scripts/library-cache/generate-codecs.py`. CI runs it with `--check`
+`scripts/library-cache/` or `scripts/lib/generated_files.py`, run `python scripts/library-cache/generate-codecs.py`. CI runs it with `--check`
 and fails on a source that differs from what it generates.
+
+The Unicode General Category tables — `stdlib/helpers/string/unicodeCategory.maxon`, `ucd_bmp.bin` and
+`ucd_supp.bin` — are generated from `scripts/unicode/DerivedGeneralCategory.txt`. After editing that file
+or the generator, run `python scripts/unicode/generate_unicode_category.py`. CI runs it with `--check`
+and fails on a table that differs from what it generates.
 
 Run a program with the freshly built compiler:
 

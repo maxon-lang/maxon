@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import collections
-import difflib
 import hashlib
 import os
 import re
@@ -9,9 +8,11 @@ import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 
 import codec_config as config
 import codec_rewind
+import generated_files
 from codec_emit import CONTAINER_KINDS, Emitter, Unresolved
 from maxon_source import DECLARATION, ALIAS, REGION_BEGIN, REGION_END, load_tree, relative, strip_comment, without_regions
 
@@ -26,10 +27,6 @@ CODEC_TYPE_DECLARATION = re.compile(r"^\s*(?:(?:export|public)\s+)?(?:extension\
 ALIAS_KINDS = ("alias", "frozenAlias")
 
 VISIBILITY_RANK = {"unmarked": 0, "export": 1, "public": 2}
-
-EXIT_CLEAN = 0
-EXIT_DRIFT = 1
-EXIT_FAILED = 2
 
 
 class CodecOutsideHandCodecFiles(Exception):
@@ -544,19 +541,9 @@ def desired_text(plan, order, emitted, rewind):
     return desired
 
 
-def drift_report(plan, desired):
-    drifted = []
-
-    for path, source in plan.tree.sources.items():
-        if desired[path] != source.text():
-            drifted.append(path)
-
-    return drifted
-
-
 def main():
     parser = argparse.ArgumentParser(description="Generate the library cache codecs inside the compiler sources, between the generated-region markers.")
-    parser.add_argument("--check", action="store_true", help="write nothing; exit 1 when the sources differ from what the generator emits")
+    generated_files.add_check_argument(parser, "the sources")
     arguments = parser.parse_args()
 
     plan = Plan(load_tree())
@@ -566,7 +553,7 @@ def main():
     except CodecOutsideHandCodecFiles as failure:
         print("cannot generate: %s" % failure, file=sys.stderr)
 
-        return EXIT_FAILED
+        return generated_files.EXIT_FAILED
 
     order, emitted, errors = plan.build()
     rewind = None
@@ -580,29 +567,15 @@ def main():
         for item, reason in errors:
             print("cannot generate %s: %s" % (item, reason), file=sys.stderr)
 
-        return EXIT_FAILED
+        return generated_files.EXIT_FAILED
 
-    desired = desired_text(plan, order, emitted, rewind)
-    drifted = drift_report(plan, desired)
+    desired = {path: text.encode(generated_files.TEXT_ENCODING) for path, text in desired_text(plan, order, emitted, rewind).items()}
+    current = {path: source.text().encode(generated_files.TEXT_ENCODING) for path, source in plan.tree.sources.items()}
 
-    if arguments.check:
-        for path in drifted:
-            print("stale: %s" % relative(path), file=sys.stderr)
+    if not arguments.check:
+        print("%d item(s) generated" % len(emitted))
 
-            for line in list(difflib.unified_diff(plan.tree.sources[path].text().split("\n"), desired[path].split("\n"), lineterm="", n=0))[:20]:
-                print("  " + line, file=sys.stderr)
-
-        return EXIT_DRIFT if drifted else EXIT_CLEAN
-
-    for path in drifted:
-        with open(path, "w", encoding="utf8", newline="") as handle:
-            handle.write(desired[path])
-
-        print("wrote %s" % relative(path))
-
-    print("%d item(s) generated, %d file(s) rewritten" % (len(emitted), len(drifted)))
-
-    return EXIT_CLEAN
+    return generated_files.sync(desired, current, arguments.check)
 
 
 if __name__ == "__main__":

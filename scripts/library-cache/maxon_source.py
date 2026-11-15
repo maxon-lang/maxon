@@ -1,7 +1,8 @@
 import os
 import re
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from generated_files import REPO_ROOT as ROOT, relative
+
 SOURCE_DIRECTORIES = ("maxon-bin", "stdlib", "runtime")
 REGION_BEGIN = "// @generated library-cache begin"
 REGION_END = "// @generated library-cache end"
@@ -61,10 +62,6 @@ class SourceFile:
             return joined.replace("\n", "\r\n")
 
         return joined
-
-
-def relative(path):
-    return os.path.relpath(path, ROOT).replace("\\", "/")
 
 
 def source_paths():

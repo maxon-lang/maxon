@@ -1,21 +1,31 @@
 #!/usr/bin/env python3
 """
-Generate binary Unicode category lookup tables and a compact Maxon source file.
+Generate the Unicode General Category lookup tables and the Maxon source that reads them.
 
 Produces:
   - stdlib/helpers/string/ucd_bmp.bin   (65536 bytes, flat BMP table)
-  - stdlib/helpers/string/ucd_supp.bin  (N*8 bytes, sorted supplementary ranges)
-  - stdlib/helpers/string/unicodeCategory.maxon (~65 lines)
+  - stdlib/helpers/string/ucd_supp.bin  (8 bytes per sorted supplementary range)
+  - stdlib/helpers/string/unicodeCategory.maxon
 
 Usage:
-    python3 scripts/unicode/generate_unicode_category.py
+    python3 scripts/unicode/generate_unicode_category.py           # rewrite the outputs
+    python3 scripts/unicode/generate_unicode_category.py --check   # write nothing; exit 1 when they drift
 """
 
-import re
+import argparse
 import os
+import re
 import struct
+import sys
 
-# Category name -> integer constant (skip Cn=0 which is the default)
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+
+import generated_files
+
+UNASSIGNED_CATEGORY = "Cn"
+UNASSIGNED_CODE = 0
+
 CATEGORY_CODES = {
     "Lu": 1, "Ll": 2, "Lt": 3, "Lm": 4, "Lo": 5,
     "Mn": 6, "Mc": 7, "Me": 8,
@@ -26,7 +36,6 @@ CATEGORY_CODES = {
     "Cc": 26, "Cf": 27, "Co": 28, "Cs": 29,
 }
 
-# Bitmask definitions: name -> list of category names
 MASK_DEFS = {
     "GC_MASK_LETTERS":       ["Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me"],
     "GC_MASK_LOWERCASE":     ["Ll"],
@@ -40,214 +49,210 @@ MASK_DEFS = {
     "GC_MASK_LINE_PARA_SEP": ["Zl", "Zp"],
 }
 
+BMP_SIZE = 0x10000
+MAX_CODEPOINT = 0x10FFFF
+
+CODEPOINT_BITS = 21
+CATEGORY_BITS = 5
+CODEPOINT_MASK = (1 << CODEPOINT_BITS) - 1
+CATEGORY_MASK = (1 << CATEGORY_BITS) - 1
+END_SHIFT = CODEPOINT_BITS
+CATEGORY_SHIFT = 2 * CODEPOINT_BITS
+SUPP_ENTRY_FORMAT = "<Q"
+
+SOURCE_FILE = "DerivedGeneralCategory.txt"
+SOURCE_HEADER_PREFIX = "# "
+OUTPUT_DIRECTORY = ("stdlib", "helpers", "string")
+BMP_FILE = "ucd_bmp.bin"
+SUPP_FILE = "ucd_supp.bin"
+MAXON_FILE = "unicodeCategory.maxon"
+GENERATOR = "scripts/unicode/generate_unicode_category.py"
+
+ENTRY_LINE = re.compile(r"^([0-9A-Fa-f]+)(?:\.\.([0-9A-Fa-f]+))?\s*;\s*(\w+)\s*(?:#.*)?$")
+
+MAXON_TEMPLATE = """\
+// Auto-generated Unicode General Category lookup table
+// Source: {source_name}
+// Binary data: {bmp_file} ({bmp_size} bytes), {supp_file} ({supp_count} entries)
+// Do not edit manually - regenerate with {generator}
+
+public typealias GeneralCategory = int({unassigned} to {max_category})
+
+// Category bitmask helpers for CharacterSet
+{masks}
+
+let UCD_SUPP_COUNT = {supp_count}
+
+public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory
+	if cp < {bmp_size} 'bmp'
+		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp) as GeneralCategory
+	end 'bmp'
+
+	let target = cp as FullRangeInt
+	var lo = 0 as FullRangeInt
+	var hi = (UCD_SUPP_COUNT - 1) as FullRangeInt
+
+	while lo <= hi 'bsearch'
+		let mid = (lo + hi) shr 1
+		let entry = __Builtins.ucdI64At("__ucd_supp", index: mid)
+		let rangeStart = entry and {codepoint_mask}
+		let rangeEnd = (entry shr {end_shift}) and {codepoint_mask}
+
+		if target < rangeStart 'left'
+			hi = mid - 1
+		end 'left' else 'not_left'
+			if target > rangeEnd 'right'
+				lo = mid + 1
+			end 'right' else 'found'
+				return ((entry shr {category_shift}) and {category_mask}) as GeneralCategory
+			end 'found'
+		end 'not_left'
+	end 'bsearch'
+
+	return {unassigned}
+end 'unicodeGeneralCategory'
+"""
+
+
+class GenerationFailed(Exception):
+    pass
+
 
 def compute_mask(categories):
-    """Compute bitmask integer from list of category names."""
     mask = 0
-    for cat in categories:
-        mask |= (1 << CATEGORY_CODES[cat])
+
+    for category in categories:
+        mask |= 1 << CATEGORY_CODES[category]
+
     return mask
 
 
-def parse_derived_general_category(filepath):
-    """Parse DerivedGeneralCategory.txt, returning list of (start, end, category) tuples.
+def parse_entry(path, number, line):
+    match = ENTRY_LINE.match(line)
 
-    Skips Cn (Unassigned) entries.
-    """
+    if not match:
+        raise GenerationFailed(f"{path}:{number}: not an entry: {line!r}")
+
+    start = int(match.group(1), 16)
+    end = int(match.group(2), 16) if match.group(2) else start
+    category = match.group(3)
+
+    if start > end or end > MAX_CODEPOINT:
+        raise GenerationFailed(f"{path}:{number}: not a codepoint range: {line!r}")
+
+    if category != UNASSIGNED_CATEGORY and category not in CATEGORY_CODES:
+        raise GenerationFailed(f"{path}:{number}: unknown category {category!r}")
+
+    return start, end, category
+
+
+def read_source(path):
+    with open(path, "r", encoding=generated_files.TEXT_ENCODING) as handle:
+        lines = handle.read().split("\n")
+
+    if not lines[0].startswith(SOURCE_HEADER_PREFIX):
+        raise GenerationFailed(f"{path}:1: the first line names no source file: {lines[0]!r}")
+
     entries = []
-    line_re = re.compile(r'^([0-9A-Fa-f]+)(?:\.\.([0-9A-Fa-f]+))?\s*;\s*(\w+)')
 
-    with open(filepath, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            m = line_re.match(line)
-            if not m:
-                continue
-            start = int(m.group(1), 16)
-            end = int(m.group(2), 16) if m.group(2) else start
-            cat = m.group(3)
-            if cat == "Cn":
-                continue
-            if cat not in CATEGORY_CODES:
-                continue
-            entries.append((start, end, cat))
+    for number, raw in enumerate(lines, start=1):
+        line = raw.strip()
 
-    entries.sort(key=lambda x: x[0])
-    return entries
+        if not line or line.startswith("#"):
+            continue
+
+        start, end, category = parse_entry(path, number, line)
+
+        if category != UNASSIGNED_CATEGORY:
+            entries.append((start, end, CATEGORY_CODES[category]))
+
+    entries.sort()
+
+    for (_, previous_end, _), (start, end, _) in zip(entries, entries[1:]):
+        if start <= previous_end:
+            raise GenerationFailed(f"{path}: U+{start:04X}..U+{end:04X} overlaps the range before it")
+
+    return lines[0][len(SOURCE_HEADER_PREFIX):].strip(), entries
 
 
 def build_bmp_table(entries):
-    """Build a flat 65536-byte BMP lookup table."""
-    table = bytearray(65536)
-    for start, end, cat in entries:
-        code = CATEGORY_CODES[cat]
-        # Clamp to BMP range
-        s = max(start, 0)
-        e = min(end, 0xFFFF)
-        if s > 0xFFFF:
-            continue
-        for cp in range(s, e + 1):
+    table = bytearray([UNASSIGNED_CODE]) * BMP_SIZE
+
+    for start, end, code in entries:
+        for cp in range(start, min(end, BMP_SIZE - 1) + 1):
             table[cp] = code
-    return table
+
+    return bytes(table)
 
 
 def build_supp_table(entries):
-    """Build sorted supplementary range table for codepoints >= 0x10000.
-
-    Each entry is a little-endian uint64 packed as:
-      bits  0-20: start codepoint (21 bits)
-      bits 21-41: end codepoint (21 bits)
-      bits 42-46: category code (5 bits)
-    """
-    supp_entries = []
-    for start, end, cat in entries:
-        code = CATEGORY_CODES[cat]
-        # Only supplementary codepoints
-        s = max(start, 0x10000)
-        e = end
-        if e < 0x10000:
-            continue
-        # Pack into uint64
-        packed = (s & 0x1FFFFF) | ((e & 0x1FFFFF) << 21) | ((code & 0x1F) << 42)
-        supp_entries.append((s, packed))
-
-    # Sort by start codepoint
-    supp_entries.sort(key=lambda x: x[0])
-
-    # Pack into binary
+    ranges = [(max(start, BMP_SIZE), end, code) for start, end, code in entries if end >= BMP_SIZE]
     data = bytearray()
-    for _, packed in supp_entries:
-        data.extend(struct.pack('<Q', packed))
 
-    return data, len(supp_entries)
+    for start, end, code in ranges:
+        data.extend(struct.pack(SUPP_ENTRY_FORMAT, start | (end << END_SHIFT) | (code << CATEGORY_SHIFT)))
+
+    return bytes(data), len(ranges)
 
 
-def generate_maxon(supp_count, output_path):
-    """Generate the compact Maxon source file."""
-    lines = []
+def render_maxon(source_name, supp_count):
+    masks = "\n".join(f"export let {name} = {compute_mask(categories)}" for name, categories in MASK_DEFS.items())
 
-    lines.append("// Auto-generated Unicode General Category lookup table")
-    lines.append("// Source: DerivedGeneralCategory-16.0.0.txt")
-    lines.append(f"// Binary data: ucd_bmp.bin (65536 bytes), ucd_supp.bin ({supp_count} entries)")
-    lines.append("// Do not edit manually - regenerate with scripts/unicode/generate_unicode_category.py")
-    lines.append("")
-    lines.append("typealias GeneralCategory = int(0 to 29)")
-    lines.append("")
+    return MAXON_TEMPLATE.format(
+        source_name=source_name,
+        bmp_file=BMP_FILE,
+        supp_file=SUPP_FILE,
+        generator=GENERATOR,
+        bmp_size=BMP_SIZE,
+        supp_count=supp_count,
+        unassigned=UNASSIGNED_CODE,
+        max_category=max(CATEGORY_CODES.values()),
+        masks=masks,
+        codepoint_mask=CODEPOINT_MASK,
+        end_shift=END_SHIFT,
+        category_shift=CATEGORY_SHIFT,
+        category_mask=CATEGORY_MASK,
+    ).encode(generated_files.TEXT_ENCODING)
 
-    # Bitmask constants
-    lines.append("// Category bitmask helpers for CharacterSet")
-    for mask_name, cats in MASK_DEFS.items():
-        val = compute_mask(cats)
-        lines.append(f"export let {mask_name} = {val}")
-    lines.append("")
 
-    lines.append(f"let UCD_SUPP_COUNT = {supp_count}")
-    lines.append("")
+def desired_outputs(input_path, output_dir):
+    source_name, entries = read_source(input_path)
+    supp_data, supp_count = build_supp_table(entries)
 
-    # Main function with binary-search lookup.
-    #
-    # ⚠ THIS BODY HAD DRIFTED PAST COMPILING, and nothing noticed because nobody re-ran the
-    # generator: it emitted `export` (now `public` -- export is visibility, public is API surface),
-    # TWO-SPACE indentation (the language is tab-indented and `maxon fmt` enforces it), unlabelled
-    # builtin arguments (`ucdByteAt(.., cp)` -- the labels `offset:`/`index:` are required), and
-    # `var` for four bindings that are never reassigned (which is now the E3012 family's error, not
-    # a style note). Four independent language changes, each of which alone would have made the
-    # output reject. Re-running it is now a BYTE-IDENTICAL no-op against
-    # stdlib/helpers/string/unicodeCategory.maxon -- that identity is this file's only real test,
-    # so check it after any edit here.
-    lines.append("public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory")
-    lines.append("	if cp < 65536 'bmp'")
-    lines.append('		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp)')
-    lines.append("	end 'bmp'")
-    lines.append("	var lo = 0")
-    lines.append("	var hi = UCD_SUPP_COUNT - 1")
-    lines.append("	while lo <= hi 'bsearch'")
-    lines.append("		let mid = (lo + hi) shr 1")
-    lines.append('		let entry = __Builtins.ucdI64At("__ucd_supp", index: mid)')
-    lines.append("		let rangeStart = entry and 2097151")
-    lines.append("		let rangeEnd = (entry shr 21) and 2097151")
-    lines.append("		if cp < rangeStart 'left'")
-    lines.append("			hi = mid - 1")
-    lines.append("		end 'left' else 'not_left'")
-    lines.append("			if cp > rangeEnd 'right'")
-    lines.append("				lo = mid + 1")
-    lines.append("			end 'right' else 'found'")
-    lines.append("				return (entry shr 42) and 31")
-    lines.append("			end 'found'")
-    lines.append("		end 'not_left'")
-    lines.append("	end 'bsearch'")
-    lines.append("	return 0")
-    lines.append("end 'unicodeGeneralCategory'")
-    lines.append("")
+    return {
+        os.path.join(output_dir, BMP_FILE): build_bmp_table(entries),
+        os.path.join(output_dir, SUPP_FILE): supp_data,
+        os.path.join(output_dir, MAXON_FILE): render_maxon(source_name, supp_count),
+    }
 
-    with open(output_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines))
 
-    return len(lines)
+def require_field_widths():
+    if MAX_CODEPOINT > CODEPOINT_MASK or max(CATEGORY_CODES.values()) > CATEGORY_MASK:
+        raise GenerationFailed("a codepoint or category code does not fit its supplementary entry field")
+
+    if UNASSIGNED_CODE in CATEGORY_CODES.values():
+        raise GenerationFailed(f"a category takes the unassigned code {UNASSIGNED_CODE}")
 
 
 def main():
+    parser = argparse.ArgumentParser(description=f"Generate the Unicode General Category tables and {'/'.join(OUTPUT_DIRECTORY)}/{MAXON_FILE}.")
+    generated_files.add_check_argument(parser, "the checked-in files")
+    arguments = parser.parse_args()
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(os.path.dirname(script_dir))
+    output_dir = os.path.join(generated_files.REPO_ROOT, *OUTPUT_DIRECTORY)
 
-    input_path = os.path.join(script_dir, "DerivedGeneralCategory.txt")
-    output_dir = os.path.join(repo_root, "stdlib", "helpers", "string")
-    bmp_path = os.path.join(output_dir, "ucd_bmp.bin")
-    supp_path = os.path.join(output_dir, "ucd_supp.bin")
-    maxon_path = os.path.join(output_dir, "unicodeCategory.maxon")
+    try:
+        require_field_widths()
+        desired = desired_outputs(os.path.join(script_dir, SOURCE_FILE), output_dir)
+        current = {path: generated_files.read_current(path) for path in desired}
+    except (OSError, UnicodeDecodeError, GenerationFailed) as failure:
+        print(f"cannot generate: {failure}", file=sys.stderr)
 
-    if not os.path.exists(input_path):
-        print(f"Error: {input_path} not found")
-        return 1
+        return generated_files.EXIT_FAILED
 
-    entries = parse_derived_general_category(input_path)
-    print(f"Parsed {len(entries)} ranges (excluding Cn)")
-
-    # Count BMP and supplementary ranges
-    bmp_ranges = sum(1 for s, e, _ in entries if s <= 0xFFFF)
-    supp_ranges = sum(1 for s, e, _ in entries if e >= 0x10000)
-    print(f"  BMP ranges: {bmp_ranges}")
-    print(f"  Supplementary ranges: {supp_ranges}")
-
-    # Build BMP table
-    bmp_table = build_bmp_table(entries)
-    with open(bmp_path, "wb") as f:
-        f.write(bmp_table)
-    print(f"Wrote {len(bmp_table)} bytes to {bmp_path}")
-
-    # Count non-zero BMP entries
-    bmp_assigned = sum(1 for b in bmp_table if b != 0)
-    print(f"  BMP codepoints with category: {bmp_assigned}")
-
-    # Build supplementary table
-    supp_data, supp_count = build_supp_table(entries)
-    with open(supp_path, "wb") as f:
-        f.write(supp_data)
-    print(f"Wrote {len(supp_data)} bytes ({supp_count} entries) to {supp_path}")
-
-    # Generate Maxon source
-    line_count = generate_maxon(supp_count, maxon_path)
-    print(f"Wrote {line_count} lines to {maxon_path}")
-
-    # Verify packing round-trip for first few supplementary entries
-    supp_entries_raw = [(s, e, c) for s, e, c in entries if s >= 0x10000]
-    if supp_entries_raw:
-        first = supp_entries_raw[0]
-        s, e, cat = first
-        code = CATEGORY_CODES[cat]
-        packed = (s & 0x1FFFFF) | ((e & 0x1FFFFF) << 21) | ((code & 0x1F) << 42)
-        rt_start = packed & 0x1FFFFF
-        rt_end = (packed >> 21) & 0x1FFFFF
-        rt_code = (packed >> 42) & 0x1F
-        assert rt_start == s, f"Round-trip failed for start: {rt_start:#x} != {s:#x}"
-        assert rt_end == e, f"Round-trip failed for end: {rt_end:#x} != {e:#x}"
-        assert rt_code == code, f"Round-trip failed for code: {rt_code} != {code}"
-        print(f"Packing round-trip verified (first entry: U+{s:04X}..U+{e:04X} = {cat})")
-
-    return 0
+    return generated_files.sync(desired, current, arguments.check)
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())
