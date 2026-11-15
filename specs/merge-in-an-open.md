@@ -166,7 +166,7 @@ error E3201: <fragment>:29:17: 'merged' is mutable outside 'built'; a store into
 ```
 
 <!-- test: error.a-merge-of-a-value-that-is-not-isolated-is-refused-in-an-open -->
-`reader` is ordinary mutable data, so there is no isolated region for `merge` to move.
+`reader` is ordinary mutable data that was already read once, so it is no longer a fresh local to recover and there is no isolated region for `merge` to move.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -195,9 +195,10 @@ end 'Built'
 function work() returns Num
 	let built = Built.create() as isolated Built
 	let reader = Reader.create(7)
+	let seen = reader.n
 	built.reader = merge reader
 
-	return 1
+	return seen
 end 'work'
 
 function main() returns ExitCode
@@ -207,7 +208,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:28:17: 'reader' is not an isolated value; `merge` moves an isolated region into the current one
+error E3200: <fragment>:29:17: 'reader' is not an isolated value; `merge` moves an isolated region into the current one
 ```
 
 <!-- test: error.a-merged-value-is-moved-and-cannot-be-read-again -->
