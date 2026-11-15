@@ -132,3 +132,102 @@ claimed and drained. An entry is deleted by the commit that fixes it.
   at 55d03beeee17 accepts it too. An instantiated template and a non-generic function are refused E2008.
 - repro: `public function pick(value T) uses T returns T`, a body `return value`, closed `end 'pikc'`,
   and a `main` that never calls it: it compiles. The same as a `public static` method of a type.
+
+## The compiler-owned declaration file is an empty `FilePath` sentinel
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/Project.maxon:621
+- seen: the Verona regions plan, stage E (user, 2026-11-07, "after the plan"). `let CompilerOwnedDeclFilePath = FilePath from ""`
+  stands for "no source file" in every `declFilePath`, `bindingFilePath` and `scopeFilePath` field and every
+  `readerFilePath` parameter, so an empty path is a real value that means something else. The fix is
+  `union DeclarationOrigin { sourceFile(let path FilePath), compilerOwned }` threaded through those fields
+  and parameters (~20 files read the constant, many more carry the fields; the codecs regenerate). The uses
+  fall in four groups: a reader with no file, an is-compiler-owned test, a stored declaration file, and
+  environments or seen-sets. specs/static-variables.md and specs/typealias-file-scope.md name the sentinel in prose.
+- repro: `git grep -n CompilerOwnedDeclFilePath -- maxon-bin` lists the sentinel's declaration and every use
+
+## `renderTargetIr`'s panic names `compileToCodeResult`, which no longer exists
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/Compiler.maxon:1363
+- seen: the Verona regions plan, stage F round 6g (2026-11-12), when `CompilePump` was deleted and the compile moved
+  onto the driver. The ~50 stale mentions of `CompilePump`, `compileToCodeResult` and `queryAllModule` the round
+  recorded are gone; this panic message is the one left, re-checked 2026-11-14.
+- repro: `git grep -n -i "CompilePump\|compileToCodeResult\|queryAllModule"` prints this line only
+
+## Every std-pass function builds its own scratch, which costs the fan-out time and allocations
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/IR/Std/StdPassPool.maxon:91
+- seen: the Verona regions plan, stage D (user, 2026-11-07: accepted for D, revisit after E2). A fresh `StepWorkspace`
+  per function made `stdFanOut` 1.47x-3x slower, whole-compile CPU +1-2% on large programs and +7-9% on small
+  ones, allocations +6-18%; the U11b read suspected the gap is superlinear. The shape is unchanged today; not
+  re-measured. Idea: recycle each workspace: the unit region (body plus scratch) returns in the reply, the driver
+  reads the body out, and the same region goes out with the next function. Check the gap's slope rung by rung.
+- repro: `maxon scale-test --rungs=6 --repeat=3` on a compiler built from 1c0e822cef and on one built from HEAD;
+  compare the std-pass phase's CPU and allocations per rung
+
+## Raw tokens and views are held per owner, not in the `SharedLibraryCache`
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/QueryEngine.maxon:75
+- seen: the Verona regions plan, stage F round 8 (2026-11-13). `SharedLibraryCache` holds frozen parses, baselines,
+  audits and packs (LSP RSS -16..-20%), but each `CompileSession.fileMemos` owner still lexes and keeps its own
+  `TokenArray` and view per library file, because `Parser` was fenced. Freezing them needs `Parser` to take an
+  `immutable TokenArray`.
+- repro: `union SharedLibraryChange` in maxon-bin/Compiler/SharedLibraryCache.maxon has parse, baseline, audit
+  and pack cases and none for tokens or views; two LSP document projects over one stdlib each hold their own tokens
+
+## `BackendWorker.create` takes an `isolated` ABI table, so every worker is handed a clone
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/Targets/Shared/BackendPool.maxon:694
+- seen: the Verona regions plan, stage D (2026-11-07). The pool holds the table as `immutable CalleeAbiTable` and the
+  worker freezes the one it is given, but `create` (line 492) asks for `isolated`, so each spawn copies a table
+  the pool could share. `OpVariantFacts.create()` (line 558) also runs per unit, ~6 allocations per function
+  (regalloc CPU maybe +6%, under 0.3% of a compile); a shared worker-lifetime memo needs a cheap empty
+  constructor in TargetLiveness.maxon.
+- repro: `git grep -n "abi.clone()" -- maxon-bin` lists the spawn site
+
+## The service-handler profile case still names a synthesized loop
+- priority: normal
+- status: open
+- where: tests/profile/ProfileHarness.maxon:55
+- seen: the Verona regions plan, stage C (2026-11-08), when a service became a cown drained by a pooled runner.
+  `ServiceLoopFixtureName`, the `serviceloop` fixture directory and the case title and prose of
+  tests/profile/profile-service-handler-is-attributed-as-itself.maxtest still speak of a "synthesized loop" and a
+  "message loop"; rename them to the cown/behaviour model.
+- repro: `git grep -n -i "synthesized loop\|serviceloop" -- tests/profile`
+
+## alloc-torture's header describes cross-P frees that its own warning says it cannot reach
+- priority: normal
+- status: open
+- where: scripts/multicore-stress/alloc-torture.maxon:9
+- seen: the Verona regions plan, stage C (2026-11-08). The "Mechanism" paragraph says an `async` argument is freed on
+  a worker P, a remote free back onto P0; the block below it says no task of the program leaves `main`'s strand,
+  so nothing here is cross-P.
+- repro: read lines 1-31 of the file
+
+## Module-level `var` is still shown in the docs and in spec prose
+- priority: normal
+- status: open
+- where: docs/LANGUAGE_REFERENCE.md:5016
+- seen: the Verona regions plan, stage C (2026-11-08), which removed module and static `var`s; a module-level `var` is
+  now `E2001 Expected function declaration, got 'var'`. The qualified-name section still says qualification works
+  for another directory's top-level `let` and `var`. Uncompiled `text` fences in specs still show a mutating
+  module-level `var`: fixed-array.md:123, managed-list.md:22, static-methods.md:29 and pass-by-reference.md:19. The prose
+  at fixed-array.md:1071 still says "a top-level `var g = Vec3.create()`". The compiler's panic text for a module
+  global still says "top-level var" (`globalStdType` in SignatureIndex.maxon:2793-2834, `recordPointerSlotType`
+  in SignatureIndexSettle.maxon:7731-7755).
+- repro: `git grep -n '^var ' -- specs/fixed-array.md specs/managed-list.md specs/static-methods.md specs/pass-by-reference.md`
+  and the doc line above
+
+## Windows cannot spawn a spec test executable whose path is 260 characters or more
+- priority: normal
+- status: open
+- where: maxon-bin/Testing/SpecTestRunner.maxon:990
+- seen: the Verona regions plan, 2026-11-11. `CreateProcessW` with a null application name caps the program's path at
+  MAX_PATH, even spelled `\\?\`, and spec-test builds each executable at `.spec-tmp\<spec>\<case>.exe` under the
+  checkout, so a long spec plus case name fails at spawn on x64-windows. Fix: stage test executables in a short
+  directory. Not re-run on 2026-11-14.
+- repro: on x64-windows, a spec case whose `<checkout>\specs\.spec-tmp\<spec>\<case>.exe` is over 259 characters
