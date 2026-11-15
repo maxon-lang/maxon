@@ -4372,3 +4372,611 @@ done
 ```exitcode
 0
 ```
+
+<!-- test: a-variable-holding-a-case-without-a-linear-payload-owes-nothing-when-assigned -->
+`m` holds `Maybe.nothing`, a case that carries no linear value, so assigning it the case that does is no drop.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+	m = Maybe.some(Resp.create(1))
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-branch-that-assigns-the-linear-case-leaves-the-variable-owing-it -->
+After the `if` joins, `m` holds the linear case on one path, so `settle(m)` consumes it and the other path has nothing to consume.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function ready() returns bool
+	return true
+end 'ready'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	if ready() 'fill'
+		m = Maybe.some(Resp.create(1))
+	end 'fill'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-variable-assigned-the-linear-case-in-both-branches-is-consumed -->
+Both branches overwrite the `none` that `m` held before the `if`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function ready() returns bool
+	return true
+end 'ready'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	if ready() 'fill'
+		m = Maybe.some(Resp.create(1))
+	end 'fill' else 'other'
+		m = Maybe.some(Resp.create(2))
+	end 'other'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-loop-that-ends-every-lap-holding-a-case-without-a-linear-payload-owes-nothing -->
+`m` holds `nothing` when the loop is entered and at the end of every lap, so overwriting it at the top of a lap drops nothing.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	for _ in 0 upto 2 'lap'
+		m = Maybe.some(Resp.create(1))
+		settle(m)
+		m = Maybe.nothing
+	end 'lap'
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-handler-that-assigns-the-variable-a-case-without-a-linear-payload-owes-nothing -->
+The `try` body overwrites `m` with the linear case before it can throw, so the handler may not assume `m` is still empty; it assigns the case that carries nothing and `settle` consumes whichever `m` holds.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function fail() returns Code throws Oops
+	throw Oops.bad
+end 'fail'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	try 'body'
+		m = Maybe.some(Resp.create(1))
+		let code = fail()
+		print("{code}\n")
+	end 'body'
+	otherwise (e) 'h'
+		match e 'k'
+			bad then settle(m)
+		end 'k'
+
+		m = Maybe.nothing
+	end 'h'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+nothing
+```
+```exitcode
+0
+```
+
+<!-- test: overwriting-a-variable-that-holds-the-linear-case-is-refused -->
+`m` holds `Maybe.some`, which carries a `Resp` nobody consumed, so assigning it again drops that value.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+	m = Maybe.nothing
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:31:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: overwriting-a-variable-that-holds-the-linear-case-on-one-path-is-refused -->
+The `if` leaves `m` holding the linear case on one path, so the assignment after it can drop a `Resp`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function ready() returns bool
+	return true
+end 'ready'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	if ready() 'fill'
+		m = Maybe.some(Resp.create(1))
+	end 'fill'
+
+	m = Maybe.nothing
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:40:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: overwriting-a-variable-bound-to-a-call-result-is-refused -->
+A call's result may hold the linear case, so overwriting the variable it was bound to is a drop.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = recycle(Resp.create(3))
+	m = Maybe.nothing
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:36:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: an-arm-reassigns-the-linear-union-it-matched-after-consuming-the-payload -->
+The match consumes `m`, so the arms may give it a new value: `recycle` consumes the payload and answers a fresh `Maybe`, and the `nothing` arm refills it with another.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	match m 'which'
+		some(r) then m = recycle(r)
+		nothing then m = Maybe.some(Resp.create(4))
+	end 'which'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 9
+```
+```exitcode
+0
+```
+
+<!-- test: an-arm-rebuilds-the-linear-union-from-its-own-payload -->
+The payload the arm binds is owned, so the arm may wrap it into the union it matched.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function rewrap(r Resp) returns Maybe
+	return Maybe.some(r)
+end 'rewrap'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	match m 'which'
+		some(r) then m = rewrap(r)
+		nothing then m = Maybe.nothing
+	end 'which'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-union-refilled-in-only-one-arm-is-consumed-on-the-other -->
+Only the `some` arm refills `m`, so reading it after the match is a use of the union the `nothing` arm consumed.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function recycle(r Resp) returns Maybe
+	r.fin()
+	return Maybe.some(Resp.create(9))
+end 'recycle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	match m 'which'
+		some(r) then m = recycle(r)
+		nothing then print("nothing\n")
+	end 'which'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:42:9: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: an-arm-that-refills-the-union-without-consuming-its-payload-is-refused -->
+The `some` arm binds `r` and drops it: refilling `m` does not consume the payload.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.some(Resp.create(1))
+
+	match m 'which'
+		some(r) then m = Maybe.some(Resp.create(5))
+		nothing then m = Maybe.nothing
+	end 'which'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:33:3: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3012: <fragment>:33:8: unused variable: 'r'
+```

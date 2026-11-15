@@ -79,15 +79,20 @@ function uniqueAliasMessage(action String) returns String
 	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`"
 end 'uniqueAliasMessage'
 
+function matchedUniqueMovedMessage(subject String) returns String
+	return "cannot move or copy the unique value matched by '{subject}' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`"
+end 'matchedUniqueMovedMessage'
+
 export enum UniqueOrigin
 	owned
 	lentByLoop
 	lentByTuple
 	readFromSlot
+	lentByMatch
 end 'UniqueOrigin'
 
 // @generated library-cache begin
-let CacheCasesUniqueOrigin = [UniqueOrigin.owned, UniqueOrigin.lentByLoop, UniqueOrigin.lentByTuple, UniqueOrigin.readFromSlot]
+let CacheCasesUniqueOrigin = [UniqueOrigin.owned, UniqueOrigin.lentByLoop, UniqueOrigin.lentByTuple, UniqueOrigin.readFromSlot, UniqueOrigin.lentByMatch]
 
 function cacheReadUniqueOrigin(reader LibraryCacheReader) returns UniqueOrigin throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -154,6 +159,7 @@ function keptUniqueRefusalSentence(origin UniqueOrigin, subject String) returns 
 		lentByLoop then return "'{subject}' is only lent by the loop; move it out with `pop` or `remove`"
 		lentByTuple then return "'{subject}' is only lent by the tuple it was destructured from; move it out with `pop` or `remove`"
 		readFromSlot then return "a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field"
+		lentByMatch then return "'{subject}' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`"
 		owned then panic("keptUniqueRefusalSentence: an owned unique value has nothing to refuse")
 	end 'origin'
 end 'keptUniqueRefusalSentence'

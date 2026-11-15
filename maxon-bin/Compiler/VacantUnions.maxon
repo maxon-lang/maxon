@@ -1,0 +1,62 @@
+function vacantUnionValuesIn(module MaxonModule, func IrFunction, constructed ValueIdArray) returns ValueIdSet
+	let vacant = ValueIdSet.create()
+
+	if constructed.isEmpty() 'nothingIsVacant'
+		return vacant
+	end 'nothingIsVacant'
+
+	for value in constructed 'eachConstructed'
+		vacant.insert(value)
+	end 'eachConstructed'
+
+	let byId = module.blockIndexById(func)
+	let fed = ValueIdSet.create()
+
+	for blockRef in func.blockRefs 'eachFeedingBlock'
+		let source = module.getBlock(blockRef)
+
+		for edge in source.branchEdges 'eachFeedingEdge'
+			let target = try module.getBlockByIdThrough(func, byId: byId, id: edge.targetBlockId) otherwise continue
+
+			for position in 0 upto edge.argIds.count() 'eachFedPhi'
+				fed.insert((try target.blockArgs.get(position) otherwise panic("vacantUnionValuesIn: an edge passes argument {position} to block {edge.targetBlockId}, which has {target.blockArgs.count()} block argument(s)")).valueId)
+			end 'eachFedPhi'
+		end 'eachFeedingEdge'
+	end 'eachFeedingBlock'
+
+	for blockRef in func.blockRefs 'eachPhiBlock'
+		let holder = module.getBlock(blockRef)
+
+		for arg in holder.blockArgs 'eachPhi'
+			if fed.contains(arg.valueId) 'aFedPhi'
+				vacant.insert(arg.valueId)
+			end 'aFedPhi'
+		end 'eachPhi'
+	end 'eachPhiBlock'
+
+	var changed = true
+
+	while changed 'untilStable'
+		changed = false
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let source = module.getBlock(blockRef)
+
+			for edge in source.branchEdges 'eachEdge'
+				let target = try module.getBlockByIdThrough(func, byId: byId, id: edge.targetBlockId) otherwise continue
+
+				for position in 0 upto edge.argIds.count() 'eachArgument'
+					let argument = try edge.argIds.get(position) otherwise panic("vacantUnionValuesIn: argIds.get OOB at {position} despite the upto bound")
+					let phi = (try target.blockArgs.get(position) otherwise panic("vacantUnionValuesIn: an edge passes argument {position} to block {edge.targetBlockId}, which has {target.blockArgs.count()} block argument(s)")).valueId
+
+					if vacant.contains(phi) and not vacant.contains(argument) 'aValueThatMayHoldTheLinearCase'
+						_ = vacant.remove(phi)
+						changed = true
+					end 'aValueThatMayHoldTheLinearCase'
+				end 'eachArgument'
+			end 'eachEdge'
+		end 'eachBlock'
+	end 'untilStable'
+
+	return vacant
+end 'vacantUnionValuesIn'

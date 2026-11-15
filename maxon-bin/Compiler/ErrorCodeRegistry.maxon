@@ -2385,6 +2385,10 @@ export enum ErrorCode
 	// element a call such as `get` hands back is read the same way: `show(items.get(0))` lends it
 	// for the call, and `let t = items.get(0)` is refused. Move it out with `pop`, `remove`, `removeFirst` or
 	// `Slot.take`, `swap` it out of an isolated field, or read what you need from it where it stands.
+	// A `match` over a unique union lends it to its arms, so the variable that holds the matched union (its
+	// name, the record whose field is matched, or an operand of a `cond` scrutinee) is not moved, copied,
+	// stored, captured or passed to a parameter that keeps it inside an arm. Do that before or after the
+	// `match`; an arm may still read the union through a parameter the callee only reads.
 	semanticUniqueValueRefused = "E3214"
 
 	// A type argument breaks a bound on a generic type's type parameter. `where T is sendable` takes a value,
@@ -2477,8 +2481,9 @@ export enum ErrorCode
 	// finalizer call or by being moved on to a function that takes it, a `return`, a `throw` or a message. It
 	// is refused dropped, overwritten, rebound while live, discarded with `let _ = r`, left in a temporary
 	// nobody consumes, or live across a wait (an `await`, a send with a `sendTimeout:`, or a call that waits),
-	// because a wait may never end. Consume it before the exit or the wait: call its finalizer, or hand it to
-	// code that does.
+	// because a wait may never end. A variable of a linear union that holds a case carrying no linear value
+	// (`Maybe.nothing`) on every path to the point owes nothing there, so assigning it or leaving it live is
+	// not a drop. Consume it before the exit or the wait: call its finalizer, or hand it to code that does.
 	semanticLinearValueNotConsumed = "E3223"
 
 	// A linear value is used where it cannot be consumed exactly once. It lives only in locals, parameters and

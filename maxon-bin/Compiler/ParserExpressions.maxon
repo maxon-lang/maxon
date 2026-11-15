@@ -1809,7 +1809,7 @@ extension Parser
 
 			if not passesTheReceiver 'aWrittenArgument'
 				let anchorIndex = try argAnchors.get(position) otherwise panic("noteKeptArgumentSites: argAnchors.get OOB at {position} below its own count")
-				let origin = self.uniqueOriginOf(argValue, namesABinding: self.argumentNamesABindingAt(anchorIndex))
+				let origin = self.uniqueOriginOf(argValue, namesABinding: self.argumentNamesABindingAt(anchorIndex), anchorIndex: anchorIndex)
 
 				if origin != UniqueOrigin.owned 'onlyLentToTheCaller'
 					self.fileLentKeptArgument(func, opIdx: opIdx, position: position, origin: origin, anchorIndex: anchorIndex)
@@ -1838,7 +1838,7 @@ extension Parser
 		return self.argumentSpanEnd(anchorIndex) == anchorIndex + 1 and tokenCanBeAName(tok) and self.bodyState.scope.contains(tok.value)
 	end 'argumentNamesABindingAt'
 
-	function uniqueOriginOf(value ValueId, namesABinding bool) returns UniqueOrigin
+	function uniqueOriginOf(value ValueId, namesABinding bool, anchorIndex ElementIndex) returns UniqueOrigin
 		let facts = self.regionFactsForRead()
 
 		if facts.lentUniques.contains(value) 'aLoopVariable'
@@ -1853,8 +1853,24 @@ extension Parser
 			return UniqueOrigin.readFromSlot
 		end 'aSlotRead'
 
+		if self.argumentIsAMatchedUnique(value, namesABinding: namesABinding, anchorIndex: anchorIndex) 'aMatchedUnion'
+			return UniqueOrigin.lentByMatch
+		end 'aMatchedUnion'
+
 		return UniqueOrigin.owned
 	end 'uniqueOriginOf'
+
+	function argumentIsAMatchedUnique(value ValueId, namesABinding bool, anchorIndex ElementIndex) returns bool
+		if self.bodyState.lentArmRoots.isEmpty() 'noArmLendsAUnique'
+			return false
+		end 'noArmLendsAUnique'
+
+		if self.bodyState.lentArmRoots.contains(value) 'theMatchedValue'
+			return true
+		end 'theMatchedValue'
+
+		return namesABinding and self.bodyState.lentArmNames.contains(self.tokenAt(anchorIndex).value)
+	end 'argumentIsAMatchedUnique'
 
 	function fileLentKeptArgument(func IrFunction, opIdx ElementIndex, position ElementIndex, origin UniqueOrigin, anchorIndex ElementIndex)
 		let notes = self.notesForWrite(func)
@@ -1934,7 +1950,24 @@ extension Parser
 		notes.keptReadBlocks.push(self.bodyState.currentBlock.id as ElementIndex)
 	end 'fileKeptRead'
 
+	function refuseMoveOfAMatchedUnique(value ValueId)
+		let roots = self.bodyState.lentArmRoots
+
+		for index in 0 upto roots.count() 'eachRoot'
+			if (try roots.get(index) otherwise panic("refuseMoveOfAMatchedUnique: lentArmRoots.get OOB at {index} below its own count")) != value 'anotherValue'
+				continue
+			end 'anotherValue'
+
+			let subject = try self.bodyState.lentArmSubjects.get(index) otherwise panic("refuseMoveOfAMatchedUnique: lentArmSubjects.get OOB at {index} — the columns are pushed together")
+			let anchor = self.tokenAt(self.pos - 1)
+			self.deferRegionRefusal(ErrorCode.semanticUniqueValueRefused, message: matchedUniqueMovedMessage(subject), line: anchor.line, column: anchor.column)
+			return
+		end 'eachRoot'
+	end 'refuseMoveOfAMatchedUnique'
+
 	function noteLentUniqueMoved(value ValueId)
+		self.refuseMoveOfAMatchedUnique(value)
+
 		if self.bodyState.lentUniqueParams.isEmpty() 'noLentUniqueHere'
 			return
 		end 'noLentUniqueHere'
@@ -2060,6 +2093,9 @@ extension Parser
 	end 'noteWindowCall'
 
 	function finishCapabilityFacts(func IrFunction)
+		// Runs once the whole body is parsed: a loop's back-edge values are recorded last, and a merged value is
+		// vacant only when every value flowing into it is.
+		self.settleLinearObligations(func)
 		self.flushUnreturnedHeldLiterals(func)
 		self.noteHeldParams(func)
 		func.needsMutableParamMask = func.needsMutableParamMask or func.writesThroughParamMask

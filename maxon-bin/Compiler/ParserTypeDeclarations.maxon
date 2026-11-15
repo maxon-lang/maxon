@@ -9376,7 +9376,7 @@ extension Parser
 
 		if inOwnedSet and self.valueIsDeferred(value) 'aDeferredValueOwnsNothing'
 			if wasOwned 'dropOldOwner'
-				self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
+				self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok), ofABinding: true)
 			end 'dropOldOwner'
 
 			self.rebindToAValueOwningNothing(binding, nameTok: nameTok, value: value)
@@ -9421,7 +9421,7 @@ extension Parser
 		// LIVE owner has one to release: a moved-from binding's old value belongs to the binding it moved
 		// to, which drops it — decref-ing it here would double-free.
 		if wasOwned 'dropOld'
-			self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
+			self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok), ofABinding: true)
 		end 'dropOld'
 
 		if newValue != value 'aReboundValue'

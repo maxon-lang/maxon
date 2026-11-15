@@ -106,7 +106,7 @@ error E3214: <fragment>:26:13: 'Wallet' is unique (its field 'ticket' holds a un
 
 
 <!-- test: a-unique-union-kept-by-a-call-while-its-match-binding-is-read-is-refused -->
-The `filled` arm binds `token`, which moves the payload out of `slot`, so handing `slot` to `keep`, which keeps it, makes the later read of `token` in the same call a use of a moved value.
+The `filled` arm lends `slot` to its `token` binding, so handing `slot` to `keep`, which keeps it, is refused whatever the call reads of `token`.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -145,11 +145,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:31:47: use of moved value 'slot': its ownership moved to the parameter 'slot' of 'keep', which keeps it
+error E3214: <fragment>:31:33: cannot pass 'slot' to parameter 'slot' of 'keep': it keeps a unique value, and 'slot' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
 ```
 
 <!-- test: a-match-binding-read-after-its-subject-is-moved-is-refused -->
-The `filled` arm moves the payload of `slot` into `token`, so handing `slot` to `keep`, which keeps it, makes the later read of the payload binding `n` a use of a moved value.
+The `filled` arm lends `slot` to its `token` binding, so handing `slot` to `keep`, which keeps it, is refused whatever the call reads of the payload binding `n`.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -188,7 +188,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:31:46: use of moved value 'slot': its ownership moved to the parameter 'slot' of 'keep', which keeps it
+error E3214: <fragment>:31:33: cannot pass 'slot' to parameter 'slot' of 'keep': it keeps a unique value, and 'slot' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
 ```
 
 <!-- test: a-unique-local-kept-by-a-call-is-refused-when-read-afterwards -->
@@ -1695,4 +1695,441 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:15:3: use of moved value 'pending': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-unique-union-copied-in-the-arm-that-lends-it-is-refused -->
+`match slot` lends the unique union to its arm, whose `token` binding views it, so `let copy = slot` in that arm gives the union a second name while it is lent.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then let copy = slot
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:22:33: cannot move or copy the unique value matched by 'slot' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`
+```
+
+<!-- test: a-unique-union-kept-by-a-call-in-the-arm-that-lends-it-is-refused -->
+`keep` stores its argument, which moves `slot` out from under the `token` binding the arm reads, so the call is refused even though `token` is read before it.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function keep(slot Slot) returns Tally
+	let kept = SlotArray.create(0)
+	kept.push(slot)
+
+	return 1
+end 'keep'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n} {keep(slot)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:31:40: cannot pass 'slot' to parameter 'slot' of 'keep': it keeps a unique value, and 'slot' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: a-unique-union-stored-in-a-field-in-the-arm-that-lends-it-is-refused -->
+Storing `slot` into a field in its own arm moves it, which the arm refuses.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+type Holder is unique
+	export var slot as Slot
+
+	static function create(slot Slot) returns Self
+		return Self{slot: slot}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+	let holder = Holder.create(Slot.empty)
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then holder.slot = slot
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:31:36: cannot move or copy the unique value matched by 'slot' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`
+```
+
+<!-- test: a-closure-capturing-the-matched-unique-union-in-its-arm-is-refused -->
+A closure made in the arm captures `slot`, which moves it into the closure.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+function peek(slot Slot) returns Tally
+	return match slot 'which'
+		empty gives 0
+		filled(token) gives token.n
+	end 'which'
+end 'peek'
+
+typealias Probe = function() returns Tally
+
+function run(f Probe) returns Tally
+	return f()
+end 'run'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{run(function() gives peek(slot))}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:35:60: cannot move or copy the unique value matched by 'slot' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`
+```
+
+<!-- test: a-record-holding-the-matched-unique-union-kept-in-the-arm-is-refused -->
+The arm of `match holder.slot` lends the record `holder` that owns the union, so a call that keeps `holder` is refused.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+type Holder is unique
+	export var slot as Slot
+
+	static function create(slot Slot) returns Self
+		return Self{slot: slot}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+function keepHolder(holder Holder) returns Tally
+	let kept = HolderArray.create(0)
+	kept.push(holder)
+
+	return 1
+end 'keepHolder'
+
+function main() returns ExitCode
+	let holder = Holder.create(Slot.filled(Token.create(1)))
+
+	match holder.slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n} {keepHolder(holder)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:39:40: cannot pass 'holder' to parameter 'holder' of 'keepHolder': it keeps a unique value, and 'holder' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: an-operand-of-a-cond-scrutinee-kept-in-the-arm-is-refused -->
+Either operand of a `cond` scrutinee may be the union the arm views, so keeping `other` in the arm is refused as keeping `slot` is.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function keep(slot Slot) returns Tally
+	let kept = SlotArray.create(0)
+	kept.push(slot)
+
+	return 1
+end 'keep'
+
+function main() returns ExitCode
+	let flag = true
+	let slot = Slot.filled(Token.create(1))
+	let other = Slot.empty
+
+	match slot if flag else other 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n} {keep(other)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:33:40: cannot pass 'other' to parameter 'slot' of 'keep': it keeps a unique value, and 'other' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: a-by-reference-unique-union-kept-in-its-own-arm-is-refused -->
+A `mutable` parameter that is matched is lent to its arms the same way a local is.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function keep(slot Slot) returns Tally
+	let kept = SlotArray.create(0)
+	kept.push(slot)
+
+	return 1
+end 'keep'
+
+function consume(slot mutable Slot)
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n} {keep(slot)}\n")
+	end 'which'
+end 'consume'
+
+function main() returns ExitCode
+	var slot = Slot.filled(Token.create(1))
+	consume(slot)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:29:40: cannot pass 'slot' to parameter 'slot' of 'keep': it keeps a unique value, and 'slot' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: a-unique-union-lent-to-a-reading-call-in-its-own-arm-runs -->
+A call that only reads the union lends it again: the arm may read `slot` through `peek` and `token` together.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+function peek(slot Slot) returns Tally
+	return match slot 'which'
+		empty gives 0
+		filled(token) gives token.n
+	end 'which'
+end 'peek'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n} {peek(slot)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```stdout
+1 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-union-kept-after-the-match-ends-runs -->
+The refusal covers the arm only: after the `match` the union is moved as any unique value is.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function keep(slot Slot) returns Tally
+	let kept = SlotArray.create(0)
+	kept.push(slot)
+
+	return 1
+end 'keep'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n}\n")
+	end 'which'
+
+	print("{keep(slot)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1
+1
+```
+```exitcode
+0
+```
+
+<!-- test: another-unique-union-kept-in-the-arm-runs -->
+Only the union the `match` lends is refused: a second unique variable is kept in the arm as it would be anywhere.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function keep(slot Slot) returns Tally
+	let kept = SlotArray.create(0)
+	kept.push(slot)
+
+	return 1
+end 'keep'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Token.create(1))
+	let other = Slot.filled(Token.create(2))
+
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n} {keep(other)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```stdout
+1 1
+```
+```exitcode
+0
 ```

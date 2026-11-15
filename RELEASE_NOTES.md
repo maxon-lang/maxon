@@ -15,6 +15,13 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A `match` over a unique union lends it to its arms, and the variable that holds the matched union is not
+  moved or copied inside an arm: `let copy = slot`, a call whose parameter keeps `slot`, a store of it into a
+  field, a closure that captures it, and the same for the record whose field is matched (`match holder.slot`)
+  and the operands of a `cond` scrutinee are E3214 (`cannot move or copy the unique value matched by 'slot'
+  inside the arm that lends it`). A call that only reads it stays legal.
+  Fix: move or copy the union before or after the `match`.
+
 - `module` is not a visibility modifier: it is an ordinary identifier, and written before a declaration it is
   a syntax error (`E2001 … Expected function declaration, got 'module'`; in a type body `E2010 … Expected
   'function' but got 'module'`). An unmarked declaration has the visibility `module` gave.

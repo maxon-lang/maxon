@@ -1382,7 +1382,9 @@ extension Parser
 		let handBack = try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
 
 		if payloadFillBuildsAConstruct(fill) and self.signatures.unionRepresentation(layout) == UnionRepresentation.word 'aWordUnion'
-			return (try self.emitUnboxedUnionWordConstruct(layout, fill: fill, caseIndex: caseIndex, classes: classes, args: args, argsBareLocal: argsBareLocal, caseTok: caseTok, range: range), handBack)
+			let word = try self.emitUnboxedUnionWordConstruct(layout, fill: fill, caseIndex: caseIndex, classes: classes, args: args, argsBareLocal: argsBareLocal, caseTok: caseTok, range: range)
+			self.noteVacantUnion(word, args: args)
+			return (word, handBack)
 		end 'aWordUnion'
 
 		let box = self.openPayloadRecord(layout, fill: fill, range: range)
@@ -1415,8 +1417,28 @@ extension Parser
 			serviceMessage then break
 		end 'zeroFillOwnership'
 
+		if payloadFillBuildsAConstruct(fill) 'aConstruct'
+			self.noteVacantUnion(box, args: args)
+		end 'aConstruct'
+
 		return (box, handBack)
 	end 'emitEnumBox'
+
+	function noteVacantUnion(union ValueId, args ValueIdArray)
+		if self.valueIsLinear(union) and not self.anyValueMustBeConsumed(args) 'aCaseHoldingNothingToConsume'
+			self.bodyState.vacantUnions.push(union)
+		end 'aCaseHoldingNothingToConsume'
+	end 'noteVacantUnion'
+
+	function anyValueMustBeConsumed(values ValueIdArray) returns bool
+		for value in values 'eachValue'
+			if self.valueIsLinear(value) or self.valueOwnsGreenThread(value) 'anObligation'
+				return true
+			end 'anObligation'
+		end 'eachValue'
+
+		return false
+	end 'anyValueMustBeConsumed'
 
 	function emitUnboxedUnionWordConstruct(layout EnumLayout, fill PayloadFill, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, argsBareLocal BoolArray, caseTok Token, range SourceRange) returns ValueId throws SourceParseError
 		if layout.payloadArityAt(caseIndex) == 0 'payloadFree'

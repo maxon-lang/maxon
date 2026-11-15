@@ -414,7 +414,11 @@ to bind, return or store it is **E3214**, and so is a `for` loop variable or a t
 to a parameter that keeps it: move it out with `pop`, `remove`, `removeFirst` or `Slot.take`, or `swap` it out
 of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
 readable, and an element a container call hands back is lent for the call in the same way:
-`show(items.get(0))` reads it, and `let ticket = items.get(0)` is **E3214**. The standard library's `Promise` is
+`show(items.get(0))` reads it, and `let ticket = items.get(0)` is **E3214**. A `match` over a unique union lends
+it to its arms: the variable that holds the matched union (its name, the record whose field is matched, or an
+operand of a `cond` scrutinee) is not moved, copied, stored, captured or passed to a parameter that keeps it
+inside an arm (**E3214**), while a call that only reads it is accepted; move or copy it before or after the
+`match`. The standard library's `Promise` is
 unique, so is `Reply`, and so are the OS handle types (`TcpClient`,
 `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
 that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
@@ -487,9 +491,14 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
 - **No linear value is live across a wait.** An `await`, a send with a `sendTimeout:` and a call that waits
   may never end, so a linear value is consumed before one (E3223).
 - **A union with a linear payload is linear.** A `match` over one consumes it: every arm for a case with a
-  linear payload binds it to a name and consumes it, and a `default` arm cannot cover such a case (E3224). A
-  failed send hands a linear argument back in `mailboxFull` or `serviceStopped`, and the handler of the failure
-  consumes it.
+  linear payload binds it to a name and consumes it, and a `default` arm cannot cover such a case (E3224). An
+  arm may assign the variable it matched once the payload is consumed, so `some(r) then m = recycle(r)` refills
+  `m`; a read of `m` after the `match` needs every arm to have refilled it. A failed send hands a linear
+  argument back in `mailboxFull` or `serviceStopped`, and the handler of the failure consumes it.
+- **A case that carries no linear value owes nothing.** A variable of a linear union that holds such a case
+  (`Maybe.nothing`) on every path to a point is not a linear value there: assigning it, leaving its scope or
+  leaving it live across a wait is not a drop. A branch, a loop lap or a `try` handler that can leave the linear
+  case in it keeps the obligation, and so does a value that came from a call.
 - **Cancellation consumes.** A coroutine that holds a linear value is cancelled
   [cooperatively](/docs/language/async/#cancellation-and-dropped-promises), so its own code consumes the value on the path the
   early return of its wait leads it down.

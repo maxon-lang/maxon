@@ -4502,6 +4502,7 @@ extension Parser
 		let errorUnion = self.errorUnionForScrutinee(scrutStart)
 		let isErrorUnionMatch = errorUnionIsSynthesized(errorUnion)
 		let parsedScrut = try self.parseExpression(func, block: block)
+		let scrutEnd = self.pos
 
 		// Inside an open boxed arm `e` names that arm's retagged box, while the dispatch and the match
 		// obligation are keyed on the shared flag.
@@ -4690,6 +4691,7 @@ extension Parser
 		// `dead` block for an exhaustive enum (created after the loop). `planMissIsUnreachable` is set
 		// for the dead block only, and the three travel to the dispatch as one `DispatchMiss`.
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
+		let lentRoots = self.lentArmRootsOf(scrut, scrutStart: scrutStart, scrutEnd: scrutEnd, isLentMatch: isEnumMatch and not deferredScrutinee and not isErrorUnionMatch)
 
 		// ⭐ **THE ENTRY BLOCK IS HELD BY ITS `BlockId`, NOT AS A SECOND NAME FOR `currentTestBlock`** —
 		// an IrBlock alias held across block-creating or block-mutating calls goes stale, and the arm loop
@@ -5043,7 +5045,9 @@ extension Parser
 				end 'aLinearScrutinee'
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
+				let lentArmFloor = self.enterLentArm(lentRoots, scrutStart: scrutStart, scrutEnd: scrutEnd)
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, destination: destination, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
+				self.leaveLentArm(lentArmFloor)
 
 				if opensArmScope 'closeArmScope'
 					self.bodyState.scope.popScope()
@@ -5342,6 +5346,99 @@ extension Parser
 
 		return ScrutineeStanding.create(self.valueIsSoleHeapOwner(scrut), slotsMayBeReadAgain: slotsMayBeReadAgain, unaliased: unaliased)
 	end 'scrutineeStandingOf'
+
+	function lentArmRootsOf(scrut ValueId, scrutStart ElementIndex, scrutEnd ElementIndex, isLentMatch bool) returns LentArmRoots
+		let roots = LentArmRoots.create()
+
+		if not isLentMatch or self.valueIsLinear(scrut) or not self.valueHoldsAUniqueRecord(scrut) 'nothingIsLentUnique'
+			return roots
+		end 'nothingIsLentUnique'
+
+		roots.values.push(scrut)
+		roots.names.push(EmptySourceText)
+		var held = scrut
+
+		while true 'eachHolder'
+			let origin = try self.regionFactsForRead().fieldOrigins.get(held) otherwise break
+			roots.values.push(origin.holder)
+			roots.names.push(EmptySourceText)
+			held = origin.holder
+		end 'eachHolder'
+
+		self.pushNamedOperandRoots(scrutStart, scrutEnd: scrutEnd, roots: roots)
+		return roots
+	end 'lentArmRootsOf'
+
+	function pushNamedOperandRoots(scrutStart ElementIndex, scrutEnd ElementIndex, roots LentArmRoots)
+		// A call in the scrutinee may answer a fresh value, so its operands are not roots of what the arm views.
+		for index in scrutStart upto scrutEnd 'eachCallToken'
+			if self.kindAt(index) == TokenKind.leftParen 'aCallOrGrouping'
+				return
+			end 'aCallOrGrouping'
+		end 'eachCallToken'
+
+		var inCondition = false
+
+		for index in scrutStart upto scrutEnd 'eachToken'
+			let kind = self.kindAt(index)
+
+			if kind == TokenKind.if 'conditionBegins'
+				inCondition = true
+				continue
+			end 'conditionBegins'
+
+			if kind == TokenKind.else 'conditionEnds'
+				inCondition = false
+				continue
+			end 'conditionEnds'
+
+			if inCondition or kind != TokenKind.identifier or self.kindAt(index - 1) == TokenKind.dot 'notAnOperandName'
+				continue
+			end 'notAnOperandName'
+
+			let name = self.tokenAt(index).value
+
+			if not self.bodyState.scope.contains(name) or self.bodyState.scope.isSelfField(name) 'notAPlainLocal'
+				continue
+			end 'notAPlainLocal'
+
+			let bound = self.bodyState.scope.getInfo(name).boundValue
+
+			if self.valueHoldsAUniqueRecord(bound) 'aUniqueOperand'
+				roots.values.push(bound)
+				roots.names.push(name)
+			end 'aUniqueOperand'
+		end 'eachToken'
+	end 'pushNamedOperandRoots'
+
+	function enterLentArm(roots LentArmRoots, scrutStart ElementIndex, scrutEnd ElementIndex) returns ElementIndex
+		let floor = self.bodyState.lentArmRoots.count()
+
+		if roots.isEmpty() 'noUniqueIsLent'
+			return floor
+		end 'noUniqueIsLent'
+
+		let subject = self.tokenTextFrom(scrutStart, endIndex: scrutEnd)
+
+		for index in 0 upto roots.values.count() 'eachRoot'
+			let value = try roots.values.get(index) otherwise panic("enterLentArm: values.get OOB at {index} below its own count")
+			let name = try roots.names.get(index) otherwise panic("enterLentArm: names.get OOB at {index} — the columns are pushed together")
+
+			self.bodyState.lentArmRoots.push(value)
+			self.bodyState.lentArmNames.push(name)
+			self.bodyState.lentArmSubjects.push(subject)
+		end 'eachRoot'
+
+		return floor
+	end 'enterLentArm'
+
+	function leaveLentArm(floor ElementIndex)
+		while self.bodyState.lentArmRoots.count() > floor 'eachRoot'
+			_ = try self.bodyState.lentArmRoots.pop() otherwise panic("leaveLentArm: lentArmRoots holds more than {floor} roots and cannot pop one")
+			_ = try self.bodyState.lentArmNames.pop() otherwise panic("leaveLentArm: lentArmNames is pushed with lentArmRoots and cannot be shorter")
+			_ = try self.bodyState.lentArmSubjects.pop() otherwise panic("leaveLentArm: lentArmSubjects is pushed with lentArmRoots and cannot be shorter")
+		end 'eachRoot'
+	end 'leaveLentArm'
 
 	function consumeScrutinee(scrut ValueId)
 		self.setBindingPartiallyMoved(scrut, value: true)

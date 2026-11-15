@@ -6454,7 +6454,7 @@ extension Parser
 		let shape = self.releaseShapeAt(position)
 
 		if shape == ReleaseShape.plain 'aRecord'
-			self.emitDecref(value, range: range, name: self.ownedBindingAt(position).name)
+			self.emitDecref(value, range: range, name: self.ownedBindingAt(position).name, ofABinding: true)
 			return
 		end 'aRecord'
 
@@ -7228,11 +7228,11 @@ extension Parser
 	// value's type alone. It is a separate emit rather than a widened `decrefCalleeFor` because that router
 	// answers a NAME and this needs an argument list; `decrefCalleeFor`'s own `interfaceRef` guard says so
 	// from the other side.
-	function emitDecref(value ValueId, range SourceRange, name immutable ByteArray = EmptySourceText)
+	function emitDecref(value ValueId, range SourceRange, name immutable ByteArray = EmptySourceText, ofABinding bool = false)
 		let firstOp = self.artifact.module.ops.count()
 		self.emitDecrefOps(value, range: range)
 		self.noteDroppedPromise(value, firstOp: firstOp, name: name)
-		self.noteDroppedLinear(value, firstOp: firstOp, name: name)
+		self.noteDroppedLinear(value, firstOp: firstOp, name: name, ofABinding: ofABinding)
 
 		if self.anyLoopTracksDrop(value) 'aLoopMayWithdrawIt'
 			self.noteHeaderDrop(value, results: self.opResultsSince(firstOp))
@@ -7456,12 +7456,19 @@ extension Parser
 		return self.signatures.valueIsLinear(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames)
 	end 'valueIsLinear'
 
-	function noteDroppedLinear(value ValueId, firstOp ElementIndex, name immutable ByteArray)
+	function noteDroppedLinear(value ValueId, firstOp ElementIndex, name immutable ByteArray, ofABinding bool)
 		if firstOp >= self.artifact.module.ops.count() or not self.valueIsLinear(value) 'notALinearDrop'
 			return
 		end 'notALinearDrop'
 
 		self.noteDroppedOwned(DroppedOwnedKind.linear, op: firstOp, name: name)
+
+		// Only a variable's drop is exempt when it holds a case with nothing to consume; `Maybe.nothing` dropped
+		// as a bare statement stays refused.
+		if ofABinding 'aVariableMayHoldNothing'
+			self.bodyState.bindingDropOps.push(firstOp)
+			self.bodyState.bindingDropValues.push(value)
+		end 'aVariableMayHoldNothing'
 	end 'noteDroppedLinear'
 
 	function noteDroppedOwned(kind DroppedOwnedKind, op ElementIndex, name immutable ByteArray)
@@ -7471,24 +7478,93 @@ extension Parser
 	function noteLinearLiveAcrossOp(opIdx ElementIndex)
 		for binding in self.bodyState.ownedBindings 'eachOwned'
 			if not binding.movedFrom and self.valueIsLinear(binding.boundValue) 'aLiveLinearBinding'
-				self.recordLinearLiveAt(opIdx, name: binding.name)
-				return
+				self.fileLinearLiveRow(opIdx, name: binding.name, value: binding.boundValue, isBinding: true)
 			end 'aLiveLinearBinding'
 		end 'eachOwned'
 
 		for pending in self.bodyState.pendingTempDrops 'eachPending'
 			if self.valueIsLinear(pending) 'aLiveLinearTemporary'
-				self.recordLinearLiveAt(opIdx, name: EmptySourceText)
+				self.fileLinearLiveRow(opIdx, name: EmptySourceText, value: pending, isBinding: false)
 				return
 			end 'aLiveLinearTemporary'
 		end 'eachPending'
 	end 'noteLinearLiveAcrossOp'
+
+	function fileLinearLiveRow(opIdx ElementIndex, name ByteArray, value ValueId, isBinding bool)
+		self.bodyState.liveLinearRowOps.push(opIdx)
+		self.bodyState.liveLinearRowNames.push(name)
+		self.bodyState.liveLinearRowValues.push(value)
+		self.bodyState.liveLinearRowIsBinding.push(isBinding)
+	end 'fileLinearLiveRow'
 
 	function recordLinearLiveAt(opIdx ElementIndex, name ByteArray)
 		let notes = self.notesForWrite(self.bodyFunction()).sparseForWrite()
 		notes.liveLinearCallOps.push(opIdx)
 		notes.liveLinearCallNames.push(name)
 	end 'recordLinearLiveAt'
+
+	function settleLinearObligations(func IrFunction)
+		let vacant = vacantUnionValuesIn(self.artifact.module, func: func, constructed: self.bodyState.vacantUnions)
+
+		self.forgetDropsOfVacantBindings(func, vacant: vacant)
+		self.fileLinearLiveRows(vacant)
+	end 'settleLinearObligations'
+
+	function forgetDropsOfVacantBindings(func IrFunction, vacant ValueIdSet)
+		if vacant.count() == 0 or self.bodyState.bindingDropOps.isEmpty() 'nothingToForget'
+			return
+		end 'nothingToForget'
+
+		let notes = self.notesForWrite(func).sparseForWrite()
+		let kept = DroppedOwnedArray.create(0)
+
+		for dropped in notes.droppedOwned 'eachDrop'
+			if dropped.kind == DroppedOwnedKind.linear and self.bindingDropHoldsAVacantValue(dropped.op, vacant: vacant) 'aVacantBinding'
+				continue
+			end 'aVacantBinding'
+
+			kept.push(dropped)
+		end 'eachDrop'
+
+		notes.droppedOwned = kept
+	end 'forgetDropsOfVacantBindings'
+
+	function bindingDropHoldsAVacantValue(op ElementIndex, vacant ValueIdSet) returns bool
+		for index in 0 upto self.bodyState.bindingDropOps.count() 'eachBindingDrop'
+			if (try self.bodyState.bindingDropOps.get(index) otherwise panic("bindingDropHoldsAVacantValue: bindingDropOps.get OOB at {index} below its own count")) != op 'anotherDrop'
+				continue
+			end 'anotherDrop'
+
+			return vacant.contains(try self.bodyState.bindingDropValues.get(index) otherwise panic("bindingDropHoldsAVacantValue: bindingDropValues.get OOB at {index} — the columns are pushed together"))
+		end 'eachBindingDrop'
+
+		return false
+	end 'bindingDropHoldsAVacantValue'
+
+	function fileLinearLiveRows(vacant ValueIdSet)
+		var filedAny = false
+		var lastFiledOp = 0 as ElementIndex
+
+		for index in 0 upto self.bodyState.liveLinearRowOps.count() 'eachRow'
+			let op = try self.bodyState.liveLinearRowOps.get(index) otherwise panic("fileLinearLiveRows: liveLinearRowOps.get OOB at {index} below its own count")
+
+			if filedAny and lastFiledOp == op 'opAlreadyReported'
+				continue
+			end 'opAlreadyReported'
+
+			let isBinding = try self.bodyState.liveLinearRowIsBinding.get(index) otherwise panic("fileLinearLiveRows: liveLinearRowIsBinding.get OOB at {index} — the columns are pushed together")
+			let value = try self.bodyState.liveLinearRowValues.get(index) otherwise panic("fileLinearLiveRows: liveLinearRowValues.get OOB at {index} — the columns are pushed together")
+
+			if isBinding and vacant.contains(value) 'aVacantBinding'
+				continue
+			end 'aVacantBinding'
+
+			let name = try self.bodyState.liveLinearRowNames.get(index) otherwise panic("fileLinearLiveRows: liveLinearRowNames.get OOB at {index} — the columns are pushed together")
+			self.recordLinearLiveAt(op, name: name)
+			filedAny = true
+			lastFiledOp = op
+		end 'eachRow'
+	end 'fileLinearLiveRows'
 
 	function truncateOwnedBindings(height ElementIndex)
 		for position in height upto self.bodyState.ownedBindings.count() 'eachDropped'
@@ -7640,7 +7716,7 @@ extension Parser
 					// because the value here is never a cell's box: a cell binding cannot be moved — the
 					// poisoning doors match a binding through `boundValue` and a cell's reads yield fresh
 					// loads — so no cell binding is ever mixed at a merge.
-					self.emitDecref(liveValue, range: SourceRange.ofToken(anchor))
+					self.emitDecref(liveValue, range: SourceRange.ofToken(anchor), ofABinding: true)
 				end 'liveEdge'
 			end 'dropLive'
 
@@ -9238,6 +9314,10 @@ extension Parser
 		self.carryFact(ValueFact.bufferElements, to: to, from: from, source: source, path: path)
 		self.markBufferSurfaceSlots(to, surface: bodySlotSurface(source, value: from))
 		self.carryBrandOrigin(to, from: from, source: source, path: path)
+
+		if not source.vacantUnions.isEmpty() and source.vacantUnions.contains(from) and not self.bodyState.vacantUnions.contains(to) 'aVacantCase'
+			self.bodyState.vacantUnions.push(to)
+		end 'aVacantCase'
 	end 'carryValueFacts'
 
 	function carryBrandOrigin(to ValueId, from ValueId, source FunctionBodyState, path ValueCarryPath)
