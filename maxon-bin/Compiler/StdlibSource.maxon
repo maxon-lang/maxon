@@ -679,6 +679,7 @@ type WitnessEvidenceLedger
 	let listedEnums as FunctionScopedSet
 	let listedPositions as FunctionScopedSet
 	let noCallResults as LibraryCallResults
+	let blamesLibraryCalls as bool
 
 	static function over(signatures ProgramSignatures, project Project) returns Self
 		let constrainedBases = ConstrainedOwnerSet.create()
@@ -722,22 +723,22 @@ type WitnessEvidenceLedger
 			end 'eachEnum'
 		end 'eachInterface'
 
-		return Self.holding(seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, mentions: TypeMentions.over(signatures))
+		return Self.holding(seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, mentions: TypeMentions.over(signatures), blamesLibraryCalls: not targetProvidesEveryFacility(project.target))
 	end 'over'
 
 	static function none() returns Self
-		return Self.holding(NameRoster.create(0), declaredConformers: DeclaredConformanceMap.create(), constrainedBases: ConstrainedOwnerSet.create(), conformerNameById: ConformerNameById.create(), interfacesByEnum: InterfacesByEnum.create(), enumsByInterface: EnumConformersByInterface.create(), mentions: TypeMentions.none())
+		return Self.holding(NameRoster.create(0), declaredConformers: DeclaredConformanceMap.create(), constrainedBases: ConstrainedOwnerSet.create(), conformerNameById: ConformerNameById.create(), interfacesByEnum: InterfacesByEnum.create(), enumsByInterface: EnumConformersByInterface.create(), mentions: TypeMentions.none(), blamesLibraryCalls: false)
 	end 'none'
 
-	static function holding(seedConformers NameRoster, declaredConformers DeclaredConformanceMap, constrainedBases ConstrainedOwnerSet, conformerNameById ConformerNameById, interfacesByEnum InterfacesByEnum, enumsByInterface EnumConformersByInterface, mentions TypeMentions) returns Self
-		return Self{pendingImpls: NameRoster.create(0), positions: NameRoster.create(0), functionEvents: WitnessEventArray.create(0), seedConformers: seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, ownerImpls: ImplsByName.create(), instanceImpls: ImplsByInstance.create(), enumImpls: ImplsByName.create(), interfaceImpls: ImplsByName.create(), eventsByFunction: EventsByFunction.create(), eventsByOp: EventsByOp.create(), mentions: mentions, listedEnums: FunctionScopedSet.create(), listedPositions: FunctionScopedSet.create(), noCallResults: LibraryCallResults.none()}
+	static function holding(seedConformers NameRoster, declaredConformers DeclaredConformanceMap, constrainedBases ConstrainedOwnerSet, conformerNameById ConformerNameById, interfacesByEnum InterfacesByEnum, enumsByInterface EnumConformersByInterface, mentions TypeMentions, blamesLibraryCalls bool) returns Self
+		return Self{pendingImpls: NameRoster.create(0), positions: NameRoster.create(0), functionEvents: WitnessEventArray.create(0), seedConformers: seedConformers, declaredConformers: declaredConformers, constrainedBases: constrainedBases, conformerNameById: conformerNameById, interfacesByEnum: interfacesByEnum, enumsByInterface: enumsByInterface, ownerImpls: ImplsByName.create(), instanceImpls: ImplsByInstance.create(), enumImpls: ImplsByName.create(), interfaceImpls: ImplsByName.create(), eventsByFunction: EventsByFunction.create(), eventsByOp: EventsByOp.create(), mentions: mentions, listedEnums: FunctionScopedSet.create(), listedPositions: FunctionScopedSet.create(), noCallResults: LibraryCallResults.none(), blamesLibraryCalls: blamesLibraryCalls}
 	end 'holding'
 
-	function noteFunction(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet)
-		self.functionEvents.clear()
+	function collectCredits(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns WitnessEventArray
+		let candidates = WitnessEventArray.create(0)
 
 		if let typeName = try witnessOwnerOf(func.name) 'anOwnedFunction'
-			self.noteCredit(WitnessCredit.owner(typeName), blame: WitnessBlame.functionName, project: project, signatures: signatures)
+			candidates.push(WitnessCreditEvent.create(WitnessCredit.owner(typeName), blame: WitnessBlame.functionName))
 		end 'anOwnedFunction'
 
 		self.positions.clear()
@@ -745,10 +746,20 @@ type WitnessEvidenceLedger
 		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: self.positions, listed: self.listedPositions)
 
 		for interfaceName in self.positions 'eachNamedInterface'
-			self.noteCredit(WitnessCredit.namedInterface(interfaceName), blame: WitnessBlame.functionName, project: project, signatures: signatures)
+			candidates.push(WitnessCreditEvent.create(WitnessCredit.namedInterface(interfaceName), blame: WitnessBlame.functionName))
 		end 'eachNamedInterface'
 
-		self.noteMentionsOf(func, module: module, project: project, signatures: signatures, stdlib: stdlib)
+		self.collectMentionCredits(func, module: module, project: project, signatures: signatures, stdlib: stdlib, into: candidates)
+
+		return candidates
+	end 'collectCredits'
+
+	function noteFunction(func IrFunction, candidates WitnessEventArray, project Project, signatures ProgramSignatures)
+		self.functionEvents.clear()
+
+		for candidate in candidates 'eachCandidate'
+			self.noteCredit(candidate.credit, blame: candidate.blame, project: project, signatures: signatures)
+		end 'eachCandidate'
 
 		if self.functionEvents.count() == 0 'creditedNothing'
 			return
@@ -907,35 +918,35 @@ type WitnessEvidenceLedger
 		end 'anEnumNotYetListed'
 	end 'listEnumCredit'
 
-	function noteMentionsOf(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet)
+	function collectMentionCredits(func IrFunction, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, into WitnessEventArray)
 		if self.constrainedBases.count() == 0 and self.declaredConformers.count() == 0 'nothingToCredit'
 			return
 		end 'nothingToCredit'
 
-		let callResults = self.callResultsOf(func, module: module, project: project, stdlib: stdlib)
+		let callResults = self.callResultsOf(func, module: module, stdlib: stdlib)
 
 		for position in 0 upto callResults.values.count() 'eachCallResult'
-			self.mentions.gatherValue(func, value: try callResults.values.get(position) otherwise panic("WitnessEvidenceLedger.noteMentionsOf: values.get OOB at {position}"), project: project, signatures: signatures)
-			self.noteMentionCredits(WitnessBlame.op(try callResults.ops.get(position) otherwise panic("WitnessEvidenceLedger.noteMentionsOf: ops.get OOB at {position}")), project: project, signatures: signatures)
+			self.mentions.gatherValue(func, value: try callResults.values.get(position) otherwise panic("WitnessEvidenceLedger.collectMentionCredits: values.get OOB at {position}"), project: project, signatures: signatures)
+			self.collectMentionCreditsAt(WitnessBlame.op(try callResults.ops.get(position) otherwise panic("WitnessEvidenceLedger.collectMentionCredits: ops.get OOB at {position}")), signatures: signatures, into: into)
 		end 'eachCallResult'
 
 		self.mentions.gather(func, project: project, signatures: signatures, skipping: callResults)
-		self.noteMentionCredits(WitnessBlame.functionName, project: project, signatures: signatures)
-	end 'noteMentionsOf'
+		self.collectMentionCreditsAt(WitnessBlame.functionName, signatures: signatures, into: into)
+	end 'collectMentionCredits'
 
-	function callResultsOf(func IrFunction, module MaxonModule, project Project, stdlib FunctionNameSet) returns LibraryCallResults
-		if targetProvidesEveryFacility(project.target) or stdlib.contains(func.name) 'noOpIsBlamed'
+	function callResultsOf(func IrFunction, module MaxonModule, stdlib FunctionNameSet) returns LibraryCallResults
+		if not self.blamesLibraryCalls or stdlib.contains(func.name) 'noOpIsBlamed'
 			return self.noCallResults
 		end 'noOpIsBlamed'
 
 		return LibraryCallResults.inFunction(func, module: module, stdlib: stdlib)
 	end 'callResultsOf'
 
-	function noteMentionCredits(blame WitnessBlame, project Project, signatures ProgramSignatures)
+	function collectMentionCreditsAt(blame WitnessBlame, signatures ProgramSignatures, into WitnessEventArray)
 		for credit in self.mentionCredits(signatures) 'eachMentionCredit'
-			self.noteCredit(credit, blame: blame, project: project, signatures: signatures)
+			into.push(WitnessCreditEvent.create(credit, blame: blame))
 		end 'eachMentionCredit'
-	end 'noteMentionCredits'
+	end 'collectMentionCreditsAt'
 
 	function noteCredit(credit WitnessCredit, blame WitnessBlame, project Project, signatures ProgramSignatures)
 		let impls = self.admit(credit, project: project, signatures: signatures)
@@ -975,6 +986,106 @@ type WitnessEvidenceLedger
 		end 'route'
 	end 'enrol'
 end 'WitnessEvidenceLedger'
+
+enum ReachMarkKind
+	edge
+	slotInit
+	service
+end 'ReachMarkKind'
+
+typealias ReachMarkKindArray = Array with ReachMarkKind
+
+type ReachMarks
+	let func as IrFunction
+	let names as NameRoster
+	let kinds as ReachMarkKindArray
+	let slotInitCallees as NameRoster
+
+	static function of(func IrFunction) returns Self
+		return Self{func: func, names: NameRoster.create(0), kinds: ReachMarkKindArray.create(0), slotInitCallees: NameRoster.create(0)}
+	end 'of'
+
+	function note(kind ReachMarkKind, name immutable ByteArray)
+		self.names.push(name)
+		self.kinds.push(kind)
+
+		if kind == ReachMarkKind.slotInit 'aSlotInitializer'
+			self.slotInitCallees.push(name)
+		end 'aSlotInitializer'
+	end 'note'
+end 'ReachMarks'
+
+type FunctionCredits
+	let func as IrFunction
+	let candidates as WitnessEventArray
+
+	static function of(func IrFunction, candidates WitnessEventArray) returns Self
+		return Self{func: func, candidates: candidates}
+	end 'of'
+end 'FunctionCredits'
+
+typealias MarksByFunction = Map with (ByteArray, ReachMarks)
+typealias CreditsByFunction = Map with (ByteArray, FunctionCredits)
+
+union ReachEpoch
+	unset
+	held(signatures ProgramSignatures)
+
+	function matches(signatures ProgramSignatures) returns bool
+		return match self 'epoch'
+			unset gives false
+			held(heldSignatures) gives heldSignatures is signatures
+		end 'epoch'
+	end 'matches'
+end 'ReachEpoch'
+
+// An entry serves the same `IrFunction` under the same `ProgramSignatures`, sound only because a
+// re-merged function is a new object. Credits are replayed: what one admits depends on the ledger.
+type ReachCarry
+	var epoch as ReachEpoch
+	var marks as MarksByFunction
+	var credits as CreditsByFunction
+
+	static function create() returns Self
+		return Self{epoch: ReachEpoch.unset, marks: MarksByFunction.create(), credits: CreditsByFunction.create()}
+	end 'create'
+
+	function align(signatures ProgramSignatures)
+		if self.epoch.matches(signatures) 'sameEpoch'
+			return
+		end 'sameEpoch'
+
+		self.marks = MarksByFunction.create()
+		self.credits = CreditsByFunction.create()
+		self.epoch = ReachEpoch.held(signatures)
+	end 'align'
+
+	function marksOf(func IrFunction, module MaxonModule, signatures ProgramSignatures) returns ReachMarks
+		if let held = try self.marks.get(func.name) 'recorded'
+			if held.func is func 'sameFunction'
+				return held
+			end 'sameFunction'
+		end 'recorded'
+
+		let fresh = collectReachMarks(module, signatures: signatures, func: func)
+		self.marks.upsert(func.name, value: fresh)
+
+		return fresh
+	end 'marksOf'
+
+	function creditsOf(func IrFunction, ledger WitnessEvidenceLedger, module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns WitnessEventArray
+		if let held = try self.credits.get(func.name) 'recorded'
+			if held.func is func 'sameFunction'
+				return held.candidates
+			end 'sameFunction'
+		end 'recorded'
+
+		let candidates = ledger.collectCredits(func, module: module, project: project, signatures: signatures, stdlib: stdlib)
+		self.credits.upsert(func.name, value: FunctionCredits.of(func, candidates: candidates))
+
+		return candidates
+	end 'creditsOf'
+end 'ReachCarry'
 
 function namesIn(table ImplsByName) returns NameRoster
 	let names = NameRoster.create(0)
@@ -1056,15 +1167,17 @@ export type LibraryFacts
 
 	let witnessEvidence as WitnessEvidenceLedger
 
-	static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes NameRoster, witnessEvidence WitnessEvidenceLedger) returns LibraryFacts
-		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, substrateNodes: substrateNodes, witnessEvidence: witnessEvidence}
+	let reachCarry as ReachCarry
+
+	static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes NameRoster, witnessEvidence WitnessEvidenceLedger, reachCarry ReachCarry) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, substrateNodes: substrateNodes, witnessEvidence: witnessEvidence, reachCarry: reachCarry}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create(0), witnessEvidence: WitnessEvidenceLedger.none())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create(0), witnessEvidence: WitnessEvidenceLedger.none(), reachCarry: ReachCarry.create())
 	end 'empty'
 
 	// ⭐⭐ **THE ONE QUESTION EVERY PRE-ELIMINATION PASS ASKS OF A LIBRARY BODY: WILL DEAD-FUNCTION
@@ -1105,13 +1218,13 @@ export type LibraryFacts
 			end 'eachCompilerCalled'
 		end 'noInstallerMintsAnAllocatorCall'
 
-		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
+		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence, reachCarry: self.reachCarry)
 	end 'withCompilerCalledTierUnreached'
 
 	export function withSubstrateEntriesOf(project Project, module MaxonModule) returns LibraryFacts
 		let entries = stdlibSubstrateEntries(project, module: module, stdlibNames: self.substrateNodes, unreachable: self.unreachable, evidence: self.witnessEvidence)
 
-		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence)
+		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: entries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: self.unreachedRuntimeTier, compilerCalledTier: self.compilerCalledTier, substrateNodes: self.substrateNodes, witnessEvidence: self.witnessEvidence, reachCarry: self.reachCarry)
 	end 'withSubstrateEntriesOf'
 
 	function witnessCrossingsOf(project Project, module MaxonModule, func IrFunction) returns WitnessCrossings
@@ -1181,7 +1294,7 @@ function deriveLibraryFacts(project Project, module MaxonModule, signatures Prog
 end 'deriveLibraryFacts'
 
 function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, split LibraryReachSplit, substrateNodes NameRoster, evidence WitnessEvidenceLedger) returns LibraryFacts
-	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, substrateNodes: substrateNodes, witnessEvidence: evidence)
+	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, substrateNodes: substrateNodes, witnessEvidence: evidence, reachCarry: ReachCarry.create())
 end 'libraryFactsOf'
 
 union LibraryReach
@@ -1242,7 +1355,9 @@ function libraryReachOf(project Project, module MaxonModule, signatures ProgramS
 	end 'noneReferenced'
 
 	let ledger = WitnessEvidenceLedger.over(signatures, project: project)
-	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, ledger: ledger)
+	let carry = project.libraryFacts.reachCarry
+	carry.align(signatures)
+	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, ledger: ledger, carry: carry)
 	ledger.settle(project, signatures: signatures)
 
 	return LibraryReach.walked(roster, stdlib: stdlibSet, reachable: reachable, ledger: ledger)
@@ -1592,7 +1707,7 @@ end 'classifyLibraryReach'
 // stdlib factory named only by an initializer, and the elimination walk reaches the empty function it
 // left: `var sep = FilePath.separator()` would be a `requireUnreachableLibraryStayedDead` panic on a
 // correct program (`specs/top-level-factory-globals.md`'s `stdlib-factory-reached-from-the-initializer`).
-function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, ledger WitnessEvidenceLedger) returns FunctionNameSet throws CompileError
+function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, ledger WitnessEvidenceLedger, carry ReachCarry) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	let reached = FixedBoolArray.create(module.funcCount())
@@ -1624,9 +1739,9 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// `LibraryFacts.unreachable` names is skipped"*. That is the rule that decides whether the slot EXISTS,
 	// so it is the rule that decides whether `__module_init` builds a record calling these bodies — and a
 	// root missing under it is `requireUnreachableLibraryStayedDead`, not a lost prune. Matching it exactly is
-	// what keeps the two derivations from disagreeing; the reached-code half is `markCorpusSlotInitCallees`,
+	// what keeps the two derivations from disagreeing; the reached-code half is `noteCorpusSlotInitMarks`,
 	// which covers the stdlib bodies this seed deliberately does not.
-	seedCorpusSlotInitCalleesOfUserCode(module, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
+	seedCorpusSlotInitCalleesOfUserCode(module, signatures: signatures, stdlib: stdlib, carry: carry, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐⭐ **A WITNESS IMPL IS CREDITED FOR A PAIR — A CONFORMER THE WALK HAS EVIDENCE OF, AND AN INTERFACE
 	// THE REACHED CODE CAN NAME.** Each half asked ALONE over-credits: the conformer key credits every
@@ -1643,7 +1758,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	let creditedServices = CreditedServiceSet.create()
 
 	while true 'seedRounds'
-		drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices, ledger: ledger, stdlib: stdlib)
+		drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices, ledger: ledger, carry: carry, stdlib: stdlib)
 
 		for impl in ledger.takeLiveImpls() 'eachLiveImpl'
 			markOneReachable(impl, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -1761,12 +1876,12 @@ function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project 
 	byInterface.upsert(interfaceName, value: conformers)
 end 'recordEnumWitnessCredit'
 
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet, ledger WitnessEvidenceLedger, stdlib FunctionNameSet)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet, ledger WitnessEvidenceLedger, carry ReachCarry, stdlib FunctionNameSet)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
-		markMaxonCallees(module, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
-		ledger.noteFunction(func, module: module, project: project, signatures: signatures, stdlib: stdlib)
+		markRecordedCallees(carry.marksOf(func, module: module, signatures: signatures), signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
+		ledger.noteFunction(func, candidates: carry.creditsOf(func, ledger: ledger, module: module, project: project, signatures: signatures, stdlib: stdlib), project: project, signatures: signatures)
 	end 'walk'
 end 'drainReachableWorklist'
 
@@ -1809,7 +1924,7 @@ end 'drainReachableWorklist'
 // OP: a COMPILER-OWNED runtime callee that threads a CONTAINER's key witnesses as ordinary arguments.**
 // Every such callee's corpus counterpart is a declared generic method, so its witnesses are a DECLARATION the
 // first route already covers. A new compiler-owned witness-carrying callee needs that route back, in
-// `markMaxonCallees`, because nothing declares such a body's parameters.
+// `collectReachMarks`, because nothing declares such a body's parameters.
 //
 // ⇒ **EVERY ROUTE'S EVIDENCE IS A REACHED DECLARATION, so the demand is discovered BY the
 // drain, and the drain reruns until it credits no new impl** — see `reachableMaxonFunctionNames`. The seed stays an
@@ -1970,18 +2085,42 @@ end 'markOneReachable'
 // COMPUTES: a walk of its own would re-derive, on every compile, a callee name this one already holds. The
 // corpus has no such callee — see `functionDeclaresAWitnessPosition`'s header for the two routes that
 // remain.
-function markMaxonCallees(module MaxonModule, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+function collectReachMarks(module MaxonModule, signatures ProgramSignatures, func IrFunction) returns ReachMarks
+	let marks = ReachMarks.of(func)
+
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("collectReachMarks: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.bodyOps() 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
-			markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
-			markCorpusSlotInitCallees(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			markServiceBehaviourHandlers(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
+			let op = try module.ops.get(opIdx) otherwise panic("collectReachMarks: opRef {opIdx} not in module.ops")
+
+			if let callee = try maxonOpReachEdge(op) 'anEdge'
+				marks.note(ReachMarkKind.edge, name: callee)
+			end 'anEdge'
+
+			noteCorpusSlotInitMarks(op, signatures: signatures, into: marks)
+
+			if maxonOpIsServiceSpawn(op) 'aSpawn'
+				marks.note(ReachMarkKind.service, name: maxonOpSpawnedServiceType(op))
+			end 'aSpawn'
 		end 'eachOp'
 	end 'eachBlock'
-end 'markMaxonCallees'
+
+	return marks
+end 'collectReachMarks'
+
+function markRecordedCallees(marks ReachMarks, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+	for position in 0 upto marks.names.count() 'eachMark'
+		let name = try marks.names.get(position) otherwise panic("markRecordedCallees: names.get OOB at {position}")
+		let kind = try marks.kinds.get(position) otherwise panic("markRecordedCallees: kinds.get OOB at {position}")
+
+		match kind 'kind'
+			edge or
+			slotInit then markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
+			service then markServiceBehaviourHandlers(name, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
+		end 'kind'
+	end 'eachMark'
+end 'markRecordedCallees'
 
 // The static reachability edge one `MaxonOp` names, if any — asked of the DIALECT'S OWN classifier, which
 // is the single place the op set answers "does this variant bind a callee name, and which operand is it?".
@@ -1996,29 +2135,29 @@ end 'markMaxonCallees'
 // A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
 // code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
 // already credited, and `maxonOpCalleeKind` answers `noCallee` for it.
-function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function maxonOpReachEdge(op MaxonOp) returns immutable ByteArray throws AbsentError
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
-		functionValue then markOneReachable(maxonOpCalleeName(op), byName: byName, reached: reached, worklist: worklist, names: names)
-		noCallee then break
+		functionValue then return maxonOpCalleeName(op)
+		noCallee then throw AbsentError.absent
 	end 'kind'
+end 'maxonOpReachEdge'
+
+function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if let callee = try maxonOpReachEdge(op) 'anEdge'
+		markOneReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'anEdge'
 end 'markMaxonCalleeEdge'
 
 // ⭐⭐ **A `spawn` REACHES EVERY HANDLER ITS SERVICE'S `__behave` DISPATCHES.** `<T>.__behave` is built after
 // this walk (`installServiceBehaviours`), and `DeadFunctionElimination` reaches it through the `funcAddr` the
-// `spawn` lowers to — so its calls are credited here, at the op that makes it live, from the roster it is
-// built from (`serviceBehaviourHandlerCallees`). Its other callees are runtime entries and synthesized drops, never
-// stdlib source.
+// `spawn` lowers to — so its calls are credited here, from the `service` mark the `spawn` op records,
+// out of the roster it is built from (`serviceBehaviourHandlerCallees`). Its other callees are runtime
+// entries and synthesized drops, never stdlib source.
 //
 // ⚡ Credited once per TYPE: the spawn sites and the messages of one service both grow with the program, and
 // their product would not.
-function markServiceBehaviourHandlers(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
-	if not maxonOpIsServiceSpawn(op) 'startsNoService'
-		return
-	end 'startsNoService'
-
-	let typeName = maxonOpSpawnedServiceType(op)
-
+function markServiceBehaviourHandlers(typeName ByteArray, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	if creditedServices.contains(typeName) 'alreadyCredited'
 		return
 	end 'alreadyCredited'
@@ -2111,20 +2250,15 @@ end 'constraintWitnessImplNames'
 // Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
 // inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
 // not kept for it.
-function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, signatures ProgramSignatures, stdlib FunctionNameSet, carry ReachCarry, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for func in module.functions 'eachFunc'
 		if stdlib.contains(func.name) 'skipStdlibBody'
 			continue
 		end 'skipStdlibBody'
 
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: blockRef from func.blockRefs not in module.blocks")
-
-			for opIdx in block.bodyOps() 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: opRef {opIdx} not in module.ops")
-				markCorpusSlotInitCallees(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			end 'eachOp'
-		end 'eachBlock'
+		for callee in carry.marksOf(func, module: module, signatures: signatures).slotInitCallees 'eachSlotInitCallee'
+			markOneReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		end 'eachSlotInitCallee'
 	end 'eachFunc'
 end 'seedCorpusSlotInitCalleesOfUserCode'
 
@@ -2132,8 +2266,9 @@ end 'seedCorpusSlotInitCalleesOfUserCode'
 // KEEPS THE SLOT.** `installManagedGlobalInit` builds `__module_init` AFTER this walk, so the calls a
 // global's initializer makes exist in no op the walk can read. What the walk CAN see is the `globalAddr` on
 // that slot — which is precisely what decides the slot survives at all (`contributesStorage` keeps a corpus
-// slot on liveness alone) — so the edge is credited there. Exact in both directions rather than
-// approximated: keeping the slot is running the initializer, and dropping it is not.
+// slot on liveness alone) — so the edge is recorded there, as a `slotInit` mark. Exact in both
+// directions rather than approximated: keeping the slot is running the initializer, and dropping it is
+// not.
 //
 // ⛔ **ROOTING THEM BESIDE `main`, AS `globalInitCallees` DOES FOR THE PROGRAM'S OWN DECLARATIONS, IS
 // WRONG FOR THE CORPUS'.** See `TopLevelDecl.declaredByTheCorpus` for the two symptoms — an allocator and
@@ -2142,15 +2277,15 @@ end 'seedCorpusSlotInitCalleesOfUserCode'
 // ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** a read the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
 // MISSING root is a `requireUnreachableLibraryStayedDead` panic.
-function markCorpusSlotInitCallees(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function noteCorpusSlotInitMarks(op MaxonOp, signatures ProgramSignatures, into ReachMarks)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return
 	end 'namesNoSlot'
 
 	for callee in signatures.initCalleesOfCorpusSlot(maxonOpGlobalLabelName(op)) 'eachCallee'
-		markOneReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		into.note(ReachMarkKind.slotInit, name: callee)
 	end 'eachCallee'
-end 'markCorpusSlotInitCallees'
+end 'noteCorpusSlotInitMarks'
 
 // True iff any live op in USER code names a STDLIB callee, or a TOP-LEVEL INITIALIZER does — the
 // allocation-free pre-scan that lets a program which never touches stdlib skip the reachability walk and
@@ -2214,7 +2349,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 			continue
 		end 'skipStdlibBody'
 
-		// Direct `block.bodyOps()` walk — allocation-free, and safe for the same reason `markMaxonCallees`
+		// Direct `block.bodyOps()` walk — allocation-free, and safe for the same reason `collectReachMarks`
 		// and `scanRuntimeUsage` use it at this tier (pre-pipeline: no orphan ops; callees are body ops).
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("userCodeReachesStdlib: blockRef from func.blockRefs not in module.blocks")
@@ -2758,7 +2893,7 @@ end 'witnessedScoreOf'
 // (a seed) or calls another stdlib function (a reverse edge). A callee can never be both — the parser
 // reserves the `__` prefix for compiler-owned names, so no stdlib declaration can carry one.
 //
-// The band structure — and the band-append protection — is `markMaxonCalleeEdge`'s, the third member of
+// The band structure — and the band-append protection — is `maxonOpReachEdge`'s, the third member of
 // that family in this file. Each asks a different question of the SAME four callee-naming variants, and
 // each pays a different cost (this one runs only for a compile that calls into stdlib), which is why they
 // are separate matches; a variant appended past `witnessTryDispatch` fails to compile in all three rather

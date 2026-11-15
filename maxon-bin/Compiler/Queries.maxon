@@ -1005,12 +1005,17 @@ function queryProgramSignatures(project Project) returns ProgramSignatures throw
 
 		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
 		// ones.
-		project.db.signatureCache.value.adoptLiveReach(project.db.liveReach)
+		if project.db.signatureCache.adoptedReach != project.db.liveReach.revision 'reachMoved'
+			project.db.signatureCache.value.adoptLiveReach(project.db.liveReach)
+			project.db.signatureCache.adoptedReach = project.db.liveReach.revision
+		end 'reachMoved'
+
 		return project.db.signatureCache.value
 	end 'hit'
 
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
+	let reachRevision = project.db.liveReach.revision
 	let signatures = try foldedProgramDeclarations(project)
 	signatures.settleContestedFunctionSpellings()
 	adoptShadowSpellings(project, roster: signatures.shadowRoster())
@@ -1165,7 +1170,7 @@ function queryProgramSignatures(project Project) returns ProgramSignatures throw
 		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding, {sharedParseEntryCount(project)} parse artifact(s) held, {project.db.sharedParseHits} parse hit(s), {project.db.sharedParseMisses} parse miss(es), {project.db.sharedParsePublishes} parse publish(es), {project.db.sharedParseDrifts} parse(s) whose referenced ids moved, library parses {signatures.libraryParseSharing.name}")
 	end 'debugging'
 
-	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true)
+	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true, adoptedReach: reachRevision)
 	return signatures
 end 'queryProgramSignatures'
 
@@ -3494,7 +3499,7 @@ end 'noteMoved'
 // Check every artifact's row-set answers against the merged index, filing each file's moved answers as its
 // overrides. Answers whether any moved.
 function rowSetAnswersMoved(project Project, artifacts FileParseArtifactArray, signatures ProgramSignatures) returns bool
-	let complete = RowSetAnswerMap.create()
+	let complete = RowSetRound.create()
 	var moved = false
 
 	for artifact in artifacts 'eachArtifact'
@@ -3507,7 +3512,7 @@ function rowSetAnswersMoved(project Project, artifacts FileParseArtifactArray, s
 	return moved
 end 'rowSetAnswersMoved'
 
-function fileRowSetAnswersMoved(project Project, path FilePath, mints LocalInstanceMints, signatures ProgramSignatures, complete RowSetAnswerMap) returns bool
+function fileRowSetAnswersMoved(project Project, path FilePath, mints LocalInstanceMints, signatures ProgramSignatures, complete RowSetRound) returns bool
 	let overrides = project.db.rowSetOverrides.of(path)
 
 	if not signatures.rowSetAnswersThatMoved(path, mints: mints, overrides: overrides, complete: complete) 'stands'

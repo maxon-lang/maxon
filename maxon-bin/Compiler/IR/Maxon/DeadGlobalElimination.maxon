@@ -128,7 +128,7 @@ export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalC
 
 		// Walk `block.bodyOps()` DIRECTLY rather than `IrModule.liveOpIndices`, which allocates a fresh
 		// op-index array per function: this runs at the Maxon tier BEFORE any block-rebuilding pass, so
-		// `opRefs` holds no orphan ops — the same reason `StdlibSource.markMaxonCallees` and
+		// `opRefs` holds no orphan ops — the same reason `StdlibSource.collectReachMarks` and
 		// `scanRuntimeUsage` walk it this way. A TERMINATOR can never carry a label (`globalAddr` defines
 		// a value and terminators are the returns and branches), so the body ops are the whole of it.
 		for blockRef in func.blockRefs 'eachBlock'
@@ -146,10 +146,10 @@ end 'liveGlobalLabels'
 
 // ⭐ **DOES THIS `MaxonOp` NAME A `.data` LABEL — ONE TABLE, THREE READERS.** ONE variant carries a label —
 // `globalAddr` — and it carries it for a read and a write alike, which is the whole of this pass's
-// bidirectionality. `StdlibSource`'s `markCorpusSlotInitCallees` and `opReadsACorpusSlotRootedInStdlib` are
+// bidirectionality. `StdlibSource`'s `noteCorpusSlotInitMarks` and `opReadsACorpusSlotRootedInStdlib` are
 // two more readers (a `globalAddr` on a corpus slot is what keeps that slot, and so what runs its
 // initializer), and `GlobalInitOrder.noteSlotNamed` is the fourth. They read this rather than re-matching
-// the op for `markMaxonCalleeEdge`'s stated reason: an under-approximation at a second site is not a compile
+// the op for `maxonOpReachEdge`'s stated reason: an under-approximation at a second site is not a compile
 // error, it is a body that is never lowered and then reached.
 //
 // ⭐⭐ **A SCALAR PREDICATE PLUS A NAME GETTER, NOT A UNION — THE SAME CORRECTION
@@ -167,7 +167,7 @@ end 'liveGlobalLabels'
 // table's -1,455,736.
 //
 // The arms NAME every variant of `MaxonOp`, so a variant added later FAILS TO COMPILE here rather than
-// being classified by omission — exactly as `StdlibSource.markMaxonCalleeEdge` and
+// being classified by omission — exactly as `StdlibSource.maxonOpReachEdge` and
 // `DeadFunctionElimination.markCalleeOf` rely on. A new variant that names a `.data` label must be added
 // as its own arm.
 export function maxonOpNamesAGlobalLabel(op MaxonOp) returns bool

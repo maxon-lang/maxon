@@ -2684,3 +2684,40 @@ The ladder row logged with this change is not attributable to it alone. Against 
 3.5 M allocations at rung 0 and 7.0 M at rung 5, and the two audits this change takes out of the build are
 0.15 M and 0.98 M of that; the rest arrived with the commits the branch was rebased onto between the two rows
 (directory-scoped visibility with its cached library audit, and a signature index that records less).
+
+### Result — 2026-11-15, four whole-program answers the compiling thread recomputed are computed once
+
+A sampling profile of the compiling thread (63.5 s of an 84.2 s self-compile, at about 4.3 ms a sample) named
+four computations repeated with unchanged inputs:
+
+| what was repeated | where | samples before | after |
+|---|---|---|---|
+| the live default keys and spawned type names compared in full on every signature-memo hit, reached once per call argument through `checkOneArgType` | `ProgramSignatures.adoptLiveReach` | 932 | 0 |
+| a type's graph walked for deep-clone support from an empty visited set for every row a row-set question asks about | `rowSetAnswersMoved` | 745 | 196 |
+| each lazily computed reach set of hold resolution sorted so that membership could binary-search it | `HoldEventSummary.computeReach` | 781 | 145 |
+| every reached function's callee marks and witness credits collected again in each of the front end's rounds | `reachableMaxonFunctionNames` | 956 | 474 |
+
+The memo hit adopts the reach only when its revision moved. A round of row-set answers shares the names a
+clone walk proved. A reach set is a bitset over the function rows when that is no larger than the list. The
+reach walk carries each function's marks and credit candidates across rounds, keyed by the function object
+and the signature index they were read under, and replays them against the round's own ledger.
+
+The self-compile on an i7-8700, four interleaved rounds, both arms compiling the base commit's `maxon-bin`
+to the same file name in sibling directories. The base arm is the compiler of the commit before this one,
+built by this change's compiler:
+
+| | base | this change | |
+|---|---|---|---|
+| wall | 84.9 s, 85.1 s, 87.7 s, 87.7 s | 70.5 s, 70.6 s, 73.2 s, 73.5 s | −16.6% |
+| CPU ticks | 225.7 G, 225.0 G, 231.7 G, 231.7 G | 181.9 G, 182.5 G, 188.5 G, 188.9 G | −18.9% |
+| allocations | 504.7 M, 503.3 M, 503.3 M, 503.3 M | 476.9 M in every round | −5.3% |
+| `semanticCheck` | 18.8 s, 18.9 s, 19.2 s, 19.1 s | 10.7 s, 10.8 s, 10.9 s, 10.9 s | |
+| unattributed | 11.6 s, 11.4 s, 11.8 s, 11.8 s | 6.4 s, 6.5 s, 6.7 s, 6.8 s | |
+| front-end pool wall | 7.2 s, 7.2 s, 7.5 s, 7.4 s | 6.5 s, 6.4 s, 6.7 s, 6.7 s | |
+
+The two arms' executables and debug sidecars are byte-identical. The signature sweep (6.4 s), the merge
+(3.7 s), `inlineLeaves` (6.8 s), the lowering (3.9 s) and the three pools' walls did not move.
+
+`tests/ladders/gentypeprops.sh <N> services`, `phase semanticCheck` CPU ticks at N = 250, 500, 1000, 2000:
+271 M, 475 M, 1,022 M, 2,527 M before (x1.75, x2.15, x2.47 per doubling) and 237 M, 374 M, 668 M, 1,231 M after
+(x1.58, x1.78, x1.84), allocations linear in both.

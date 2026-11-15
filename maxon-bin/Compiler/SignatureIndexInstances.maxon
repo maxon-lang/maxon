@@ -9984,9 +9984,9 @@ extension ProgramSignatures
 	end 'instanceWithTypeArgKind'
 
 	// The walk behind `instanceWithTypeArgKind`, over the rows this index holds right now.
-	function typeArgKindMatchOverTheRows(param TypeParamId, kind TypeArgInstantiationKind) returns TypeArgKindMatch
+	function typeArgKindMatchOverTheRows(param TypeParamId, kind TypeArgInstantiationKind, proofs CloneProofs) returns TypeArgKindMatch
 		let asked = TypeParamIdSet.create()
-		return self.typeArgKindMatchThrough(param, kind: kind, asked: asked)
+		return self.typeArgKindMatchThrough(param, kind: kind, asked: asked, proofs: proofs)
 	end 'typeArgKindMatchOverTheRows'
 
 	// ⭐⭐ **A ROW WRITTEN OVER ANOTHER DECLARATION'S PARAMETER STANDS FOR THAT PARAMETER'S EVERY INSTANTIATION.**
@@ -9995,7 +9995,7 @@ extension ProgramSignatures
 	// (`kindFollowsADeclarationView`), the row answers with whatever `Outer.T`'s own rows answer. Read as a bare
 	// parameter instead, a shared `Box` body reassigning its field neither drops the old `String` nor reserves the
 	// descriptor to drop it through. `asked` ends the walk a view over its own declaration's parameters closes.
-	function typeArgKindMatchThrough(param TypeParamId, kind TypeArgInstantiationKind, asked TypeParamIdSet) returns TypeArgKindMatch
+	function typeArgKindMatchThrough(param TypeParamId, kind TypeArgInstantiationKind, asked TypeParamIdSet, proofs CloneProofs) returns TypeArgKindMatch
 		if asked.contains(param) 'alreadyWalked'
 			return TypeArgKindMatch.noInstance
 		end 'alreadyWalked'
@@ -10020,7 +10020,7 @@ extension ProgramSignatures
 					let arg = self.instanceArgType(id, position: position)
 
 					if kindFollowsADeclarationView(kind) and maxonTypeTag(arg) == ValueTypeTag.typeParameter 'aDeclarationView'
-						let viewed = self.typeArgKindMatchThrough(typeParamIdOf(arg), kind: kind, asked: asked)
+						let viewed = self.typeArgKindMatchThrough(typeParamIdOf(arg), kind: kind, asked: asked, proofs: proofs)
 
 						match viewed 'viewed'
 							noInstance then continue
@@ -10028,7 +10028,7 @@ extension ProgramSignatures
 						end 'viewed'
 					end 'aDeclarationView'
 
-					if not self.typeArgHasKind(arg, kind: kind) 'notThisKind'
+					if not self.typeArgHasKind(arg, kind: kind, proofs: proofs) 'notThisKind'
 						continue
 					end 'notThisKind'
 
@@ -10059,15 +10059,15 @@ extension ProgramSignatures
 	// The per-kind argument predicate the instance-scan gates read (see `instanceWithTypeArgKind`). Each arm
 	// reads off the SAME `typeArgIsOwned` / `typeIsManaged` / `typeSupportsDeepClone` boundary the
 	// corresponding drop, consume or copy site decides on, so a gate and the emission it guards cannot disagree.
-	function typeArgHasKind(t MaxonType, kind TypeArgInstantiationKind) returns bool
+	function typeArgHasKind(t MaxonType, kind TypeArgInstantiationKind, proofs CloneProofs) returns bool
 		match kind 'kind'
 			consumeMoved then return self.typeArgIsOwned(t)
-			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
+			uncopyableElement then return not self.typeSupportsDeepCloneProving(t, purpose: GraphCascadePurpose.deepClone, proofs: proofs)
 			managedElement then return self.typeArgIsManagedElement(t)
 			noZeroElement then return self.typeArgOwesDrop(t) or self.typeExcludesZero(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
 			greenThreadElement or
-			greenThreadFeed then return self.sourceCloneVerdictOfType(t) == SourceCloneVerdict.holdsAGreenThread
+			greenThreadFeed then return self.sourceCloneVerdictOfType(t, proofs: proofs) == SourceCloneVerdict.holdsAGreenThread
 		end 'kind'
 	end 'typeArgHasKind'
 

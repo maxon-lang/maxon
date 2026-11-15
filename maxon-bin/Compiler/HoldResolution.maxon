@@ -637,6 +637,13 @@ end 'HoldReachState'
 
 typealias HoldReachStateColumn = FixedArray with HoldReachState
 
+enum HoldReachLayout
+	sorted
+	dense
+end 'HoldReachLayout'
+
+typealias HoldReachLayoutColumn = FixedArray with HoldReachLayout
+
 type HoldEventSummary
 	export let eventIds as HoldEventIds
 	let flags as FixedHoldWordColumn
@@ -644,10 +651,12 @@ type HoldEventSummary
 	let ranks as FixedCsrColumn
 	let storers as CsrGraph
 	var reachStates as HoldReachStateColumn
+	var reachLayouts as HoldReachLayoutColumn
 	var reachFloors as FixedHoldIndexColumn
 	var reachBegin as FixedHoldIndexColumn
 	var reachEnd as FixedHoldIndexColumn
 	var reachNodes as HoldIndexColumn
+	var reachWords as HoldWordColumn
 	var reachStamps as FixedHoldIndexColumn
 	var reachStamp as ElementIndex
 	var reachQueue as HoldIndexColumn
@@ -655,11 +664,13 @@ type HoldEventSummary
 	static function create(eventIds HoldEventIds, flags FixedHoldWordColumn, callers CsrGraph, ranks FixedCsrColumn, storers CsrGraph) returns HoldEventSummary
 		let reachStates = HoldReachStateColumn.create(eventIds.count())
 		reachStates.refill(HoldReachState.uncomputed)
+		let reachLayouts = HoldReachLayoutColumn.create(eventIds.count())
+		reachLayouts.refill(HoldReachLayout.sorted)
 		let reachFloors = FixedHoldIndexColumn.create(eventIds.count())
 		let reachBegin = FixedHoldIndexColumn.create(eventIds.count())
 		let reachEnd = FixedHoldIndexColumn.create(eventIds.count())
 		let reachStamps = FixedHoldIndexColumn.create(flags.count())
-		return Self{eventIds: eventIds, flags: flags, callers: callers, ranks: ranks, storers: storers, reachStates: reachStates, reachFloors: reachFloors, reachBegin: reachBegin, reachEnd: reachEnd, reachNodes: HoldIndexColumn.create(0), reachStamps: reachStamps, reachStamp: 0, reachQueue: HoldIndexColumn.create(0)}
+		return Self{eventIds: eventIds, flags: flags, callers: callers, ranks: ranks, storers: storers, reachStates: reachStates, reachLayouts: reachLayouts, reachFloors: reachFloors, reachBegin: reachBegin, reachEnd: reachEnd, reachNodes: HoldIndexColumn.create(0), reachWords: HoldWordColumn.create(0), reachStamps: reachStamps, reachStamp: 0, reachQueue: HoldIndexColumn.create(0)}
 	end 'create'
 
 	function rowFlags(row ElementIndex) returns HoldWord
@@ -735,17 +746,49 @@ type HoldEventSummary
 			end 'eachCaller'
 		end 'eachReached'
 
+		self.storeReach(slot)
+		try self.reachFloors.set(slot, value: floor) otherwise panic("HoldEventSummary.computeReach: reachFloors.set OOB at {slot}")
+		try self.reachStates.set(slot, value: state) otherwise panic("HoldEventSummary.computeReach: reachStates.set OOB at {slot}")
+	end 'computeReach'
+
+	function denseWordCount() returns ElementIndex
+		return (self.flags.count() + WordMask) shr WordShift
+	end 'denseWordCount'
+
+	// A dense slot's `reachBegin` indexes `reachWords` and its `reachEnd` means nothing, so a reach is
+	// read only through `reachContains`.
+	function storeReach(slot ElementIndex)
+		let layout = HoldReachLayout.dense if self.denseWordCount() <= self.reachQueue.count() else HoldReachLayout.sorted
+		try self.reachLayouts.set(slot, value: layout) otherwise panic("HoldEventSummary.storeReach: reachLayouts.set OOB at {slot}")
+
+		match layout 'layout'
+			sorted then self.storeSortedReach(slot)
+			dense then self.storeDenseReach(slot)
+		end 'layout'
+	end 'storeReach'
+
+	function storeSortedReach(slot ElementIndex)
 		self.reachQueue.sort()
-		try self.reachBegin.set(slot, value: self.reachNodes.count()) otherwise panic("HoldEventSummary.computeReach: reachBegin.set OOB at {slot}")
+		try self.reachBegin.set(slot, value: self.reachNodes.count()) otherwise panic("HoldEventSummary.storeSortedReach: reachBegin.set OOB at {slot}")
 
 		for node in self.reachQueue 'eachMember'
 			self.reachNodes.push(node)
 		end 'eachMember'
 
-		try self.reachEnd.set(slot, value: self.reachNodes.count()) otherwise panic("HoldEventSummary.computeReach: reachEnd.set OOB at {slot}")
-		try self.reachFloors.set(slot, value: floor) otherwise panic("HoldEventSummary.computeReach: reachFloors.set OOB at {slot}")
-		try self.reachStates.set(slot, value: state) otherwise panic("HoldEventSummary.computeReach: reachStates.set OOB at {slot}")
-	end 'computeReach'
+		try self.reachEnd.set(slot, value: self.reachNodes.count()) otherwise panic("HoldEventSummary.storeSortedReach: reachEnd.set OOB at {slot}")
+	end 'storeSortedReach'
+
+	function storeDenseReach(slot ElementIndex)
+		let base = self.reachWords.count()
+		self.reachWords.growFilled(base + self.denseWordCount(), value: 0)
+		try self.reachBegin.set(slot, value: base) otherwise panic("HoldEventSummary.storeDenseReach: reachBegin.set OOB at {slot}")
+
+		for node in self.reachQueue 'eachMember'
+			let at = base + (node shr WordShift)
+			let word = try self.reachWords.get(at) otherwise panic("HoldEventSummary.storeDenseReach: reachWords.get OOB at {at}")
+			try self.reachWords.set(at, value: word or (1 shl (node and WordMask))) otherwise panic("HoldEventSummary.storeDenseReach: reachWords.set OOB at {at}")
+		end 'eachMember'
+	end 'storeDenseReach'
 
 	function visitReach(node ElementIndex, floor ElementIndex)
 		if (try self.ranks.get(node) otherwise panic("HoldEventSummary.visitReach: no rank for function {node}")) < floor 'aboveEveryProber'
@@ -761,12 +804,21 @@ type HoldEventSummary
 	end 'visitReach'
 
 	function reachContains(slot ElementIndex, row ElementIndex) returns bool
-		var low = try self.reachBegin.get(slot) otherwise panic("HoldEventSummary.reachContains: reachBegin.get OOB at {slot}")
-		var high = try self.reachEnd.get(slot) otherwise panic("HoldEventSummary.reachContains: reachEnd.get OOB at {slot}")
+		let layout = try self.reachLayouts.get(slot) otherwise panic("HoldEventSummary.reachContains: reachLayouts.get OOB at {slot}")
+
+		return match layout 'layout'
+			sorted gives self.sortedReachContains(slot, row: row)
+			dense gives self.denseReachContains(slot, row: row)
+		end 'layout'
+	end 'reachContains'
+
+	function sortedReachContains(slot ElementIndex, row ElementIndex) returns bool
+		var low = try self.reachBegin.get(slot) otherwise panic("HoldEventSummary.sortedReachContains: reachBegin.get OOB at {slot}")
+		var high = try self.reachEnd.get(slot) otherwise panic("HoldEventSummary.sortedReachContains: reachEnd.get OOB at {slot}")
 
 		while low < high 'search'
 			let middle = low + ((high - low) shr 1)
-			let member = try self.reachNodes.get(middle) otherwise panic("HoldEventSummary.reachContains: reachNodes.get OOB at {middle}")
+			let member = try self.reachNodes.get(middle) otherwise panic("HoldEventSummary.sortedReachContains: reachNodes.get OOB at {middle}")
 
 			if member == row 'found'
 				return true
@@ -780,7 +832,15 @@ type HoldEventSummary
 		end 'search'
 
 		return false
-	end 'reachContains'
+	end 'sortedReachContains'
+
+	function denseReachContains(slot ElementIndex, row ElementIndex) returns bool
+		let base = try self.reachBegin.get(slot) otherwise panic("HoldEventSummary.denseReachContains: reachBegin.get OOB at {slot}")
+		let at = base + (row shr WordShift)
+		let word = try self.reachWords.get(at) otherwise panic("HoldEventSummary.denseReachContains: reachWords.get OOB at {at}")
+
+		return ((word shr (row and WordMask)) and 1) != 0
+	end 'denseReachContains'
 end 'HoldEventSummary'
 
 enum HoldEdgeMode

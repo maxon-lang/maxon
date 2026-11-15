@@ -3111,13 +3111,23 @@ extension ProgramSignatures
 		return self.aggregateNameIsImmutable(name, visited: visited)
 	end 'slotTypeIsImmutable'
 
-	function sourceCloneVerdictOfType(t MaxonType) returns SourceCloneVerdict
-		if self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
+	function sourceCloneVerdictOfType(t MaxonType, proofs CloneProofs = CloneProofs.create()) returns SourceCloneVerdict
+		if self.typeSupportsDeepCloneProving(t, purpose: GraphCascadePurpose.sourceClone, proofs: proofs) 'cloneable'
 			return SourceCloneVerdict.cloneable
 		end 'cloneable'
 
-		return refusedSourceCloneVerdict(self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone))
+		return refusedSourceCloneVerdict(self.typeSupportsDeepCloneProving(t, purpose: GraphCascadePurpose.deepClone, proofs: proofs))
 	end 'sourceCloneVerdictOfType'
+
+	function typeSupportsDeepCloneProving(t MaxonType, purpose GraphCascadePurpose, proofs CloneProofs) returns bool
+		let cloneable = self.typeSupportsDeepClone(t, visited: proofs.walkedFor(purpose), purpose: purpose)
+
+		if not cloneable 'aRefutedWalk'
+			proofs.refuted(purpose)
+		end 'aRefutedWalk'
+
+		return cloneable
+	end 'typeSupportsDeepCloneProving'
 
 	function sourceCloneVerdictOfAggregate(name ByteArray) returns SourceCloneVerdict
 		if self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
@@ -7271,24 +7281,24 @@ extension ProgramSignatures
 		return answer
 	end 'rowSetAnswer'
 
-	function answerOverTheRows(query RowSetQuery) returns RowSetAnswer
+	function answerOverTheRows(query RowSetQuery, proofs CloneProofs = CloneProofs.create()) returns RowSetAnswer
 		match query 'query'
-			typeArgKind(param, kind) then return rowSetAnswerOfMatch(self.typeArgKindMatchOverTheRows(param, kind: kind))
+			typeArgKind(param, kind) then return rowSetAnswerOfMatch(self.typeArgKindMatchOverTheRows(param, kind: kind, proofs: proofs))
 			dropDiverges(typeName, index, sharedCallee) then return RowSetAnswer.holds(self.dropDivergesOverTheRows(typeName, index: index, sharedCallee: sharedCallee))
 		end 'query'
 	end 'answerOverTheRows'
 
 	// Re-ask every question one parse recorded over the rows this index holds now — every file's, after the
 	// merge — and file the whole program's answer into `overrides` wherever it is stronger than what the parse
-	// was told. Answers whether anything was filed. `complete` carries answers already asked this fold, so a
-	// question many files asked is walked once.
+	// was told. Answers whether anything was filed. `complete` carries answers already asked this fold
+	// and the clone walks they proved, so a question many files asked is walked once.
 	//
 	// ⭐ **EVERY ANSWER IS MONOTONE IN THE ROWS, AND THE ROWS ONLY GROW.** Each question is existential over the
 	// rows ("some instance…"), a merge holds every row the parse saw, and an override only ever raises an answer —
 	// so the whole program is never weaker than what a parse was told, and that is checked here rather than
 	// assumed. An answer of equal strength stands whatever site it names: a site is blame for a refusal, which
 	// ends the compile before any comparison.
-	export function rowSetAnswersThatMoved(filePath FilePath, mints LocalInstanceMints, overrides RowSetOverrideTable, complete RowSetAnswerMap) returns bool
+	export function rowSetAnswersThatMoved(filePath FilePath, mints LocalInstanceMints, overrides RowSetOverrideTable, complete RowSetRound) returns bool
 		var moved = false
 
 		for key in mints.rowSetAnswers.order 'eachQuestion'
@@ -7323,13 +7333,13 @@ extension ProgramSignatures
 		return "'{String.from(owner.declaringTypeName)}.{String.from(owner.paramName)}'"
 	end 'typeParamDisplay'
 
-	function completeRowSetAnswer(key ByteArray, query RowSetQuery, complete RowSetAnswerMap) returns RowSetAnswer
-		if let asked = try complete.get(key) 'alreadyAsked'
+	function completeRowSetAnswer(key ByteArray, query RowSetQuery, complete RowSetRound) returns RowSetAnswer
+		if let asked = try complete.answers.get(key) 'alreadyAsked'
 			return asked
 		end 'alreadyAsked'
 
-		let answer = self.answerOverTheRows(query)
-		complete.upsert(key, value: answer)
+		let answer = self.answerOverTheRows(query, proofs: complete.proofs)
+		complete.answers.upsert(key, value: answer)
 		return answer
 	end 'completeRowSetAnswer'
 

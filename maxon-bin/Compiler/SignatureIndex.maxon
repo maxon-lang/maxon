@@ -6468,6 +6468,39 @@ enum SourceCloneVerdict
 	holdsAnUncloneable
 end 'SourceCloneVerdict'
 
+// A walk answering true proved every name it visited; one answering false proves nothing, so
+// `refuted` drops its set. Sound for one round of answers only, so it is never stored on the index.
+type CloneProofs
+	var deepClone = ClonerSet.create()
+	var sourceClone = ClonerSet.create()
+
+	static function create() returns CloneProofs
+		return Self{}
+	end 'create'
+
+	function walkedFor(purpose GraphCascadePurpose) returns ClonerSet
+		return match purpose 'purpose'
+			deepClone gives self.deepClone
+			sourceClone gives self.sourceClone
+			send or
+			shareWalk or
+			sendPastFunctionValues or
+			shareWalkPastFunctionValues panic("CloneProofs.walkedFor: only a `deepClone` or `sourceClone` walk is proven, got {purpose.name}")
+		end 'purpose'
+	end 'walkedFor'
+
+	function refuted(purpose GraphCascadePurpose)
+		match purpose 'purpose'
+			deepClone then self.deepClone = ClonerSet.create()
+			sourceClone then self.sourceClone = ClonerSet.create()
+			send or
+			shareWalk or
+			sendPastFunctionValues or
+			shareWalkPastFunctionValues then panic("CloneProofs.refuted: only a `deepClone` or `sourceClone` walk is proven, got {purpose.name}")
+		end 'purpose'
+	end 'refuted'
+end 'CloneProofs'
+
 // Asked only once the `sourceClone` walk has refused: the two walks differ only in refusing a green
 // thread, so a type `deepClone` accepts was refused for one.
 function refusedSourceCloneVerdict(deepCloneable bool) returns SourceCloneVerdict
@@ -10007,7 +10040,16 @@ end 'cacheReadRowSetAnswerHolds'
 
 // @generated library-cache end
 
-export typealias RowSetAnswerMap = Map with (ByteArray, RowSetAnswer)
+typealias RowSetAnswerMap = Map with (ByteArray, RowSetAnswer)
+
+export type RowSetRound
+	let answers = RowSetAnswerMap.create()
+	let proofs = CloneProofs.create()
+
+	export static function create() returns RowSetRound
+		return Self{}
+	end 'create'
+end 'RowSetRound'
 
 function rowSetAnswerOfMatch(found TypeArgKindMatch) returns RowSetAnswer
 	match found 'found'

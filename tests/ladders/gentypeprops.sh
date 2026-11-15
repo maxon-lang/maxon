@@ -37,7 +37,7 @@
 # group of 50 call sites is its own file `units<g>.maxon`. A front-end worker parses one file against a
 # private overlay of the shared index and drops what it learned at the end of the parse, so the cost of an
 # answer that is not kept in the shared index is paid once per FILE per type, and a one-file ladder would
-# pay it once. Every type and function a second file names is `module`.
+# pay it once. Every type and function a second file names is unmarked, which every file of the directory sees.
 #
 # Every mode compiles and exits 0 at every N. `main` calls the groups' `drive<g>` functions, so no function
 # body grows with N and `regalloc` stays out of the way. Read `--metrics` allocations of `phase:parse` and
@@ -146,7 +146,7 @@ emit_record_chain() {
       fi
       vis=""
       if [ "$k" -eq 0 ]; then
-        vis="module "
+        vis=""
       fi
       printf '%stype %s\n\tvar n as Tally\n' "$vis" "$me"
       printf '%b' "$fields"
@@ -165,7 +165,7 @@ emit_record_chain() {
 emit_types() {
   local c k m j d members me payload eaten made
 
-  printf 'module typealias Tally = int(0 to u32.max)\n\n'
+  printf 'typealias Tally = int(0 to u32.max)\n\n'
 
   case "$MODE" in
     unique|control)
@@ -180,17 +180,17 @@ emit_types() {
       c=0
       while [ "$c" -lt "$CHAINS" ]; do
         emit_record_chain "U" "$c"
-        printf 'module union S%s\n\tempty\n\tfilled(item U%sL0M0)\nend '\''S%s'\''\n\n' "$c" "$c" "$c"
-        printf 'module function relay%s(w U%sL0M0) returns U%sL0M0\n\treturn w\nend '\''relay%s'\''\n\n' "$c" "$c" "$c" "$c"
+        printf 'union S%s\n\tempty\n\tfilled(item U%sL0M0)\nend '\''S%s'\''\n\n' "$c" "$c" "$c"
+        printf 'function relay%s(w U%sL0M0) returns U%sL0M0\n\treturn w\nend '\''relay%s'\''\n\n' "$c" "$c" "$c" "$c"
         c=$(( c + 1 ))
       done
       ;;
     linear)
-      printf 'module type Resp\n\tvar n as Tally\n\n'
-      printf '\tmodule static function create(n Tally) returns Self\n\t\treturn Self{n: n}\n\tend '\''create'\''\n\n'
-      printf '\tmodule function fin(consuming self) returns Tally\n\t\tlet held = self.n\n\t\tdestruct self\n\t\treturn held\n\tend '\''fin'\''\n'
+      printf 'type Resp\n\tvar n as Tally\n\n'
+      printf '\tstatic function create(n Tally) returns Self\n\t\treturn Self{n: n}\n\tend '\''create'\''\n\n'
+      printf '\tfunction fin(consuming self) returns Tally\n\t\tlet held = self.n\n\t\tdestruct self\n\t\treturn held\n\tend '\''fin'\''\n'
       printf 'end '\''Resp'\''\n\n'
-      emit_floor "module "
+      emit_floor ""
 
       c=0
       while [ "$c" -lt "$CHAINS" ]; do
@@ -200,7 +200,7 @@ emit_types() {
           m=0
           while [ "$m" -lt "$members" ]; do
             me="L${c}L${k}M${m}"
-            printf 'module union %s\n' "$me"
+            printf 'union %s\n' "$me"
             j=0
             while [ "$j" -lt "$WIDTH" ]; do
               if [ "$k" -eq "$LAST" ]; then
@@ -228,7 +228,7 @@ emit_types() {
           while [ "$m" -lt "$members" ]; do
             me="L${c}L${k}M${m}"
             if [ "$k" -eq 0 ]; then
-              printf 'module '
+              printf ''
             fi
             printf 'function eat%s(v %s) returns Tally\n\tmatch v '\''level'\''\n' "$me" "$me"
             j=0
@@ -257,8 +257,8 @@ emit_types() {
           made="L${c}L${k}M$(( k == 0 ? 0 : WIDTH - 1 )).case$(( WIDTH - 1 ))($made)"
           k=$(( k - 1 ))
         done
-        printf 'module function make%s(n Tally) returns L%sL0M0\n\treturn %s\nend '\''make%s'\''\n\n' "$c" "$c" "$made" "$c"
-        printf 'module function relay%s(w L%sL0M0) returns L%sL0M0\n\treturn w\nend '\''relay%s'\''\n\n' "$c" "$c" "$c" "$c"
+        printf 'function make%s(n Tally) returns L%sL0M0\n\treturn %s\nend '\''make%s'\''\n\n' "$c" "$c" "$made" "$c"
+        printf 'function relay%s(w L%sL0M0) returns L%sL0M0\n\treturn w\nend '\''relay%s'\''\n\n' "$c" "$c" "$c" "$c"
         c=$(( c + 1 ))
       done
       ;;
@@ -269,7 +269,7 @@ emit_types() {
       c=0
       while [ "$c" -lt "$CHAINS" ]; do
         emit_record_chain "P" "$c"
-        printf 'module function relay%s(w P%sL0M0) returns P%sL0M0\n\treturn w\nend '\''relay%s'\''\n\n' "$c" "$c" "$c" "$c"
+        printf 'function relay%s(w P%sL0M0) returns P%sL0M0\n\treturn w\nend '\''relay%s'\''\n\n' "$c" "$c" "$c" "$c"
         c=$(( c + 1 ))
       done
 
@@ -306,7 +306,7 @@ emit_types() {
 
       d=0
       while [ "$d" -lt "$(desk_count)" ]; do
-        printf 'module type %s\n\tmodule static function create() returns Self\n\t\treturn Self{}\n\tend '\''create'\''\n\n' "$(desk_name "$d")"
+        printf 'type %s\n\tstatic function create() returns Self\n\t\treturn Self{}\n\tend '\''create'\''\n\n' "$(desk_name "$d")"
         printf '\texport function ask(n Tally) returns Tally throws ReplyStopped\n'
         printf '\t\tlet pending = reply.later()\n\t\tsettleL0(%s, n: n)\n\t\treturn\n\tend '\''ask'\''\n' "$made"
         printf 'end '\''%s'\''\n\n' "$(desk_name "$d")"
@@ -355,7 +355,7 @@ emit_unit() {
     printf 'function touchFloor(n Tally) returns Tally\n\tlet f = Floor.create(n)\n\treturn f.value()\nend '\''touchFloor'\''\n\n'
   fi
 
-  printf 'module function drive%s() returns Tally\n\tvar total = 0 as Tally\n' "$g"
+  printf 'function drive%s() returns Tally\n\tvar total = 0 as Tally\n' "$g"
 
   if [ "$MODE" = "linear" ] && [ "$g" -eq 0 ]; then
     printf '\ttotal = total + touchResp(1) + touchFloor(1)\n'
@@ -402,7 +402,7 @@ emit_main() {
   if [ "$MODE" = "services" ]; then
     local d=0
     while [ "$d" -lt "$CHAINS" ]; do
-      printf '\nmodule function consult%s() returns Tally\n' "$d"
+      printf '\nfunction consult%s() returns Tally\n' "$d"
       printf '\tlet desk = spawn %s.create()\n' "$(desk_name "$d")"
       printf '\treturn try await desk.ask(7) otherwise panic("the message answers through its Reply")\n'
       printf 'end '\''consult%s'\''\n' "$d"

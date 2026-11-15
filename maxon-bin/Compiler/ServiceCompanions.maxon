@@ -303,6 +303,9 @@ end 'spawnCandidateKey'
 export type LiveReach
 	export var defaultKeys as LiveNameSet
 	export var spawnedTypes as LiveNameSet
+	// A signature-memo hit re-adopts the reach only when this has moved, so every change to either
+	// set goes through `replaceWith`.
+	var revision = 0 as LiveKeysRevision
 
 	export static function create() returns LiveReach
 		return Self{defaultKeys: LiveNameSet.create(), spawnedTypes: LiveNameSet.create()}
@@ -315,6 +318,7 @@ export type LiveReach
 	export function replaceWith(keys LiveNameSet, spawns LiveNameSet)
 		self.defaultKeys = copiedNames(keys)
 		self.spawnedTypes = copiedNames(spawns)
+		self.revision = self.revision + 1
 	end 'replaceWith'
 end 'LiveReach'
 

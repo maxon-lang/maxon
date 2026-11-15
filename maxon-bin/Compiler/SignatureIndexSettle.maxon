@@ -363,9 +363,11 @@ extension ProgramSignatures
 	end 'rebasedMintsAbsentFromTheBaseline'
 
 	export function toldAnswersHold(mints LocalInstanceMints, overrides RowSetOverrideTable) returns bool
+		let proofs = CloneProofs.create()
+
 		for key in mints.rowSetAnswers.order 'eachQuestion'
 			let told = try mints.rowSetAnswers.records.get(key) otherwise panic("ProgramSignatures.toldAnswersHold: the log orders a question it holds no record of")
-			let expected = try overrides.answerFor(key) otherwise self.answerOverTheRows(told.query)
+			let expected = try overrides.answerFor(key) otherwise self.answerOverTheRows(told.query, proofs: proofs)
 
 			if rowSetAnswerIsAffirmative(told.answer) != rowSetAnswerIsAffirmative(expected) 'theAnswerMoved'
 				return false
