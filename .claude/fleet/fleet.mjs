@@ -6,7 +6,8 @@ import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 
 const TARGET_PERCENT = 98;
-const WINDOW_HOURS = { five_hour: 5, seven_day: 168 };
+const STATUS_LINE_LIMIT_KINDS = { five_hour: 'session', seven_day: 'weekly_all' };
+const USAGE_COMMAND = '/usage';
 const LIVE_HEARTBEAT_MINUTES = 30;
 const RATE_SPAN_HOURS = 2;
 const MIN_RATE_SPAN_MINUTES = 20;
@@ -177,10 +178,49 @@ function account() {
   return { label, planTier: status.planTier ?? status.subscriptionType ?? 'unknown' };
 }
 
-function localUsage() {
+function limitKey(limit) {
+  const model = limit.scope?.model?.display_name;
+  return model ? `${limit.kind}:${model}` : limit.kind;
+}
+
+async function sdkUsage() {
+  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+
+  for await (const message of query({ prompt: USAGE_COMMAND, options: { maxTurns: 1, settingSources: [] } })) {
+    const limits = message.usage_report?.rate_limits?.limits;
+    if (!limits) continue;
+    return {
+      at: Math.round(nowSeconds()),
+      source: 'sdk',
+      limits: limits
+        .filter(limit => limit.is_active && limit.resets_at)
+        .map(limit => ({ key: limitKey(limit), used: limit.percent, resetsAt: Math.round(Date.parse(limit.resets_at) / 1000) })),
+    };
+  }
+
+  throw new Error(`${USAGE_COMMAND} returned no usage report`);
+}
+
+function statusLineUsage() {
   const path = join(configDir(), USAGE_FILE);
   if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, 'utf8'));
+  const sample = JSON.parse(readFileSync(path, 'utf8'));
+  return {
+    at: sample.at,
+    source: 'status-line',
+    limits: Object.entries(sample.rate_limits ?? {})
+      .filter(([name]) => STATUS_LINE_LIMIT_KINDS[name])
+      .map(([name, window]) => ({ key: STATUS_LINE_LIMIT_KINDS[name], used: window.used_percentage, resetsAt: window.resets_at })),
+  };
+}
+
+async function usageSample() {
+  try {
+    return await sdkUsage();
+  } catch (error) {
+    console.error(`fleet: the SDK usage report failed (${error.message}); using the status line's sample. If the SDK is missing, run \`npm ci --prefix .claude/fleet\` once in this checkout`);
+    return statusLineUsage();
+  }
 }
 
 function commandInit() {
@@ -246,17 +286,18 @@ function commandWait(options) {
   }
 }
 
-function commandHeartbeat(options) {
+async function commandHeartbeat(options) {
   const id = required(options, 'as');
   const state = required(options, 'state');
   if (!STATES.includes(state)) fail(`--state must be one of ${STATES.join(', ')}`);
+  const model = required(options, 'model');
   const { label, planTier } = account();
-  const usage = localUsage();
+  const usage = await usageSample();
   const data = {
     id,
     account: label,
     planTier,
-    model: options.model ?? usage?.model ?? required(options, 'model'),
+    model,
     machine: hostname(),
     state,
     task: options.task ?? null,
@@ -284,16 +325,16 @@ function commandStatus() {
   }
 }
 
-function windowState(sample, name, now) {
-  const window = sample?.rate_limits?.[name];
-  if (!window || window.resets_at <= now) return null;
-  return { used: window.used_percentage, resetsAt: window.resets_at };
+function openLimits(sample, now) {
+  return Object.fromEntries((sample?.limits ?? [])
+    .filter(limit => limit.resetsAt > now)
+    .map(limit => [limit.key, { used: limit.used, resetsAt: limit.resetsAt }]));
 }
 
-function perConsumerRate(history, name, current, now) {
+function perConsumerRate(history, key, current, now) {
   const points = history.filter(point =>
-    point[name] &&
-    Math.abs(point[name].resetsAt - current.resetsAt) < SAME_WINDOW_TOLERANCE_SECONDS &&
+    point.limits?.[key] &&
+    Math.abs(point.limits[key].resetsAt - current.resetsAt) < SAME_WINDOW_TOLERANCE_SECONDS &&
     point.at >= now - RATE_SPAN_HOURS * 3600);
   if (points.length < 2) return null;
   const first = points[0];
@@ -302,11 +343,10 @@ function perConsumerRate(history, name, current, now) {
   if (spanHours * 60 < MIN_RATE_SPAN_MINUTES) return null;
   const meanConsumers = points.reduce((sum, point) => sum + point.consumers, 0) / points.length;
   if (meanConsumers === 0) return null;
-  return (last[name].used - first[name].used) / spanHours / meanConsumers;
+  return (last.limits[key].used - first.limits[key].used) / spanHours / meanConsumers;
 }
 
 function allowedConsumers(current, rate, now) {
-  if (!current) return { limit: Infinity, why: 'no such window on this plan, or it has reset' };
   const headroom = TARGET_PERCENT - current.used;
   if (headroom <= 0) return { limit: 0, why: `at ${current.used}%` };
   if (rate === null) return { limit: Infinity, why: 'burn rate not yet measured' };
@@ -332,22 +372,22 @@ function commandBudget() {
     const stored = histories.find(entry => entry.key === acct);
     let history = stored?.data ?? [];
 
+    const limits = openLimits(sample, now);
+
     if (sample && (history.length === 0 || sample.at - history[history.length - 1].at >= HISTORY_SPACING_SECONDS)) {
-      const point = { at: sample.at, consumers: working + orchestrator };
-      for (const name of Object.keys(WINDOW_HOURS)) point[name] = windowState(sample, name, now);
-      history.push(point);
+      history.push({ at: sample.at, consumers: working + orchestrator, limits });
     }
 
     history = history.filter(point => point.at >= now - HISTORY_HOURS * 3600);
     upsertComment(issue, stored?.comment, 'history', acct, history);
 
-    const windows = Object.keys(WINDOW_HOURS).map(name => {
-      const current = windowState(sample, name, now);
-      const allowed = allowedConsumers(current, current ? perConsumerRate(history, name, current, now) : null, now);
-      return { name, used: current?.used ?? null, ...allowed, limit: allowed.limit === Infinity ? 'unbounded' : Number(allowed.limit.toFixed(2)) };
+    const windows = Object.entries(limits).map(([key, current]) => {
+      const allowed = allowedConsumers(current, perConsumerRate(history, key, current, now), now);
+      return { key, used: current.used, resetsAt: new Date(current.resetsAt * 1000).toISOString(), why: allowed.why, limit: allowed.limit };
     });
 
-    const limit = Math.min(...windows.map(window => window.limit));
+    const limit = Math.min(Infinity, ...windows.map(window => window.limit));
+    for (const window of windows) window.limit = window.limit === Infinity ? 'unbounded' : Number(window.limit.toFixed(2));
     const ceiling = limit === Infinity ? working + 1 : Math.floor(limit) - orchestrator;
     const target = sample ? Math.max(0, Math.min(ceiling, working + 1, available)) : working;
     const action = !sample ? 'hold (no usage sample)'
@@ -376,4 +416,4 @@ const [name, ...rest] = process.argv.slice(2);
 const command = COMMANDS[name];
 if (!command) fail(`usage: fleet.mjs <${Object.keys(COMMANDS).join('|')}> [--as <id>] …`);
 const { options, positional } = parseArgs(rest);
-command(options, positional);
+await command(options, positional);

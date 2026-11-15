@@ -21,6 +21,8 @@ is in the fleet as soon as it is set — run by the
 that no two sessions own the same problem. It may be on another machine or another Claude account, so
 every message goes through the private fleet repository with `node .claude/fleet/fleet.mjs`, never
 through `SendMessage`. Your fleet id is your session's name (`claude -n <id>`); without one, ask the user.
+`fleet.mjs` reads plan usage through the Claude Agent SDK: run `npm ci --prefix .claude/fleet` once per
+checkout.
 
 - **Before any work, tell it.** A task the user gave you directly is a `REQUEST`; with no task, send
   `READY`. Start only on its `ASSIGN`. A `STOP` means another session owns the problem: tell the user.
