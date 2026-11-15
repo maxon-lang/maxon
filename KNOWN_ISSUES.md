@@ -16,6 +16,28 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 - repro: a program that reproduces it, or for ci-red the run URL, lane and failing case
 ```
 
+## The Unicode category generator emits a lookup body that differs from the checked-in one
+- priority: normal
+- status: open
+- where: scripts/unicode/generate_unicode_category.py:136
+- seen: fixing the CI red after directory visibility landed. Regenerating
+  stdlib/helpers/string/unicodeCategory.maxon changes it: `typealias GeneralCategory` loses `public`, and
+  `unicodeGeneralCategory` loses its `as GeneralCategory` and `as FullRangeInt` casts, the `target`
+  local and its blank lines. Nothing runs the generator in CI, so the drift is silent.
+- repro: `python3 -I scripts/unicode/generate_unicode_category.py; git diff stdlib/helpers/string/unicodeCategory.maxon`
+
+## The Windows process listing once took over 30 s in the VS Code suite
+- priority: normal
+- status: open
+- where: vscode-extension/src/test/processTree.ts:60
+- seen: CI run 43648604039 (059dd0104b), corpora x64-windows. `the listing shows this process with its
+  arguments` timed out at 30 s. The next listing in the same run took 6.7 s, and the same test took 3.4 s
+  on the previous run; locally the `Get-CimInstance Win32_Process` command takes ~1.5 s. It ran right after
+  four Debugging tests had each waited 60–120 s for a debug session that never launched. The mechanism is
+  not yet known. The test's timeout now exceeds the listing budget, so the next occurrence fails with the
+  lister's own error.
+- repro: the run above; not reproduced locally
+
 ## Nothing checks that spec-test prints the same stdout at one worker and at several
 - priority: normal
 - status: open
