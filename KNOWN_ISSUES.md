@@ -222,6 +222,17 @@ claimed and drained. An entry is deleted by the commit that fixes it.
 - repro: `git grep -n '^var ' -- specs/fixed-array.md specs/managed-list.md specs/static-methods.md specs/pass-by-reference.md`
   and the doc line above
 
+## A lent unique parameter rebound with `let b = a` is refused when `b` is read
+- priority: normal
+- status: open
+- where: maxon-bin/Compiler/ParserExpressions.maxon (`bindingReadsValue`, called by `noteReadOfKeptArgument`)
+- seen: the sibling-shape hunt of the three-panics fix. `let b = a` over a lent unique parameter files a
+  moved-lent-unique site, and `bindingReadsValue` matches every binding holding the moved value, so a read of
+  the new name `b` is reported as a read of the moved `a`. A `let b = a` over an owned local compiles.
+- repro: `type Tk is unique` with `var n as Num`; `function rebind(a Tk)` holding `let b = a` then
+  `print("{b.n}\n")`; a `main` calling `rebind(Tk.create(7))`: E3102 at the read of `b`, naming 'a'. With
+  `shelf.push(b)` in place of the print it is refused the same way.
+
 ## Windows cannot spawn a spec test executable whose path is 260 characters or more
 - priority: normal
 - status: open
