@@ -416,6 +416,148 @@ end 'main'
 error E3217: <fragment>:31:10: parameter `bV` of the factory `Rcv.create` is a `Bt` with no capability word, and this `spawn` moves its arguments into the state of `Rcv`, a service — whose state is run by whichever green thread takes its next message, so what crosses must be owned by one side or read-only on both. `isolated` gives the value away: the sender builds it for this one send and no other name reaches it afterwards. `immutable` shares it: the sender freezes it (`freeze x.clone()`), and both threads only read it. Write it `create(bV isolated …)` or `create(bV immutable …)`
 ```
 
+<!-- test: model-finding-aa-send-match-payload-unique -->
+The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `send-match-payload-unique` of redteamAA/p9.txt, in capmodel `reggio/REPORTRTAA.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	have(t Tk)
+	none
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Rc
+	var t as Tk
+
+	static function create(t isolated Tk) returns Self
+		return Self{t: merge t}
+	end 'create'
+
+	export function put(tV Tk)
+		self.t = tV
+	end 'put'
+end 'Rc'
+
+function g(r Rc.handle) returns Num
+	let u = UT.have(Tk.create(1))
+	match u 'x1'
+		have(q) then try r.put(q) otherwise ignore
+		none then break
+	end 'x1'
+	return 0
+end 'g'
+
+function main() returns ExitCode
+	let r = spawn Rc.create(Tk.create(0))
+	let _ = g(r)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:32:26: cannot hand 'q' to argument `tV` of the message `Rc.put`: it keeps a unique value, and 'q' is only borrowed by this code, and only the code that owns a unique value hands it to another green thread; move it in from its owner
+```
+
+<!-- test: model-finding-aa-send-byref-param -->
+The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `send-byref-param` of redteamAA/p9.txt, in capmodel `reggio/REPORTRTAA.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Rc
+	var t as Tk
+
+	static function create(t isolated Tk) returns Self
+		return Self{t: merge t}
+	end 'create'
+
+	export function put(tV Tk)
+		self.t = tV
+	end 'put'
+end 'Rc'
+
+function g(r Rc.handle, tV mutable Tk) returns Num
+	try r.put(tV) otherwise ignore
+	return 0
+end 'g'
+
+function main() returns ExitCode
+	var tV = Tk.create(1)
+	let r = spawn Rc.create(Tk.create(0))
+	let _ = g(r, tV: tV)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:25:12: cannot hand 'tV' to argument `tV` of the message `Rc.put`: it keeps a unique value, and 'tV' is only borrowed by this code, and only the code that owns a unique value hands it to another green thread; move it in from its owner
+```
+
+<!-- test: model-finding-aa-send-record-field-unique -->
+The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `send-record-field-unique` of redteamAA/p9.txt, in capmodel `reggio/REPORTRTAA.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hold
+	var tk as Tk
+
+	static function create(tk Tk) returns Self
+		return Self{tk: tk}
+	end 'create'
+end 'Hold'
+
+type Rc
+	var t as Tk
+
+	static function create(t isolated Tk) returns Self
+		return Self{t: merge t}
+	end 'create'
+
+	export function put(tV Tk)
+		self.t = tV
+	end 'put'
+end 'Rc'
+
+function g(r Rc.handle) returns Num
+	let h = Hold.create(Tk.create(1))
+	try r.put(h.tk) otherwise ignore
+	return 0
+end 'g'
+
+function main() returns ExitCode
+	let r = spawn Rc.create(Tk.create(0))
+	let _ = g(r)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:34:12: cannot hand 'h.tk' to argument `tV` of the message `Rc.put`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
+```
+
 <!-- test: model-finding-aa-send-record-field-unique-swap -->
 The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3198. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `send-record-field-unique-swap` of redteamAA/p9.txt, in capmodel `reggio/REPORTRTAA.txt`.
 
@@ -2396,4 +2538,61 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:32:16: use of moved value 'xs': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: model-hand-ag-f2-send -->
+The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f2-send` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias TkArray = Array with Tk
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hs2
+	var xs as TkArray
+
+	static function create(xs TkArray) returns Self
+		return Self{xs: xs}
+	end 'create'
+end 'Hs2'
+
+type Sa
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeA(xsV TkArray)
+		for x in xsV 'f1'
+			x.n = 1
+		end 'f1'
+	end 'takeA'
+end 'Sa'
+
+function main() returns ExitCode
+	let su = spawn Sa.create(0)
+	let h = Hs2.create(TkArray.create(0))
+	h.xs.push(Tk.create(1))
+	for t in h.xs 'f1'
+		try su.takeA(h.xs) otherwise (sendFailure) 'h2'
+			match sendFailure 'x3'
+				mailboxFull then break
+				serviceStopped then break
+			end 'x3'
+		end 'h2'
+		t.n = 5
+	end 'f1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:40:16: cannot hand 'h.xs' to argument `xsV` of the message `Sa.takeA`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
 ```

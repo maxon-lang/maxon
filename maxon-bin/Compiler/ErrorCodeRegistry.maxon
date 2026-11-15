@@ -2378,7 +2378,7 @@ export enum ErrorCode
 	semanticPromiseDropped = "E3213"
 
 	// A `unique` value is copied or given a second name. A type declared `is unique`, or holding a `unique`
-	// field, is never cloned, so `clone()` is refused; the OS handle types (`TcpClient`, `TcpListener`,
+	// field, or a union with a unique payload, is never cloned, so `clone()` is refused; the OS handle types (`TcpClient`, `TcpListener`,
 	// `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`, and every type holding
 	// one) are unique, so they are never cloned either. A unique value read out of a field, an element, a
 	// `for` loop variable or a tuple destructure cannot be bound, passed to a parameter that keeps it, or
@@ -2386,6 +2386,9 @@ export enum ErrorCode
 	// element a call such as `get` hands back is read the same way: `show(items.get(0))` lends it
 	// for the call, and `let t = items.get(0)` is refused. Move it out with `pop`, `remove`, `removeFirst` or
 	// `Slot.take`, `swap` it out of an isolated field, or read what you need from it where it stands.
+	// A message argument or `spawn` factory argument is handed to another green thread, so a unique value there
+	// must be the sender's to give: one read from a field or an element, lent by a loop, a tuple or a `match`,
+	// or borrowed through a by-reference parameter is refused.
 	// A `match` over a unique union lends it to its arms, so the variable that holds the matched union (its
 	// name, the record whose field is matched, or an operand of a `cond` scrutinee) is not moved, copied,
 	// stored, captured or passed to a parameter that keeps it inside an arm. Do that before or after the
@@ -2491,8 +2494,9 @@ export enum ErrorCode
 	// message arguments: a field, a container or other type argument, a tuple item, a closure capture, a
 	// promise payload, a message reply, a union stored in a field, an argument of an `async` call, the result
 	// of an `async` call and an argument of an interface or function value call are refused. A linear value
-	// lent to code that does not own it (a parameter of a function that does not take it) is not consumed
-	// there. `consuming self` belongs to a method of a `type` that declares a finalizer, and `destruct self`
+	// lent to code that does not own it (a parameter of a function that does not take it, or `self` of a method
+	// that does not take `consuming self`) is not consumed there, returned or built into a union.
+	// `consuming self` belongs to a method of a `type` that declares a finalizer, and `destruct self`
 	// is written in a method that takes `consuming self`, on a `type` that holds fields. A `match` over a
 	// union with a linear payload binds the payload in every arm that covers its case and consumes it there,
 	// and a `default` arm cannot cover such a case. Carry the value in a local or a message argument, and

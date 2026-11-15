@@ -6785,7 +6785,8 @@ end 'Ticket'
 
 A type with a unique field is unique too, with no declaration and no generated `clone()` (**E3214**:
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
-holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
+holds an array of unique values, and so is a union with a unique payload (`slot.clone()` is **E3214**). A unique
+value cannot be frozen, and reading one out of a field or an element
 to bind, return or store it is **E3214**, and so is a `for` loop variable or a tuple destructure of one handed
 to a parameter that keeps it: move it out with `pop`, `remove`, `removeFirst` or `Slot.take`, or `swap` it out
 of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
@@ -6794,7 +6795,9 @@ readable, and an element a container call hands back is lent for the call in the
 it to its arms: the variable that holds the matched union (its name, the record whose field is matched, or an
 operand of a `cond` scrutinee) is not moved, copied, stored, captured or passed to a parameter that keeps it
 inside an arm (**E3214**), while a call that only reads it is accepted; move or copy it before or after the
-`match`. The standard library's `Promise` is
+`match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
+own a unique value there: one read from a field or an element, lent by a loop, a tuple or a `match`, or
+borrowed through a `mutable` parameter is **E3214**. The standard library's `Promise` is
 unique, so is `Reply`, and so are the OS handle types (`TcpClient`,
 `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
 that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
@@ -6805,8 +6808,9 @@ The cases are in `specs/regions-unique.md`.
 
 A `destruct self` statement ends the life of the value a method is called on. A method that contains one is a
 **finalizer**, and it takes `consuming self`: a call to it moves the receiver, and reading the receiver
-afterwards is **E3102**. A `destruct self`, or any other move of the receiver, inside a loop is **E3102** too:
-the next lap reads a receiver the previous lap moved. A type with at least one finalizer is **linear**, and a linear type is `unique`: never
+afterwards is **E3102**, and so is a read or write of `self` after `destruct self`. A `destruct self`, or any
+other move of the receiver, inside a loop is **E3102** too: the next lap reads a receiver the previous lap
+moved. A type with at least one finalizer is **linear**, and a linear type is `unique`: never
 cloned, frozen or aliased (**E3214**).
 
 ```maxon
@@ -6864,7 +6868,8 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
   argument or result of an `async` call and an argument of an interface or function value call are
   [E3224](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3224): each would keep the value past the code that
   must consume it. A value lent to code that does not own it, such as a parameter of a function that does not
-  take it, is consumed only by its owner.
+  take it or `self` of a method that does not take `consuming self`, is consumed only by its owner: passing,
+  returning or building it into a union there is E3224.
 - **No linear value is live across a wait.** An `await`, a send with a `sendTimeout:` and a call that waits
   may never end, so a linear value is consumed before one (E3223).
 - **A union with a linear payload is linear.** A `match` over one consumes it: every arm for a case with a

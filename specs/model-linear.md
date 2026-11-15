@@ -1587,6 +1587,48 @@ end 'main'
 error E3224: <fragment>:3:11: 'Rl' is a linear value and cannot be a type argument of 'Array': a linear value lives only in locals, parameters and message arguments, so no container, promise, generic record or generic function holds one
 ```
 
+<!-- test: model-finding-ae-clone-linear-union -->
+The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `clone-linear-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+function main() returns ExitCode
+	let u = Sh.held(Rl.create(1))
+	let c = u.clone()
+	match u 'x1'
+		none then break
+		held(r) then r.fin(1)
+	end 'x1'
+	match c 'x2'
+		none then break
+		held(r) then r.fin(2)
+	end 'x2'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:24:10: 'Sh' is unique (its field 'r' holds a unique 'Rl') and cannot be cloned
+```
+
 <!-- test: model-finding-ae-freeze-linear-union -->
 The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `freeze-linear-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
@@ -2143,6 +2185,35 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ab-m-destruct-then-use-self -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-destruct-then-use-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Q
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+		let _ = self.n
+	end 'fin'
+end 'Q'
+
+function main() returns ExitCode
+	let q = Q.create(0)
+	q.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:11: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- test: model-hand-ab-m-use-self-field-before -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-use-self-field-before` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
@@ -2202,7 +2273,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:17:12: use of moved value '__self': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:17:12: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ab-u-nested-union-dropped -->
@@ -3079,6 +3150,40 @@ end 'main'
 error E3102: <fragment>:46:15: use of moved value 'r': it was moved in an earlier iteration of this loop
 ```
 
+<!-- test: model-hand-ab-k-isolated-from-iso -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-from-iso` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	let a = r as isolated Resp
+	a.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ab-k-isolated-union-drop -->
 The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `k-isolated-union-drop` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
@@ -3812,7 +3917,7 @@ error E3102: <fragment>:30:4: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ab-f-while-var-refill-conditional -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3223. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-while-var-refill-conditional` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-var-refill-conditional` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3852,7 +3957,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:35:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3102: <fragment>:29:3: use of moved value 'r': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: model-hand-ab-f-while-var-refill-nonetwork -->
@@ -4971,6 +5076,47 @@ end 'main'
 error E3214: <fragment>:32:17: 'Sent' is unique (its field 'r' holds a unique 'Resp') and cannot be frozen
 ```
 
+<!-- test: model-hand-ab-s-reassign-after-move-in-branch -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-reassign-after-move-in-branch` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	var r = Resp.create(0)
+	r.fin(1)
+	if lg(1) != 0 'i1'
+		r = Resp.create(1)
+	end 'i1'
+	r.fin(2)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:31:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- test: model-hand-ab-s-reassign-after-move-branch-ok -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-reassign-after-move-branch-ok` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
@@ -5472,6 +5618,40 @@ end 'main'
 ```
 ```maxoncstderr
 error E3223: <fragment>:22:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-ab-r-return-self -->
+The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `r-return-self` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Me2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+
+	function me() returns Me2
+		return self
+	end 'me'
+end 'Me2'
+
+function main() returns ExitCode
+	let m = Me2.create(0)
+	let a = m.me()
+	a.fin()
+	m.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3224: <fragment>:16:10: this linear value is only lent to this code (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`), and only the code that owns a linear value consumes it
 ```
 
 <!-- test: model-hand-ab-d-let-underscore-field -->
@@ -6152,7 +6332,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:15:12: use of moved value '__self': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:15:12: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ab-fz-finalizer-fields-linear -->
@@ -6353,6 +6533,71 @@ end 'main'
 ```
 ```maxoncstderr
 error E3223: <fragment>:13:4: this drops 'self', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-ac-fin-loop-destruct -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fin-loop-destruct` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self)
+		var i = 2 as Num
+		while i != 0 'w1'
+			destruct self
+			i = lg(0)
+		end 'w1'
+	end 'f'
+end 'Fz'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:13: use of moved value 'self': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: model-hand-ac-fin-use-after-destruct -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fin-use-after-destruct` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self) returns Num
+		destruct self
+		return self.n
+	end 'f'
+end 'Fz'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	let _ = t.f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:10: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-fin-self-into-union -->
@@ -8918,6 +9163,57 @@ end 'main'
 ```
 ```maxoncstderr
 error E3223: <fragment>:33:2: this drops '_', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-ac-sw-clone-union -->
+The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `sw-clone-union` of redteamAC.hand_ac15, in capmodel `reggio/REPORTRTAC.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function giveS(r Resp) returns Sent
+	return Sent.notSent(r)
+end 'giveS'
+
+function useS(s Sent)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let s = giveS(Resp.create(0))
+	let c = s.clone()
+	useS(s)
+	useS(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:39:10: 'Sent' is unique (its field 'r' holds a unique 'Resp') and cannot be cloned
 ```
 
 <!-- test: model-hand-ac-ua-spawn-and-exit-with-pending-handback -->
@@ -14342,6 +14638,51 @@ end 'main'
 error E3102: <fragment>:40:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: model-hand-ad-c-loop-refill-cond -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-refill-cond` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function bump()
+		self.code = lg(1)
+	end 'bump'
+end 'Resp'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	var r = Resp.create(0)
+	r.fin(1)
+	if lg(1) != 0 'i1'
+		r = Resp.create(2)
+	end 'i1'
+	r.fin(3)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:35:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- test: model-hand-ad-c-if-else-consume -->
 The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-if-else-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
@@ -15463,6 +15804,40 @@ end 'main'
 error E3224: <fragment>:3:11: 'Sent' is a linear value and cannot be a type argument of 'Array': a linear value lives only in locals, parameters and message arguments, so no container, promise, generic record or generic function holds one
 ```
 
+<!-- test: model-hand-ad-o-record-method-returns-self -->
+The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `o-record-method-returns-self` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function me() returns Rs
+		return self
+	end 'me'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Rs'
+
+function main() returns ExitCode
+	let r = Rs.create(0)
+	let a = r.me()
+	a.fin()
+	r.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3224: <fragment>:12:10: this linear value is only lent to this code (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`), and only the code that owns a linear value consumes it
+```
+
 <!-- test: model-hand-ad-o-record-method-passes-self -->
 The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `o-record-method-passes-self` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
@@ -15534,7 +15909,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:13:9: use of moved value '__self': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:13:9: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-keeps-self-out -->
@@ -15645,7 +16020,101 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:13:12: use of moved value '__self': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:13:12: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-ad-o-consuming-method-while -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-while` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function go(consuming self)
+		var i = 2 as Num
+		while i != 0 'w1'
+			destruct self
+			i = lg(0)
+		end 'w1'
+	end 'go'
+end 'Rs'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let r = Rs.create(0)
+	r.go()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:13: use of moved value 'self': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: model-hand-ad-o-consuming-method-field-write-after -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-field-write-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function go(consuming self)
+		destruct self
+		self.n = 3
+	end 'go'
+end 'Rs'
+
+function main() returns ExitCode
+	let r = Rs.create(0)
+	r.go()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:3: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-ad-o-consuming-method-read-after-destruct -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-read-after-destruct` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function go(consuming self) returns Num
+		destruct self
+		return self.n
+	end 'go'
+end 'Rs'
+
+function main() returns ExitCode
+	let r = Rs.create(0)
+	let _ = r.go()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:10: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-peek-after-destruct -->
@@ -17762,6 +18231,73 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: model-hand-af-c4-clone-mixed-union -->
+The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `c4-clone-mixed-union` of redteamAF.hand_af21, in capmodel `reggio/REPORTRTAF.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let u = Mp.m1(Bx.create(1))
+	let v = u.clone()
+	match u 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.n = 1
+	end 'x1'
+	match v 'x2'
+		m0(x) then x.fin(2)
+		m1(y) then y.n = 2
+	end 'x2'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:49:10: 'Mp' is unique (its field 'x' holds a unique 'Rl') and cannot be cloned
 ```
 
 <!-- test: model-hand-af-l1-continue-after-consume -->

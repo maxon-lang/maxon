@@ -5809,3 +5809,255 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-finalizer-reads-nothing-of-its-receiver-after-destruct -->
+`destruct self` moves the receiver, so a read of it afterwards is use after move.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self) returns Code
+		destruct self
+		return self.code
+	end 'fin'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(1)
+	let _ = r.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:10: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-finalizer-writes-nothing-of-its-receiver-after-destruct -->
+A field write through the receiver is a use of it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+		self.code = 3
+	end 'fin'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(1)
+	r.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:3: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-method-that-does-not-take-consuming-self-cannot-return-it -->
+`self` of a method that does not take `consuming self` is only lent, so returning it would give the caller a second owner of a value one finalizer ends.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function me() returns Resp
+		return self
+	end 'me'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(1)
+	let again = r.me()
+	again.fin()
+	r.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3224: <fragment>:12:10: this linear value is only lent to this code (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`), and only the code that owns a linear value consumes it
+```
+
+<!-- test: a-method-that-does-not-take-consuming-self-cannot-build-a-union-around-it -->
+A union literal holding the lent receiver moves it into the union, which only the code that owns it may do.
+```maxon
+typealias Code = int(0 to 999)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function wrap() returns Sent
+		return Sent.notSent(self)
+	end 'wrap'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(1)
+	let s = r.wrap()
+	match s 'x'
+		ok then break
+		notSent(held) then held.fin()
+	end 'x'
+	r.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3224: <fragment>:17:27: this linear value is only lent to this code (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`), and only the code that owns a linear value consumes it
+```
+
+<!-- test: a-union-carrying-a-linear-value-cannot-be-cloned -->
+A union with a linear payload is linear and unique, so `clone()` is refused as it is for the record.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Held
+	none
+	held(r Resp)
+end 'Held'
+
+function settle(h Held)
+	match h 'x'
+		none then break
+		held(r) then r.fin()
+	end 'x'
+end 'settle'
+
+function main() returns ExitCode
+	let u = Held.held(Resp.create(1))
+	let c = u.clone()
+	settle(u)
+	settle(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:30:10: 'Held' is unique (its field 'r' holds a unique 'Resp') and cannot be cloned
+```
+
+<!-- test: a-variable-refilled-in-only-one-branch-is-moved-after-the-branch -->
+`r` is moved before the `if` and refilled only in its `then` branch, so after the `if` it is moved on the path that skipped the refill.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function again() returns bool
+	return false
+end 'again'
+
+function main() returns ExitCode
+	var r = Resp.create(0)
+	r.fin()
+
+	if again() 'refill'
+		r = Resp.create(1)
+	end 'refill'
+
+	r.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-variable-refilled-in-every-branch-is-live-after-the-branches -->
+The `else` refills too, so `r` is live on both paths and the last `fin` consumes it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function again() returns bool
+	return false
+end 'again'
+
+function main() returns ExitCode
+	var r = Resp.create(0)
+	r.fin()
+
+	if again() 'refill'
+		r = Resp.create(1)
+	end 'refill' else 'refillOther'
+		r = Resp.create(2)
+	end 'refillOther'
+
+	r.fin()
+	return 0
+end 'main'
+```
+```stdout
+fin 0
+fin 2
+```
+```exitcode
+0
+```

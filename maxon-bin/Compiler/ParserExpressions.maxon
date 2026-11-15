@@ -193,7 +193,7 @@ extension Parser
 
 		// A binding the rhs moved is dropped on the skip edge, which then needs a block of its own: `entry` already
 		// dominates the rhs. A short-circuit that moves nothing keeps the direct edge — `finalizeIfNoElse`'s shape.
-		if self.movesALiveBinding(rhs.skippedMoveMark, after: rhs.rhsMoveMark) 'skipEdgeDrops'
+		if self.marksDisagreeOnAMove(rhs.skippedMoveMark, after: rhs.rhsMoveMark) 'skipEdgeDrops'
 			let skip = self.artifact.module.addBlock(func, label: b"scskip", heat: BlockHeat.normal)
 			self.reconcileMovesAtTwoEdgeMerge(skip, markA: rhs.skippedMoveMark, b: rhsEnd, markB: rhs.rhsMoveMark, anchor: opTok)
 			self.recordBranchEdge(skip, targetId: merge.id, argIds: argsOf(seed))
@@ -233,7 +233,7 @@ extension Parser
 		let rhs = try self.parseShortCircuitRhs(func, leftValue: leftValue, opTok: opTok, rhsMinPrec: rhsMinPrec)
 		let rhsEnd = self.bodyState.currentBlock
 
-		if self.movesALiveBinding(rhs.skippedMoveMark, after: rhs.rhsMoveMark) 'rhsMovedABinding'
+		if self.marksDisagreeOnAMove(rhs.skippedMoveMark, after: rhs.rhsMoveMark) 'rhsMovedABinding'
 			self.reconcileMovesAtTwoEdgeMerge(entry, markA: rhs.skippedMoveMark, b: rhsEnd, markB: rhs.rhsMoveMark, anchor: opTok)
 		end 'rhsMovedABinding'
 

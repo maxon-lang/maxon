@@ -2376,3 +2376,211 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:15:16: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: a-union-holding-a-unique-cannot-be-cloned -->
+A union whose payload is unique holds a unique, so its `clone()` would give the payload a second owner.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	none
+	have(t Token)
+end 'Slot'
+
+function main() returns ExitCode
+	let slot = Slot.have(Token.create(1))
+	let copy = slot.clone()
+
+	match copy 'x'
+		none then break
+		have(t) then print("{t.n}\n")
+	end 'x'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:19:13: 'Slot' is unique (its field 't' holds a unique 'Token') and cannot be cloned
+```
+
+<!-- test: a-unique-read-from-a-field-is-not-handed-to-a-service -->
+A send hands its argument to the service's green thread, so a unique value only read out of a record's field, which the record keeps, cannot be sent.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Holder
+	var token as Token
+
+	static function create(token Token) returns Self
+		return Self{token: token}
+	end 'create'
+end 'Holder'
+
+type Shelf
+	var token as Token
+
+	static function create(token isolated Token) returns Self
+		return Self{token: merge token}
+	end 'create'
+
+	export function put(held Token)
+		self.token = held
+	end 'put'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = spawn Shelf.create(Token.create(0))
+	let holder = Holder.create(Token.create(1))
+	try shelf.put(holder.token) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:35:16: cannot hand 'holder.token' to argument `held` of the message `Shelf.put`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
+```
+
+<!-- test: a-unique-payload-lent-by-a-match-is-not-handed-to-a-service -->
+The arm's binding views the unique union it matched, so sending the payload would give the service a second owner while the union still holds it.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	none
+	have(t Token)
+end 'Slot'
+
+type Shelf
+	var token as Token
+
+	static function create(token isolated Token) returns Self
+		return Self{token: merge token}
+	end 'create'
+
+	export function put(held Token)
+		self.token = held
+	end 'put'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = spawn Shelf.create(Token.create(0))
+	let slot = Slot.have(Token.create(1))
+
+	match slot 'x'
+		none then break
+		have(t) then try shelf.put(t) otherwise ignore
+	end 'x'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:35:30: cannot hand 't' to argument `held` of the message `Shelf.put`: it keeps a unique value, and 't' is only borrowed by this code, and only the code that owns a unique value hands it to another green thread; move it in from its owner
+```
+
+<!-- test: a-unique-element-of-an-array-field-is-not-handed-to-a-service -->
+Sending the array a record's field holds is a read of storage too: the record keeps the array and every unique in it.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+typealias TokenArray = Array with Token
+
+type Holder
+	var tokens as TokenArray
+
+	static function create(tokens TokenArray) returns Self
+		return Self{tokens: tokens}
+	end 'create'
+end 'Holder'
+
+type Sink
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function take(tokens TokenArray)
+		self.count = tokens.count() as Tally
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let sink = spawn Sink.create()
+	let holder = Holder.create(TokenArray.create(0))
+	holder.tokens.push(Token.create(1))
+	try sink.take(holder.tokens) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:38:16: cannot hand 'holder.tokens' to argument `tokens` of the message `Sink.take`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
+```
+
+<!-- test: an-owned-unique-is-handed-to-a-service -->
+A local the sender owns is moved into the message, and the service's own slot takes it.
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Shelf
+	var token as Token
+
+	static function create(token isolated Token) returns Self
+		return Self{token: merge token}
+	end 'create'
+
+	export function put(held Token)
+		self.token = held
+	end 'put'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = spawn Shelf.create(Token.create(0))
+	let fresh = Token.create(1)
+	try shelf.put(fresh) otherwise ignore
+	try shelf.put(Token.create(2)) otherwise ignore
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

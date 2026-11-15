@@ -168,6 +168,16 @@ function keptUniqueRefusalSentence(origin UniqueOrigin, subject String) returns 
 	end 'origin'
 end 'keptUniqueRefusalSentence'
 
+function borrowedUniqueRefusalSentence(origin UniqueOrigin, subject String) returns String
+	match origin 'origin'
+		owned then return "'{subject}' is only borrowed by this code, and only the code that owns a unique value hands it to another green thread; move it in from its owner"
+		lentByLoop or
+		lentByTuple or
+		readFromSlot or
+		lentByMatch then return keptUniqueRefusalSentence(origin, subject: subject)
+	end 'origin'
+end 'borrowedUniqueRefusalSentence'
+
 function spellsCapabilityWord(word ByteArray) returns bool
 	return word.equals(IsolatedCapabilityWord) or word.equals(ImmutableCapabilityWord) or word.equals(MutableMarkerWord)
 end 'spellsCapabilityWord'

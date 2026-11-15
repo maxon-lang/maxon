@@ -3324,6 +3324,61 @@ end 'main'
 0
 ```
 
+<!-- test: model-finding-aa-send-state-slot-read -->
+The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `send-state-slot-read` of redteamAA/p9.txt, in capmodel `reggio/REPORTRTAA.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Rc
+	var t as Tk
+
+	static function create(t isolated Tk) returns Self
+		return Self{t: merge t}
+	end 'create'
+
+	export function put(tV Tk)
+		self.t = tV
+	end 'put'
+end 'Rc'
+
+type Sv
+	var t as Tk
+	var k as Num
+
+	static function create(t isolated Tk, k Num) returns Self
+		return Self{t: merge t, k: k}
+	end 'create'
+end 'Sv'
+
+function g(r Rc.handle, s Sv.handle) returns Num
+	acquire s 'a1'
+		try r.put(s.t) otherwise ignore
+	end 'a1' otherwise 's2'
+		let _ = 0 as Num
+	end 's2'
+	return 0
+end 'g'
+
+function main() returns ExitCode
+	let r = spawn Rc.create(Tk.create(0))
+	let s = spawn Sv.create(Tk.create(1), k: 0)
+	let _ = g(r, s: s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:35:13: cannot hand 's.t' to argument `tV` of the message `Rc.put`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
+```
+
 <!-- test: model-finding-aa-send-state-swap -->
 The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3198. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `send-state-swap` of redteamAA/p9.txt, in capmodel `reggio/REPORTRTAA.txt`.
 

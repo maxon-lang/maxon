@@ -4068,6 +4068,131 @@ end 'main'
 error E3201: <fragment>:51:15: an isolated value from outside 'm1' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm1' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
 ```
 
+<!-- test: model-hand-ae-local-then-modify-local -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-then-modify-local` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	modify bx 'm1'
+		let w = v as isolated Rl
+		let by = Bx.create(1) as isolated Bx
+		modify by 'm2'
+			useS(giveS(w))
+		end 'm2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:52:15: an isolated value from outside 'm2' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm2' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
+<!-- test: model-hand-ae-local-outside-then-window -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-outside-then-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	let w = v as isolated Rl
+	modify bx 'm1'
+		useS(giveS(w))
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:50:14: an isolated value from outside 'm1' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm1' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
 <!-- test: model-hand-ae-local-outside-two -->
 The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-outside-two` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 

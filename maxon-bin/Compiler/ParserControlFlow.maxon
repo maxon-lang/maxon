@@ -324,7 +324,8 @@ extension Parser
 		end 'thenTerminated'
 
 		// Both the false edge (entry state) and the then edge (then state) reach the continuation. A binding
-		// the then branch MOVED but the entry left LIVE must be dropped on the false path — but the direct
+		// whose moved state differs between them — moved by the then branch while the entry left it live, or
+		// refilled by it after a move — is dropped on whichever edge still owns it, and the direct
 		// entry->cont false edge is `entry`, which already ends in the two-way condBranch and cannot take an
 		// appended decref. Only then is a fresh `iffalse` block minted on that edge to hold the drop; an `if`
 		// with no such conditional move takes the direct edge and its codegen is byte-identical to before.
@@ -334,7 +335,7 @@ extension Parser
 		// The block this branch already mints for a conditional move is exactly the block the counter needs,
 		// and `reconcileMovesAtMerge` emits nothing when no binding is mixed — so an instrumented `if` with no
 		// conditional move pays one block, one branch and the counter, and nothing else.
-		if self.movesALiveBinding(entryMoveMark, after: thenMoveMark) or self.coverageActive() 'falseEdgeDrop'
+		if self.marksDisagreeOnAMove(entryMoveMark, after: thenMoveMark) or self.coverageActive() 'falseEdgeDrop'
 			let falseBlock = self.artifact.module.addBlock(func, label: b"iffalse", heat: BlockHeat.normal)
 			self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: falseBlock.id, ifTok: ifTok)
 			self.mintElseArmPoint(falseBlock, funcName: func.name, ifTok: ifTok, elseTok: ifTok, written: false)
@@ -375,24 +376,15 @@ extension Parser
 
 	// Was the owned binding at `index` live in `before` and moved in `after`? The move flag is monotonic within a
 	// path, so such a binding was moved BY the code parsed between the two marks.
-	function movedBetweenMarks(before MoveMark, after MoveMark, index ElementIndex) returns bool
-		let wasMoved = before.movedAt(index)
-		let isMoved = after.movedAt(index)
-		return isMoved and not wasMoved
-	end 'movedBetweenMarks'
-
-	// Did the code between two marks move an owned binding live at the first — the shape a merge must place a
-	// drop on its other edge for (`finalizeIfNoElse`, `emitShortCircuit`)? A binding already moved at the first
-	// mark is moved on both edges, and one nothing touched is live on both.
-	function movesALiveBinding(before MoveMark, after MoveMark) returns bool
+	function marksDisagreeOnAMove(before MoveMark, after MoveMark) returns bool
 		for i in positionsThatMayDiffer(before, b: after) 'scan'
-			if self.movedBetweenMarks(before, after: after, index: i) or self.cellStoredBetweenMarks(before, after: after, index: i) 'movedBetween'
+			if before.movedAt(i) != after.movedAt(i) or self.cellStoredBetweenMarks(before, after: after, index: i) 'movedStateDiffers'
 				return true
-			end 'movedBetween'
+			end 'movedStateDiffers'
 		end 'scan'
 
 		return false
-	end 'movesALiveBinding'
+	end 'marksDisagreeOnAMove'
 
 	// Finalize an `if`/`else`: the entry's condBranch targets the then and else blocks.
 	// The continuation is reachable only when a branch falls through; when BOTH return
@@ -4771,7 +4763,7 @@ extension Parser
 
 				if prevFallthrough 'defaultIsFtArrival'
 					defaultArrivedMoveMark = self.captureMoveMark()
-					defaultNeedsADispatchEdge = self.movesALiveBinding(entryMoveMark, after: defaultArrivedMoveMark)
+					defaultNeedsADispatchEdge = self.marksDisagreeOnAMove(entryMoveMark, after: defaultArrivedMoveMark)
 				end 'defaultIsFtArrival'
 
 				// `var` because `parseArmBody` mutates it, and seated from an ID because `currentTestBlock`
@@ -4975,8 +4967,8 @@ extension Parser
 				end 'armFresh'
 
 				// The short-circuit is load-bearing: a fresh arm leaves `armArrivedMoveMark` the shared
-				// empty mark, which `movesALiveBinding` would index out of bounds against the entry mark.
-				let armDropsOnItsDispatchEdge = prevFallthrough and self.movesALiveBinding(entryMoveMark, after: armArrivedMoveMark)
+				// empty mark, which `marksDisagreeOnAMove` would index out of bounds against the entry mark.
+				let armDropsOnItsDispatchEdge = prevFallthrough and self.marksDisagreeOnAMove(entryMoveMark, after: armArrivedMoveMark)
 
 				if usePlan 'planEdgeArgs'
 					// The dispatch records each test→arm edge from the stamped intervals. No `condBranch` here — the

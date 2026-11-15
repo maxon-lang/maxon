@@ -15,6 +15,28 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A finalizer reads and writes nothing of its receiver after `destruct self`: `self.field`, `self.field = …`
+  and a bare field name written after it are E3102, as a read of any moved value is.
+  Fix: read what the finalizer needs into a local before `destruct self`.
+
+- `self` of a method that does not take `consuming self` is only lent, so `return self` and a union literal
+  built around it (`Sent.notSent(self)`) are E3224, as passing it to a function that takes it already was.
+  Fix: take `consuming self`, or return a field or a new value.
+
+- A union with a unique payload cannot be cloned: `slot.clone()` is E3214 (`'Slot' is unique … and cannot be
+  cloned`), as it is for a unique record.
+  Fix: move the union, or clone what its payload holds and build a new union around the copy.
+
+- A variable moved before an `if` and refilled in only some of its branches is moved after the `if`, so a
+  read of it there is E3102.
+  Fix: refill it in every branch, or leave the moved value unread until the next assignment.
+
+- A unique value is handed to another green thread only by the code that owns it. A message argument or a
+  `spawn` factory argument that is a unique value only read out of a field or an element, lent by a loop, a
+  tuple or a `match`, or borrowed through a by-reference parameter is E3214.
+  Fix: move the value out of its holder first (`pop`, `remove`, or `swap` out of an isolated field) and send
+  that.
+
 - A `match` over a unique union lends it to its arms, and the variable that holds the matched union is not
   moved or copied inside an arm: `let copy = slot`, a call whose parameter keeps `slot`, a store of it into a
   field, a closure that captures it, and the same for the record whose field is matched (`match holder.slot`)

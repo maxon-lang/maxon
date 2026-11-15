@@ -1373,6 +1373,10 @@ extension Parser
 			let checked = try self.requirePayloadArgType(field, declared: declared, declaredWithAlias: declaredWithAlias, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill), layout: layout)
 			try args.set(i, value: checked) otherwise panic("emitEnumBox: args.set OOB at {i} — args.count() was checked to equal the arity")
 
+			if payloadFillBuildsAConstruct(fill) and self.valueIsLinear(checked) 'aLinearPayload'
+				try self.requireLinearArgumentIsOwned(checked, anchor: self.tokenAt(anchorIndex))
+			end 'aLinearPayload'
+
 			match fill 'fill'
 				unionConstruct then self.recordPayloadRangeCheck(checked, class: class, declared: declaredWithAlias, layout: layout, anchor: self.tokenAt(anchorIndex))
 				serviceMessage then break
@@ -5633,6 +5637,7 @@ extension Parser
 	// ⚠ The refusals come BEFORE the tokens are consumed and before anything is emitted, for
 	// `emitSynthesizedStructClone`'s reason: a rejected program must leave no ops behind.
 	function emitSynthesizedUnionClone(recv MethodReceiver, layout EnumLayout, memberTok Token) returns ValueId throws SourceParseError
+		try self.requireNoUniqueCause(self.signatures.uniqueCauseOf(layout.name), subject: String.from(layout.name), verb: "cloned", anchor: recv.anchor)
 		try self.requireUnionCloneSupported(layout, memberTok: memberTok)
 		self.advance()
 		try self.consumeEmptyArgList()

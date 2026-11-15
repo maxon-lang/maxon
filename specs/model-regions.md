@@ -972,6 +972,34 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ad-k-local-isolated-once -->
+The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-local-isolated-once` of redteamAD.hand_ad3, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tok is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tok'
+
+function keepLocal(t Tok)
+	let _ = t
+end 'keepLocal'
+
+function main() returns ExitCode
+	let t = Tok.create(0) as isolated Tok
+	keepLocal(t)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ad-k-arr -->
 The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-arr` of redteamAD.hand_ad3, in capmodel `reggio/REPORTRTAD.txt`.
 
@@ -1489,6 +1517,121 @@ end 'main'
 ```
 ```maxoncstderr
 error E3196: <fragment>:20:10: cannot store an isolated 'Tok' into 'an element of the container push writes', which holds a mutable 'Tok'; `merge` it first
+```
+
+<!-- test: model-hand-ad-k-method-keep -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-method-keep` of redteamAD.hand_ad3, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tok is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tok'
+
+type Ek
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(t Tok)
+		let _ = t
+	end 'eat'
+end 'Ek'
+
+function main() returns ExitCode
+	let e = Ek.create(0)
+	let t = Tok.create(1) as isolated Tok
+	e.eat(t)
+	e.eat(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:27:2: 'e' is mutable outside 't'; a call into an isolated region takes values, immutable or isolated
+```
+
+<!-- test: model-hand-ad-k-method-keep-iso-recv -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-method-keep-iso-recv` of redteamAD.hand_ad3, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tok is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tok'
+
+type Ek
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(t Tok)
+		let _ = t
+	end 'eat'
+end 'Ek'
+
+function main() returns ExitCode
+	let e = Ek.create(0) as isolated Ek
+	let t = Tok.create(1) as isolated Tok
+	e.eat(t)
+	e.eat(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:27:8: one statement reaches through two isolated values, 'e' and 't'; a statement opens one isolated value, so open one with `modify` or split the statement
+```
+
+<!-- test: model-hand-ad-k-cond -->
+The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-cond` of redteamAD.hand_ad3, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tok is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tok'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function rd(t Tok) returns Num
+	return t.n
+end 'rd'
+
+function keepLocal(t Tok)
+	let _ = t
+end 'keepLocal'
+
+function main() returns ExitCode
+	let t = Tok.create(1) as isolated Tok
+	let u = Tok.create(2) as isolated Tok
+	keepLocal((t if lg(1) != 0 else u))
+	let _ = rd(t)
+	let _ = rd(u)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:13: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-af-sh7-inner-let-iso-bx -->

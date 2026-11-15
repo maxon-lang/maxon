@@ -2010,6 +2010,10 @@ extension Parser
 	end 'parseCheckedValueReturn'
 
 	function returnCheckedValue(func IrFunction, expression ValueId, retStart ElementIndex, anchor Token) throws SourceParseError
+		if self.valueIsLinear(expression) 'aLinearResult'
+			try self.requireLinearArgumentIsOwned(expression, anchor: self.tokenAt(retStart))
+		end 'aLinearResult'
+
 		try self.requireByReferenceIsolatedStaysPut(func, value: expression, at: anchor)
 
 		try self.requireReturnedCapability(func, value: expression, retStart: retStart)

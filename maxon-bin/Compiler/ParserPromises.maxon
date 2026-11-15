@@ -829,6 +829,18 @@ extension Parser
 		return self.coroutineTakeOf(argument)
 	end 'handOffTakeOf'
 
+	function requireNoUniqueIsBorrowedAway(argument HandedOffArgument) throws SourceParseError
+		if not self.valueHoldsAUniqueRecord(argument.value) or self.valueIsAnImmortalImageRecord(argument.value) 'nothingAliasable'
+			return
+		end 'nothingAliasable'
+
+		let index = self.argumentFirstTokenIndex(SourceRange.ofToken(argument.anchor))
+		let origin = self.uniqueOriginOf(argument.value, namesABinding: self.argumentNamesABindingAt(index), anchorIndex: index)
+		let subject = self.tokenTextFrom(index, endIndex: self.argumentSpanEnd(index, throughOtherwise: true))
+
+		throw self.regionRefusal(ErrorCode.semanticUniqueValueRefused, message: "cannot hand '{subject}' to {handOffDoorBlame(argument.door)}: it keeps a unique value, and {borrowedUniqueRefusalSentence(origin, subject: subject)}", line: argument.anchor.line, column: argument.anchor.column)
+	end 'requireNoUniqueIsBorrowedAway'
+
 	function coroutineTakeOf(argument HandedOffArgument) returns HandOffTake
 		let value = argument.value
 
@@ -868,6 +880,8 @@ extension Parser
 		end 'borrowedButNothingCanWriteIt'
 
 		if not self.valueIsOwnedHeap(value) 'borrowed'
+			try self.requireNoUniqueIsBorrowedAway(argument)
+
 			if self.spawnReleasesTheReadsOf(value, door: door) or not tagIsByteRecord(self.tagOf(value)) 'aReadTheDoorTakesAReferenceTo'
 				return HandOffTake.aReferenceOfItsOwn
 			end 'aReadTheDoorTakesAReferenceTo'
