@@ -18,7 +18,9 @@
 //     site (`spliceFitsRegisters`), or, when it keeps values in registers across its calls, into a
 //     caller that keeps none where a hot path avoids the site (`CallProbe`).
 //     Callees are spliced before their callers (post-order over the direct-call graph), so a
-//     chain nests naturally and a spliced body's own site table is remapped into its caller's.
+//     chain nests up to `MaxCalledOnceSiteDepth` inline-site levels (a callee whose splice would
+//     carry its caller past that stays a call) and a spliced body's own site table is remapped into
+//     its caller's.
 //
 // ⭐⭐ **A SPLICED BODY KEEPS ITS FRAME IN EVERY STACK TRACE.** Every block a splice copies carries the
 // splice's INLINE SITE (`IrBlock.inlineSite`: the callee's name and the site it nests under); the backends
@@ -110,6 +112,8 @@ let MaxInlinedLeafColdOps = 12 as ElementIndex
 // The budget for a witness-slot adapter, which may hold the impl the called-once rule merged
 // into it.
 let MaxInlinedForwarderOps = 48 as ElementIndex
+
+let MaxCalledOnceSiteDepth = 32 as SiteHeight
 
 // The block labels this pass mints. They reach the rendered Target IR, so they are short and
 // prefixed `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and
@@ -2456,6 +2460,7 @@ enum CalledOnceRefusal
 	unsupportedOp
 	pressureBudgetExceeded
 	widensCallerFrame
+	nestsTooDeep
 
 	// A ```RequiredRuntime block asks the printer for this body after the pipeline; spliced away, it
 	// would be dropped and the `TargetIr` pin would hold nothing of it.
@@ -2483,6 +2488,7 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 		unsupportedOp gives "it holds an op the splice cannot copy"
 		pressureBudgetExceeded gives "the caller's values live across the site plus the body's loop live-ins are over the register budget"
 		widensCallerFrame gives "its body keeps values in registers across its calls and the caller keeps none, so the splice would make the caller save callee registers on every path"
+		nestsTooDeep gives "splicing it would give its caller an inline-site height above {MaxCalledOnceSiteDepth}"
 		namedByIrRequest gives "a rendered-IR request names its body"
 		siteOutsideThisRound gives "its one site lies outside the caller range this round considers"
 		calleeOutsideThisRound gives "it is not a runtime tier body, which is the only callee the band's round joins a builder caller to"
@@ -2676,8 +2682,8 @@ type CalledOnceCensus
 	end 'noteTerminatorReferences'
 end 'CalledOnceCensus'
 
-// The called-once callees one wave admits — those whose every called-once callee is already spliced — and
-// the value-space width and block count each copy was admitted at.
+// The called-once callees one wave admits — those whose every called-once callee is already spliced
+// or left a call — and the value-space width and block count each copy was admitted at.
 type CalledOnceWave
 	var admitted as FixedBoolArray
 	var valueBounds as FixedValueIdArray
@@ -2714,6 +2720,133 @@ type CalledOnceWave
 		return try self.blockCounts.get(calleeIndex) otherwise panic("CalledOnceWave.blockCountOf: function index {calleeIndex} is outside the {self.blockCounts.count()}-function module")
 	end 'blockCountOf'
 end 'CalledOnceWave'
+
+typealias SiteHeight = int(0 to u64.max)
+typealias SiteHeightArray = Array with SiteHeight
+
+type SiteDepths
+	export let depths as SiteHeightArray
+	export var height as SiteHeight
+
+	static function create() returns SiteDepths
+		return Self{depths: SiteHeightArray.create(0), height: 0}
+	end 'create'
+
+	function extendOver(func IrFunction)
+		for index in self.depths.count() upto func.inlineSites.count() 'eachNewSite'
+			let site = try func.inlineSites.get(index) otherwise panic("SiteDepths.extendOver: inlineSites.get OOB at {index} inside its own count")
+			let depth = self.depthOf(site.parent) + 1
+			self.depths.push(depth)
+
+			if depth > self.height 'deeper'
+				self.height = depth
+			end 'deeper'
+		end 'eachNewSite'
+	end 'extendOver'
+
+	function depthOf(site InlineSiteRef) returns SiteHeight
+		return match site 's'
+			none gives 0
+			site(index) gives try self.depths.get(index) otherwise panic("SiteDepths.depthOf: site {index} is not among the {self.depths.count()} measured — a site nests under one recorded before it")
+		end 's'
+	end 'depthOf'
+end 'SiteDepths'
+
+typealias SiteDepthsMap = Map with (ElementIndex, SiteDepths)
+
+type SiteHeights
+	var byFunc as SiteDepthsMap
+
+	static function create() returns SiteHeights
+		return Self{byFunc: SiteDepthsMap.create()}
+	end 'create'
+
+	function depthsOf(func IrFunction, funcIndex ElementIndex) returns SiteDepths
+		if let known = try self.byFunc.get(funcIndex) 'known'
+			known.extendOver(func)
+			return known
+		end 'known'
+
+		let fresh = SiteDepths.create()
+		fresh.extendOver(func)
+		self.byFunc.upsert(funcIndex, value: fresh)
+		return fresh
+	end 'depthsOf'
+
+	function siteHeightOf(func IrFunction, funcIndex ElementIndex) returns SiteHeight
+		return self.depthsOf(func, funcIndex: funcIndex).height
+	end 'siteHeightOf'
+
+	function splicingNestsTooDeep(module StdModule, caller IrFunction, callerIndex ElementIndex, callee IrFunction, calleeIndex ElementIndex, site SiteAcross) returns bool
+		let callerDepths = self.depthsOf(caller, funcIndex: callerIndex)
+		let siteDepth = callerDepths.depthOf(module.blockAtPosition(caller, position: site.cut.position).inlineSite)
+		let nested = siteDepth + 1 + self.siteHeightOf(callee, funcIndex: calleeIndex)
+		let reached = nested if nested > callerDepths.height else callerDepths.height
+		return reached > MaxCalledOnceSiteDepth
+	end 'splicingNestsTooDeep'
+end 'SiteHeights'
+
+function calledOnceHeightSummary(module StdModule, census CalledOnceCensus, candidate FixedBoolArray, heights SiteHeights) returns String
+	let funcCount = module.funcCount()
+	let survives = FixedBoolArray.create(funcCount)
+
+	for calleeIndex in 0 upto funcCount 'eachFunc'
+		if not isCandidate(candidate, funcIndex: calleeIndex) or not module.getFunc(calleeIndex).bodySplicedAway 'notSplicedThisRound'
+			continue
+		end 'notSplicedThisRound'
+
+		let callerIndex = census.callerOfCallee(calleeIndex)
+
+		if not module.getFunc(callerIndex).bodySplicedAway 'callerKeepsItsBody'
+			try survives.set(callerIndex, value: true) otherwise panic("calledOnceHeightSummary: survives.set OOB at {callerIndex}")
+		end 'callerKeepsItsBody'
+	end 'eachFunc'
+
+	let survivorHeights = SiteHeightArray.create(0)
+	var deepest = 0 as SiteHeight
+
+	for funcIndex in 0 upto funcCount 'eachSurvivor'
+		if not (try survives.get(funcIndex) otherwise panic("calledOnceHeightSummary: survives.get OOB at {funcIndex}")) 'notASurvivor'
+			continue
+		end 'notASurvivor'
+
+		let height = heights.siteHeightOf(module.getFunc(funcIndex), funcIndex: funcIndex)
+		survivorHeights.push(height)
+
+		if height > deepest 'deeper'
+			deepest = height
+		end 'deeper'
+	end 'eachSurvivor'
+
+	if survivorHeights.count() == 0 'noCallerSplicedInto'
+		return "no caller was spliced into"
+	end 'noCallerSplicedInto'
+
+	let tally = SiteCountArray.create((deepest + 1) as ElementIndex)
+
+	for height in survivorHeights 'eachHeight'
+		let slot = height as ElementIndex
+		try tally.set(slot, value: (try tally.get(slot) otherwise panic("calledOnceHeightSummary: tally.get OOB at {slot}")) + 1) otherwise panic("calledOnceHeightSummary: tally.set OOB at {slot}")
+	end 'eachHeight'
+
+	var text = ""
+
+	for slot in 0 upto tally.count() 'eachSlot'
+		let count = try tally.get(slot) otherwise panic("calledOnceHeightSummary: tally.get OOB at {slot} inside its own count")
+
+		if count == 0 'noCallerAtThisHeight'
+			continue
+		end 'noCallerAtThisHeight'
+
+		if text.byteLength() > 0 'notTheFirst'
+			text.append(", ")
+		end 'notTheFirst'
+
+		text.append("{count} x height {slot}")
+	end 'eachSlot'
+
+	return "{text}; deepest {deepest}"
+end 'calledOnceHeightSummary'
 
 // ⭐ **EVERYTHING THE SPLICES INTO ONE CALLER ASK ABOUT IT, COMPUTED ONCE PER CALLER**: every candidate
 // site in it — where it stands, what it passes, and the values live across it that the loop around it
@@ -3405,6 +3538,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 	let liveness = StdLiveness.create()
 	let across = StdValueUseSet.createRecordingIds()
 	let calls = CallProbe.create(project, funcCount: funcCount, byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
+	let heights = SiteHeights.create()
 
 	while remaining > 0 'eachWave'
 		if ready.count() == 0 'onlyCyclesLeft'
@@ -3412,7 +3546,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'onlyCyclesLeft'
 
-		remaining = remaining - spliceWave(project, module: module, byName: byName, census: census, calleesOfCallers: calleesOfCallers, budget: budget, candidate: candidate, processed: processed, pendingCallees: pendingCallees, ready: ready, refusals: refusals, stats: stats, def: def, cloner: cloner, meta: meta, origins: origins, wave: wave, callerFacts: callerFacts, liveness: liveness, across: across, calls: calls)
+		remaining = remaining - spliceWave(project, module: module, byName: byName, census: census, calleesOfCallers: calleesOfCallers, budget: budget, candidate: candidate, processed: processed, pendingCallees: pendingCallees, ready: ready, refusals: refusals, stats: stats, def: def, cloner: cloner, meta: meta, origins: origins, wave: wave, callerFacts: callerFacts, liveness: liveness, across: across, calls: calls, heights: heights)
 	end 'eachWave'
 
 	stats.dropWhatNoPathReaches(module)
@@ -3421,6 +3555,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: {spliced} called-once callee(s) spliced, {declinedGuards} spliced parameter cascade(s) declined as provably dead; left as calls: {refusals.summary(CalledOnceRefusal.allCaseNames)}")
+		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: called-once site heights: {calledOnceHeightSummary(module, census: census, candidate: candidate, heights: heights)}")
 	end 'debugging'
 end 'spliceCalledOnceCallees'
 
@@ -3570,10 +3705,10 @@ function isProcessed(processed FixedBoolArray, funcIndex ElementIndex) returns b
 	return try processed.get(funcIndex) otherwise panic("isProcessed: function index {funcIndex} is outside the processed column")
 end 'isProcessed'
 
-// One wave: every ready candidate is checked against the frame rule (`CallProbe.frameOf`) and the
-// pressure budget at its site, the admitted ones are spliced caller by caller, and all of them are
-// retired. Answers how many candidates it retired.
-function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, budget HoistPressureBudget, candidate FixedBoolArray, processed FixedBoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, liveness StdLiveness, across StdValueUseSet, calls CallProbe) returns ElementIndex
+// One wave: every ready candidate is checked against the depth bound (`splicingNestsTooDeep`), the
+// frame rule (`CallProbe.frameOf`) and the pressure budget at its site, the admitted ones are spliced
+// caller by caller, and all of them are retired. Answers how many candidates it retired.
+function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, budget HoistPressureBudget, candidate FixedBoolArray, processed FixedBoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, liveness StdLiveness, across StdValueUseSet, calls CallProbe, heights SiteHeights) returns ElementIndex
 	let retiring = FuncIndexArray.create(ready.count(), zeroed: false)
 	let calleesByCaller = IndexGroupMap.create()
 
@@ -3591,20 +3726,29 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 		let caller = module.getFunc(callerIndex)
 		let facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness, calls: calls)
 		var admittedAny = false
+		let judged = FuncIndexArray.create(callees.count(), zeroed: false)
 		let sites = SiteAcrossArray.create(callees.count(), zeroed: false)
 		let valueBounds = ValueIdArray.create(callees.count(), zeroed: false)
 		let calleeHolds = BoolArray.create(callees.count(), zeroed: false)
 
 		for calleeIndex in callees 'eachCandidate'
 			let callee = module.getFunc(calleeIndex)
-			sites.push(facts.siteOf(calleeIndex, callee: callee))
+			let site = facts.siteOf(calleeIndex, callee: callee)
+
+			if heights.splicingNestsTooDeep(module, caller: caller, callerIndex: callerIndex, callee: callee, calleeIndex: calleeIndex, site: site) 'nestsTooDeep'
+				refusals.add(CalledOnceRefusal.nestsTooDeep.ordinal, count: 1)
+				continue
+			end 'nestsTooDeep'
+
+			judged.push(calleeIndex)
+			sites.push(site)
 			valueBounds.push(calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex))
 			calleeHolds.push(calls.callerFrameIsLean(callerIndex) and calls.calleeHoldsRegisters(module, calleeIndex: calleeIndex, liveness: liveness))
 		end 'eachCandidate'
 
 		let verdicts = judgeSites(module, budget: budget, callerIndex: callerIndex, sites: sites, valueBounds: valueBounds, calleeHolds: calleeHolds, across: across, liveness: liveness, calls: calls)
 
-		for (iter, calleeIndex) in callees.withIterator() 'eachVerdict'
+		for (iter, calleeIndex) in judged.withIterator() 'eachVerdict'
 			let verdict = try verdicts.get(iter.index()) otherwise panic("spliceWave: no verdict for candidate {iter.index()}")
 
 			match verdict 'verdict'
@@ -3644,6 +3788,11 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 		let readyCallees = try calleesByCaller.get(callerIndex) otherwise panic("spliceWave: no ready callees for a caller this wave admitted callees of")
 		splicer.spliceCalledOnceSites(facts, readyCallees: readyCallees, wave: wave)
 		calls.forget(callerIndex)
+		let reached = heights.siteHeightOf(module.getFunc(callerIndex), funcIndex: callerIndex)
+
+		if reached > MaxCalledOnceSiteDepth 'splicedPastTheBound'
+			panic("spliceWave: '{String.from(module.getFunc(callerIndex).name)}' reached an inline-site height of {reached} — the admission above refuses every splice that would take its caller above {MaxCalledOnceSiteDepth}")
+		end 'splicedPastTheBound'
 	end 'eachSplicingCaller'
 
 	for calleeIndex in retiring 'eachRetired'
@@ -4389,10 +4538,10 @@ type SiteSplicer
 	// `InlineManagedPrimitives`, nothing is revisited at all.** A splice appends two kinds of block. A
 	// COPIED body under the leaf rule may hold calls in cold blocks, and the snapshot is what leaves
 	// them calls (`watchCopiedCalls` notes the flippable ones); under the called-once rule every
-	// called-once callee inside it was spliced in an earlier wave. A CONTINUATION holds ops of the
-	// ORIGINAL block, every site in which `collectSites` has already collected before it split
-	// anything. So one pass over the original blocks IS the whole walk — no worklist, no "already
-	// expanded" marker column, and no chain to follow.
+	// called-once callee inside it was spliced or left a call in an earlier wave. A CONTINUATION
+	// holds ops of the ORIGINAL block, every site in which `collectSites` has already collected
+	// before it split anything. So one pass over the original blocks IS the whole walk — no
+	// worklist, no "already expanded" marker column, and no chain to follow.
 	//
 	// Every block's sites are collected before any is spliced, because a wrapper site's verdict depends
 	// on the caller's other sites (`judgeSites` admits the fillers first).

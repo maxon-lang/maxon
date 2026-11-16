@@ -3,8 +3,8 @@ set -euo pipefail
 N="$1"; MODE="$2"; OUT="$3"
 
 case "$MODE" in
-  bases|owners|returns|returnsfree|doors|closure|dedupe|cycle|nested|phantom) ;;
-  *) echo "genshare.sh: mode must be bases, owners, returns, returnsfree, doors, closure, dedupe, cycle, nested or phantom, got '$MODE'" >&2; exit 2 ;;
+  bases|owners|returns|returnsfree|doors|closure|dedupe|cycle|ring|nested|phantom) ;;
+  *) echo "genshare.sh: mode must be bases, owners, returns, returnsfree, doors, closure, dedupe, cycle, ring, nested or phantom, got '$MODE'" >&2; exit 2 ;;
 esac
 
 emit_prelude() {
@@ -98,16 +98,22 @@ last_use="$(printf 'use%05d()' $(( N - 1 )))"
       done
       emit_main "freeze " "$last_use"
       ;;
-    cycle)
+    cycle|ring)
       emit_gen "Gen"
       k=0
       while [ "$k" -lt "$N" ]; do
-        next=$(( k + 1 - 2 * (k % 2) ))
+        if [ "$MODE" = cycle ]; then
+          next=$(( k + 1 - 2 * (k % 2) ))
+          start=$(( k - k % 2 ))
+        else
+          next=$(( (k + 1) % N ))
+          start=0
+        fi
         printf 'type Ring%05d uses A, B\n\ttypealias Flip = Ring%05d with (B, A)\n\ttypealias AGen = Gen with A\n\n\tstatic function go(x A, y B, depth Tally) returns Sink\n\t\tif depth == 0 '\''done'\''\n\t\t\treturn AGen.create(x, seen: 1)\n\t\tend '\''done'\''\n\n\t\treturn Flip.go(y, y: x, depth: depth - 1)\n\tend '\''go'\''\nend '\''Ring%05d'\''\n\n' "$k" "$next" "$k"
-        if [ $(( k % 2 )) -eq 0 ]; then
+        if [ "$k" -eq "$start" ]; then
           printf 'typealias Start%05d = Ring%05d with (Tally, Tally)\n\n' "$k" "$k"
         fi
-        emit_chain_link "$k" "$(printf 'Start%05d.go(1, y: 2, depth: 2).total()' $(( k - k % 2 )))"
+        emit_chain_link "$k" "$(printf 'Start%05d.go(1, y: 2, depth: 2).total()' "$start")"
         k=$(( k + 1 ))
       done
       emit_main "freeze " "$last_use"

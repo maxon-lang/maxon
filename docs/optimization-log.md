@@ -280,6 +280,7 @@ ragged.
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 10,469,413 | 14,555,746 | 22,697,436 | 39,002,472 | 71,758,773 | 137,878,391 |
 | 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 14,626,494 | 19,107,038 | 28,055,214 | 45,979,705 | 81,961,833 | 154,547,142 |
 | 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 11,164,174 | 15,538,163 | 24,255,682 | 41,712,756 | 76,772,855 | 147,502,626 |
+| 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The called-once rule is bounded by inline-site depth (MaxCalledOnceSiteDepth = 32): inlineLeaves keeps one depth column per function the rule asks about, and no corpus function nests past the bound, so code bytes are unchanged | 10,474,470 | 14,564,778 | 22,714,414 | 39,035,343 | 71,823,414 | 138,006,554 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -369,6 +370,7 @@ ragged.
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 1,107,872,432 | 1,609,875,216 | 2,615,829,648 | 4,652,378,928 | 8,784,771,584 | 17,075,723,456 |
 | 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 1,402,204,336 | 1,935,298,288 | 3,002,651,296 | 5,165,089,920 | 9,547,507,088 | 18,341,147,696 |
 | 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 1,192,525,568 | 1,717,957,104 | 2,769,790,064 | 4,899,461,024 | 9,217,588,320 | 17,881,208,992 |
+| 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The called-once rule is bounded by inline-site depth (MaxCalledOnceSiteDepth = 32): inlineLeaves keeps one depth column per function the rule asks about, and no corpus function nests past the bound, so code bytes are unchanged | 1,108,146,688 | 1,610,372,112 | 2,616,690,096 | 4,654,051,168 | 8,788,063,520 | 17,082,292,496 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -501,6 +503,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | A library file never sees a declaration from a layer above it: every parser lookup takes the reading file's layer | 1,593,731,909 | 2,198,554,228 | 3,530,302,749 | 5,706,880,362 | 10,567,712,559 | 20,256,949,477 |
 | 2026-11-14 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Each type's unique, linear and reply-holding answer is settled once per type and asked without a visited set until a walk is needed; same-directory A/B against a compiler built from the base commit: total allocations -0.09% at rung 0 to +0.03% at rung 5 (signatures +0.86% to +1.08% for the settle, parse -0.52% to -0.12%, semanticCheck -0.21% to -0.28%), growth ratios identical, emitted code bytes unchanged, images byte-identical at every rung; the corpus declares no unique or linear type, so the saving is read on tests/ladders/gentypeprops.sh and the self-compile | 5,678,014,421 | 7,352,085,686 | 10,656,406,205 | 17,527,837,540 | 31,153,548,494 | 59,034,916,098 |
 | 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 4,479,465,135 | 6,035,210,470 | 9,104,994,533 | 15,008,722,008 | 27,204,630,868 | 52,003,627,401 |
+| 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The called-once rule is bounded by inline-site depth (MaxCalledOnceSiteDepth = 32): inlineLeaves keeps one depth column per function the rule asks about, and no corpus function nests past the bound, so code bytes are unchanged | 1,738,098,828 | 2,323,158,834 | 3,592,485,855 | 5,950,906,787 | 12,145,758,983 | 21,650,004,570 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -2753,3 +2756,34 @@ skipped, because every program that touches the heap is checked for leaks after 
 compiler's own source also never starts from the library's cached declarations: it declares about 110 names
 the library uses too (`DrivePrefixLength` and `DriveColonByte` trip the rule first), so its sweep folds
 the library with the program.
+
+### Result — 2026-11-16, the called-once rule is bounded by inline-site depth, so a chain of single-call functions is linear from `inlineLeaves` on
+
+The called-once rule spliced with no bound, so a chain of functions each called once (a plain `link<k>` calling `link<k+1>`, or a ring of generics whose members but one have a single caller) folded as one path `N` levels deep in the function at its root. Two costs followed, against linear emitted code:
+
+- `inlineLeaves` folds one link per wave, leaves first, and each wave copied the body grown so far: the sum of the depths, `N²/2` bodies.
+- every later phase paid once per enclosing inline level. A level's parameters stay live and in scope through every deeper level, so the debug-range harvest in `regalloc`, the encoder's site climbs and the sidecar's local rows were `N²` too: the `.mxdbg` of the ring read 552,237 / 1,697,125 / 6,146,937 / 23,686,525 bytes at N = 100 / 200 / 400 / 800.
+
+The rule now refuses a callee whose splice would give its caller an inline-site height above `MaxCalledOnceSiteDepth` (32); the callee stays a call and its caller stays a candidate, so a long chain becomes runs of 33 links cut at heights counted from the leaves. The height is read off the inline-site tree, each site's depth computed once per run of the rule.
+
+The value rests on measurement: the deepest called-once site height in the compiler's own compile is 10 (2,940 callers at height 1, 852 at 2, 304 at 3, 109 at 4, 43 at 5, 14 at 6, 7 at 7, 1 at 8, 2 at 9, 2 at 10), and 8 over `examples/` (`wc`). The bound refuses nothing there: the self-compile's executable is byte-identical to the one a compiler built from the parent commit produces, and no `ir-specs/` pin moved.
+
+Read on `tests/ladders/genoncechain.sh <N> <out>` and `tests/ladders/genshare.sh <N> ring <out>`, allocations per phase (`--metrics`, field 4), with the ratios of the differences between rungs; every rung exits 0. Before, at N = 100 / 200 / 400 / 800, on the parent commit:
+
+| Ladder | `inlineLeaves` | `regalloc` | `encode` | `writeDebugInfo` |
+|---|---|---|---|---|
+| chain | 490,316 / 1,593,938 / 5,933,754 / 23,140,064 (×3.93, ×3.96) | 235,267 / 521,489 / 1,603,826 / 5,808,342 (×3.78, ×3.88) | 43,624 / 150,636 / 574,637 / 2,262,608 (×3.96, ×3.98) | 152,823 / 415,533 / 1,423,072 / 5,362,709 (×3.84, ×3.91) |
+| `ring` | 575,866 / 1,833,902 / 6,692,513 / 25,776,464 (×3.86, ×3.93) | 848,998 / 1,274,669 / 2,667,953 / 7,612,281 (×3.27, ×3.55) | 80,548 / 213,046 / 718,165 / 2,688,221 (×3.81, ×3.90) | 225,389 / 663,971 / 2,356,311 / 8,979,418 (×3.86, ×3.91) |
+
+After, at N = 100 / 200 / 400 / 800 / 1600 / 3200:
+
+| Ladder | `inlineLeaves` | `regalloc` | `encode` | `writeDebugInfo` |
+|---|---|---|---|---|
+| chain | 270,772 / 452,829 / 816,078 / 1,544,856 / 3,006,283 / 5,944,372 (×2.00, ×2.01, ×2.01, ×2.01) | 183,642 / 250,965 / 386,942 / 656,243 / 1,195,587 / 2,277,214 (×2.02, ×1.98, ×2.00, ×2.01) | 20,841 / 35,491 / 65,050 / 123,912 / 241,960 / 479,359 (×2.02, ×1.99, ×2.01, ×2.01) | 97,154 / 140,464 / 227,057 / 400,501 / 751,377 / 1,450,217 (×2.00, ×2.00, ×2.02, ×1.99) |
+| `ring` | 336,986 / 590,738 / 948,612 / 1,798,388 / 3,501,790 / 6,923,714 (×1.41, ×2.37, ×2.00, ×2.01) | 831,034 / 1,110,933 / 1,375,529 / 2,148,756 / 3,698,186 / 6,798,025 (×0.95, ×2.92, ×2.00, ×2.00) | 56,476 / 88,196 / 133,653 / 239,525 / 451,787 / 877,656 (×1.43, ×2.33, ×2.00, ×2.01) | 142,183 / 244,260 / 346,190 / 629,904 / 1,204,772 / 2,347,708 (×1.00, ×2.78, ×2.03, ×1.99) |
+
+The `ring` ladder's small rungs are not a clean doubling in either direction: its emitted code reads the same ×1.03, ×2.78 before settling at ×2.00, because the `use<k>` chain beside the ring is cut by the pressure budget and the ring by the depth bound at different periods. Read it from N = 800 up. The ring's `.mxdbg` is now 330,217 / 566,849 / 858,541 / 1,590,881 / 3,059,054 / 6,009,186 bytes.
+
+`lowerMaxonToStd` and `synthesizeBodies` stay quadratic on the `ring` ladder (137,303 / 282,671 / 695,602 / 2,006,074 and 91,490 / 136,091 / 286,496 / 829,705 at N = 100…800). That is a different mechanism, a type-argument-kind walk that follows a declaration view around the ring once per parameter, and this change does not touch it.
+
+On `scale-test` the change costs `inlineLeaves` +1,524 / +2,702 / +5,054 / +9,759 / +19,153 / +37,923 allocations per rung against a compiler built without it (one depth column per function the rule asks about), 0.027% of the top rung, with code bytes identical on every rung. The row this change recorded reads +5,057 … +128,163 against the row before it; the difference is not this change's, since no other phase's count moves between the two compilers.
