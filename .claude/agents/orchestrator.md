@@ -198,7 +198,13 @@ Open a `task` issue in the fleet repository for each task (`gh issue create -R <
    worker's survey;
 3. **the area**: the passes, directories or files it will change, as tightly as you can state them;
 4. every Roadmap ruling it touches, quoted with its issue number;
-5. what it must not touch, naming the tasks that own neighbouring areas.
+5. what it must not touch, naming the tasks that own neighbouring areas;
+6. the testing line, verbatim: "Test only what your change touches: `--filter`ed specs while you work,
+   the §8 gates once at the end. The full suite, the wasm lane and the tree corpora are CI's. A hook
+   refuses an unfiltered run."
+
+Agents drift toward extra testing on long tasks. When a `PROGRESS` reports full-suite runs, repeated gate
+runs on an unchanged tree, or gates before the change is finished, reply with the testing line.
 
 **Every open Roadmap issue has a priority**, the project's `Priority` field:
 - `P0` now: a red CI lane, a soundness hole, wrong output from compiled code, a compiler crash on valid input;
