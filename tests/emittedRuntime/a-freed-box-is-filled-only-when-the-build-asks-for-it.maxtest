@@ -4,9 +4,9 @@ let BoxFreeName = "__mm_free_slow"
 let FreedBoxDoorName = "__slab_free_box"
 let PlainFreeName = "__slab_free_tracked"
 
-let TailBranchPrefix = "arm64.tailBranch "
 let FillMnemonic = "arm64.arm64MemFill 0x3f"
-let AbsentFunctionPhrase = "this program contains nothing named "
+let DefaultBuildCarrier = "a default build"
+let FreedBoxDoorRole = "the door that fills the freed box"
 
 let FillReason = "A freed managed box is filled with 0x3F only by a build that asks for it with the poison option. Every other build frees a box through the plain slab free without writing to it, so the fill costs nothing there; a build that asks must route `__mm_free` through the door that fills, whose body writes the fill byte."
 
@@ -36,17 +36,7 @@ function noteUnpoisoned(findings StringArray, staged FilePath, target String)
 		findings.push("on {target}, a default build's `{BoxFreeName}` calls `{FreedBoxDoorName}`, which fills the freed box")
 	end 'callsTheFillingDoor'
 
-	let extra = StringArray.create(0)
-	extra.push("{TargetOptionPrefix}{target}")
-	extra.push("{EmitIrFunctionOptionPrefix}{FreedBoxDoorName}")
-
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join("{OutputFileStem}-{label}-door-{target}"), label: label, extraArguments: extra)
-
-	if build.exitCode() == 0 'builtTheDoor'
-		findings.push("on {target}, a default build carries `{FreedBoxDoorName}`")
-	end 'builtTheDoor' else if not "{build.stdout}{build.stderr}".contains("{AbsentFunctionPhrase}'{FreedBoxDoorName}'") 'refusedForAnotherReason'
-		findings.push("on {target}, a default build refused `{EmitIrFunctionOptionPrefix}{FreedBoxDoorName}` without saying the program contains nothing named it. It said: {oneLine(build.stdout)}{oneLine(build.stderr)}")
-	end 'refusedForAnotherReason'
+	noteFunctionAbsent(findings, staged: staged, caseLabel: label, target: target, functionName: FreedBoxDoorName, carrier: DefaultBuildCarrier, role: FreedBoxDoorRole)
 end 'noteUnpoisoned'
 
 function notePoisoned(findings StringArray, staged FilePath, target String)
@@ -63,7 +53,3 @@ function notePoisoned(findings StringArray, staged FilePath, target String)
 		findings.push("on {target}, a {PoisonFreedOption} build's `{FreedBoxDoorName}` does not hold exactly one `{FillMnemonic}`")
 	end 'noFill'
 end 'notePoisoned'
-
-function callsOrTailBranchesTo(body StringArray, name String) returns LineTally
-	return bodyLineCount(body, startingWith: Arm64DirectCallPrefix, containing: "", endingWith: " {name}") + bodyLineCount(body, startingWith: TailBranchPrefix, containing: "", endingWith: " {name}")
-end 'callsOrTailBranchesTo'

@@ -1,0 +1,17 @@
+let AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerCaseLabel = "handle-holder-array"
+
+let HandleHolderArrayFixtureName = "handle-holder-array"
+let AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerCarrier = "a program that only holds a process handle type"
+
+let AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerReason = "Naming `__ManagedHandle` as a field type makes the struct's destructor name the profiler's handle destructor, but only a program that samples a process can open a handle, so a program that merely holds the type never has one to close. It needs no scheduler on any target."
+
+test 'a program that only holds a process handle type lays out no scheduler'
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerCaseLabel, fixture: HandleHolderArrayFixtureName)
+
+	let findings = StringArray.create(0)
+	noteHolderArrayRunsWithNoScheduler(findings, staged: staged, caseLabel: AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerCaseLabel, carrier: AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerCarrier)
+
+	Expect.isTrue(findings.isEmpty(), message: "a program that only holds a process handle type laid out a scheduler:{renderedFindings(findings)}\n\n  {AProgramThatOnlyHoldsAProcessHandleTypeLaysOutNoSchedulerReason}")
+
+	discardStagedDir(staged)
+end 'a program that only holds a process handle type lays out no scheduler'

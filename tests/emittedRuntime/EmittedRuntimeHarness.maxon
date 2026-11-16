@@ -21,6 +21,25 @@ let LinuxTargetName = "arm64-linux"
 let X64LinuxTargetName = "x64-linux"
 let X64WindowsTargetName = "x64-windows"
 
+let PinDestructName = "__gt_pin_destruct"
+let SchedulerInitName = "__gt_init"
+let SchedulerInitRole = "the green-thread scheduler's bring-up"
+let AbsentFunctionPhrase = "this program contains nothing named "
+let AbsenceLabelInfix = "-absent"
+let EmptyHolderArrayLine = "0"
+
+let X64RegisterCallPrefix = "{X64OpPrefix}callReg "
+let X64MemoryCallPrefix = "{X64OpPrefix}callMem "
+let X64ImportCallPrefix = "{X64OpPrefix}iatCall "
+let X64TailJumpPrefix = "{X64OpPrefix}tailJmp "
+let X64SyscallPrefix = "{X64OpPrefix}x64Syscall "
+let X64IndirectReturnLine = "{X64OpPrefix}retIndirect"
+let Arm64RegisterCallPrefix = "{Arm64OpPrefix}blr "
+let Arm64ImportCallPrefix = "{Arm64OpPrefix}importCall "
+let Arm64TailBranchPrefix = "{Arm64OpPrefix}tailBranch "
+let Arm64SyscallPrefix = "{Arm64OpPrefix}syscall "
+let Arm64IndirectReturnLine = "{Arm64OpPrefix}retIndirect"
+
 let FunctionHeaderSuffix = " \{"
 let FunctionBodyEndLine = "\}"
 
@@ -107,9 +126,9 @@ type WordAccesses
 	end 'claimAccess'
 end 'WordAccesses'
 
-function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns FilePath
+function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false, libraryTier bool = false) returns FilePath
 	let ir = stagedIrPath(staged, caseLabel: caseLabel, target: target)
-	let build = spawnStagedIrBuild(staged, caseLabel: caseLabel, target: target, functionName: functionName, debugStream: debugStream, poisonFreed: poisonFreed)
+	let build = spawnStagedIrBuild(staged, caseLabel: caseLabel, target: target, functionName: functionName, debugStream: debugStream, poisonFreed: poisonFreed, libraryTier: libraryTier)
 
 	requireBuiltOrPanic(build, output: ir, what: "{stagedIrBuildSpelling(target, functionName: functionName)}, which writes the Target IR to read,")
 
@@ -124,7 +143,7 @@ function stagedIrBuildSpelling(target String, functionName String) returns Strin
 	return "`{BuildCommandName} … {TargetOptionPrefix}{target} {EmitIrFunctionOptionPrefix}{functionName}`"
 end 'stagedIrBuildSpelling'
 
-function spawnStagedIrBuild(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns CollectedOutput
+function spawnStagedIrBuild(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false, libraryTier bool = false) returns CollectedOutput
 	let executable = staged.join("{OutputFileStem}-{caseLabel}-{target}")
 
 	let extraArguments = StringArray.create(0)
@@ -139,8 +158,72 @@ function spawnStagedIrBuild(staged FilePath, caseLabel String, target String, fu
 		extraArguments.push(PoisonFreedOption)
 	end 'withTheFill'
 
+	if libraryTier 'asLibraryTier'
+		return spawnBuild(staged.join(libraryTierProgramFile()), staged: staged, output: executable, label: caseLabel, extraArguments: extraArguments, binary: stagedTierCompilerPath(staged))
+	end 'asLibraryTier'
+
 	return spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: extraArguments)
 end 'spawnStagedIrBuild'
+
+function stagedTierCompilerPath(staged FilePath) returns FilePath
+	return staged.join(LibraryTierDirName).join(StagedTierBinDirName).join(testedCompilerPath().filename())
+end 'stagedTierCompilerPath'
+
+function noteFunctionAbsent(findings StringArray, staged FilePath, caseLabel String, target String, functionName String, carrier String, role String, libraryTier bool = false)
+	let build = spawnStagedIrBuild(staged, caseLabel: "{caseLabel}{AbsenceLabelInfix}{functionName}", target: target, functionName: functionName, libraryTier: libraryTier)
+
+	if build.exitCode() == 0 'laidOut'
+		findings.push("on {target}, {carrier} carries `{functionName}`, {role}")
+		return
+	end 'laidOut'
+
+	if not "{build.stdout}{build.stderr}".contains("{AbsentFunctionPhrase}'{functionName}'") 'anotherRefusal'
+		panic("emitted-runtime tests: the gate could not run — {stagedIrBuildSpelling(target, functionName: functionName)} for {carrier} exited {build.exitCode()} without saying the program contains nothing named `{functionName}`: {oneLine(build.stdout)} {oneLine(build.stderr)}")
+	end 'anotherRefusal'
+end 'noteFunctionAbsent'
+
+function everyNativeTargetName() returns StringArray
+	return [MacosTargetName, LinuxTargetName, X64LinuxTargetName, X64WindowsTargetName]
+end 'everyNativeTargetName'
+
+function noteHolderArrayRunsWithNoScheduler(findings StringArray, staged FilePath, caseLabel String, carrier String) throws TestFailure
+	let run = runStagedForHost(builtExecutable(staged), staged: staged, procs: SoleProcessor, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	try Expect.equal(run.exitCode(), expected: 0, message: "{carrier} exited {run.exitCode()}; stderr: {run.stderr}")
+	try Expect.equal(oneLine(run.stdout), expected: EmptyHolderArrayLine, message: "{carrier} said `{oneLine(run.stdout)}` where it says `{EmptyHolderArrayLine}` for its empty array")
+
+	for target in everyNativeTargetName() 'eachTarget'
+		noteFunctionAbsent(findings, staged: staged, caseLabel: caseLabel, target: target, functionName: SchedulerInitName, carrier: carrier, role: SchedulerInitRole, libraryTier: true)
+	end 'eachTarget'
+end 'noteHolderArrayRunsWithNoScheduler'
+
+function controlTransferPrefixes() returns StringArray
+	return [X64DirectCallPrefix, X64RegisterCallPrefix, X64MemoryCallPrefix, X64ImportCallPrefix, X64TailJumpPrefix, X64SyscallPrefix, X64IndirectReturnLine, Arm64DirectCallPrefix, Arm64RegisterCallPrefix, Arm64ImportCallPrefix, Arm64TailBranchPrefix, Arm64SyscallPrefix, Arm64IndirectReturnLine]
+end 'controlTransferPrefixes'
+
+function callsOrTailBranchesTo(body StringArray, name String) returns LineTally
+	var found = 0 as LineTally
+
+	for prefix in controlTransferPrefixes() 'eachTransfer'
+		found = found + bodyLineCount(body, startingWith: prefix, containing: NoFurtherDemand, endingWith: " {name}")
+	end 'eachTransfer'
+
+	return found
+end 'callsOrTailBranchesTo'
+
+function firstControlTransfer(body StringArray) returns LineIndex throws IrScanError
+	let prefixes = controlTransferPrefixes()
+
+	for (iter, text) in body.withIterator() 'eachLine'
+		for prefix in prefixes 'eachTransfer'
+			if text.startsWith(prefix) 'aTransfer'
+				return iter.index()
+			end 'aTransfer'
+		end 'eachTransfer'
+	end 'eachLine'
+
+	throw IrScanError.noSuchLine
+end 'firstControlTransfer'
 
 function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}{executableSuffix()}")

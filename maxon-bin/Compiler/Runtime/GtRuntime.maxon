@@ -2733,7 +2733,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtInit(module)
 	buildGtPinMachine(module)
 	buildGtUnpinMachine(module)
-	buildGtUnpinOwner(module)
+	buildRealSchedulerEntries(module)
 	buildGtPinDepth(module)
 	buildGtPinHandle(module)
 	buildGtCurrentMachine(module)
@@ -4051,15 +4051,83 @@ function buildGtReplyDestruct(module StdModule)
 end 'buildGtReplyDestruct'
 
 export function isMachineBindingCallee(callee ByteArray) returns bool
-	return callee.equals(GtPinMachineName) or callee.equals(GtUnpinMachineName) or callee.equals(GtCurrentMachineName) or callee.equals(GtPinDepthName) or callee.equals(GtPinAcquireName) or callee.equals(GtPinTokenName) or callee.equals(GtPinReleaseName) or callee.equals(GtPinSurrenderName) or callee.equals(GtPinDestructName)
+	return callee.equals(GtPinMachineName) or callee.equals(GtUnpinMachineName) or callee.equals(GtCurrentMachineName) or callee.equals(GtPinDepthName) or callee.equals(GtPinAcquireName) or callee.equals(GtPinTokenName) or callee.equals(GtPinReleaseName) or callee.equals(GtPinSurrenderName)
 end 'isMachineBindingCallee'
+
+// Without the scheduler each entry gets a no-op body, sound only because no pin or pin token exists
+// there. An entry whose call does real work without the scheduler does not belong here.
+enum SchedulerEntryWithInertBody
+	pinDestruct
+	unpinOwner
+end 'SchedulerEntryWithInertBody'
+
+function schedulerEntryName(entry SchedulerEntryWithInertBody) returns immutable ByteArray
+	return match entry 'roster'
+		pinDestruct gives GtPinDestructName
+		unpinOwner gives GtUnpinOwnerName
+	end 'roster'
+end 'schedulerEntryName'
+
+let SchedulerEntryRoster = SchedulerEntryWithInertBody.allCases
+
+typealias SchedulerEntrySet = Set with SchedulerEntryWithInertBody
+
+union SchedulerEntryCallee
+	entry(entry SchedulerEntryWithInertBody)
+	otherCallee
+end 'SchedulerEntryCallee'
+
+function schedulerEntryCalleeOf(callee ByteArray) returns SchedulerEntryCallee
+	for entry in SchedulerEntryRoster 'eachEntry'
+		if callee.equals(schedulerEntryName(entry)) 'thisEntry'
+			return SchedulerEntryCallee.entry(entry)
+		end 'thisEntry'
+	end 'eachEntry'
+
+	return SchedulerEntryCallee.otherCallee
+end 'schedulerEntryCalleeOf'
+
+function noteSchedulerEntryNamed(usage RuntimeUsage, entry SchedulerEntryWithInertBody)
+	if usage.schedulerEntriesSettled 'alreadySettled'
+		panic("noteSchedulerEntryNamed: '{String.from(schedulerEntryName(entry))}' is named after `installInertSchedulerEntries` has already run and settled which scheduler entries get a body, so a program without the scheduler would carry a call to it that links against nothing")
+	end 'alreadySettled'
+
+	usage.namedSchedulerEntries.insert(entry)
+end 'noteSchedulerEntryNamed'
+
+function emitSchedulerEntryCall(module StdModule, block IrBlock, entry SchedulerEntryWithInertBody, args ValueIdArray, usage RuntimeUsage, ids ValueMinter)
+	noteSchedulerEntryNamed(usage, entry: entry)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: schedulerEntryName(entry), args: args))
+end 'emitSchedulerEntryCall'
+
+function buildRealSchedulerEntries(module StdModule)
+	for entry in SchedulerEntryRoster 'eachEntry'
+		match entry 'realBody'
+			pinDestruct then buildBoxDestruct(module, name: GtPinDestructName, release: GtPinReleaseName)
+			unpinOwner then buildGtUnpinOwner(module)
+		end 'realBody'
+	end 'eachEntry'
+end 'buildRealSchedulerEntries'
+
+export function installInertSchedulerEntries(module StdModule, usage RuntimeUsage)
+	usage.schedulerEntriesSettled = true
+
+	if usage.usesGt 'theSchedulerBuiltThem'
+		return
+	end 'theSchedulerBuiltThem'
+
+	for entry in SchedulerEntryRoster 'eachEntry'
+		if usage.namedSchedulerEntries.contains(entry) 'named'
+			buildOneWordNoOpEntry(module, name: schedulerEntryName(entry))
+		end 'named'
+	end 'eachEntry'
+end 'installInertSchedulerEntries'
 
 function buildGtPinHandle(module StdModule)
 	buildGtPinAcquire(module)
 	buildBoxWordGetter(module, name: GtPinTokenName, offset: ManagedPinTokenOffset)
 	buildGtPinRelease(module)
 	buildGtPinSurrender(module)
-	buildBoxDestruct(module, name: GtPinDestructName, release: GtPinReleaseName)
 end 'buildGtPinHandle'
 
 function buildGtPinAcquire(module StdModule)

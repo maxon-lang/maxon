@@ -882,7 +882,7 @@ tests/
     console-write-imports.maxtest           which console API an emitted x64-windows image imports
     fixtures/hello/main.maxon.fixture       stored name only - see rule 1
   emittedRuntime/
-    EmittedRuntimeHarness.maxon             the shared half: the build, the printed body, the line scan, the plain-load reading
+    EmittedRuntimeHarness.maxon             the shared half: the build, the printed body, the line scan, the plain-load reading, the absence and control-transfer checks
     steal-reads-the-victim-ring-with-acquire-loads.maxtest     the thief reads another P's runqHead, runqTail and runnext with `ldar`, on both arm64 lanes
     locked-relist-doors-recheck-the-owner-with-an-acquire-load.maxtest     both doors that finish a slot free off the cache re-read the span's owner word with `ldar`, on both arm64 lanes
     the-span-stack-pop-backs-off-after-a-lost-swap-on-arm64-alone.maxtest     `__slab_refill`'s lost-swap edge calls `mrt_host_spin_pause` with a growing count on both arm64 lanes and on neither x64 lane
@@ -907,6 +907,8 @@ tests/
     a-new-green-threads-saved-context-lives-in-its-record-not-on-its-stack.maxtest   a new green thread is seeded with its stack top and no frame below it
     published-scheduler-words-are-stored-with-release-and-loaded-with-acquire.maxtest   the scheduler words published from under the lock are stored with a release and loaded with an acquire
     the-macos-trust-store-reads-the-admin-and-user-trust-settings-domains.maxtest   a macOS image that reads the trust store imports the trust-settings walk and no anchor-only call
+    a-program-that-only-holds-a-machine-pin-type-lays-out-no-scheduler.maxtest   an empty array of `__ManagedPin` holders runs with no `__gt_init` on any native lane, and its `__gt_pin_destruct` makes no call, tail branch or syscall there
+    a-program-that-only-holds-a-process-handle-type-lays-out-no-scheduler.maxtest   an empty array of `__ManagedHandle` holders runs with no `__gt_init` on any native lane
     fixtures/cown/main.maxon.fixture        stored name only - see rule 1
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
@@ -919,6 +921,8 @@ tests/
     fixtures/pinned-machine/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
     fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
+    fixtures/pin-holder-array/main.maxon.fixture   stored name only - see rule 1
+    fixtures/handle-holder-array/main.maxon.fixture   stored name only - see rule 1
   examples/
     ExamplesHarness.maxon                   the shared half: lint and build one example, bench/concurrency/, bench/aes/ or bench/hash/ program or document's program into `<test scratch>/<source spelling>/`, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
@@ -1704,7 +1708,10 @@ and whether it overwrites it — two facts rather than one, because `ldr x1, [x1
 register after a given line, skipping copies and throwing at an overwrite) are readings of that one scan;
 `copySourceRegisterOf` reads the source register off one copy line. `buildStagedProgram` panics on a
 failed build; a case that owes its own reason for one spawns the build with `spawnStagedIrBuild` and
-reads the printed body at `stagedIrPath`.
+reads the printed body at `stagedIrPath`. `noteFunctionAbsent` records a finding when a build asked to
+render a function succeeds, and panics when the build is refused for any reason but naming no function of
+the program. `firstControlTransfer` and `callsOrTailBranchesTo` read the lines `controlTransferPrefixes`
+lists for both ISAs: every call, tail branch, syscall and indirect return.
 The cases that locate a word's accesses by walking the body themselves — the scheduler words and the
 debug-stream ring — tally each access they find into a `WordAccesses`, which sorts it into plain loads,
 plain stores, acquires and releases and panics on any other shape.
@@ -1721,6 +1728,14 @@ host-facing object is a `MachinePin` runs on this host and prints `held true`, a
 `__prof_close`, the profiler's host-handle close, is refused for naming no function of the program: a pin
 is a green-thread object, and its destructor sits in the scheduler's runtime band, apart from the
 profiler's.
+
+**`a-program-that-only-holds-a-machine-pin-type-lays-out-no-scheduler`** and
+**`a-program-that-only-holds-a-process-handle-type-lays-out-no-scheduler`** build a library-tier program
+whose struct holds a `__ManagedPin` or a `__ManagedHandle` and which makes only an empty array of it, so
+the type's destructor is named and never runs. `noteHolderArrayRunsWithNoScheduler` runs it on this host,
+expecting `0`, and asks each of `everyNativeTargetName`'s lanes to render `__gt_init`, which must be
+refused as absent. The pin case also reads `__gt_pin_destruct` on every native lane and requires a body
+with no control transfer: only a taken pin has anything to release.
 
 **`a-pinned-green-thread-stays-on-its-machine-across-a-park`** — 24 parks, and the program reports how many
 of them came back on a different machine. `moved 0 of 24` is the answer; a run killed at the deadline is

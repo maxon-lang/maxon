@@ -805,7 +805,7 @@ export function installProfileRuntime(module StdModule, usage RuntimeUsage, cont
 	// provides, so they are built on every lane; the host entries below only where the target samples
 	// processes.
 	if not targetProvidesFacility(target, facility: HostFacility.processSampling) 'noSamplingSubstrate'
-		buildInertHandleDestruct(module, name: ProfileHandleDestructName)
+		buildOneWordNoOpEntry(module, name: ProfileHandleDestructName)
 		return
 	end 'noSamplingSubstrate'
 
@@ -814,7 +814,7 @@ export function installProfileRuntime(module StdModule, usage RuntimeUsage, cont
 	match shape 'shape'
 		win32 then installWin32SamplingEntries(module, layout: context)
 		mach then installMachSamplingEntries(module, layout: context)
-		ptrace then installPtraceSamplingEntries(module, layout: context, schedulerPresent: usage.usesGt)
+		ptrace then installPtraceSamplingEntries(module, layout: context, usage: usage)
 	end 'shape'
 
 	buildProfileClose(module, shape: shape)
@@ -843,8 +843,8 @@ function installWin32SamplingEntries(module StdModule, layout HostContextLayout)
 	buildHostProcessEntry(module, name: ProfileReadRemoteName, words: HostProcessFourWords, service: HostProcessCall.readProcessMemory)
 end 'installWin32SamplingEntries'
 
-function installPtraceSamplingEntries(module StdModule, layout HostContextLayout, schedulerPresent bool)
-	installPtraceHostRuntime(module, layout: layout, schedulerPresent: schedulerPresent)
+function installPtraceSamplingEntries(module StdModule, layout HostContextLayout, usage RuntimeUsage)
+	installPtraceHostRuntime(module, layout: layout, usage: usage)
 	buildProfileSleep(module)
 end 'installPtraceSamplingEntries'
 

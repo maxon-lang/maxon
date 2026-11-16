@@ -750,7 +750,7 @@ function buildManagedFileDestruct(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileDestruct'
 
-export function buildInertHandleDestruct(module StdModule, name ByteArray)
+function buildOneWordNoOpEntry(module StdModule, name ByteArray)
 	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -758,7 +758,7 @@ export function buildInertHandleDestruct(module StdModule, name ByteArray)
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildInertHandleDestruct'
+end 'buildOneWordNoOpEntry'
 
 // `__mf_size(box) -> (size, flag)` — `GetFileSizeEx`, or `sizeFailed`/an errno variant.
 //
@@ -1334,7 +1334,7 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage, 
 	if targetProvidesFacility(target, facility: HostFacility.managedFile) 'aHandleCanExist'
 		buildManagedFileDestruct(module)
 	end 'aHandleCanExist' else 'noHandleCanExist'
-		buildInertHandleDestruct(module, name: ManagedFileDestructName)
+		buildOneWordNoOpEntry(module, name: ManagedFileDestructName)
 	end 'noHandleCanExist'
 
 	for func in module.functions 'eachFunc'

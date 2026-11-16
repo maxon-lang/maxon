@@ -1,7 +1,8 @@
 let AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel = "pin-only"
 
-let PinDestructName = "__gt_pin_destruct"
 let ProfileCloseName = "__prof_close"
+let ProfileCloseRole = "the profiler's host-handle close"
+let AProgramThatOnlyPinsLaysOutNoProfileRuntimeCarrier = "a program that only pins"
 let PinOnlyFixtureName = "pin-only"
 let HeldLine = "held true"
 let AProgramThatOnlyPinsLaysOutNoProfileRuntimeRunDeadline = 30000
@@ -19,8 +20,8 @@ test 'a program that only pins lays out the pin destructor and no profile runtim
 	let findings = StringArray.create(0)
 	notePinDestructor(findings, staged: staged, target: MacosTargetName)
 	notePinDestructor(findings, staged: staged, target: LinuxTargetName)
-	noteNoProfileRuntime(findings, staged: staged, target: MacosTargetName)
-	noteNoProfileRuntime(findings, staged: staged, target: LinuxTargetName)
+	noteFunctionAbsent(findings, staged: staged, caseLabel: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel, target: MacosTargetName, functionName: ProfileCloseName, carrier: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCarrier, role: ProfileCloseRole)
+	noteFunctionAbsent(findings, staged: staged, caseLabel: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel, target: LinuxTargetName, functionName: ProfileCloseName, carrier: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCarrier, role: ProfileCloseRole)
 
 	Expect.isTrue(findings.isEmpty(), message: "a program that only pins did not lay out the runtime a pin needs and nothing else:{renderedFindings(findings)}\n\n  {AProgramThatOnlyPinsLaysOutNoProfileRuntimePinReason}")
 
@@ -34,15 +35,3 @@ function notePinDestructor(findings StringArray, staged FilePath, target String)
 		findings.push("on {target}, the emitted `{PinDestructName}` is empty")
 	end 'empty'
 end 'notePinDestructor'
-
-function noteNoProfileRuntime(findings StringArray, staged FilePath, target String)
-	let extra = StringArray.create(0)
-	extra.push("{TargetOptionPrefix}{target}")
-	extra.push("{EmitIrFunctionOptionPrefix}{ProfileCloseName}")
-
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join("{OutputFileStem}-{AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel}-profile-{target}"), label: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel, extraArguments: extra)
-
-	if build.exitCode() == 0 'laidOut'
-		findings.push("on {target}, a program that only pins carries `{ProfileCloseName}`, the profiler's host-handle close")
-	end 'laidOut'
-end 'noteNoProfileRuntime'

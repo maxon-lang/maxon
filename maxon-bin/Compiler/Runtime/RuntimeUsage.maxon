@@ -82,9 +82,7 @@ export type RuntimeUsage
 
 	// The program spawns a green thread (`async`/`await`). Drives `installGtRuntime` + the GT `.data`
 	// globals + the two hand-assembled backend chunks. Set alongside `usesHeap` (the scheduler's machines,
-	// processors, lock and park stores are `__slab_alloc`'d), from the `asyncCall`/`await` Maxon ops rather
-	// than a callee name — the async ops are their own op kind, and their `__gt_*` calls do not exist until
-	// lowering.
+	// processors, lock and park stores are `__slab_alloc`'d), by `recordGtUsage`.
 	export var usesGt as bool
 
 	// The program reads a CHILD's pipe — a YIELDING read (`__gt_io_read`, `__gt_subp_yield_read`). A SUPERSET of
@@ -548,6 +546,8 @@ export type RuntimeUsage
 	export var usesServiceRegistry = false
 	export var releasesRegistry = false
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
+	var namedSchedulerEntries = SchedulerEntrySet.create()
+	var schedulerEntriesSettled = false
 
 	static function create() returns RuntimeUsage
 		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, typeParamEntries: TypeParamEntrySet.create(), usesHardwareSha: false, usesHash: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesIncrefSticky: false, usesMmIsNull: false, usesRetain: false, usesRetainSticky: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
@@ -738,21 +738,25 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// A DIRECT `__gt_*` runtime call carries the whole green-thread scheduler. `async`/
 	// `await`/`try await` are detected by op KIND above because their `__gt_*` calls do not exist until
 	// lowering, but `__Builtins.sleep(ms)` lowers in the FRONT END to a `call __gt_sleep`, which IS a Maxon
-	// `call` this scan sees — so any `__gt_*` callee here turns on the scheduler (and, via `recordGtUsage`,
+	// `call` this scan sees — so a `__gt_*` callee here turns on the scheduler (and, via `recordGtUsage`,
 	// the heap). A source `sleep(ms)` reaches it one frame down, inside `stdlib/Sleep.maxon`'s body, which
 	// this scan walks because stdlib source is merged into the module it walks — but ONLY IF A PATH FROM
 	// `main` REACHES THAT BODY. `scanRuntimeUsage`'s `bodyIsSwept` filter (above) skips the rest, and
 	// that qualifier is the load-bearing half, not a footnote: it is what keeps listing a stdlib module
 	// byte-neutral for a program that does not use it.
 	//
-	// The two exceptions are the clock read and the sleep on a lane that does not park on I/O: that lane
-	// has no green threads, so no scheduler to install, and `ClockRuntime` builds both bodies without one.
+	// The exceptions are the clock read, the sleep and the strand guards on a lane that does not
+	// park on I/O, which has no scheduler to install (`ClockRuntime` builds the first two bodies
+	// without one), and a `SchedulerEntryWithInertBody` entry, which is only recorded as named.
 	if not usage.parksOnIo and callee.equals(GtNowNsName) 'schedulerlessNowNs'
 		usage.usesSchedulerlessNowNs = true
 	end 'schedulerlessNowNs' else if not usage.parksOnIo and callee.equals(GtSleepName) 'schedulerlessSleep'
 		usage.usesSchedulerlessSleep = true
-	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) and not strandGuardCallIsElided(usage.parksOnIo, callee: callee) and not pinDestructIsInert(usage.parksOnIo, callee: callee) 'gt'
-		recordGtUsage(usage)
+	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) and not strandGuardCallIsElided(usage.parksOnIo, callee: callee) 'gt'
+		match schedulerEntryCalleeOf(callee) 'schedulerEntry'
+			entry(entry) then noteSchedulerEntryNamed(usage, entry: entry)
+			otherCallee then recordGtUsage(usage)
+		end 'schedulerEntry'
 	end 'gt'
 
 	if isSharedValueRuntimeCallee(callee) 'sharedValue'
