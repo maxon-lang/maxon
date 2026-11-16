@@ -2902,7 +2902,7 @@ extension Parser
 			try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
 			try self.requireFrozenResultIsMixed()
 
-			self.finishCapabilityFacts(func)
+			try self.finishCapabilityFacts(func)
 
 			try self.validateNascentSelfAssignments(func)
 			try self.requireNoWitnessCursorElementIsDropped("'{String.from(nameTok.value)}'", line: nameTok.line, column: nameTok.column)
@@ -4490,7 +4490,7 @@ extension Parser
 		// text of its own), so this asks it rather than inlining half of it. `specs/default-values.md` —
 		// the canonical definition, for the PARAMETER door — pins `'zzz'` and `'e100'`.
 		try self.requireDefaultValueEnded(pending.exprEnd)
-		self.finishCapabilityFacts(helper)
+		try self.finishCapabilityFacts(helper)
 
 		// A default-value helper takes NO parameters and its return type is the parameter's own already-resolved
 		// declared type (`pending.declaredType`), not a spelling this parse is standing on — so neither
@@ -8880,6 +8880,7 @@ extension Parser
 
 		let stored = self.storedValueNamedByBinding(assigned, binding: binding, nameTok: nameTok, sourceIsBareLocal: rhsBareLocalName.isLocal())
 		try self.requireAssignmentFitsVariable(binding, value: written, valueStart: valueStart, valueEnd: valueEnd)
+		let assignedFresh = self.settleAssignedCapability(binding, value: stored, line: nameTok.line)
 
 		if not rhsBareLocalName.isLocal() and valueIsMarked(self.bodyState.unsignedMaxLiterals, value: stored) and maxonTypeTag(binding.varType) == ValueTypeTag.named and self.declaresARangedAlias(self.declaredAliasOfType(binding.varType), t: binding.varType) 'anUnsignedLiteralTakesTheBindingsAlias'
 			self.recordValueDeclaredAliasId(stored, aliasId: typeNameIdOf(binding.varType))
@@ -8896,6 +8897,10 @@ extension Parser
 		end 'livesInACell'
 
 		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: stored, rhsBareLocalName: rhsBareLocalName)
+
+		if assignedFresh 'anAssignedFreshLocal'
+			self.registerFreshLocal(binding.boundValue, binding: binding)
+		end 'anAssignedFreshLocal'
 	end 'completeLocalRebind'
 
 	function stampDeclaredFunctionType(value ValueId, binding VarInfo, sourceIsBareLocal bool)

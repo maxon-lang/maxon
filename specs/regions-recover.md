@@ -266,6 +266,138 @@ end 'main'
 error E3200: <fragment>:19:10: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
+<!-- test: a-local-each-match-arm-leaves-fresh-is-fresh-after-the-match -->
+One arm gives `fresh` a new `Box` and the other leaves the one it was declared with; neither reads it, so it is fresh after the `match` and moves into the `isolated` parameter.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+enum Side
+	left
+	right
+end 'Side'
+
+function side() returns Side
+	return Side.left
+end 'side'
+
+function consume(b isolated Box)
+	print("consumed {b.n}\n")
+end 'consume'
+
+function main() returns ExitCode
+	var fresh = Box.create(1)
+
+	match side() 'which'
+		left then fresh = Box.create(2)
+		right then print("right\n")
+	end 'which'
+
+	consume(fresh)
+	return 0
+end 'main'
+```
+```stdout
+consumed 2
+```
+```exitcode
+0
+```
+
+<!-- test: a-local-a-match-arm-reads-is-not-fresh-after-the-match -->
+The `right` arm reads `fresh`, so after the `match` it may have been read before the `isolated` parameter reads it.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+enum Side
+	left
+	right
+end 'Side'
+
+function side() returns Side
+	return Side.left
+end 'side'
+
+function consume(b isolated Box)
+	print("consumed {b.n}\n")
+end 'consume'
+
+function main() returns ExitCode
+	var fresh = Box.create(1)
+
+	match side() 'which'
+		left then fresh = Box.create(2)
+		right then print("right {fresh.n}\n")
+	end 'which'
+
+	consume(fresh)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:33:10: 'fresh' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+```
+
+<!-- test: a-local-assigned-a-try-of-a-fresh-call-with-a-fresh-fallback-is-fresh -->
+`fresh` is moved, then given either `build`'s new `Box` or the fallback's, so it is fresh again and moves into the `isolated` parameter.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+enum BuildError implements Error
+	refused
+end 'BuildError'
+
+function build(n Count) returns Box throws BuildError
+	if n == 0 'refuse'
+		throw BuildError.refused
+	end 'refuse'
+
+	return Box.create(n)
+end 'build'
+
+function consume(b isolated Box)
+	print("consumed {b.n}\n")
+end 'consume'
+
+function main() returns ExitCode
+	var fresh = Box.create(1)
+	consume(fresh)
+	fresh = try build(0) otherwise Box.create(3)
+	consume(fresh)
+	return 0
+end 'main'
+```
+```stdout
+consumed 1
+consumed 3
+```
+```exitcode
+0
+```
+
 <!-- test: the-plain-payload-of-an-owned-union-goes-where-an-isolated-value-does -->
 `u` is an `isolated` local holding a linear union, and the `match` consumes it. `y` is the lone plain payload of its case, so it is recovered into `consume`'s `isolated` parameter.
 ```maxon

@@ -13,12 +13,12 @@ These cases are programs of the capmodel executable model, translated to Maxon b
 `scripts/model-specs/generate.py` (`docs/SPECS.md`, "Model-derived specs") and pinned to the model's verdict on
 linear types, finalizers and their hand-backs. A program the model accepts runs and exits 0; one it refuses fails to compile, with the diagnostic
 the compiler gives. A case is written only where the compiler and the model agree, so the suite fails
-the day the compiler stops agreeing with a verdict the model pinned. The rule set is `core-m3w-fa13`.
+the day the compiler stops agreeing with a verdict the model pinned. The rule set is `core-m3w-fa14`.
 
 ## Tests
 
 <!-- test: model-finding-ad-match-window-both-arms -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `match-window-both-arms` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `match-window-both-arms` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -84,7 +84,7 @@ error E3201: <fragment>:55:16: 'giveS' hands back mutable data of the isolated r
 ```
 
 <!-- test: model-finding-ad-match-window-both-arms-gives -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `match-window-both-arms-giveS` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `match-window-both-arms-giveS` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -146,7 +146,7 @@ error E3201: <fragment>:50:16: 'giveS' hands back mutable data of the isolated r
 ```
 
 <!-- test: model-finding-ad-state-window-reply-union-state -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `state-window-reply-union-state` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `state-window-reply-union-state` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -212,7 +212,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ad-lit-no-window -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `lit-no-window` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `lit-no-window` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -253,7 +253,7 @@ error E3196: <fragment>:31:18: cannot store an isolated 'Rl' into 'Sn.notSent.r'
 ```
 
 <!-- test: model-finding-ad-v-match-window -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `v-match-window` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `v-match-window` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -315,7 +315,7 @@ error E3201: <fragment>:51:16: 'giveS' hands back mutable data of the isolated r
 ```
 
 <!-- test: model-finding-ad-oneopen-state-field-path -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `oneopen-state-field-path` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `oneopen-state-field-path` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -387,7 +387,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-rec-list-drop-tail -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224, E4014. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rec-list-drop-tail` of redteamAE/p11.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224, E4014. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rec-list-drop-tail` of redteamAE/p11.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -428,7 +428,7 @@ error E3224: <fragment>:25:3: the case 'cons' carries the linear value 't', and 
 ```
 
 <!-- test: model-finding-ae-mutual-union-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224, E4014. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `mutual-union-drop` of redteamAE/p11.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224, E4014. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `mutual-union-drop` of redteamAE/p11.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -474,7 +474,7 @@ error E3224: <fragment>:30:3: the case 'a1' carries the linear value 'b', and th
 ```
 
 <!-- test: model-finding-ae-union-method-plain -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `union-method-plain` of redteamAE/p11.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `union-method-plain` of redteamAE/p11.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -514,7 +514,7 @@ error E3224: <fragment>:9:4: this linear value is only lent to this code (a para
 ```
 
 <!-- test: model-finding-ae-mixed-union-iso-nonlinear-arm-write -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mixed-union-iso-nonlinear-arm-write` of redteamAE/p12.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mixed-union-iso-nonlinear-arm-write` of redteamAE/p12.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -568,7 +568,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-mixed-union-iso-nonlinear-arm-move -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mixed-union-iso-nonlinear-arm-move` of redteamAE/p12.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mixed-union-iso-nonlinear-arm-move` of redteamAE/p12.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -617,7 +617,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-w-match-consume-in-one-call-open -->
-The model (`core-m3w-fa13`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `w-match-consume-in-one-call-open` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `w-match-consume-in-one-call-open` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -678,7 +678,7 @@ error E3201: <fragment>:51:9: 'u' is mutable outside 'bx'; a call into an isolat
 ```
 
 <!-- test: model-finding-ae-match-in-loop-refill -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `match-in-loop-refill` of redteamAE/p15.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `match-in-loop-refill` of redteamAE/p15.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -724,7 +724,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-match-call-temp -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `match-call-temp` of redteamAE/p15.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `match-call-temp` of redteamAE/p15.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -764,7 +764,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-rep-h2a-iso-payload-moved -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `rep-H2a-iso-payload-moved` of redteamAE/p20.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `rep-H2a-iso-payload-moved` of redteamAE/p20.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -809,7 +809,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-linear-union-method-self-twice -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `linear-union-method-self-twice` of redteamAE/p23.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `linear-union-method-self-twice` of redteamAE/p23.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -850,7 +850,7 @@ error E3224: <fragment>:9:4: this linear value is only lent to this code (a para
 ```
 
 <!-- test: model-finding-ae-record-method-linear-self-field-via-match -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `record-method-linear-self-field-via-match` of redteamAE/p23.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `record-method-linear-self-field-via-match` of redteamAE/p23.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -901,7 +901,7 @@ error E3102: <fragment>:41:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-finding-ae-arm-payload-pair-iso -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `arm-payload-pair-iso` of redteamAE/p25.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `arm-payload-pair-iso` of redteamAE/p25.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -947,7 +947,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-iso-payload-plain -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-payload-plain` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-payload-plain` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -984,7 +984,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-iso-payload-iso-local -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-payload-iso-local` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-payload-iso-local` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1021,7 +1021,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-iso-payload-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `iso-payload-drop` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `iso-payload-drop` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1058,7 +1058,7 @@ error E3224: <fragment>:26:3: the case 'held' carries the linear value 'r', and 
 ```
 
 <!-- test: model-finding-ae-iso-payload-two-matches -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `iso-payload-two-matches` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `iso-payload-two-matches` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1099,7 +1099,7 @@ error E3102: <fragment>:28:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-finding-ae-iso-payload-return -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-payload-return` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-payload-return` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1140,7 +1140,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-iso-payload-return-nofin -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `iso-payload-return-nofin` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `iso-payload-return-nofin` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1180,7 +1180,7 @@ error E3223: <fragment>:31:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-finding-ae-iso-payload-break -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `iso-payload-break` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `iso-payload-break` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1221,7 +1221,7 @@ error E3224: <fragment>:28:4: the case 'held' carries the linear value 'r', and 
 ```
 
 <!-- test: model-finding-ae-iso-payload-array-of-union -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `iso-payload-array-of-union` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `iso-payload-array-of-union` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1256,7 +1256,7 @@ error E3224: <fragment>:3:11: 'Sh' is a linear value and cannot be a type argume
 ```
 
 <!-- test: model-finding-ae-varpayload-iso-param-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `varpayload-iso-param-twice` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `varpayload-iso-param-twice` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1305,7 +1305,7 @@ error E3102: <fragment>:36:8: use of moved value 'v': its ownership moved to ano
 ```
 
 <!-- test: model-finding-ae-varpayload-plain-param -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-plain-param` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-plain-param` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1346,7 +1346,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-varpayload-plain-param-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `varpayload-plain-param-twice` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `varpayload-plain-param-twice` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1391,7 +1391,7 @@ error E3102: <fragment>:32:8: use of moved value 'v': its ownership moved to ano
 ```
 
 <!-- test: model-finding-ae-varpayload-iso-recv -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-iso-recv` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-iso-recv` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1432,7 +1432,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-varpayload-iso-return -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-iso-return` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-iso-return` of redteamAE/p7.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1473,7 +1473,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-varpayload-iso-param-fn -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-iso-param-fn` of redteamAE/p8.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `varpayload-iso-param-fn` of redteamAE/p8.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1521,7 +1521,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-record-field-linear-inferred -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `record-field-linear-inferred` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `record-field-linear-inferred` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1559,7 +1559,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-array-linear-inferred -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `array-linear-inferred` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `array-linear-inferred` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1588,7 +1588,7 @@ error E3224: <fragment>:3:11: 'Rl' is a linear value and cannot be a type argume
 ```
 
 <!-- test: model-finding-ae-clone-linear-union -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `clone-linear-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `clone-linear-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1630,7 +1630,7 @@ error E3214: <fragment>:24:10: 'Sh' is unique (its field 'r' holds a unique 'Rl'
 ```
 
 <!-- test: model-finding-ae-freeze-linear-union -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `freeze-linear-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `freeze-linear-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1664,7 +1664,7 @@ error E3214: <fragment>:24:17: 'Sh' is unique (its field 'r' holds a unique 'Rl'
 ```
 
 <!-- test: model-finding-ae-merge-linear-iso -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `merge-linear-iso` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `merge-linear-iso` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1702,7 +1702,7 @@ error E3224: <fragment>:18:6: the field 'keep' holds a linear value, and a linea
 ```
 
 <!-- test: model-finding-ae-merge-linear-into-union -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-linear-into-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-linear-into-union` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1744,7 +1744,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-merge-linear-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `merge-linear-twice` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `merge-linear-twice` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1788,7 +1788,7 @@ error E3102: <fragment>:32:27: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-finding-ae-freeze-linear-record -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `freeze-linear-record` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `freeze-linear-record` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1817,7 +1817,7 @@ error E3214: <fragment>:19:17: 'Rl' is unique and cannot be frozen
 ```
 
 <!-- test: model-finding-ae-clone-linear-record -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `clone-linear-record` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `clone-linear-record` of redteamAE/p9.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1848,7 +1848,7 @@ error E3214: <fragment>:19:10: 'Rl' is unique and cannot be cloned
 ```
 
 <!-- test: model-hand-ab-t-send-arg-then-throw -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t-send-arg-then-throw` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t-send-arg-then-throw` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1902,7 +1902,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-peek-in-arg -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-peek-in-arg` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-peek-in-arg` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1935,7 +1935,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-fin-arg-self -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-fin-arg-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-fin-arg-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1964,7 +1964,7 @@ error E3102: <fragment>:19:8: use of moved value 'q': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-m-fin-arg-other-moves -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-fin-arg-other-moves` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-fin-arg-other-moves` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2011,7 +2011,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-fin-arg-other-dropped -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `m-fin-arg-other-dropped` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `m-fin-arg-other-dropped` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2058,7 +2058,7 @@ error E3223: <fragment>:28:11: this drops 'o', a linear value that was never con
 ```
 
 <!-- test: model-hand-ab-m-fin-recv-moved-then-arg -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-fin-recv-moved-then-arg` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-fin-recv-moved-then-arg` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2087,7 +2087,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-return-self -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-return-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-return-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2120,7 +2120,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-return-self-dropped -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `m-return-self-dropped` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `m-return-self-dropped` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2152,7 +2152,7 @@ error E3223: <fragment>:23:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-m-fin-in-peek -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-fin-in-peek` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-fin-in-peek` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2186,7 +2186,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-destruct-then-use-self -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-destruct-then-use-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-destruct-then-use-self` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2215,7 +2215,7 @@ error E3102: <fragment>:13:11: use of moved value 'self': its ownership moved to
 ```
 
 <!-- test: model-hand-ab-m-use-self-field-before -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-use-self-field-before` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-use-self-field-before` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2244,7 +2244,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-m-self-moved-then-destruct -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-self-moved-then-destruct` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-self-moved-then-destruct` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2277,7 +2277,7 @@ error E3102: <fragment>:17:12: use of moved value 'self': its ownership moved to
 ```
 
 <!-- test: model-hand-ab-u-nested-union-dropped -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-nested-union-dropped` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-nested-union-dropped` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2323,7 +2323,7 @@ error E3224: <fragment>:35:3: the case 'a' carries the linear value 's', and thi
 ```
 
 <!-- test: model-hand-ab-u-array-of-union -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `u-array-of-union` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `u-array-of-union` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2361,7 +2361,7 @@ error E3224: <fragment>:3:11: 'Sent' is a linear value and cannot be a type argu
 ```
 
 <!-- test: model-hand-ab-u-union-method -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-union-method` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-union-method` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2406,7 +2406,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-u-union-method-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `u-union-method-drop` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `u-union-method-drop` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2447,7 +2447,7 @@ error E3223: <fragment>:32:2: this drops 'w', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-u-match-in-loop-break -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-match-in-loop-break` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-match-in-loop-break` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2495,7 +2495,7 @@ error E3224: <fragment>:36:4: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ab-u-match-scrut-expr -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-match-scrut-expr` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-match-scrut-expr` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2539,7 +2539,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-u-match-scrut-expr-bare -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-match-scrut-expr-bare` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-match-scrut-expr-bare` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2583,7 +2583,7 @@ error E3224: <fragment>:33:3: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ab-u-match-param -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-match-param` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-match-param` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2631,7 +2631,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-u-match-param-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `u-match-param-drop` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `u-match-param-drop` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2676,7 +2676,7 @@ error E3223: <fragment>:30:10: this drops '_', a linear value that was never con
 ```
 
 <!-- test: model-hand-ab-u-return-union-from-arm -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-return-union-from-arm` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-return-union-from-arm` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2731,7 +2731,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-u-union-ok-case-only -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-union-ok-case-only` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-union-ok-case-only` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2775,7 +2775,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-u-union-two-payloads-one -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-union-two-payloads-one` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `u-union-two-payloads-one` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2816,7 +2816,7 @@ error E3224: <fragment>:30:3: the case 'both' carries the linear value 'b', and 
 ```
 
 <!-- test: model-hand-ab-u-union-same-name -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-union-same-name` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u-union-same-name` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2857,7 +2857,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-y-try-handler-var -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-try-handler-var` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-try-handler-var` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2912,7 +2912,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-y-try-handback-original-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `y-try-handback-original-after` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `y-try-handback-original-after` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2968,7 +2968,7 @@ error E3102: <fragment>:46:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-y-try-handback-other-linear -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-try-handback-other-linear` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-try-handback-other-linear` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3025,7 +3025,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-y-try-handback-in-loop -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-try-handback-in-loop` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-try-handback-in-loop` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3088,7 +3088,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-y-try-handback-loop-carried -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `y-try-handback-loop-carried` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `y-try-handback-loop-carried` of redteamAB.hand_ab1, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3151,7 +3151,7 @@ error E3102: <fragment>:46:15: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ab-k-isolated-alias -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-alias` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-alias` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3185,7 +3185,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-k-isolated-from-iso -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-from-iso` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-isolated-from-iso` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3219,7 +3219,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-k-isolated-union-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `k-isolated-union-drop` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `k-isolated-union-drop` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3260,7 +3260,7 @@ error E3223: <fragment>:32:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-k-ret-immutable -->
-The model (`core-m3w-fa13`) refuses it by `R4-RESULT`; the compiler refuses it with E3209. Model program `k-ret-immutable` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R4-RESULT`; the compiler refuses it with E3209. Model program `k-ret-immutable` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3296,7 +3296,7 @@ error E3209: <fragment>:22:9: a return does not fit the declared result: 'Resp.c
 ```
 
 <!-- test: model-hand-ab-min-temp-receiver -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `min-temp-receiver` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `min-temp-receiver` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3332,7 +3332,7 @@ error E3223: <fragment>:26:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-min-temp-field -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `min-temp-field` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `min-temp-field` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3364,7 +3364,7 @@ error E3223: <fragment>:22:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-min-discard-var -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `min-discard-var` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `min-discard-var` of redteamAB.hand_ab10, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3397,7 +3397,7 @@ error E3223: <fragment>:24:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-s-slot-param-var-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `s-slot-param-var-after` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `s-slot-param-var-after` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3436,7 +3436,7 @@ error E3224: <fragment>:28:4: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-ab-s-slot-param-two -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `s-slot-param-two` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `s-slot-param-two` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3474,7 +3474,7 @@ error E3224: <fragment>:22:4: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-ab-f-factory-finalizer -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-factory-finalizer` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-factory-finalizer` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3517,7 +3517,7 @@ end 'main'
 
 <!-- test: model-hand-ab-f-factory-drops -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-factory-drops` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-factory-drops` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3558,7 +3558,7 @@ error E3223: <fragment>:26:3: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-f-behave-param-wrap-union -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-behave-param-wrap-union` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-behave-param-wrap-union` of redteamAB.hand_ab12, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3626,7 +3626,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-for-body-linear-local -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-for-body-linear-local` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-for-body-linear-local` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3672,7 +3672,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-for-break-linear -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-for-break-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-for-break-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3718,7 +3718,7 @@ error E3223: <fragment>:35:3: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-f-for-continue-linear -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-for-continue-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-for-continue-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3764,7 +3764,7 @@ error E3223: <fragment>:35:3: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-f-for-outer-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-for-outer-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-for-outer-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3810,7 +3810,7 @@ error E3102: <fragment>:35:3: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ab-f-for-outer-consume-after -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-for-outer-consume-after` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-for-outer-consume-after` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3857,7 +3857,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-for-return-outer -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-for-return-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-for-return-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3908,7 +3908,7 @@ error E3223: <fragment>:35:3: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-f-while-two-iterations -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-two-iterations` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-two-iterations` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3951,7 +3951,7 @@ error E3102: <fragment>:30:4: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ab-f-while-var-refill-conditional -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-var-refill-conditional` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-var-refill-conditional` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3995,7 +3995,7 @@ error E3102: <fragment>:29:3: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ab-f-while-var-refill-nonetwork -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-while-var-refill-nonetwork` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-while-var-refill-nonetwork` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4038,7 +4038,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-while-break-after-consume -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-while-break-after-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-while-break-after-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4075,7 +4075,7 @@ error E3223: <fragment>:24:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-f-while-break-before-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-break-before-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-break-before-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4115,7 +4115,7 @@ error E3102: <fragment>:28:3: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ab-f-while-cond-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-cond-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `f-while-cond-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4155,7 +4155,7 @@ error E3102: <fragment>:28:12: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ab-f-while-cond-fresh -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-while-cond-fresh` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-while-cond-fresh` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4194,7 +4194,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-nested-loop-break-outer -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-nested-loop-break-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-nested-loop-break-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4236,7 +4236,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-loop-continue-after-consume -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-loop-continue-after-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f-loop-continue-after-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4278,7 +4278,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-f-loop-continue-before-consume-else -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-loop-continue-before-consume-else` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `f-loop-continue-before-consume-else` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4322,7 +4322,7 @@ error E3223: <fragment>:31:4: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-f-match-arm-in-loop-continue -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `f-match-arm-in-loop-continue` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `f-match-arm-in-loop-continue` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4375,7 +4375,7 @@ error E3224: <fragment>:41:4: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ab-s-handback-twice-one-full -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-twice-one-full` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-twice-one-full` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4481,7 +4481,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-handback-fresh-nested -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-fresh-nested` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-fresh-nested` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4583,7 +4583,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-handback-in-message-body -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-in-message-body` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-in-message-body` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4681,7 +4681,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-handback-send-to-stopped -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-send-to-stopped` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-handback-send-to-stopped` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4782,7 +4782,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-state-method-eat -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-state-method-eat` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-state-method-eat` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4875,7 +4875,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-state-method-mk -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-state-method-mk` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-state-method-mk` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4968,7 +4968,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-merge-linear -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-merge-linear` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-merge-linear` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5002,7 +5002,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-merge-linear-use -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-merge-linear-use` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-merge-linear-use` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5036,7 +5036,7 @@ error E3102: <fragment>:24:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-s-merge-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-merge-drop` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-merge-drop` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5069,7 +5069,7 @@ error E3223: <fragment>:24:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-s-freeze-union -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `s-freeze-union` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `s-freeze-union` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5111,7 +5111,7 @@ error E3214: <fragment>:32:17: 'Sent' is unique (its field 'r' holds a unique 'R
 ```
 
 <!-- test: model-hand-ab-s-reassign-after-move-in-branch -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-reassign-after-move-in-branch` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-reassign-after-move-in-branch` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5152,7 +5152,7 @@ error E3102: <fragment>:31:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-s-reassign-after-move-branch-ok -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-reassign-after-move-branch-ok` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-reassign-after-move-branch-ok` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5195,7 +5195,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-consume-in-branch-refill-after -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-consume-in-branch-refill-after` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-consume-in-branch-refill-after` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5236,7 +5236,7 @@ error E3223: <fragment>:27:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-s-conditional-move-then-assign -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-conditional-move-then-assign` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-conditional-move-then-assign` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5277,7 +5277,7 @@ error E3223: <fragment>:27:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-s-while-assign -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-while-assign` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-while-assign` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5320,7 +5320,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-two-vars-aliased-by-union -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-two-vars-aliased-by-union` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-two-vars-aliased-by-union` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5371,7 +5371,7 @@ error E3102: <fragment>:40:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-s-shadow-in-nested-block -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-shadow-in-nested-block` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-shadow-in-nested-block` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5412,7 +5412,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-shadow-in-nested-block-both-consumed-by-name -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-shadow-in-nested-block-both-consumed-by-name` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-shadow-in-nested-block-both-consumed-by-name` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5455,7 +5455,7 @@ error E3102: <fragment>:33:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-s-shadow-then-outer-moved-inside -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-shadow-then-outer-moved-inside` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-shadow-then-outer-moved-inside` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5498,7 +5498,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-while-body-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-while-body-shadow` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-while-body-shadow` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5537,7 +5537,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-s-two-scopes-same-name-sequence -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-two-scopes-same-name-sequence` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-two-scopes-same-name-sequence` of redteamAB.hand_ab5, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5579,7 +5579,7 @@ error E3223: <fragment>:32:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-r-temp-union-field -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `r-temp-union-field` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `r-temp-union-field` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5619,7 +5619,7 @@ error E3223: <fragment>:30:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-r-temp-as-arg-peek -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `r-temp-as-arg-peek` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `r-temp-as-arg-peek` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5655,7 +5655,7 @@ error E3223: <fragment>:22:2: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-r-return-self -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `r-return-self` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `r-return-self` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5689,7 +5689,7 @@ error E3224: <fragment>:16:10: this linear value is only lent to this code (a pa
 ```
 
 <!-- test: model-hand-ab-d-let-underscore-field -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `d-let-underscore-field` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `d-let-underscore-field` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5723,7 +5723,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-d-let-underscore-passr -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-let-underscore-passR` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-let-underscore-passR` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5760,7 +5760,7 @@ error E3223: <fragment>:28:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-d-cond-var-fresh -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `d-cond-var-fresh` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `d-cond-var-fresh` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5794,7 +5794,7 @@ error E3223: <fragment>:25:2: this drops 'a', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-d-two-args-same -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-two-args-same` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-two-args-same` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5832,7 +5832,7 @@ error E3102: <fragment>:28:10: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ab-d-assign-passr -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `d-assign-passr` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `d-assign-passr` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5870,7 +5870,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-d-assign-from-other -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-assign-from-other` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-assign-from-other` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5905,7 +5905,7 @@ error E3223: <fragment>:24:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-d-assign-from-other-moved -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-assign-from-other-moved` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-assign-from-other-moved` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5942,7 +5942,7 @@ error E3102: <fragment>:26:2: use of moved value 'q': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-d-let-alias-then-both -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-let-alias-then-both` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-let-alias-then-both` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5977,7 +5977,7 @@ error E3102: <fragment>:24:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-d-param-alias-callee -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-param-alias-callee` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-param-alias-callee` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6029,7 +6029,7 @@ error E3102: <fragment>:40:16: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ab-d-iter-bind-loop-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-iter-bind-loop-var` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `d-iter-bind-loop-var` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6071,7 +6071,7 @@ error E3102: <fragment>:29:11: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ab-d-consume-in-cond-expr -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-consume-in-cond-expr` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-consume-in-cond-expr` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6108,7 +6108,7 @@ error E3223: <fragment>:27:13: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ab-d-cond-throw-arm-consume -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-cond-throw-arm-consume` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-cond-throw-arm-consume` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6149,7 +6149,7 @@ error E3223: <fragment>:31:27: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ab-d-cond-arm-moves-var -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `d-cond-arm-moves-var` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `d-cond-arm-moves-var` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6191,7 +6191,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-d-cond-arm-moves-var-handled -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-cond-arm-moves-var-handled` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `d-cond-arm-moves-var-handled` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6232,8 +6232,110 @@ end 'main'
 error E3223: <fragment>:27:27: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
+<!-- test: model-hand-ab-m-spawn-fails-linear-live -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-spawn-fails-linear-live` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Sfn
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Sfn'
+
+function g(c Num)
+	let r = Resp.create(0)
+	let _ = spawn Sfn.create(c)
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ab-m-send-fails-linear-live -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-send-fails-linear-live` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Sfn
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function m()
+		self.n = 1
+	end 'm'
+end 'Sfn'
+
+function g()
+	let r = Resp.create(0)
+	let s = spawn(capacity: 1) Sfn.create(0)
+	try s.m() otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x2'
+	end 'h1'
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ab-fz-two-finalizers -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fz-two-finalizers` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fz-two-finalizers` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6266,7 +6368,7 @@ error E3102: <fragment>:23:2: use of moved value 'q': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-fz-two-finalizers-branches -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-two-finalizers-branches` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-two-finalizers-branches` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6307,7 +6409,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-fz-finalizer-recursive -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-finalizer-recursive` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-finalizer-recursive` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6339,7 +6441,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-fz-finalizer-recursive-both -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fz-finalizer-recursive-both` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fz-finalizer-recursive-both` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6370,7 +6472,7 @@ error E3102: <fragment>:15:12: use of moved value 'self': its ownership moved to
 ```
 
 <!-- test: model-hand-ab-fz-finalizer-fields-linear -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fz-finalizer-fields-linear` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fz-finalizer-fields-linear` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6416,7 +6518,7 @@ error E3223: <fragment>:28:11: this drops 'r', a linear value that was never con
 ```
 
 <!-- test: model-hand-ab-fz-destruct-self-not-last -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-destruct-self-not-last` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-destruct-self-not-last` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6462,7 +6564,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-fz-consuming-in-record-other -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-consuming-in-record-other` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fz-consuming-in-record-other` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6504,7 +6606,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-fz-linear-record-with-int-fields-clone -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `fz-linear-record-with-int-fields-clone` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `fz-linear-record-with-int-fields-clone` of redteamAB.hand_ab8, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6539,7 +6641,7 @@ error E3214: <fragment>:23:10: 'Resp' is unique and cannot be cloned
 ```
 
 <!-- test: model-hand-ac-fin-return-before -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-return-before` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-return-before` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6570,7 +6672,7 @@ error E3223: <fragment>:13:4: this drops 'self', a linear value that was never c
 ```
 
 <!-- test: model-hand-ac-fin-loop-destruct -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fin-loop-destruct` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fin-loop-destruct` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6606,7 +6708,7 @@ error E3102: <fragment>:14:13: use of moved value 'self': it was moved in an ear
 ```
 
 <!-- test: model-hand-ac-fin-use-after-destruct -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fin-use-after-destruct` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `fin-use-after-destruct` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6635,7 +6737,7 @@ error E3102: <fragment>:13:10: use of moved value 'self': its ownership moved to
 ```
 
 <!-- test: model-hand-ac-fin-self-into-union -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-self-into-union` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-self-into-union` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6676,7 +6778,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-fin-self-into-union-dropped -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-self-into-union-dropped` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-self-into-union-dropped` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6713,7 +6815,7 @@ error E3223: <fragment>:16:11: this drops '_', a linear value that was never con
 ```
 
 <!-- test: model-hand-ac-fin-self-to-fn -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-self-to-fn` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-self-to-fn` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6749,7 +6851,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-fin-self-to-fn-nonconsuming -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-self-to-fn-nonconsuming` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-self-to-fn-nonconsuming` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6784,8 +6886,58 @@ end 'main'
 error E3223: <fragment>:20:10: this drops 't', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
+<!-- test: model-hand-ac-fin-self-send -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-self-send` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self, a Hq.handle)
+		try a.take(self) otherwise (sendFailure) 'h1'
+			match sendFailure 'x2'
+				mailboxFull(q) then q.g()
+				serviceStopped(q) then q.g()
+			end 'x2'
+		end 'h1'
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+end 'Fz'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Hq'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Hq.create(0)
+	let t = Fz.create(0)
+	t.f(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ac-fin-self-send-drop-handler -->
-The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fin-self-send-drop-handler` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `fin-self-send-drop-handler` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6835,7 +6987,7 @@ error E3224: <fragment>:14:5: the case 'mailboxFull' carries the linear value 't
 ```
 
 <!-- test: model-hand-ac-fin-recv-other-instance -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-recv-other-instance` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-recv-other-instance` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6868,7 +7020,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-fin-method-returns-self-moved -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-method-returns-self-moved` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-method-returns-self-moved` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6901,7 +7053,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-fin-method-returns-self-dropped -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-method-returns-self-dropped` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `fin-method-returns-self-dropped` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6933,7 +7085,7 @@ error E3223: <fragment>:23:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-fin-method-returns-self-chain -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-method-returns-self-chain` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-method-returns-self-chain` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6964,7 +7116,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-fin-nonconsuming-with-self-peek -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-nonconsuming-with-self-peek` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fin-nonconsuming-with-self-peek` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6998,7 +7150,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-two-linear-two-names -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-two-linear-two-names` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-two-linear-two-names` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7049,7 +7201,7 @@ error E3224: <fragment>:38:4: the case 'mailboxFull' carries the linear value 'b
 ```
 
 <!-- test: model-hand-ac-hb-nonlinear-first-one-name -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-nonlinear-first-one-name` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-nonlinear-first-one-name` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7100,7 +7252,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-refill-var-in-handler -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-refill-var-in-handler` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-refill-var-in-handler` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7152,7 +7304,7 @@ error E3196: <fragment>:38:28: cannot store an isolated 'Resp' into 'r', which h
 ```
 
 <!-- test: model-hand-ac-hb-refill-var-in-handler-no-use -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-refill-var-in-handler-no-use` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-refill-var-in-handler-no-use` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7203,7 +7355,7 @@ error E3196: <fragment>:38:28: cannot store an isolated 'Resp' into 'r', which h
 ```
 
 <!-- test: model-hand-ac-hb-loop-refill -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-loop-refill` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `hb-loop-refill` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7262,7 +7414,7 @@ error E3196: <fragment>:44:29: cannot store an isolated 'Resp' into 'r', which h
 ```
 
 <!-- test: model-hand-ac-hb-send-in-loop-fresh -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-send-in-loop-fresh` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-send-in-loop-fresh` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7320,7 +7472,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-handler-breaks -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-handler-breaks` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-handler-breaks` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7378,7 +7530,7 @@ error E3224: <fragment>:43:5: the case 'mailboxFull' carries the linear value 't
 ```
 
 <!-- test: model-hand-ac-hb-handler-returns -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-handler-returns` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-handler-returns` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7432,7 +7584,7 @@ error E3224: <fragment>:36:4: the case 'mailboxFull' carries the linear value 't
 ```
 
 <!-- test: model-hand-ac-hb-union-arg -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-union-arg` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-union-arg` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7501,7 +7653,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-union-arg-handler-drops -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-union-arg-handler-drops` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-union-arg-handler-drops` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7563,7 +7715,7 @@ error E3224: <fragment>:49:4: the case 'mailboxFull' carries the linear value 's
 ```
 
 <!-- test: model-hand-ac-hb-send-twice-same-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-send-twice-same-var` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-send-twice-same-var` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7620,7 +7772,7 @@ error E3102: <fragment>:42:13: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-hb-send-var-then-peek -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-send-var-then-peek` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-send-var-then-peek` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7672,7 +7824,7 @@ error E3102: <fragment>:42:10: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-hb-send-in-behaviour -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-send-in-behaviour` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-send-in-behaviour` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7735,7 +7887,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-send-param-in-behaviour -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-send-param-in-behaviour` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-send-param-in-behaviour` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7803,7 +7955,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-forward-param-no-handler-consume -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-forward-param-no-handler-consume` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `hb-forward-param-no-handler-consume` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7871,7 +8023,7 @@ error E3224: <fragment>:43:5: the case 'mailboxFull' carries the linear value 't
 ```
 
 <!-- test: model-hand-ac-ub-while-cond-temp -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-while-cond-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-while-cond-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7914,7 +8066,7 @@ error E3223: <fragment>:31:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-ub-union-nonlinear-from-temp -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-union-nonlinear-from-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-union-nonlinear-from-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7955,7 +8107,7 @@ error E3223: <fragment>:31:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-ub-cond-cond-arms -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-cond-cond-arms` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-cond-cond-arms` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7992,7 +8144,7 @@ error E3223: <fragment>:26:2: this drops a linear value that was never consumed:
 
 <!-- test: model-hand-ac-ub-send-operand-temp -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-send-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-send-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8042,7 +8194,7 @@ error E3223: <fragment>:39:8: this drops a linear value that was never consumed:
 
 <!-- test: model-hand-ac-ub-await-operand-temp -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-await-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-await-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8092,7 +8244,7 @@ error E3223: <fragment>:39:22: this drops a linear value that was never consumed
 
 <!-- test: model-hand-ac-ub-spawn-operand-temp -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-spawn-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-spawn-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8136,7 +8288,7 @@ error E3223: <fragment>:34:19: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ac-ub-new-operand-temp -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-new-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-new-operand-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8180,7 +8332,7 @@ error E3223: <fragment>:34:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-ub-for-iterable-temp -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-for-iterable-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-for-iterable-temp` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8220,7 +8372,7 @@ error E3223: <fragment>:29:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-ub-return-temp-receiver -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-return-temp-receiver` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-return-temp-receiver` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8256,7 +8408,7 @@ error E3223: <fragment>:22:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-ub-return-union-temp-ok -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ub-return-union-temp-ok` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ub-return-union-temp-ok` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8308,7 +8460,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-ub-array-of-linear -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `ub-array-of-linear` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `ub-array-of-linear` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8342,7 +8494,7 @@ error E3224: <fragment>:3:11: 'Resp' is a linear value and cannot be a type argu
 ```
 
 <!-- test: model-hand-ac-ub-array-of-linear-union -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `ub-array-of-linear-union` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `ub-array-of-linear-union` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8381,7 +8533,7 @@ error E3224: <fragment>:3:11: 'Sent' is a linear value and cannot be a type argu
 ```
 
 <!-- test: model-hand-ac-wc-underscore-binding -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `wc-underscore-binding` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `wc-underscore-binding` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8426,7 +8578,7 @@ error E3224: <fragment>:34:3: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ac-wc-underscore-handler -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `wc-underscore-handler` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `wc-underscore-handler` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8488,7 +8640,7 @@ error E3224: <fragment>:37:4: the case 'mailboxFull' carries the linear value 't
 ```
 
 <!-- test: model-hand-ac-wc-underscore-let -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8520,7 +8672,7 @@ error E3223: <fragment>:23:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-wc-underscore-let-call -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let-call` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let-call` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8556,7 +8708,7 @@ error E3223: <fragment>:27:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-wc-underscore-let-iso-var -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let-iso-var` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let-iso-var` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8589,7 +8741,7 @@ error E3223: <fragment>:24:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-wc-underscore-let-union -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let-union` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-underscore-let-union` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8630,7 +8782,7 @@ error E3223: <fragment>:32:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-wc-non-exhaustive-no-linear-case -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-non-exhaustive-no-linear-case` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-non-exhaustive-no-linear-case` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8675,7 +8827,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-wc-non-exhaustive-ok-value -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-non-exhaustive-ok-value` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-non-exhaustive-ok-value` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8716,7 +8868,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-wc-match-in-loop -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-match-in-loop` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-match-in-loop` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8768,7 +8920,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-wc-match-arm-assign-scrutinee-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `wc-match-arm-assign-scrutinee-var` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `wc-match-arm-assign-scrutinee-var` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8817,7 +8969,7 @@ error E3102: <fragment>:36:8: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-wc-match-var-arm-refill-path -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `wc-match-var-arm-refill-path` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `wc-match-var-arm-refill-path` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8870,7 +9022,7 @@ error E3102: <fragment>:43:7: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-wc-match-two-vars-same-arm-names -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-match-two-vars-same-arm-names` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-match-two-vars-same-arm-names` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8917,7 +9069,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-wc-match-on-param-union-linear-returned -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-match-on-param-union-linear-returned` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wc-match-on-param-union-linear-returned` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8966,7 +9118,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-wc-match-on-param-union-linear-returned-dropped -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-match-on-param-union-linear-returned-dropped` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-match-on-param-union-linear-returned-dropped` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9014,7 +9166,7 @@ error E3223: <fragment>:39:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-wc-return-in-arm-leaves-other-payload -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-return-in-arm-leaves-other-payload` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-return-in-arm-leaves-other-payload` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9067,7 +9219,7 @@ error E3223: <fragment>:35:11: this drops 't', a linear value that was never con
 
 <!-- test: model-hand-ac-wc-send-linear-without-handback -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `wc-send-linear-without-handback` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `wc-send-linear-without-handback` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9113,7 +9265,7 @@ error E3223: <fragment>:35:2: this drops a linear value that was never consumed:
 
 <!-- test: model-hand-ac-wc-spawn-linear-arg -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-spawn-linear-arg` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `wc-spawn-linear-arg` of redteamAC.hand_ac11, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9157,7 +9309,7 @@ error E3223: <fragment>:34:20: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ac-sw-merge-linear -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sw-merge-linear` of redteamAC.hand_ac15, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sw-merge-linear` of redteamAC.hand_ac15, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9199,7 +9351,7 @@ error E3223: <fragment>:33:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-sw-clone-union -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `sw-clone-union` of redteamAC.hand_ac15, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `sw-clone-union` of redteamAC.hand_ac15, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9250,7 +9402,7 @@ error E3214: <fragment>:39:10: 'Sent' is unique (its field 'r' holds a unique 'R
 ```
 
 <!-- test: model-hand-ac-ua-spawn-and-exit-with-pending-handback -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ua-spawn-and-exit-with-pending-handback` of redteamAC.hand_ac18, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ua-spawn-and-exit-with-pending-handback` of redteamAC.hand_ac18, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9300,7 +9452,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-li-use-then-fin -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-use-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-use-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9338,7 +9490,7 @@ error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-use-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-use-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-use-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9376,7 +9528,7 @@ error E3102: <fragment>:28:7: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-useri-then-fin -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-useRI-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-useRI-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9414,7 +9566,7 @@ error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-useri-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-useRI-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-useRI-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9452,7 +9604,7 @@ error E3102: <fragment>:28:9: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-use-no-more -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `li-use-no-more` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `li-use-no-more` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9489,7 +9641,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-li-pass-then-fin -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-pass-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-pass-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9528,7 +9680,7 @@ error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-pass-bound-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-pass-bound-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-pass-bound-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9568,7 +9720,7 @@ error E3102: <fragment>:28:17: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-li-peek-fin-then-fin -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-peek-fin-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-peek-fin-then-fin` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9608,7 +9760,7 @@ error E3102: <fragment>:30:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-in-loop -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-in-loop` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-in-loop` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9653,7 +9805,7 @@ error E3102: <fragment>:33:8: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ac-li-in-if -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-in-if` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-in-if` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9693,7 +9845,7 @@ error E3102: <fragment>:30:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-method-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-method-consume` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-method-consume` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9731,7 +9883,7 @@ error E3102: <fragment>:28:13: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-li-param-forward -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-param-forward` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-param-forward` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9772,7 +9924,7 @@ error E3102: <fragment>:27:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-li-param-forward-once -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `li-param-forward-once` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `li-param-forward-once` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9812,7 +9964,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-li-union-lend -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-union-lend` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `li-union-lend` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9862,7 +10014,7 @@ error E3102: <fragment>:40:8: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-hb-iso-var -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-iso-var` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-iso-var` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9913,7 +10065,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-iso-var-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-var-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-var-twice` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9970,7 +10122,7 @@ error E3102: <fragment>:42:13: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-hb-iso-var-use-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-var-use-after` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-var-use-after` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10022,7 +10174,7 @@ error E3102: <fragment>:42:10: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-hb-iso-refill -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10075,7 +10227,7 @@ error E3102: <fragment>:42:2: use of moved value 'r': its ownership moved to ano
 
 <!-- test: model-hand-ac-hb-iso-refill-no-use -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `hb-iso-refill-no-use` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `hb-iso-refill-no-use` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10126,7 +10278,7 @@ error E3223: <fragment>:36:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-hb-iso-loop-refill -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-loop-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-loop-refill` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10185,7 +10337,7 @@ error E3102: <fragment>:42:14: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ac-hb-iso-loop-refill-final -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-loop-refill-final` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-loop-refill-final` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10245,7 +10397,7 @@ error E3102: <fragment>:42:14: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ac-hb-iso-handler-consume-then-sender-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-handler-consume-then-sender-consume` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-handler-consume-then-sender-consume` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10297,7 +10449,7 @@ error E3102: <fragment>:42:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-hb-iso-handler-names-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-iso-handler-names-shadow` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-iso-handler-names-shadow` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10348,7 +10500,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hb-iso-handler-shadow-then-use -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-handler-shadow-then-use` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `hb-iso-handler-shadow-then-use` of redteamAC.hand_ac2, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10400,7 +10552,7 @@ error E3102: <fragment>:42:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-min-h1-loop -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-loop` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-loop` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10442,7 +10594,7 @@ error E3102: <fragment>:29:8: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ac-min-h1-call-result -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-call-result` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-call-result` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10484,7 +10636,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-min-h1-behaviour -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-behaviour` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-behaviour` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10539,7 +10691,7 @@ error E3102: <fragment>:30:3: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-min-h1-finalizer -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-finalizer` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-finalizer` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10590,7 +10742,7 @@ error E3102: <fragment>:30:3: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-min-h1-recursion -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-recursion` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-recursion` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10636,7 +10788,7 @@ error E3102: <fragment>:36:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-min-h1-control-plain -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-control-plain` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-control-plain` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10674,7 +10826,7 @@ error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-min-h1-control-iso-param -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-control-iso-param` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `min-h1-control-iso-param` of redteamAC.hand_ac20, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10712,7 +10864,7 @@ error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-call-result-iso -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-call-result-iso` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-call-result-iso` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10754,7 +10906,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-method-arg -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-arg` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-arg` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10818,7 +10970,7 @@ error E3201: <fragment>:53:2: 'e' is mutable outside 'r'; a call into an isolate
 ```
 
 <!-- test: model-hand-ac-ld-method-arg2 -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-arg2` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-arg2` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10882,7 +11034,7 @@ error E3201: <fragment>:53:2: 'e' is mutable outside 'r'; a call into an isolate
 ```
 
 <!-- test: model-hand-ac-ld-method-wrap-union -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-wrap-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-wrap-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10954,7 +11106,7 @@ error E3201: <fragment>:60:10: 'e' is mutable outside 'r'; a call into an isolat
 ```
 
 <!-- test: model-hand-ac-ld-wrap-fn-union -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-wrap-fn-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-wrap-fn-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11005,7 +11157,7 @@ error E3201: <fragment>:39:10: 'wrapI' hands back mutable data of the isolated r
 ```
 
 <!-- test: model-hand-ac-ld-wrap-fn-union-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-wrap-fn-union-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-wrap-fn-union-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11057,7 +11209,7 @@ error E3201: <fragment>:39:10: 'wrapI' hands back mutable data of the isolated r
 ```
 
 <!-- test: model-hand-ac-ld-union-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-union-var` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-union-var` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11107,7 +11259,7 @@ error E3102: <fragment>:40:8: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-union-var-match-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-union-var-match-after` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-union-var-match-after` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11160,7 +11312,7 @@ error E3102: <fragment>:40:8: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-in-if-both-arms -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ld-in-if-both-arms` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ld-in-if-both-arms` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11201,7 +11353,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-ld-in-if-lent-else-fin -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ld-in-if-lent-else-fin` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ld-in-if-lent-else-fin` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11242,7 +11394,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-ld-in-if-lent-else-fin-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-in-if-lent-else-fin-after` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-in-if-lent-else-fin-after` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11284,7 +11436,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-param-forward-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-param-forward-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-param-forward-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11325,7 +11477,7 @@ error E3102: <fragment>:27:7: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-behaviour-param-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-behaviour-param-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-behaviour-param-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11380,7 +11532,7 @@ error E3102: <fragment>:30:8: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-for-array-lend -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-for-array-lend` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-for-array-lend` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11431,7 +11583,7 @@ error E3102: <fragment>:39:8: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ac-sm-behaviour-self-method -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-behaviour-self-method` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-behaviour-self-method` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11500,7 +11652,7 @@ error E3102: <fragment>:43:11: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-sm-behaviour-self-method-once -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-behaviour-self-method-once` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-behaviour-self-method-once` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11569,7 +11721,7 @@ error E3102: <fragment>:43:11: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-sm-behaviour-use-then-peek -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-behaviour-use-then-peek` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-behaviour-use-then-peek` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11638,7 +11790,7 @@ error E3102: <fragment>:43:11: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-sm-main-var-iso-fn-result -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-main-var-iso-fn-result` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `sm-main-var-iso-fn-result` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11680,7 +11832,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-cond-two-fresh -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `cond-two-fresh` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `cond-two-fresh` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11717,7 +11869,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-cond-fresh-and-var -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-fresh-and-var` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-fresh-and-var` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11755,7 +11907,7 @@ error E3223: <fragment>:29:2: this drops 'a', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-cond-union-fresh -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `cond-union-fresh` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `cond-union-fresh` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11804,7 +11956,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-cond-in-arg -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `cond-in-arg` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `cond-in-arg` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11844,7 +11996,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-sh-inner-block-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-inner-block-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-inner-block-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11881,7 +12033,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-sh-same-scope-rebind -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-same-scope-rebind` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-same-scope-rebind` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11915,7 +12067,7 @@ error E3223: <fragment>:25:2: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-sh-match-payload-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-match-payload-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-match-payload-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11961,7 +12113,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-sh-match-payload-shadow-outer-moved-inside -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-match-payload-shadow-outer-moved-inside` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-match-payload-shadow-outer-moved-inside` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12006,7 +12158,7 @@ error E3223: <fragment>:32:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-sh-handler-name-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-handler-name-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-handler-name-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12059,7 +12211,7 @@ end 'main'
 
 <!-- test: model-hand-ac-sh-handler-name-shadow-live-outer-dropped -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-handler-name-shadow-live-outer-dropped` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-handler-name-shadow-live-outer-dropped` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12110,7 +12262,7 @@ error E3223: <fragment>:42:2: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-sh-loop-body-continue -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-loop-body-continue` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-loop-body-continue` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12154,7 +12306,7 @@ error E3223: <fragment>:31:4: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-sh-loop-body-fresh-each-iter -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-loop-body-fresh-each-iter` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-loop-body-fresh-each-iter` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12195,7 +12347,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-sh-param-shadow-let -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-param-shadow-let` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `sh-param-shadow-let` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12232,7 +12384,7 @@ error E3223: <fragment>:21:10: this drops 'r', a linear value that was never con
 ```
 
 <!-- test: model-hand-ac-sh-param-shadow-inner -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-param-shadow-inner` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-param-shadow-inner` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12272,7 +12424,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-sh-var-assign-inner-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-var-assign-inner-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh-var-assign-inner-shadow` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12311,7 +12463,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-un-two-linear-payloads-one-consumed -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `un-two-linear-payloads-one-consumed` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `un-two-linear-payloads-one-consumed` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12355,7 +12507,7 @@ error E3224: <fragment>:29:3: the case 'both' carries the linear value 'b', and 
 ```
 
 <!-- test: model-hand-ac-un-mixed-payloads -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `un-mixed-payloads` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `un-mixed-payloads` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12399,7 +12551,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-un-nested-wrap -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `un-nested-wrap` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `un-nested-wrap` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12459,7 +12611,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-un-nested-wrap-arm-ignores -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `un-nested-wrap-arm-ignores` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `un-nested-wrap-arm-ignores` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12512,7 +12664,7 @@ error E3224: <fragment>:38:3: the case 'o' carries the linear value 's', and thi
 ```
 
 <!-- test: model-hand-ac-un-match-twice-same-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `un-match-twice-same-var` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `un-match-twice-same-var` of redteamAC.hand_ac6, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12561,7 +12713,7 @@ error E3102: <fragment>:36:8: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-union-literal-iso -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `ul-union-literal-iso` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `ul-union-literal-iso` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12608,7 +12760,7 @@ error E3196: <fragment>:35:23: cannot store an isolated 'Resp' into 'Sent.notSen
 ```
 
 <!-- test: model-hand-ac-ul-union-literal-iso-return -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `ul-union-literal-iso-return` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `ul-union-literal-iso-return` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12659,7 +12811,7 @@ error E3196: <fragment>:35:23: cannot store an isolated 'Resp' into 'Sent.notSen
 ```
 
 <!-- test: model-hand-ac-ul-union-literal-iso-dropped-s -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `ul-union-literal-iso-dropped-s` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `ul-union-literal-iso-dropped-s` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12697,7 +12849,7 @@ error E3196: <fragment>:28:23: cannot store an isolated 'Resp' into 'Sent.notSen
 ```
 
 <!-- test: model-hand-ac-ul-union-literal-plain -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-union-literal-plain` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-union-literal-plain` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12744,7 +12896,7 @@ error E3102: <fragment>:36:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-iso-let-copy -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-let-copy` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-let-copy` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12779,7 +12931,7 @@ error E3102: <fragment>:24:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-iso-return-then-use -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-return-then-use` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-return-then-use` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12818,7 +12970,7 @@ error E3102: <fragment>:24:9: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-iso-iso-param-conversion -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-iso-param-conversion` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-iso-param-conversion` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12860,7 +13012,7 @@ error E3102: <fragment>:32:7: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-iso-plain-then-iso-param -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-plain-then-iso-param` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-plain-then-iso-param` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12902,7 +13054,7 @@ error E3102: <fragment>:32:9: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-iso-peek-in-fn-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-peek-in-fn-after` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-peek-in-fn-after` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12941,7 +13093,7 @@ error E3102: <fragment>:28:10: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-ul-iso-handback-after-lend -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-handback-after-lend` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-handback-after-lend` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12997,7 +13149,7 @@ error E3102: <fragment>:41:13: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ac-ul-iso-then-return -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-then-return` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-then-return` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13040,7 +13192,7 @@ error E3102: <fragment>:28:9: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ul-iso-lend-in-while-cond -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-lend-in-while-cond` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ul-iso-lend-in-while-cond` of redteamAC.hand_ac7, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13081,7 +13233,7 @@ error E3102: <fragment>:28:18: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ac-gh-loopbrk-then-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `gh-loopbrk-then-drop` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `gh-loopbrk-then-drop` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13121,7 +13273,7 @@ error E3223: <fragment>:31:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-gh-loopbrk-then-consume -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `gh-loopbrk-then-consume` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `gh-loopbrk-then-consume` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13162,7 +13314,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-rec-mutual-plain -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-mutual-plain` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-mutual-plain` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13208,7 +13360,7 @@ error E3102: <fragment>:36:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-rec-self-plain -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-self-plain` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-self-plain` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13250,7 +13402,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-rec-self-iso -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-self-iso` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-self-iso` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13292,7 +13444,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-rec-chain-plain -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-chain-plain` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-chain-plain` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13342,7 +13494,7 @@ error E3102: <fragment>:40:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-rec-chain-iso -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-chain-iso` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-chain-iso` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13392,7 +13544,7 @@ error E3102: <fragment>:40:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-rec-forward-ref -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-forward-ref` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `rec-forward-ref` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13433,7 +13585,7 @@ error E3102: <fragment>:23:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-lp-break-skips-refill -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `lp-break-skips-refill` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `lp-break-skips-refill` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13478,7 +13630,7 @@ error E3223: <fragment>:28:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-lp-continue-skips-refill -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `lp-continue-skips-refill` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `lp-continue-skips-refill` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13525,7 +13677,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-lp-zero-iter-for -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `lp-zero-iter-for` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `lp-zero-iter-for` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13562,7 +13714,7 @@ error E3102: <fragment>:26:3: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ac-lp-while-false-consumes -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `lp-while-false-consumes` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `lp-while-false-consumes` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13597,7 +13749,7 @@ error E3102: <fragment>:24:3: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ac-lp-while-true-consumes-break -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `lp-while-true-consumes-break` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `lp-while-true-consumes-break` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13633,7 +13785,7 @@ error E3223: <fragment>:23:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-lp-while-true-consume-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `lp-while-true-consume-after` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `lp-while-true-consume-after` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13670,7 +13822,7 @@ error E3102: <fragment>:27:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-lp-loop-condition-consumes-fresh -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `lp-loop-condition-consumes-fresh` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `lp-loop-condition-consumes-fresh` of redteamAC.hand_ac8, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13710,7 +13862,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hq-fin-only -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-fin-only` of redteamAC.hand_ac9, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-fin-only` of redteamAC.hand_ac9, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13772,7 +13924,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hq-use-only -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-use-only` of redteamAC.hand_ac9, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-use-only` of redteamAC.hand_ac9, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13838,7 +13990,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ac-hq-union-sent -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-union-sent` of redteamAC.hand_ac9, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-union-sent` of redteamAC.hand_ac9, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13916,7 +14068,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-n-wrap-main -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-wrap-main` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-wrap-main` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13985,7 +14137,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-n-wrap-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `n-wrap-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `n-wrap-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14039,7 +14191,7 @@ error E3223: <fragment>:45:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-n-wrap-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-wrap-twice` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-wrap-twice` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14109,7 +14261,7 @@ error E3102: <fragment>:60:7: use of moved value 'w': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-n-wrap-match-leak-payload -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `n-wrap-match-leak-payload` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `n-wrap-match-leak-payload` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14167,7 +14319,7 @@ error E3224: <fragment>:47:3: the case 'w1' carries the linear value 's', and th
 ```
 
 <!-- test: model-hand-ad-n-wrap-match-s-and-w -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-wrap-match-s-and-w` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-wrap-match-s-and-w` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14240,7 +14392,7 @@ error E3102: <fragment>:63:7: use of moved value 'w': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-n-two-pair -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `n-two-pair` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `n-two-pair` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14289,7 +14441,7 @@ error E3224: <fragment>:38:3: the case 'pair' carries the linear value 'b', and 
 ```
 
 <!-- test: model-hand-ad-c-break-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-break-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-break-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14337,7 +14489,7 @@ error E3223: <fragment>:34:4: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-c-continue-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-continue-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-continue-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14385,7 +14537,7 @@ error E3223: <fragment>:35:4: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-c-return-in-loop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-return-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-return-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14437,7 +14589,7 @@ error E3223: <fragment>:34:4: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-c-loop-create-consume -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-loop-create-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-loop-create-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14482,7 +14634,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-c-loop-consume-outer -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-consume-outer` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-consume-outer` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14527,7 +14679,7 @@ error E3102: <fragment>:33:3: use of moved value 'r': it was moved in an earlier
 ```
 
 <!-- test: model-hand-ad-c-loop-consume-and-refill -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-loop-consume-and-refill` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-loop-consume-and-refill` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14574,7 +14726,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-c-loop-refill-break-before -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-loop-refill-break-before` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-loop-refill-break-before` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14623,7 +14775,7 @@ error E3223: <fragment>:32:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ad-c-loop-refill-break-after-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-refill-break-after-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-refill-break-after-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14673,7 +14825,7 @@ error E3102: <fragment>:40:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-c-loop-refill-cond -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-refill-cond` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-loop-refill-cond` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14718,7 +14870,7 @@ error E3102: <fragment>:35:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-c-if-else-consume -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-if-else-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c-if-else-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14763,7 +14915,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-c-if-one-arm -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-if-one-arm` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-if-one-arm` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14806,7 +14958,7 @@ error E3223: <fragment>:31:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ad-c-nested-if -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-nested-if` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `c-nested-if` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14857,7 +15009,7 @@ error E3223: <fragment>:38:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ad-c-while-cond-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-while-cond-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-while-cond-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14905,7 +15057,7 @@ error E3102: <fragment>:36:13: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ad-c-while-cond-consume-once -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-while-cond-consume-once` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-while-cond-consume-once` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14957,7 +15109,7 @@ error E3102: <fragment>:37:13: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ad-c-if-cond-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-if-cond-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `c-if-cond-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15007,7 +15159,7 @@ error E3102: <fragment>:37:3: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-s-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-shadow` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-shadow` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15052,7 +15204,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-s-shadow-drop-inner -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-shadow-drop-inner` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-shadow-drop-inner` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15096,7 +15248,7 @@ error E3223: <fragment>:33:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-s-overwrite -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-overwrite` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-overwrite` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15138,7 +15290,7 @@ error E3223: <fragment>:31:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ad-s-overwrite-moved -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-overwrite-moved` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-overwrite-moved` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15181,7 +15333,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-s-overwrite-in-if -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-overwrite-in-if` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s-overwrite-in-if` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15226,7 +15378,7 @@ error E3223: <fragment>:31:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ad-s-overwrite-with-self-call -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-overwrite-with-self-call` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-overwrite-with-self-call` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15273,7 +15425,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-s-overwrite-with-keep -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-overwrite-with-keep` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-overwrite-with-keep` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15319,7 +15471,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-s-let-from-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-let-from-var` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-let-from-var` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15362,7 +15514,7 @@ error E3102: <fragment>:33:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-s-alias-in-if -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-alias-in-if` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-alias-in-if` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15407,7 +15559,7 @@ error E3102: <fragment>:35:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-s-alias-in-loop -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-alias-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `s-alias-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15453,7 +15605,7 @@ error E3102: <fragment>:33:11: use of moved value 'r': it was moved in an earlie
 ```
 
 <!-- test: model-hand-ad-s-assign-alias -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `s-assign-alias` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `s-assign-alias` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15497,7 +15649,7 @@ error E3102: <fragment>:34:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-w-one-call-open-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-one-call-open-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-one-call-open-consume` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15539,7 +15691,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-w-one-stmt-read -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-one-stmt-read` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-one-stmt-read` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15581,7 +15733,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-w-one-stmt-bump -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-one-stmt-bump` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-one-stmt-bump` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15623,7 +15775,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-w-one-stmt-assign -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-one-stmt-assign` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-one-stmt-assign` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15665,7 +15817,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-o-cond-new -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-cond-new` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-cond-new` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15706,7 +15858,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-o-cond-new-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `o-cond-new-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `o-cond-new-drop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15746,7 +15898,7 @@ error E3223: <fragment>:31:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-o-cond-var-fresh -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `o-cond-var-fresh` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `o-cond-var-fresh` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15788,7 +15940,7 @@ error E3223: <fragment>:33:2: this drops 'a', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-o-iter-array -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `o-iter-array` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `o-iter-array` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15839,7 +15991,7 @@ error E3224: <fragment>:3:11: 'Sent' is a linear value and cannot be a type argu
 ```
 
 <!-- test: model-hand-ad-o-record-method-returns-self -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `o-record-method-returns-self` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `o-record-method-returns-self` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15873,7 +16025,7 @@ error E3224: <fragment>:12:10: this linear value is only lent to this code (a pa
 ```
 
 <!-- test: model-hand-ad-o-record-method-passes-self -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `o-record-method-passes-self` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `o-record-method-passes-self` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15910,7 +16062,7 @@ error E3224: <fragment>:12:3: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-passes-self-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-passes-self-twice` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-passes-self-twice` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15947,7 +16099,7 @@ error E3102: <fragment>:13:9: use of moved value 'self': its ownership moved to 
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-keeps-self-out -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-consuming-method-keeps-self-out` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-consuming-method-keeps-self-out` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15980,7 +16132,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-self-in-union -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-consuming-method-self-in-union` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-consuming-method-self-in-union` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16021,7 +16173,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-self-destruct-after-pass -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-self-destruct-after-pass` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-self-destruct-after-pass` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16058,7 +16210,7 @@ error E3102: <fragment>:13:12: use of moved value 'self': its ownership moved to
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-while -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-while` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-while` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16094,7 +16246,7 @@ error E3102: <fragment>:14:13: use of moved value 'self': it was moved in an ear
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-field-write-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-field-write-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-field-write-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16123,7 +16275,7 @@ error E3102: <fragment>:13:3: use of moved value 'self': its ownership moved to 
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-read-after-destruct -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-read-after-destruct` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-read-after-destruct` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16152,7 +16304,7 @@ error E3102: <fragment>:13:10: use of moved value 'self': its ownership moved to
 ```
 
 <!-- test: model-hand-ad-o-consuming-method-peek-after-destruct -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-peek-after-destruct` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-consuming-method-peek-after-destruct` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16186,7 +16338,7 @@ error E3102: <fragment>:17:10: use of moved value 'self': its ownership moved to
 
 <!-- test: model-hand-ad-n-handler-shadows-outer -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `n-handler-shadows-outer` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `n-handler-shadows-outer` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16268,8 +16420,163 @@ end 'main'
 error E3223: <fragment>:74:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
+<!-- test: model-hand-ad-n-handler-shadows-outer-fin -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-handler-shadows-outer-fin` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Resp)
+		r.fin(1)
+	end 'take'
+
+	export function two(r Resp, s Resp)
+		r.fin(1)
+		s.fin(1)
+	end 'two'
+
+	export function mix(x Num, r Resp, y Num)
+		let _ = y
+		r.fin(x)
+	end 'mix'
+
+	export function takeS(s Sent)
+		useS(s)
+	end 'takeS'
+end 'Hq'
+
+function useS(s Sent)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let r = Resp.create(0)
+	let a = spawn(capacity: 1) Hq.create(0)
+	try a.take(Resp.create(1)) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(r) then r.fin(1)
+			serviceStopped(r) then r.fin(1)
+		end 'x2'
+	end 'h1'
+	r.fin(2)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ad-n-handler-name-is-sent-var -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-handler-name-is-sent-var` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Resp)
+		r.fin(1)
+	end 'take'
+
+	export function two(r Resp, s Resp)
+		r.fin(1)
+		s.fin(1)
+	end 'two'
+
+	export function mix(x Num, r Resp, y Num)
+		let _ = y
+		r.fin(x)
+	end 'mix'
+
+	export function takeS(s Sent)
+		useS(s)
+	end 'takeS'
+end 'Hq'
+
+function useS(s Sent)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let r = Resp.create(0)
+	let a = spawn(capacity: 1) Hq.create(0)
+	try a.take(r) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(r) then r.fin(1)
+			serviceStopped(r) then r.fin(1)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ad-n-handler-name-is-sent-var-use-after -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `n-handler-name-is-sent-var-use-after` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-handler-name-is-sent-var-use-after` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16346,8 +16653,85 @@ end 'main'
 error E3102: <fragment>:68:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: model-hand-ad-n-handler-name-int-mixed -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-handler-name-int-mixed` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Resp)
+		r.fin(1)
+	end 'take'
+
+	export function two(r Resp, s Resp)
+		r.fin(1)
+		s.fin(1)
+	end 'two'
+
+	export function mix(x Num, r Resp, y Num)
+		let _ = y
+		r.fin(x)
+	end 'mix'
+
+	export function takeS(s Sent)
+		useS(s)
+	end 'takeS'
+end 'Hq'
+
+function useS(s Sent)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let r = Resp.create(0)
+	let a = spawn(capacity: 1) Hq.create(0)
+	try a.mix(1, r: r, y: 2) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(_, q, _) then q.fin(1)
+			serviceStopped(_, q, _) then q.fin(1)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ad-n-arm-name-is-scrutinee -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-arm-name-is-scrutinee` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-arm-name-is-scrutinee` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16392,7 +16776,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-n-arm-name-is-scrutinee-after -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-arm-name-is-scrutinee-after` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `n-arm-name-is-scrutinee-after` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16445,7 +16829,7 @@ error E3102: <fragment>:43:7: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-n-arm-name-is-outer-linear -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-arm-name-is-outer-linear` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-arm-name-is-outer-linear` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16492,7 +16876,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-n-arm-name-is-outer-linear-drop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `n-arm-name-is-outer-linear-drop` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `n-arm-name-is-outer-linear-drop` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16539,7 +16923,7 @@ error E3224: <fragment>:35:3: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ad-n-arm-name-is-outer-linear-use-outer -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `n-arm-name-is-outer-linear-use-outer` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `n-arm-name-is-outer-linear-use-outer` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16585,7 +16969,7 @@ error E3223: <fragment>:33:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ad-j-break-in-arm -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `j-break-in-arm` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `j-break-in-arm` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16638,7 +17022,7 @@ error E3224: <fragment>:40:4: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ad-j-return-in-arm -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `j-return-in-arm` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `j-return-in-arm` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16687,7 +17071,7 @@ error E3224: <fragment>:34:3: the case 'notSent' carries the linear value 'r', a
 ```
 
 <!-- test: model-hand-ad-j-handler-return -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `j-handler-return` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3224. Model program `j-handler-return` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16768,8 +17152,95 @@ end 'main'
 error E3224: <fragment>:62:4: the case 'mailboxFull' carries the linear value 'r', and this arm must bind it to a name and consume it: a pattern that leaves it behind drops it
 ```
 
+<!-- test: model-hand-ad-j-handler-in-loop-refill -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `j-handler-in-loop-refill` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Resp)
+		r.fin(1)
+	end 'take'
+
+	export function two(r Resp, s Resp)
+		r.fin(1)
+		s.fin(1)
+	end 'two'
+
+	export function mix(x Num, r Resp, y Num)
+		let _ = y
+		r.fin(x)
+	end 'mix'
+
+	export function takeS(s Sent)
+		useS(s)
+	end 'takeS'
+end 'Hq'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function useS(s Sent)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Hq.create(0)
+	var r = Resp.create(0)
+	var i = 3 as Num
+	while i != 0 'w1'
+		try a.take(r) otherwise (sendFailure) 'h2'
+			match sendFailure 'x3'
+				mailboxFull(q) then q.fin(1)
+				serviceStopped(q) then q.fin(1)
+			end 'x3'
+		end 'h2'
+		r = Resp.create(1)
+		i = lg(0)
+	end 'w1'
+	r.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ad-j-handler-in-loop-no-refill -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `j-handler-in-loop-no-refill` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `j-handler-in-loop-no-refill` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16853,8 +17324,95 @@ end 'main'
 error E3102: <fragment>:68:14: use of moved value 'r': it was moved in an earlier iteration of this loop
 ```
 
+<!-- test: model-hand-ad-j-handler-in-loop-refill-both -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `j-handler-in-loop-refill-both` of redteamAD.hand_ad4, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sent
+	ok
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Resp)
+		r.fin(1)
+	end 'take'
+
+	export function two(r Resp, s Resp)
+		r.fin(1)
+		s.fin(1)
+	end 'two'
+
+	export function mix(x Num, r Resp, y Num)
+		let _ = y
+		r.fin(x)
+	end 'mix'
+
+	export function takeS(s Sent)
+		useS(s)
+	end 'takeS'
+end 'Hq'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function useS(s Sent)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Hq.create(0)
+	var r = Resp.create(0)
+	var i = 3 as Num
+	while i != 0 'w1'
+		try a.take(r) otherwise (sendFailure) 'h2'
+			match sendFailure 'x3'
+				mailboxFull(q) then q.fin(1)
+				serviceStopped(q) then q.fin(1)
+			end 'x3'
+		end 'h2'
+		r = Resp.create(5)
+		i = lg(0)
+	end 'w1'
+	r.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ad-k-forward-keeper -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16892,7 +17450,7 @@ error E3102: <fragment>:28:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-chain -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-chain` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-chain` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16938,7 +17496,7 @@ error E3102: <fragment>:36:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-mutual -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-mutual` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-mutual` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16988,7 +17546,7 @@ error E3102: <fragment>:40:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-self -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-self` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-self` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17034,7 +17592,7 @@ error E3102: <fragment>:36:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-self-no-keep -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-self-no-keep` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-self-no-keep` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17078,7 +17636,7 @@ error E3102: <fragment>:34:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-through-method -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-through-method` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-through-method` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17134,7 +17692,7 @@ error E3201: <fragment>:45:7: 'h' is mutable outside 'r'; a call into an isolate
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-in-spawn -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3224. Model program `k-forward-keeper-in-spawn` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-in-spawn` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17177,7 +17735,7 @@ error E3224: <fragment>:32:19: a `spawn` takes no linear argument: a factory tha
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-in-new -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-forward-keeper-in-new` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-forward-keeper-in-new` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17223,7 +17781,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-union-fn -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-union-fn` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-union-fn` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17269,7 +17827,7 @@ error E3102: <fragment>:36:9: use of moved value 's': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-union-fn-once -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-forward-keeper-union-fn-once` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-forward-keeper-union-fn-once` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17313,8 +17871,54 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ad-k-forward-keeper-union-fn-peek -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-forward-keeper-union-fn-peek` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Resp)
+end 'Sn'
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok as isolated Sn
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ad-hole-match-window -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-match-window` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-match-window` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17376,7 +17980,7 @@ error E3201: <fragment>:50:16: 'giveS' hands back mutable data of the isolated r
 ```
 
 <!-- test: model-hand-af-m1-union-method-match-self -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `m1-union-method-match-self` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `m1-union-method-match-self` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17437,7 +18041,7 @@ error E3224: <fragment>:14:4: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-af-m2-union-method-match-self-once -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `m2-union-method-match-self-once` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SELF`; the compiler refuses it with E3224. Model program `m2-union-method-match-self-once` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17494,7 +18098,7 @@ error E3224: <fragment>:14:4: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-af-m4-union-method-peek-then-match -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m4-union-method-peek-then-match` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m4-union-method-peek-then-match` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17552,7 +18156,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-b1-byref-union-param -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `b1-byref-union-param` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `b1-byref-union-param` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17615,7 +18219,7 @@ error E3224: <fragment>:50:3: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-af-c1-cond-union-scrutinee -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `c1-cond-union-scrutinee` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `c1-cond-union-scrutinee` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17678,7 +18282,7 @@ error E3223: <fragment>:54:2: this drops 'b', a linear value that was never cons
 ```
 
 <!-- test: model-hand-af-r1-record-field-union-match -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `r1-record-field-union-match` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `r1-record-field-union-match` of redteamAF.hand_af1, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17744,7 +18348,7 @@ error E3224: <fragment>:53:3: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-af-b4-binder-named-like-linear-outer -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `b4-binder-named-like-linear-outer` of redteamAF.hand_af15, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `b4-binder-named-like-linear-outer` of redteamAF.hand_af15, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17800,7 +18404,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh1-binder-iso-param -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh1-binder-iso-param` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh1-binder-iso-param` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17860,7 +18464,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh4-inner-let-iso-param -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh4-inner-let-iso-param` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh4-inner-let-iso-param` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17918,7 +18522,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh5-inner-let-send -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh5-inner-let-send` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh5-inner-let-send` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17994,7 +18598,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh6-inner-let-in-loop -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh6-inner-let-in-loop` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh6-inner-let-in-loop` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18054,7 +18658,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh8-binder-iso-bx -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh8-binder-iso-bx` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh8-binder-iso-bx` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18122,7 +18726,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh12-param-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh12-param-shadow` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh12-param-shadow` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18192,7 +18796,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-sh14-loop-reuse -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh14-loop-reuse` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `sh14-loop-reuse` of redteamAF.hand_af16, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18268,7 +18872,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-c4-clone-mixed-union -->
-The model (`core-m3w-fa13`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `c4-clone-mixed-union` of redteamAF.hand_af21, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `c4-clone-mixed-union` of redteamAF.hand_af21, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18335,7 +18939,7 @@ error E3214: <fragment>:49:10: 'Mp' is unique (its field 'x' holds a unique 'Rl'
 ```
 
 <!-- test: model-hand-af-l1-continue-after-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l1-continue-after-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l1-continue-after-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18398,7 +19002,7 @@ error E3102: <fragment>:47:9: use of moved value 'u': it was moved in an earlier
 ```
 
 <!-- test: model-hand-af-l2-conditional-continue-after-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l2-conditional-continue-after-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l2-conditional-continue-after-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18463,7 +19067,7 @@ error E3102: <fragment>:47:9: use of moved value 'u': it was moved in an earlier
 ```
 
 <!-- test: model-hand-af-l3-break-after-consume -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l3-break-after-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l3-break-after-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18521,7 +19125,7 @@ error E3223: <fragment>:42:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-af-l4-continue-before-consume -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l4-continue-before-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l4-continue-before-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18586,7 +19190,7 @@ error E3223: <fragment>:46:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-af-l5-continue-skips-consume-then-consume-after-loop -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l5-continue-skips-consume-then-consume-after-loop` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l5-continue-skips-consume-then-consume-after-loop` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18656,7 +19260,7 @@ error E3102: <fragment>:57:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-af-l6-refill-before-continue -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l6-refill-before-continue` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l6-refill-before-continue` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18724,7 +19328,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-l7-refill-only-on-one-path -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l7-refill-only-on-one-path` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l7-refill-only-on-one-path` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18790,7 +19394,7 @@ error E3223: <fragment>:46:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-af-l8-refill-only-on-one-path-then-use -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l8-refill-only-on-one-path-then-use` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l8-refill-only-on-one-path-then-use` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18860,7 +19464,7 @@ error E3102: <fragment>:57:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-af-l11-for-break -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l11-for-break` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l11-for-break` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18921,7 +19525,7 @@ error E3223: <fragment>:45:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-af-l12-for-continue-consume -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l12-for-continue-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l12-for-continue-consume` of redteamAF.hand_af22, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18982,7 +19586,7 @@ error E3102: <fragment>:46:9: use of moved value 'u': it was moved in an earlier
 ```
 
 <!-- test: model-hand-af-s1-binder-named-like-outer-iso -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-binder-named-like-outer-iso` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-binder-named-like-outer-iso` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19038,7 +19642,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s2-binder-named-like-outer-plain -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s2-binder-named-like-outer-plain` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s2-binder-named-like-outer-plain` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19094,7 +19698,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s3-binder-named-like-scrutinee -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s3-binder-named-like-scrutinee` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s3-binder-named-like-scrutinee` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19148,7 +19752,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s6-binder-two-arms-same-name -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s6-binder-two-arms-same-name` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s6-binder-two-arms-same-name` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19214,7 +19818,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s7-binder-reuse-after -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s7-binder-reuse-after` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s7-binder-reuse-after` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19270,7 +19874,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s8-binder-shadows-param -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s8-binder-shadows-param` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `s8-binder-shadows-param` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19327,7 +19931,7 @@ error E3223: <fragment>:39:10: this drops 'q', a linear value that was never con
 ```
 
 <!-- test: model-hand-af-s9-binder-shadows-iso-param-kept -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s9-binder-shadows-iso-param-kept` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s9-binder-shadows-iso-param-kept` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19385,7 +19989,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s14-binder-shadows-then-moved-away -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s14-binder-shadows-then-moved-away` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s14-binder-shadows-then-moved-away` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19447,7 +20051,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s15-plain-payload-binder-shadow -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s15-plain-payload-binder-shadow` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s15-plain-payload-binder-shadow` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19511,7 +20115,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p1-plain-mixed-in-fn -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-plain-mixed-in-fn` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-plain-mixed-in-fn` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19577,7 +20181,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p4-plain-mixed-share-payload -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p4-plain-mixed-share-payload` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p4-plain-mixed-share-payload` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19641,7 +20245,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p6-plain-mixed-readonly-payload-in-union-from-param -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p6-plain-mixed-readonly-payload-in-union-from-param` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p6-plain-mixed-readonly-payload-in-union-from-param` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19707,7 +20311,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p7-plain-mixed-frozen-payload -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `p7-plain-mixed-frozen-payload` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `p7-plain-mixed-frozen-payload` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19770,7 +20374,7 @@ error E3196: <fragment>:49:16: cannot store an immutable 'Bx' into 'Mp.m1.y', wh
 ```
 
 <!-- test: model-hand-af-p8-plain-mixed-immutable-payload-field -->
-The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `p8-plain-mixed-immutable-payload-field` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `p8-plain-mixed-immutable-payload-field` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19832,7 +20436,7 @@ error E3197: <fragment>:51:14: cannot write 'n' through 'y', which is immutable
 ```
 
 <!-- test: model-hand-af-r1-union-result-adapting -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r1-union-result-adapting` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r1-union-result-adapting` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19890,7 +20494,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-r2-union-result-twice -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `r2-union-result-twice` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `r2-union-result-twice` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19953,7 +20557,7 @@ error E3102: <fragment>:50:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-af-r11-two-match-same-temp-call -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r11-two-match-same-temp-call` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r11-two-match-same-temp-call` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20014,7 +20618,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-r12-match-in-condition -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r12-match-in-condition` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r12-match-in-condition` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20072,7 +20676,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-r17-loop-break-in-arm -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `r17-loop-break-in-arm` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `r17-loop-break-in-arm` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20135,7 +20739,7 @@ error E3223: <fragment>:54:2: this drops 'u', a linear value that was never cons
 ```
 
 <!-- test: model-hand-af-r18-loop-refill-with-none -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r18-loop-refill-with-none` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r18-loop-refill-with-none` of redteamAF.hand_af5, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20202,7 +20806,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w4-method-on-outer-record -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w4-method-on-outer-record` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w4-method-on-outer-record` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20275,7 +20879,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w5-union-to-record-method -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w5-union-to-record-method` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w5-union-to-record-method` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20345,7 +20949,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w10-two-cases-two-sinks -->
-The model (`core-m3w-fa13`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `w10-two-cases-two-sinks` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `w10-two-cases-two-sinks` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20415,7 +21019,7 @@ error E3200: <fragment>:58:19: 'x' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-af-w11-mixed-nonlinear-moved-to-send -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w11-mixed-nonlinear-moved-to-send` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w11-mixed-nonlinear-moved-to-send` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20490,7 +21094,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w12-early-return-in-arm -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w12-early-return-in-arm` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w12-early-return-in-arm` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20547,7 +21151,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w13-union-built-in-branch -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w13-union-built-in-branch` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w13-union-built-in-branch` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20610,7 +21214,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w14-match-then-rebuild-same-var -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w14-match-then-rebuild-same-var` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w14-match-then-rebuild-same-var` of redteamAF.hand_af8, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20673,7 +21277,7 @@ error E3102: <fragment>:49:8: use of moved value 'u': its ownership moved to ano
 
 <!-- test: model-hand-af-m1-param-union-match-fin -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m1-param-union-match-fin` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m1-param-union-match-fin` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20740,7 +21344,7 @@ error E3223: <fragment>:56:2: this drops a linear value that was never consumed:
 
 <!-- test: model-hand-af-m5-param-union-two-matches-in-two-behaviours -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m5-param-union-two-matches-in-two-behaviours` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m5-param-union-two-matches-in-two-behaviours` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20813,7 +21417,7 @@ error E3223: <fragment>:63:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-af-m7-param-union-in-function -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m7-param-union-in-function` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m7-param-union-in-function` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20870,7 +21474,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-m8-param-union-in-function-in-behaviour -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m8-param-union-in-function-in-behaviour` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m8-param-union-in-function-in-behaviour` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20940,7 +21544,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-m9-behaviour-local-union -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m9-behaviour-local-union` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m9-behaviour-local-union` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21008,7 +21612,7 @@ end 'main'
 
 <!-- test: model-hand-af-m10-behaviour-param-union-iso-fn -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m10-behaviour-param-union-iso-fn` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m10-behaviour-param-union-iso-fn` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21079,7 +21683,7 @@ error E3223: <fragment>:60:2: this drops a linear value that was never consumed:
 
 <!-- test: model-hand-af-m12-behaviour-param-mixed-store-assign -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m12-behaviour-param-mixed-store-assign` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m12-behaviour-param-mixed-store-assign` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21155,7 +21759,7 @@ error E3223: <fragment>:65:2: this drops a linear value that was never consumed:
 
 <!-- test: model-hand-af-m13-behaviour-param-plain-store -->
 <!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m13-behaviour-param-plain-store` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `m13-behaviour-param-plain-store` of redteamAF.hand_af9, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21230,7 +21834,7 @@ error E3223: <fragment>:65:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-t8-wo-payload -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t8-wo-payload` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t8-wo-payload` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21302,7 +21906,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-bm-nowin-keep-p -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21414,7 +22018,7 @@ error E3201: <fragment>:82:32: 'y.p' is mutable outside 'self.item'; a store int
 ```
 
 <!-- test: model-hand-ag-bm-nowin-plain -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-plain` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-plain` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21525,7 +22129,7 @@ error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into 
 ```
 
 <!-- test: model-hand-ag-bm-nowin-hq -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-hq` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-nowin-hq` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21636,7 +22240,7 @@ error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into 
 ```
 
 <!-- test: model-hand-ag-f1-control-no-window -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-control-no-window` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-control-no-window` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21704,7 +22308,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s1-beh-if-else-match-both -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-beh-if-else-match-both` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-beh-if-else-match-both` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21793,7 +22397,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s2-beh-if-match-else-call -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s2-beh-if-match-else-call` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s2-beh-if-match-else-call` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21879,7 +22483,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s3-iso-local-if-else -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s3-iso-local-if-else` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s3-iso-local-if-else` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21948,7 +22552,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s6-w4-none-in-both-then-held -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s6-w4-none-in-both-then-held` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s6-w4-none-in-both-then-held` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22015,7 +22619,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s7-w4-none-loop-fill-consume -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s7-w4-none-loop-fill-consume` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s7-w4-none-loop-fill-consume` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22083,7 +22687,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s9-w3-iso-param-two-fns -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s9-w3-iso-param-two-fns` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s9-w3-iso-param-two-fns` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22155,7 +22759,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s10-w3-local-from-plain-local -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s10-w3-local-from-plain-local` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s10-w3-local-from-plain-local` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22227,7 +22831,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s11-w3-local-inline-new -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s11-w3-local-inline-new` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s11-w3-local-inline-new` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22298,7 +22902,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-s14-w2-refill-from-arm-fn -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s14-w2-refill-from-arm-fn` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s14-w2-refill-from-arm-fn` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22364,7 +22968,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-h8-handback-vacant-literal -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `h8-handback-vacant-literal` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `h8-handback-vacant-literal` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22506,12 +23110,13 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3196: <fragment>:133:28: cannot store an isolated 'Sh' into 'v', which holds a mutable 'Sh'; `merge` it first
+```exitcode
+0
 ```
 
 <!-- test: model-hand-ag-h9-handback-overwrite-vacant -->
-The model (`core-m3w-fa13`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `h9-handback-overwrite-vacant` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
+<!-- unsupported-targets: wasm32-wasi -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `h9-handback-overwrite-vacant` of redteamAG.hand_ag18, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22655,11 +23260,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:133:28: cannot store an isolated 'Sh' into 'v', which holds a mutable 'Sh'; `merge` it first
+error E3223: <fragment>:137:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-ag-b5-binder-named-like-scrutinee -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `b5-binder-named-like-scrutinee` of redteamAG.hand_ag19, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `b5-binder-named-like-scrutinee` of redteamAG.hand_ag19, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22717,7 +23322,7 @@ error E3102: <fragment>:45:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ag-b6-binder-named-like-scrutinee-refill -->
-The model (`core-m3w-fa13`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `b6-binder-named-like-scrutinee-refill` of redteamAG.hand_ag19, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `b6-binder-named-like-scrutinee-refill` of redteamAG.hand_ag19, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22779,7 +23384,7 @@ error E3102: <fragment>:52:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ag-beh-mp-state-plain -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-plain` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-plain` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22881,7 +23486,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-beh-mp-state-write -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-write` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-write` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22983,7 +23588,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-beh-mp-state-method -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-method` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-method` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23085,7 +23690,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-beh-mp-state-item -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-item` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-item` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23187,7 +23792,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-beh-mp-state-none -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-none` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-none` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23289,7 +23894,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-beh-mr-state-hq -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mr-state-hq` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mr-state-hq` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23387,7 +23992,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-beh-mr-state-hq-part -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mr-state-hq-part` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mr-state-hq-part` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23485,7 +24090,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v5-unique-case-overwritten -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v5-unique-case-overwritten` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v5-unique-case-overwritten` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23548,7 +24153,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v6-iso-unique-case-overwritten -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v6-iso-unique-case-overwritten` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v6-iso-unique-case-overwritten` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23611,7 +24216,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v7-union-holding-union-none -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v7-union-holding-union-none` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v7-union-holding-union-none` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23682,7 +24287,7 @@ error E3223: <fragment>:60:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v8-union-holding-held-union -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v8-union-holding-held-union` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v8-union-holding-held-union` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23753,7 +24358,7 @@ error E3223: <fragment>:60:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v9-isolated-plain-case -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v9-isolated-plain-case` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v9-isolated-plain-case` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23826,7 +24431,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v10-no-payload-case-of-three -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v10-no-payload-case-of-three` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v10-no-payload-case-of-three` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23895,7 +24500,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v11-plain-payload-case -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v11-plain-payload-case` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v11-plain-payload-case` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23964,7 +24569,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v12-plain-payload-aliased -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v12-plain-payload-aliased` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v12-plain-payload-aliased` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24035,7 +24640,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v21-vacant-loop-fill-then-none -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v21-vacant-loop-fill-then-none` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v21-vacant-loop-fill-then-none` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24107,7 +24712,7 @@ error E3223: <fragment>:57:4: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v22-vacant-loop-break-held -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v22-vacant-loop-break-held` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v22-vacant-loop-break-held` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24171,7 +24776,7 @@ error E3223: <fragment>:53:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v23-vacant-loop-continue -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v23-vacant-loop-continue` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v23-vacant-loop-continue` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24240,7 +24845,7 @@ error E3223: <fragment>:54:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v24-vacant-for-loop -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v24-vacant-for-loop` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v24-vacant-for-loop` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24312,7 +24917,7 @@ error E3223: <fragment>:57:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v29-vacant-shadow-same-scope -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v29-vacant-shadow-same-scope` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v29-vacant-shadow-same-scope` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24379,7 +24984,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v31-vacant-in-behaviour-state-swap -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `v31-vacant-in-behaviour-state-swap` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `v31-vacant-in-behaviour-state-swap` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24454,7 +25059,7 @@ error E3224: <fragment>:63:19: a `spawn` takes no linear argument: a factory tha
 ```
 
 <!-- test: model-hand-ag-v32-vacant-fill-from-state-then-overwrite -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `v32-vacant-fill-from-state-then-overwrite` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `v32-vacant-fill-from-state-then-overwrite` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24530,7 +25135,7 @@ error E3224: <fragment>:64:19: a `spawn` takes no linear argument: a factory tha
 ```
 
 <!-- test: model-hand-ag-v33-vacant-moved-then-refilled-then-overwritten -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v33-vacant-moved-then-refilled-then-overwritten` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v33-vacant-moved-then-refilled-then-overwritten` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24592,7 +25197,7 @@ error E3223: <fragment>:50:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v34-vacant-cond -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v34-vacant-cond` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v34-vacant-cond` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24660,7 +25265,7 @@ error E3223: <fragment>:57:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v35-vacant-match-arm-join -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v35-vacant-match-arm-join` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v35-vacant-match-arm-join` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24724,7 +25329,7 @@ error E3223: <fragment>:53:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v37-vacant-return-path -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v37-vacant-return-path` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v37-vacant-return-path` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24795,7 +25400,7 @@ error E3223: <fragment>:54:3: this drops 'u', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ag-v39-vacant-scope-end-none -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v39-vacant-scope-end-none` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v39-vacant-scope-end-none` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24846,7 +25451,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-v40-vacant-scope-end-after-if -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v40-vacant-scope-end-after-if` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v40-vacant-scope-end-after-if` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24903,7 +25508,7 @@ error E3223: <fragment>:48:2: this drops 'u', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ag-v44-vacant-pair-none-overwrite-pair -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v44-vacant-pair-none-overwrite-pair` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v44-vacant-pair-none-overwrite-pair` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24955,7 +25560,7 @@ error E3223: <fragment>:42:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v45-vacant-twice-with-held-between-in-expr -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v45-vacant-twice-with-held-between-in-expr` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v45-vacant-twice-with-held-between-in-expr` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25019,7 +25624,7 @@ error E3223: <fragment>:53:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-v46-vacant-assign-from-call-returning-u -->
-The model (`core-m3w-fa13`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v46-vacant-assign-from-call-returning-u` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v46-vacant-assign-from-call-returning-u` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25084,7 +25689,7 @@ error E3223: <fragment>:54:2: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ag-r1-refill-before-payload-moved-into-it -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r1-refill-before-payload-moved-into-it` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r1-refill-before-payload-moved-into-it` of redteamAG.hand_ag4, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25146,7 +25751,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l5-wrap-no-window -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l5-wrap-no-window` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l5-wrap-no-window` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25211,6 +25816,3722 @@ function main() returns ExitCode
 		m0(x) then useS(x.wrap())
 		m1(y) then takeB(y)
 	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-s-nofactory-linear-live -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-nofactory-linear-live` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Ct
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Ct'
+
+function g()
+	let r = Rl.create(0)
+	let _ = spawn Ct.create(0)
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-s-factory-nothrow -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-factory-nothrow` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zf
+	var n as Num
+
+	static function create(c Num) returns Self
+		return Self{n: c}
+	end 'create'
+end 'Zf'
+
+function g()
+	let r = Rl.create(0)
+	let _ = spawn Zf.create(3)
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-s-factory-calls-nothrow-fn -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-factory-calls-nothrow-fn` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zo
+	var n as Num
+
+	static function create(c Num) returns Self
+		let _ = c
+		return Self{n: one()}
+	end 'create'
+end 'Zo'
+
+function one() returns Num
+	return 1
+end 'one'
+
+function g()
+	let r = Rl.create(0)
+	let _ = spawn Zo.create(3)
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-s-nofactory-in-loop -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-nofactory-in-loop` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Ct
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Ct'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function g()
+	let r = Rl.create(0)
+	var i = 2 as Num
+	while i != 0 'w1'
+		let _ = spawn Ct.create(0)
+		i = lg(0)
+	end 'w1'
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-join-if -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-join-if` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Mx.m1(Bx.create(1)) as isolated Mx
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			m0(x) then x.fin(1)
+			m1(y) then takeB(y)
+		end 'x2'
+	end 'i1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-join-else -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-join-else` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Mx.m1(Bx.create(1)) as isolated Mx
+	if lg(1) == 0 'i1'
+		match u 'x2'
+			m0(x) then x.fin(1)
+			m1(y) then takeB(y)
+		end 'x2'
+	end 'i1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-join-linear-case -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v-join-linear-case` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Mx.m0(Rl.create(1)) as isolated Mx
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			m0(x) then x.fin(1)
+			m1(y) then takeB(y)
+		end 'x2'
+	end 'i1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:57:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-v-join-loop-moved-twice -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `v-join-loop-moved-twice` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Mx.m1(Bx.create(1)) as isolated Mx
+	var i = 2 as Num
+	while i != 0 'w1'
+		match u 'x2'
+			m0(x) then x.fin(1)
+			m1(y) then takeB(y)
+		end 'x2'
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:59:9: use of moved value 'u': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: model-hand-fa14-v-join-moved-both-then-read -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `v-join-moved-both-then-read` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Mx.m1(Bx.create(1)) as isolated Mx
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			m0(x) then x.fin(1)
+			m1(y) then takeB(y)
+		end 'x2'
+	end 'i1'
+	match u 'x3'
+		m0(x) then x.fin(1)
+		m1(y) then takeB(y)
+	end 'x3'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:63:8: use of moved value 'u': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-v-join-reassigned-linear-after -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v-join-reassigned-linear-after` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	var u = Sh.none
+	if lg(1) != 0 'i1'
+		eatSh(u)
+	end 'i1'
+	u = Sh.held(Rl.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:56:2: this drops 'u', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-v-fill-handback -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-fill-handback` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Cap1
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeSh(u Sh)
+		match u 'x1'
+			none then break
+			held(q) then q.fin(1)
+		end 'x1'
+	end 'takeSh'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Cap1'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 1) Cap1.create(0)
+	try k.poke() otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x2'
+	end 'h1'
+	var v = Sh.none
+	try k.takeSh(Sh.held(Rl.create(1))) otherwise (sendFailure) 'h3'
+		match sendFailure 'x4'
+			mailboxFull(z) then v = z
+			serviceStopped(z) then v = z
+		end 'x4'
+	end 'h3'
+	eatSh(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-fill-iso-param -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-fill-iso-param` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(z isolated Sh)
+	var v = Sh.none
+	v = z
+	eatSh(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-fill-explicit-merge -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-fill-explicit-merge` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(z isolated Sh)
+	var v = Sh.none
+	v = merge z
+	eatSh(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-fill-nonvacant -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3196. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `v-fill-nonvacant` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(z isolated Sh)
+	var v = Sh.held(Rl.create(2))
+	v = z
+	eatSh(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:48:6: cannot store an isolated 'Sh' into 'v', which holds a mutable 'Sh'; `merge` it first
+```
+
+<!-- test: model-hand-fa14-v-fill-vacant-one-path -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3196. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `v-fill-vacant-one-path` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(z isolated Sh)
+	var v = Sh.none
+	if lg(1) != 0 'i1'
+		v = Sh.held(Rl.create(2))
+	end 'i1'
+	v = z
+	eatSh(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:55:6: cannot store an isolated 'Sh' into 'v', which holds a mutable 'Sh'; `merge` it first
+```
+
+<!-- test: model-hand-fa14-v-fill-read-between -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-fill-read-between` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(z isolated Sh)
+	var v = Sh.none
+	eatSh(v)
+	v = z
+	eatSh(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-fill-then-assign-again -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `v-fill-then-assign-again` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function f(z isolated Sh)
+	var v = Sh.none
+	v = z
+	v = Sh.none
+	eatSh(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sh.held(Rl.create(1)))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:49:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-v-copy-twice -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-copy-twice` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok as isolated Sn
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-copy-thrice -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-copy-thrice` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok as isolated Sn
+	later2(s)
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-copy-plain-local -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-copy-plain-local` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-copy-in-loop -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-copy-in-loop` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok
+	var i = 2 as Num
+	while i != 0 'w1'
+		later2(s)
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-copy-then-fill -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `v-copy-then-fill` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	var s = Sn.ok
+	later2(s)
+	s = Sn.notSent(Rl.create(1))
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-v-copy-then-fill-twice -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `v-copy-then-fill-twice` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	var s = Sn.ok
+	later2(s)
+	s = Sn.notSent(Rl.create(1))
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:46:9: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-v-copy-nonvacant-twice -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `v-copy-nonvacant-twice` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.notSent(Rl.create(1))
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:44:9: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-v-copy-one-path -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `v-copy-one-path` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	var s = Sn.ok
+	if lg(1) != 0 'i1'
+		s = Sn.notSent(Rl.create(1))
+	end 'i1'
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:51:9: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-v-copy-from-call -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `v-copy-from-call` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function mkS() returns Sn
+	return Sn.ok
+end 'mkS'
+
+function main() returns ExitCode
+	let s = mkS()
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:48:9: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-l-consuming-self-send -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l-consuming-self-send` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self, a Zr2.handle)
+		try a.take(self) otherwise (sendFailure) 'h1'
+			match sendFailure 'x2'
+				mailboxFull(q) then q.g()
+				serviceStopped(q) then q.g()
+			end 'x2'
+		end 'h1'
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+end 'Fz'
+
+type Zr2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Zr2'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr2.create(0)
+	let t = Fz.create(0)
+	t.f(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-l-fn-param-send -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l-fn-param-send` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zr'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function sendIt(r Rl, a Zr.handle)
+	try a.take(r) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then q.fin(1)
+			serviceStopped(q) then q.fin(1)
+		end 'x2'
+	end 'h1'
+end 'sendIt'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr.create(0)
+	let r = Rl.create(0)
+	sendIt(r, a: a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-l-fn-param-send-chain -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l-fn-param-send-chain` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zr'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function sendIt(r Rl, a Zr.handle)
+	try a.take(r) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then q.fin(1)
+			serviceStopped(q) then q.fin(1)
+		end 'x2'
+	end 'h1'
+end 'sendIt'
+
+function relay(r Rl, a Zr.handle)
+	sendIt(r, a: a)
+end 'relay'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr.create(0)
+	relay(Rl.create(0), a: a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-l-fn-param-send-twice -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l-fn-param-send-twice` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zr'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function sendIt(r Rl, a Zr.handle)
+	try a.take(r) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then q.fin(1)
+			serviceStopped(q) then q.fin(1)
+		end 'x2'
+	end 'h1'
+	try a.take(r) otherwise (sendFailure) 'h3'
+		match sendFailure 'x4'
+			mailboxFull(q) then q.fin(1)
+			serviceStopped(q) then q.fin(1)
+		end 'x4'
+	end 'h3'
+end 'sendIt'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr.create(0)
+	sendIt(Rl.create(0), a: a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:64:13: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-l-borrowed-self-send -->
+The model (`core-m3w-fa14`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `l-borrowed-self-send` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(a Zr2.handle)
+		try a.take(self) otherwise (sendFailure) 'h1'
+			match sendFailure 'x2'
+				mailboxFull(q) then q.g()
+				serviceStopped(q) then q.g()
+			end 'x2'
+		end 'h1'
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+end 'Fz'
+
+type Zr2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Zr2'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr2.create(0)
+	let t = Fz.create(0)
+	t.f(a)
+	t.g()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:12:14: cannot hand 'self' to argument `t` of the message `Zr2.take`: it keeps a unique value, and 'self' is only borrowed by this code, and only the code that owns a unique value hands it to another green thread; move it in from its owner
+```
+
+<!-- test: model-hand-fa14-l-self-then-self -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l-self-then-self` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self, a Zr2.handle)
+		try a.take(self) otherwise (sendFailure) 'h1'
+			match sendFailure 'x2'
+				mailboxFull(q) then q.g()
+				serviceStopped(q) then q.g()
+			end 'x2'
+		end 'h1'
+		self.g()
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+end 'Fz'
+
+type Zr2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Zr2'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr2.create(0)
+	let t = Fz.create(0)
+	t.f(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:18:3: use of moved value 'self': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-l-self-no-handback -->
+<!-- unsupported-targets: wasm32-wasi -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-SEND`; the compiler refuses it with E3223. Model program `l-self-no-handback` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self, a Zr2.handle)
+		try a.take(self) otherwise ignore
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+end 'Fz'
+
+type Zr2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Zr2'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr2.create(0)
+	let t = Fz.create(0)
+	t.f(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:12:3: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-l-param-dropped -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `l-param-dropped` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eat(r Rl)
+	let _ = r.peek()
+end 'eat'
+
+function main() returns ExitCode
+	eat(Rl.create(0))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:34:10: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-r-hb-loop -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r-hb-loop` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zr'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr.create(0)
+	var r = Rl.create(0)
+	var i = 3 as Num
+	while i != 0 'w1'
+		try a.take(r) otherwise (sendFailure) 'h2'
+			match sendFailure 'x3'
+				mailboxFull(q) then q.fin(1)
+				serviceStopped(q) then q.fin(1)
+			end 'x3'
+		end 'h2'
+		r = Rl.create(1)
+		i = lg(0)
+	end 'w1'
+	r.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-r-path-read-with-call-index -->
+The model (`core-m3w-fa14`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-path-read-with-call-index` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mq
+	m0(x Rl)
+	m1(y Wo)
+end 'Mq'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+function mkWo() returns Wo
+	return Wo.create(Bx.create(0), item: Bx.create(1))
+end 'mkWo'
+
+function pk(w Wo) returns Num
+	let _ = w
+	return 0
+end 'pk'
+
+function main() returns ExitCode
+	var w = Wo.create(Bx.create(0), item: Bx.create(1))
+	w = mkWo()
+	let _ = w.keep.n
+	let _ = pk(w)
+	let _ = Mq.m1(w) as isolated Mq
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:70:10: 'Mq.m1(w) as isolated Mq' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
+<!-- test: model-hand-fa14-own-consuming-self-send -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `own-consuming-self-send` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn2
+	none
+	has(r Fz)
+end 'Sn2'
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self, a Zr2.handle)
+		try a.take(self) otherwise (sendFailure) 'h1'
+			match sendFailure 'x2'
+				mailboxFull(q) then q.g()
+				serviceStopped(q) then q.g()
+			end 'x2'
+		end 'h1'
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+
+	function h(consuming self)
+		self.g()
+	end 'h'
+
+	function w(consuming self) returns Sn2
+		return Sn2.has(self)
+	end 'w'
+end 'Fz'
+
+type Zr2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Zr2'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr2.create(0)
+	let t = Fz.create(0)
+	t.f(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-own-consuming-self-send-in-loop -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `own-consuming-self-send-in-loop` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn2
+	none
+	has(r Fz)
+end 'Sn2'
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self, a Zr2.handle)
+		try a.take(self) otherwise (sendFailure) 'h1'
+			match sendFailure 'x2'
+				mailboxFull(q) then q.g()
+				serviceStopped(q) then q.g()
+			end 'x2'
+		end 'h1'
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+
+	function h(consuming self)
+		self.g()
+	end 'h'
+
+	function w(consuming self) returns Sn2
+		return Sn2.has(self)
+	end 'w'
+end 'Fz'
+
+type Zr2
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(t Fz)
+		t.g()
+	end 'take'
+end 'Zr2'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 2) Zr2.create(0)
+	var i = 2 as Num
+	var t = Fz.create(0)
+	while i != 0 'w1'
+		t.f(a)
+		t = Fz.create(1)
+		i = lg(0)
+	end 'w1'
+	t.g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-own-consuming-self-dropped -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `own-consuming-self-dropped` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Fz
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(consuming self)
+		let _ = 1 as Num
+	end 'f'
+
+	function g(consuming self)
+		destruct self
+	end 'g'
+end 'Fz'
+
+function main() returns ExitCode
+	let t = Fz.create(0)
+	t.f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:11:11: this drops 'self', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-own-fn-param-chain -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `own-fn-param-chain` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function a1(r Rl)
+	a2(r)
+end 'a1'
+
+function a2(r Rl)
+	a3(r)
+end 'a2'
+
+function a3(r Rl)
+	r.fin(1)
+end 'a3'
+
+function main() returns ExitCode
+	a1(Rl.create(0))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-own-fn-param-union -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `own-fn-param-union` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function eatU(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'eatU'
+
+function main() returns ExitCode
+	eatU(Sn.notSent(Rl.create(0)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-own-fn-param-returned -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `own-fn-param-returned` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function thru(r Rl) returns Rl
+	return r
+end 'thru'
+
+function main() returns ExitCode
+	let r = thru(Rl.create(0))
+	r.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-own-fn-param-sent-in-loop -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `own-fn-param-sent-in-loop` of redteamFA14.hand_fa14c, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+end 'Zr'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function sendIt(r Rl, a Zr.handle)
+	try a.take(r) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then q.fin(1)
+			serviceStopped(q) then q.fin(1)
+		end 'x2'
+	end 'h1'
+end 'sendIt'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 2) Zr.create(0)
+	var i = 2 as Num
+	while i != 0 'w1'
+		sendIt(Rl.create(i), a: a)
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-return-copy -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-return-copy` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function idS(s Sn) returns Sn
+	return s
+end 'idS'
+
+function main() returns ExitCode
+	let s = Sn.ok
+	let t = idS(s)
+	later2(t)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-loop-fill-second-lap -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `a-vc-loop-fill-second-lap` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	var s = Sn.ok
+	var i = 2 as Num
+	while i != 0 'w1'
+		later2(s)
+		s = Sn.notSent(Rl.create(1))
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:53:2: this drops 's', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-a-vc-loop-fill-consumed -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-loop-fill-consumed` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	var s = Sn.ok
+	var i = 2 as Num
+	while i != 0 'w1'
+		later2(s)
+		s = Sn.notSent(Rl.create(1))
+		later2(s)
+		s = Sn.ok
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-cond-arm -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `a-vc-cond-arm` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok
+	let t = Sn.notSent(Rl.create(1))
+	later2((s if lg(1) != 0 else t))
+	later2(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:50:2: this drops 't', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-a-vc-match-arm-copy -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-match-arm-copy` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok
+	let u = Sh.none
+	match u 'x1'
+		none then later2(s)
+		held(q) then q.fin(1)
+	end 'x1'
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-join-moved-then-copy -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-join-moved-then-copy` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	let s = Sn.ok
+	if lg(1) != 0 'i1'
+		later2(s)
+	end 'i1'
+	later2(s)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-join-linear-moved-other-vacant -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a-vc-join-linear-moved-other-vacant` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function main() returns ExitCode
+	var s = Sn.ok
+	if lg(1) != 0 'i1'
+		s = Sn.notSent(Rl.create(1))
+		later2(s)
+	end 'i1'
+	later2(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:51:9: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-a-vf-fill-then-copy -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a-vf-fill-then-copy` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function f(z isolated Sn)
+	var v = Sn.ok
+	v = z
+	later2(v)
+	later2(v)
+end 'f'
+
+function main() returns ExitCode
+	f(Sn.notSent(Rl.create(1)))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:45:9: use of moved value 'v': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-a-lp-sent-then-peeked -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a-lp-sent-then-peeked` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+end 'Zr'
+
+function g(r Rl, a Zr.handle)
+	try a.take(r) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then q.fin(1)
+			serviceStopped(q) then q.fin(1)
+		end 'x2'
+	end 'h1'
+	let _ = r.peek()
+end 'g'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr.create(0)
+	g(Rl.create(0), a: a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:53:10: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-a-lp-union-param-send -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-lp-union-param-send` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zs'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function g(s Sn, k Zs.handle)
+	try k.takeS(s) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then later2(z)
+			serviceStopped(z) then later2(z)
+		end 'x2'
+	end 'h1'
+end 'g'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 2) Zs.create(0)
+	g(Sn.notSent(Rl.create(1)), k: k)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-lp-union-param-sent-twice -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a-lp-union-param-sent-twice` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zs'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function g(s Sn, k Zs.handle)
+	try k.takeS(s) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then later2(z)
+			serviceStopped(z) then later2(z)
+		end 'x2'
+	end 'h1'
+	try k.takeS(s) otherwise (sendFailure) 'h3'
+		match sendFailure 'x4'
+			mailboxFull(z) then later2(z)
+			serviceStopped(z) then later2(z)
+		end 'x4'
+	end 'h3'
+end 'g'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 2) Zs.create(0)
+	g(Sn.notSent(Rl.create(1)), k: k)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:67:14: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: model-hand-fa14-a-lp-param-then-isolated-decl-then-use -->
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a-lp-param-then-isolated-decl-then-use` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function useI(r isolated Rl)
+	r.fin(1)
+end 'useI'
+
+function g(r Rl)
+	let u = r as isolated Rl
+	let _ = r.peek()
+	useI(u)
+end 'g'
+
+function main() returns ExitCode
+	g(Rl.create(0))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:39:10: 'r as isolated Rl' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
+<!-- test: model-hand-fa14-a-lp-param-assigned-then-sent -->
+<!-- unsupported-targets: wasm32-wasi -->
+The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `a-lp-param-assigned-then-sent` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zr
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin(1)
+	end 'take'
+end 'Zr'
+
+function g(r Rl, a Zr.handle)
+	var q = r
+	q = Rl.create(3)
+	try a.take(q) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(w) then w.fin(1)
+			serviceStopped(w) then w.fin(1)
+		end 'x2'
+	end 'h1'
+end 'g'
+
+function main() returns ExitCode
+	let a = spawn(capacity: 1) Zr.create(0)
+	g(Rl.create(0), a: a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:48:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa14-a-sp-nested-factory-quiet -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-sp-nested-factory-quiet` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zq
+	var n as Num
+
+	static function create(c Num) returns Self
+		return Self{n: c}
+	end 'create'
+end 'Zq'
+
+type Zo
+	var n as Num
+
+	static function create(c Num) returns Self
+		let _ = spawn Zq.create(c)
+		return Self{n: c}
+	end 'create'
+end 'Zo'
+
+function g()
+	let r = Rl.create(0)
+	let _ = spawn Zo.create(3)
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-sp-factory-recursive-quiet -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-sp-factory-recursive-quiet` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zo
+	var n as Num
+
+	static function create(c Num) returns Self
+		let _ = c
+		return Self{n: rec(0)}
+	end 'create'
+end 'Zo'
+
+function rec(nV Num) returns Num
+	if nV != 0 'i1'
+		return rec(nV)
+	end 'i1'
+	return 0
+end 'rec'
+
+function g()
+	let r = Rl.create(0)
+	let _ = spawn Zo.create(3)
+	r.fin(1)
+end 'g'
+
+function main() returns ExitCode
+	g()
 	return 0
 end 'main'
 ```

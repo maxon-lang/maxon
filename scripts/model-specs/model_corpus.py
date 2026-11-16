@@ -9,13 +9,14 @@ import re
 import sys
 from dataclasses import dataclass
 
-DEFAULT_RULESET = "core-m3w-fa13"
+DEFAULT_RULESET = "core-m3w-fa14"
 WORKERS = "3"
 
-HAND_FAMILIES = ("AB", "AC", "AD", "AE", "AF", "AG")
+HAND_FAMILIES = ("AB", "AC", "AD", "AE", "AF", "AG", "FA14")
 FINDING_FAMILIES = ("N", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG")
 
 SEPARATOR = re.compile(r"^---- (.*)$", re.MULTILINE)
+MODEL_ROUND_FAMILY = re.compile(r"FA\d+")
 
 
 @dataclass
@@ -80,8 +81,12 @@ def finding_cases(family):
     return cases
 
 
+def report_file(family):
+    return f"REPORT{family}.txt" if MODEL_ROUND_FAMILY.fullmatch(family) else f"REPORTRT{family}.txt"
+
+
 def report_cases(family):
-    path = os.path.join("reggio", f"REPORTRT{family}.txt")
+    path = os.path.join("reggio", report_file(family))
     if not os.path.exists(path):
         return []
     lines = open(path, encoding="utf-8").read().splitlines()

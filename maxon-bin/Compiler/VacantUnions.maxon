@@ -1,4 +1,29 @@
-function vacantUnionValuesIn(module MaxonModule, func IrFunction, constructed ValueIdArray) returns ValueIdSet
+type VacantCopy
+	let copy as ValueId
+	let source as ValueId
+
+	static function create(copy ValueId, source ValueId) returns Self
+		return Self{copy: copy, source: source}
+	end 'create'
+end 'VacantCopy'
+
+typealias VacantCopyArray = Array with VacantCopy
+
+type VacantFill
+	let binding as VarInfo
+	let target as ValueId
+	let value as ValueId
+	let valueStart as ElementIndex
+	let valueEnd as ElementIndex
+
+	static function create(binding VarInfo, target ValueId, value ValueId, valueStart ElementIndex, valueEnd ElementIndex) returns Self
+		return Self{binding: binding, target: target, value: value, valueStart: valueStart, valueEnd: valueEnd}
+	end 'create'
+end 'VacantFill'
+
+typealias VacantFillArray = Array with VacantFill
+
+function vacantUnionValuesIn(module MaxonModule, func IrFunction, constructed ValueIdArray, copies VacantCopyArray) returns ValueIdSet
 	let vacant = ValueIdSet.create()
 
 	if constructed.isEmpty() 'nothingIsVacant'
@@ -8,6 +33,10 @@ function vacantUnionValuesIn(module MaxonModule, func IrFunction, constructed Va
 	for value in constructed 'eachConstructed'
 		vacant.insert(value)
 	end 'eachConstructed'
+
+	for copied in copies 'eachCopy'
+		vacant.insert(copied.copy)
+	end 'eachCopy'
 
 	let byId = module.blockIndexById(func)
 	let fed = ValueIdSet.create()
@@ -56,6 +85,13 @@ function vacantUnionValuesIn(module MaxonModule, func IrFunction, constructed Va
 				end 'eachArgument'
 			end 'eachEdge'
 		end 'eachBlock'
+
+		for copied in copies 'eachCopyOfAValue'
+			if vacant.contains(copied.copy) and not vacant.contains(copied.source) 'aCopyThatMayHoldTheLinearCase'
+				_ = vacant.remove(copied.copy)
+				changed = true
+			end 'aCopyThatMayHoldTheLinearCase'
+		end 'eachCopyOfAValue'
 	end 'untilStable'
 
 	return vacant

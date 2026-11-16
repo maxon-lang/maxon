@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the `specs/model-*.md` cases from the capmodel corpora.
 
-    python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa13]
+    python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa14]
 
 The phases, in order: judge each program with the model; reduce it to what `main` reaches and re-judge; translate
 it to Maxon; compile every translation as a spec case in a scratch directory; sort the results; write the cases
@@ -322,7 +322,7 @@ def case_for(run, entry, used_names):
         if entry.bucket == "agree-refuse-other-code":
             verdict += " The model reports the first rule that fails and the compiler every independent error, so the codes differ."
         error = entry.spec_text
-    report = f"capmodel `reggio/REPORTRT{entry.case.family.split('-')[1]}.txt`"
+    report = f"capmodel `reggio/{mc.report_file(entry.case.family.split('-')[1])}`"
     prose = f"{verdict} Model program `{entry.case.ident}` of {entry.case.origin}, in {report}."
     return SpecCase(f"model-{name}", prose, entry.mx, error, unsupported_targets(entry))
 

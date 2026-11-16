@@ -9044,6 +9044,18 @@ extension Parser
 		self.bodyState.freshReadsInInitializer.truncate(readFloor)
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: rhsStart, endIndex: self.pos, anchor: self.tokenAt(rhsStart))
 
+		return self.settleLocalCapability(value, line: nameTok.line)
+	end 'settleBindingCapability'
+
+	function settleAssignedCapability(binding VarInfo, value ValueId, line LineNumber) returns bool
+		if binding.isCellBinding or self.capabilityOfValue(binding.boundValue) == ValueCapability.isolated 'notAnOrdinaryLocal'
+			return false
+		end 'notAnOrdinaryLocal'
+
+		return self.settleLocalCapability(value, line: line)
+	end 'settleAssignedCapability'
+
+	function settleLocalCapability(value ValueId, line LineNumber) returns bool
 		if self.valueIsAValueType(value) 'aValue'
 			return false
 		end 'aValue'
@@ -9055,13 +9067,33 @@ extension Parser
 			bornFresh = true
 		end 'anOrdinaryLocal'
 
-		self.noteMutableUse(value, line: nameTok.line)
+		self.noteMutableUse(value, line: line)
 		return bornFresh
-	end 'settleBindingCapability'
+	end 'settleLocalCapability'
 
 	function registerFreshLocal(value ValueId, binding VarInfo)
 		self.bodyState.freshLocals.upsert(value, value: FreshLocal.create(binding, loopDepth: self.bodyState.loops.count()))
 	end 'registerFreshLocal'
+
+	function noteJoinedFreshLocal(binding VarInfo, merged ValueId, incoming ValueIdArray)
+		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
+			return
+		end 'nothingIsFresh'
+
+		let joined = FreshLocal.create(binding, loopDepth: self.bodyState.loops.count())
+
+		for value in incoming 'eachIncoming'
+			let fresh = try self.bodyState.freshLocals.get(value) otherwise return
+
+			if fresh.loopDepth != joined.loopDepth 'inADifferentLoop'
+				panic("noteJoinedFreshLocal: v{value}, fresh at loop depth {fresh.loopDepth}, reaches a join at loop depth {joined.loopDepth}; a join merges values of its own depth, and a value assigned in a deeper loop leaves it through that loop's header phi, which is never fresh")
+			end 'inADifferentLoop'
+
+			joined.reads = fresh.reads if fresh.reads > joined.reads else joined.reads
+		end 'eachIncoming'
+
+		self.bodyState.freshLocals.upsert(merged, value: joined)
+	end 'noteJoinedFreshLocal'
 
 	function noteFreshLocalRead(binding VarInfo)
 		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
@@ -9596,6 +9628,13 @@ extension Parser
 		end 'aFreshLocalTheVariableTakes'
 
 		let verdict = assignmentVerdict(self.capabilityOfValue(binding.boundValue), value: given, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType))
+
+		if verdict == StoreVerdict.isolatedIntoMutable and self.valueIsVacant(binding.boundValue) 'aVacantVariableTakesTheMerge'
+			self.noteMergedIntoRegion(value)
+			self.bodyState.vacantFills.push(VacantFill.create(binding, target: binding.boundValue, value: value, valueStart: valueStart, valueEnd: valueEnd))
+			return
+		end 'aVacantVariableTakesTheMerge'
+
 		try self.requireStoreVerdictFits(verdict, fieldName: String.from(binding.name), value: value, valueStart: valueStart, valueEnd: valueEnd, joinedAtALoop: false)
 
 		if verdict == StoreVerdict.recovers 'aFreshValueTakenByAnIsolatedVariable'
@@ -9719,6 +9758,11 @@ extension Parser
 		let judged = note.judgedAs(reached, given: given, parameterUndecided: self.valueIsAnUndecidedParameter(self.bodyFunction(), value: carried.value, capability: given))
 		try notes.storedSlotArgs.set(carried.noteIndex, value: judged) otherwise panic("settleCarriedStoredSlot: storedSlotArgs.set OOB at {carried.noteIndex}")
 	end 'settleCarriedStoredSlot'
+
+	function noteMergedIntoRegion(value ValueId)
+		self.setValueCapability(value, capability: ValueCapability.mutable)
+		self.regionFactsForWrite().mergedValues.insert(value)
+	end 'noteMergedIntoRegion'
 
 	function promoteTemporary(value ValueId)
 		if self.capabilityOfValue(value) == ValueCapability.temporary 'joinsTheRegion'

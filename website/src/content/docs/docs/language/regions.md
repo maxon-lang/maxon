@@ -286,6 +286,10 @@ That read moves the local, so a later read is **E3102**. A local the program rea
 reads on every lap, and one with a second name are ordinary mutable data and **E3200**
 (`specs/regions-recover.md`).
 
+A local assigned a fresh value (`spare = Bag.create()`) is fresh in the same way, from that assignment on. Where
+an `if`, a `match` or a statement `try` joins fresh values, the joined local is fresh until some path has read
+it, and a value a loop header joins is ordinary mutable data.
+
 `isolated` values are linear. Every use of an `isolated` local or parameter moves it except opening it, so
 `let b = a` moves `a` and a later read of `a` is **E3102**. An `isolated` parameter owns the region it is
 handed; `mutable isolated` is by reference, and the callee may open, swap or replace it, or lend it on to
@@ -548,7 +552,8 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
 - **A case that carries no linear value owes nothing.** A variable of a linear union that holds such a case
   (`Maybe.nothing`) on every path to a point is not a linear value there: assigning it, leaving its scope or
   leaving it live across a wait is not a drop. A branch, a loop lap or a `try` handler that can leave the linear
-  case in it keeps the obligation, and so does a value that came from a call.
+  case in it keeps the obligation, and so does a value that came from a call. Such a variable takes an `isolated`
+  value without `merge`; once it may hold the linear case on some path, storing that value is **E3196**.
 - **Cancellation consumes.** A coroutine that holds a linear value is cancelled
   [cooperatively](/docs/language/async/#cancellation-and-dropped-promises), so its own code consumes the value on the path the
   early return of its wait leads it down.

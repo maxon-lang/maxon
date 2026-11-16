@@ -7566,12 +7566,29 @@ extension Parser
 		notes.liveLinearCallNames.push(name)
 	end 'recordLinearLiveAt'
 
-	function settleLinearObligations(func IrFunction)
-		let vacant = vacantUnionValuesIn(self.artifact.module, func: func, constructed: self.bodyState.vacantUnions)
+	function vacantValuesOf(func IrFunction) returns ValueIdSet
+		return vacantUnionValuesIn(self.artifact.module, func: func, constructed: self.bodyState.vacantUnions, copies: self.bodyState.vacantCopies)
+	end 'vacantValuesOf'
 
+	function valueIsVacant(value ValueId) returns bool
+		return self.vacantValuesOf(self.bodyFunction()).contains(value)
+	end 'valueIsVacant'
+
+	function settleLinearObligations(func IrFunction) throws SourceParseError
+		let vacant = self.vacantValuesOf(func)
+
+		try self.requireFilledVariablesVacant(vacant)
 		self.forgetDropsOfVacantBindings(func, vacant: vacant)
 		self.fileLinearLiveRows(vacant)
 	end 'settleLinearObligations'
+
+	function requireFilledVariablesVacant(vacant ValueIdSet) throws SourceParseError
+		for fill in self.bodyState.vacantFills 'eachFill'
+			if not vacant.contains(fill.target) 'mayHoldTheLinearCase'
+				try self.requireStoreVerdictFits(StoreVerdict.isolatedIntoMutable, fieldName: String.from(fill.binding.name), value: fill.value, valueStart: fill.valueStart, valueEnd: fill.valueEnd, joinedAtALoop: false)
+			end 'mayHoldTheLinearCase'
+		end 'eachFill'
+	end 'requireFilledVariablesVacant'
 
 	function forgetDropsOfVacantBindings(func IrFunction, vacant ValueIdSet)
 		if vacant.count() == 0 or self.bodyState.bindingDropOps.isEmpty() 'nothingToForget'
@@ -9400,9 +9417,9 @@ extension Parser
 		self.markBufferSurfaceSlots(to, surface: bodySlotSurface(source, value: from))
 		self.carryBrandOrigin(to, from: from, source: source, path: path)
 
-		if not source.vacantUnions.isEmpty() and source.vacantUnions.contains(from) and not self.bodyState.vacantUnions.contains(to) 'aVacantCase'
-			self.bodyState.vacantUnions.push(to)
-		end 'aVacantCase'
+		if not self.bodyState.vacantUnions.isEmpty() and self.valueIsLinear(to) 'aCopyOfALinearValue'
+			self.bodyState.vacantCopies.push(VacantCopy.create(to, source: from))
+		end 'aCopyOfALinearValue'
 	end 'carryValueFacts'
 
 	function carryBrandOrigin(to ValueId, from ValueId, source FunctionBodyState, path ValueCarryPath)

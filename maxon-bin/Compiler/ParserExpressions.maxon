@@ -1339,8 +1339,7 @@ extension Parser
 			merged = self.movedAliasOf(operand, range: SourceRange.ofToken(opTok))
 		end 'movesTheLocal'
 
-		self.setValueCapability(merged, capability: ValueCapability.mutable)
-		self.regionFactsForWrite().mergedValues.insert(merged)
+		self.noteMergedIntoRegion(merged)
 		return merged
 	end 'parseMerge'
 
@@ -2124,10 +2123,10 @@ extension Parser
 		notes.windowCallPausedOperands.push(self.pausedOperandsOf(args))
 	end 'noteWindowCall'
 
-	function finishCapabilityFacts(func IrFunction)
+	function finishCapabilityFacts(func IrFunction) throws SourceParseError
 		// Runs once the whole body is parsed: a loop's back-edge values are recorded last, and a merged value is
 		// vacant only when every value flowing into it is.
-		self.settleLinearObligations(func)
+		try self.settleLinearObligations(func)
 		self.flushUnreturnedHeldLiterals(func)
 		self.noteHeldParams(func)
 		func.needsMutableParamMask = func.needsMutableParamMask or func.writesThroughParamMask

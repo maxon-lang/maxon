@@ -472,8 +472,10 @@ extension Parser
 				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(edgeArgsA, binding: binding, value: a)
 				self.pushMergedEdgeValue(edgeArgsB, binding: binding, value: b)
-				self.markPhiImmortalIfEveryEdgeIs(phiId, edges: twoArgs(a, second: b))
-				self.admitUnsignedLiteralsAcross(twoArgs(a, second: b))
+				let incoming = twoArgs(a, second: b)
+				self.markPhiImmortalIfEveryEdgeIs(phiId, edges: incoming)
+				self.admitUnsignedLiteralsAcross(incoming)
+				self.noteJoinedFreshLocal(binding, merged: phiId, incoming: incoming)
 			end 'differ'
 		end 'eachVar'
 
@@ -5663,6 +5665,7 @@ extension Parser
 				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(matchEdgeArgs, binding: binding, value: entryV)
 				self.pushMergedEdgeValue(fallthroughEdgeArgs, binding: binding, value: prevV)
+				self.noteJoinedFreshLocal(binding, merged: phiId, incoming: twoArgs(entryV, second: prevV))
 			end 'differ'
 		end 'each'
 
@@ -6004,6 +6007,7 @@ extension Parser
 				end 'eachArm'
 
 				self.admitUnsignedLiteralsAcross(incoming)
+				self.noteJoinedFreshLocal(binding, merged: phiId, incoming: incoming)
 			end 'phiVar' else 'common'
 				let commonValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: commonValue, def: DebugVersionDef.merged)

@@ -4775,6 +4775,214 @@ end 'main'
 error E3223: <fragment>:36:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
+<!-- test: an-isolated-value-is-merged-into-a-variable-both-branches-leave-holding-a-case-without-a-linear-payload -->
+Both branches give `m` the case that carries nothing, so after the `if` it holds no linear value and the isolated `filled` is merged into it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function ready() returns bool
+	return true
+end 'ready'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	if ready() 'one'
+		m = Maybe.nothing
+	end 'one' else 'other'
+		m = Maybe.nothing
+	end 'other'
+
+	let filled = Maybe.some(Resp.create(1)) as isolated Maybe
+	m = filled
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: an-isolated-value-is-merged-into-a-variable-every-lap-leaves-holding-a-case-without-a-linear-payload -->
+`m` holds `nothing` when the loop is entered and at the end of every lap, so each lap's isolated `filled` is merged into it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	for _ in 0 upto 2 'lap'
+		let filled = Maybe.some(Resp.create(1)) as isolated Maybe
+		m = filled
+		settle(m)
+		m = Maybe.nothing
+	end 'lap'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 1
+nothing
+```
+```exitcode
+0
+```
+
+<!-- test: an-isolated-value-is-not-merged-into-a-variable-one-branch-leaves-holding-the-linear-case -->
+The `then` branch leaves `m` holding the linear case, so `m` may hold a linear value when `filled` is assigned to it.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function ready() returns bool
+	return true
+end 'ready'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	if ready() 'one'
+		m = Maybe.some(Resp.create(1))
+	end 'one' else 'other'
+		m = Maybe.nothing
+	end 'other'
+
+	let filled = Maybe.some(Resp.create(2)) as isolated Maybe
+	m = filled
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:43:6: cannot store an isolated 'Maybe' into 'm', which holds a mutable 'Maybe'; `merge` it first
+```
+
+<!-- test: an-isolated-value-is-not-merged-into-a-variable-the-previous-lap-left-holding-it -->
+The lap ends with `m` holding the `filled` it was given, so the next lap's `filled` is assigned to a variable that may hold a linear value.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin()
+		nothing then print("nothing\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	var m = Maybe.nothing
+
+	for _ in 0 upto 2 'lap'
+		let filled = Maybe.some(Resp.create(1)) as isolated Maybe
+		m = filled
+	end 'lap'
+
+	settle(m)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:34:7: cannot store an isolated 'Maybe' into 'm', which holds a mutable 'Maybe'; `merge` it first
+```
+
 <!-- test: an-arm-reassigns-the-linear-union-it-matched-after-consuming-the-payload -->
 The match consumes `m`, so the arms may give it a new value: `recycle` consumes the payload and answers a fresh `Maybe`, and the `nothing` arm refills it with another.
 ```maxon

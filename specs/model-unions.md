@@ -13,12 +13,12 @@ These cases are programs of the capmodel executable model, translated to Maxon b
 `scripts/model-specs/generate.py` (`docs/SPECS.md`, "Model-derived specs") and pinned to the model's verdict on
 unions, payload bindings and `match`. A program the model accepts runs and exits 0; one it refuses fails to compile, with the diagnostic
 the compiler gives. A case is written only where the compiler and the model agree, so the suite fails
-the day the compiler stops agreeing with a verdict the model pinned. The rule set is `core-m3w-fa13`.
+the day the compiler stops agreeing with a verdict the model pinned. The rule set is `core-m3w-fa14`.
 
 ## Tests
 
 <!-- test: model-finding-ae-arm-outer-write-nonlinear-ctl -->
-The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `arm-outer-write-nonlinear-ctl` of redteamAE/p10.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `arm-outer-write-nonlinear-ctl` of redteamAE/p10.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -59,7 +59,7 @@ error E3197: <fragment>:30:13: cannot write 'n' through 'b', which is read-only 
 ```
 
 <!-- test: model-finding-ae-frozen-union-iso-arm-write -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -101,7 +101,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-param-union-iso-arm-write -->
-The model (`core-m3w-fa13`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `param-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `param-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -146,7 +146,7 @@ error E3197: <fragment>:28:11: cannot write 'k' through 'c', which is read-only 
 ```
 
 <!-- test: model-finding-ae-imm-param-union-iso-arm-write -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `imm-param-union-iso-arm-write` of redteamAE/p18.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `imm-param-union-iso-arm-write` of redteamAE/p18.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -192,7 +192,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-frozen-union-no-iso-ctl -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-no-iso-ctl` of redteamAE/p18.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-no-iso-ctl` of redteamAE/p18.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -234,7 +234,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-frozen-union-iso-pass-to-fn-writes -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-iso-pass-to-fn-writes` of redteamAE/p19.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-iso-pass-to-fn-writes` of redteamAE/p19.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -281,7 +281,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-varpayload-nonlinear-iso-param -->
-The model (`core-m3w-fa13`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `varpayload-nonlinear-iso-param` of redteamAE/p8.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `varpayload-nonlinear-iso-param` of redteamAE/p8.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -321,7 +321,7 @@ error E3198: <fragment>:29:21: 'q' is isolated and cannot be read outside a bloc
 ```
 
 <!-- test: model-hand-af-n20-two-sequential -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n20-two-sequential` of redteamAF.hand_af17, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n20-two-sequential` of redteamAF.hand_af17, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -357,7 +357,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-a9-method-call-inside-arm -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a9-method-call-inside-arm` of redteamAF.hand_af18, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a9-method-call-inside-arm` of redteamAF.hand_af18, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -393,7 +393,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s5-binder-lent-named-like-outer -->
-The model (`core-m3w-fa13`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s5-binder-lent-named-like-outer` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s5-binder-lent-named-like-outer` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -431,7 +431,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-m3-copy-use-after-arm -->
-The model (`core-m3w-fa13`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m3-copy-use-after-arm` of redteamAG.hand_ag10, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m3-copy-use-after-arm` of redteamAG.hand_ag10, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -471,7 +471,7 @@ error E3214: <fragment>:28:21: cannot move or copy the unique value matched by '
 ```
 
 <!-- test: model-hand-ag-m4-copy-use-after-arm-peek -->
-The model (`core-m3w-fa13`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m4-copy-use-after-arm-peek` of redteamAG.hand_ag10, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m4-copy-use-after-arm-peek` of redteamAG.hand_ag10, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -511,7 +511,7 @@ error E3214: <fragment>:28:21: cannot move or copy the unique value matched by '
 ```
 
 <!-- test: model-hand-ag-m8-copy-into-array -->
-The model (`core-m3w-fa13`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m8-copy-into-array` of redteamAG.hand_ag10, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m8-copy-into-array` of redteamAG.hand_ag10, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -553,7 +553,7 @@ error E3214: <fragment>:30:23: cannot move or copy the unique value matched by '
 ```
 
 <!-- test: model-hand-ag-f2-control-copy -->
-The model (`core-m3w-fa13`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f2-control-copy` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f2-control-copy` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
