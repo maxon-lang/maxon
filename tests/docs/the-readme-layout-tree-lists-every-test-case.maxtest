@@ -1,0 +1,367 @@
+let ReadmeFileName = "README.md"
+let ReadmePath = "{TestsDir}{PortablePathSeparator}{ReadmeFileName}"
+let TreeOpener = "{TestsDir}{PortablePathSeparator}"
+let HeaderIndent = "  "
+let HeaderOverIndent = "   "
+let EntryIndent = "    "
+let EntryOverIndent = "     "
+let OpenAngle = "<"
+let CloseAngle = ">"
+let FixturesDirName = "fixtures"
+let DotPrefix = "."
+let GroupIndent = "    "
+
+type TreeListing
+	let sections as StringArray
+	let literals as StringSet
+	let patterns as StringArray
+
+	static function parse(tree StringArray) returns TreeListing
+		let sections = StringArray.create(0)
+		let literals = StringSet.create()
+		let patterns = StringArray.create(0)
+		var section = ""
+
+		for line in tree 'eachLine'
+			if line.startsWith(HeaderIndent) and not line.startsWith(HeaderOverIndent) 'aHeader'
+				section = firstWordOf(line)
+
+				if not section.endsWith(PortablePathSeparator) 'notASection'
+					panic("the gate could not run — the tree line '{line}' is indented like a corpus section but its first word '{section}' does not end in '{PortablePathSeparator}'.")
+				end 'notASection'
+
+				sections.push(section)
+				continue
+			end 'aHeader'
+
+			if not line.startsWith(EntryIndent) or line.startsWith(EntryOverIndent) 'notAnEntryLine'
+				continue
+			end 'notAnEntryLine'
+
+			let word = firstWordOf(line)
+
+			if not word.endsWith(TestSourceSuffix) 'notACase'
+				continue
+			end 'notACase'
+
+			if section.isEmpty() 'beforeAnySection'
+				panic("the gate could not run — the tree line '{line}' lists a case before any corpus section opens.")
+			end 'beforeAnySection'
+
+			let full = "{section}{word}"
+
+			if full.contains(OpenAngle) 'aPattern'
+				patterns.push(full)
+			end 'aPattern' else 'aLiteral'
+				literals.insert(full)
+			end 'aLiteral'
+		end 'eachLine'
+
+		return TreeListing{sections: sections, literals: literals, patterns: patterns}
+	end 'parse'
+end 'TreeListing'
+
+test 'the layout tree lists every test case'
+	let tree = layoutTreeLines(checkoutDocumentText(ReadmePath))
+
+	Expect.isTrue(tree.count() > 0, message: "{ReadmePath} has no fenced block whose first line is `{TreeOpener}`, so there is no layout tree to compare the corpora with.")
+
+	let layout = TreeListing.parse(tree)
+
+	Expect.isTrue(layout.sections.count() > 0, message: "the layout tree in {ReadmePath} opens no corpus section, so the comparison below would be vacuous.")
+	Expect.isTrue(layout.literals.count() + layout.patterns.count() > 0, message: "the layout tree in {ReadmePath} lists no `{TestSourceSuffix}` case, so the comparison below would be vacuous.")
+
+	let onDisk = casesOnDisk()
+
+	Expect.isTrue(onDisk.count() > 0, message: "no `{TestSourceSuffix}` case was found under any corpus directory of {TestsDir}/, so the comparison below would be vacuous.")
+
+	let unlisted = StringArray.create(0)
+
+	for path in onDisk 'eachCase'
+		if not isListed(path, layout: layout) 'unlistedCase'
+			unlisted.push(path)
+		end 'unlistedCase'
+	end 'eachCase'
+
+	let stale = StringArray.create(0)
+
+	for entry in layout.literals 'eachEntry'
+		if not onDisk.contains(entry) 'staleEntry'
+			stale.push(entry)
+		end 'staleEntry'
+	end 'eachEntry'
+
+	for pattern in layout.patterns 'eachPattern'
+		if not patternMatchesAny(pattern, onDisk: onDisk) 'stalePattern'
+			stale.push(pattern)
+		end 'stalePattern'
+	end 'eachPattern'
+
+	let sectioned = StringSet.create()
+
+	for section in layout.sections 'eachSection'
+		sectioned.insert(corpusOf(section))
+	end 'eachSection'
+
+	let sectionless = StringArray.create(0)
+
+	for path in onDisk 'eachCaseCorpus'
+		let corpus = corpusOf(path)
+
+		if not sectioned.contains(corpus) and not sectionless.contains(corpus) 'newSectionless'
+			sectionless.push(corpus)
+		end 'newSectionless'
+	end 'eachCaseCorpus'
+
+	Expect.isEmpty(joined(disagreements(unlisted, stale: stale, sectionless: sectionless), separator: LineFeed), message: "the layout tree in {ReadmePath} must list every `{TestSourceSuffix}` case under a corpus directory of {TestsDir}/ (an entry written with `<…>` stands for every case its pattern matches) and name no case file or pattern that matches nothing. These break that rule, grouped by corpus:")
+end 'the layout tree lists every test case'
+
+function layoutTreeLines(readme String) returns StringArray
+	let tree = StringArray.create(0)
+	var previous = ""
+	var inTree = false
+
+	for line in readme.split(LineFeed) 'eachLine'
+		if not inTree 'seeking'
+			inTree = line == TreeOpener and previous.startsWith(FenceMarker)
+			previous = line
+			continue
+		end 'seeking'
+
+		if line.startsWith(FenceMarker) 'closes'
+			break
+		end 'closes'
+
+		tree.push(line)
+	end 'eachLine'
+
+	return tree
+end 'layoutTreeLines'
+
+function firstWordOf(line String) returns String
+	var word = ""
+	var insideAngle = false
+
+	for c in line.trim() 'eachCharacter'
+		let spelled = c.toString()
+
+		if spelled == OpenAngle 'opens'
+			insideAngle = true
+		end 'opens' else if spelled == CloseAngle 'closes'
+			insideAngle = false
+		end 'closes'
+
+		if spelled == Space and not insideAngle 'wordEnds'
+			break
+		end 'wordEnds'
+
+		word.append(spelled)
+	end 'eachCharacter'
+
+	return word
+end 'firstWordOf'
+
+function casesOnDisk() returns StringSet
+	let found = StringSet.create()
+
+	for corpus in listing(fixtureDir(TestsDir)) 'eachCorpus'
+		if not Directory.isDirectory(corpus) 'notADirectory'
+			continue
+		end 'notADirectory'
+
+		for source in sourcesUnder(corpus) 'eachSource'
+			if not source.filename().endsWith(TestSourceSuffix) 'notACase'
+				continue
+			end 'notACase'
+
+			let relative = source.toString().replace(WindowsPathSeparator, with: PortablePathSeparator).replaceFirst("{TestsDir}{PortablePathSeparator}", with: "")
+
+			if not underStagedOrFixtureDirectory(relative) 'aCase'
+				found.insert(relative)
+			end 'aCase'
+		end 'eachSource'
+	end 'eachCorpus'
+
+	return found
+end 'casesOnDisk'
+
+function underStagedOrFixtureDirectory(relative String) returns bool
+	for segment in relative.split(PortablePathSeparator) 'eachSegment'
+		if segment == FixturesDirName or segment.startsWith(DotPrefix) 'excluded'
+			return true
+		end 'excluded'
+	end 'eachSegment'
+
+	return false
+end 'underStagedOrFixtureDirectory'
+
+function corpusOf(path String) returns String
+	let segments = path.split(PortablePathSeparator)
+
+	return try segments.get(0) otherwise panic("the gate could not run — a split always yields a first segment")
+end 'corpusOf'
+
+function isListed(path String, layout TreeListing) returns bool
+	if layout.literals.contains(path) 'listedExactly'
+		return true
+	end 'listedExactly'
+
+	for pattern in layout.patterns 'eachPattern'
+		if pathMatchesPattern(path, pattern: pattern) 'matches'
+			return true
+		end 'matches'
+	end 'eachPattern'
+
+	return false
+end 'isListed'
+
+function patternMatchesAny(pattern String, onDisk StringSet) returns bool
+	for path in onDisk 'eachCase'
+		if pathMatchesPattern(path, pattern: pattern) 'matches'
+			return true
+		end 'matches'
+	end 'eachCase'
+
+	return false
+end 'patternMatchesAny'
+
+function pathMatchesPattern(path String, pattern String) returns bool
+	return matchesFrom(spelledCharacters(path), at: 0, pattern: patternItems(pattern), step: 0)
+end 'pathMatchesPattern'
+
+function spelledCharacters(text String) returns StringArray
+	let characters = StringArray.create(0)
+
+	for c in text 'eachCharacter'
+		characters.push(c.toString())
+	end 'eachCharacter'
+
+	return characters
+end 'spelledCharacters'
+
+function patternItems(pattern String) returns StringArray
+	let items = StringArray.create(0)
+	var insideAngle = false
+
+	for c in pattern 'eachCharacter'
+		let spelled = c.toString()
+
+		if spelled == OpenAngle 'opens'
+			items.push(OpenAngle)
+			insideAngle = true
+			continue
+		end 'opens'
+
+		if spelled == CloseAngle 'closes'
+			insideAngle = false
+			continue
+		end 'closes'
+
+		if not insideAngle 'aLiteral'
+			items.push(spelled)
+		end 'aLiteral'
+	end 'eachCharacter'
+
+	return items
+end 'patternItems'
+
+function matchesFrom(path StringArray, at ElementIndex, pattern StringArray, step ElementIndex) returns bool
+	if step == pattern.count() 'patternSpent'
+		return at == path.count()
+	end 'patternSpent'
+
+	let item = try pattern.get(step) otherwise panic("the gate could not run — the pattern step is inside the pattern")
+
+	if item != OpenAngle 'aLiteral'
+		if at == path.count() 'pathSpent'
+			return false
+		end 'pathSpent'
+
+		let spelled = try path.get(at) otherwise panic("the gate could not run — the path position is inside the path")
+
+		return spelled == item and matchesFrom(path, at: at + 1, pattern: pattern, step: step + 1)
+	end 'aLiteral'
+
+	var reach = at
+
+	while reach < path.count() 'eachReach'
+		let spelled = try path.get(reach) otherwise panic("the gate could not run — the path position is inside the path")
+
+		// A `<x>` spanning a separator would let a corpus's bare catch-all entry list its nested
+		// cases too, and every unlisted nested case would pass silently.
+		if spelled == PortablePathSeparator 'wildcardStops'
+			break
+		end 'wildcardStops'
+
+		reach = reach + 1
+
+		if matchesFrom(path, at: reach, pattern: pattern, step: step + 1) 'restMatches'
+			return true
+		end 'restMatches'
+	end 'eachReach'
+
+	return false
+end 'matchesFrom'
+
+function disagreements(unlisted StringArray, stale StringArray, sectionless StringArray) returns StringArray
+	let corpora = StringSet.create()
+
+	for path in unlisted 'eachUnlisted'
+		corpora.insert(corpusOf(path))
+	end 'eachUnlisted'
+
+	for entry in stale 'eachStale'
+		corpora.insert(corpusOf(entry))
+	end 'eachStale'
+
+	for corpus in sectionless 'eachSectionless'
+		corpora.insert(corpus)
+	end 'eachSectionless'
+
+	let names = StringArray.create(0)
+
+	for corpus in corpora 'eachCorpus'
+		names.push(corpus)
+	end 'eachCorpus'
+
+	names.sort()
+
+	let lines = StringArray.create(0)
+
+	for corpus in names 'eachName'
+		if sectionless.contains(corpus) 'noSection'
+			lines.push("{corpus}{PortablePathSeparator} holds `{TestSourceSuffix}` cases and has no section in the tree")
+		end 'noSection'
+
+		appendGroup(lines, heading: "{corpus}{PortablePathSeparator} has cases on disk the tree does not list", paths: within(unlisted, corpus: corpus))
+		appendGroup(lines, heading: "{corpus}{PortablePathSeparator} has tree entries matching no case file", paths: within(stale, corpus: corpus))
+	end 'eachName'
+
+	return lines
+end 'disagreements'
+
+function within(paths StringArray, corpus String) returns StringArray
+	let selected = StringArray.create(0)
+
+	for path in paths 'eachPath'
+		if corpusOf(path) == corpus 'inThisCorpus'
+			selected.push(path)
+		end 'inThisCorpus'
+	end 'eachPath'
+
+	selected.sort()
+
+	return selected
+end 'within'
+
+function appendGroup(lines StringArray, heading String, paths StringArray)
+	if paths.count() == 0 'nothingToReport'
+		return
+	end 'nothingToReport'
+
+	lines.push("{heading} ({paths.count()}):")
+
+	for path in paths 'eachPath'
+		lines.push("{GroupIndent}{path}")
+	end 'eachPath'
+end 'appendGroup'

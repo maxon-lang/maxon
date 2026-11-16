@@ -83,6 +83,10 @@ command `fmt` is. Each of the other twenty-one takes them up case by case: `test
 deliberately stores LIVE `*.maxtest` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
+The tree below lists every `.maxtest` case, and `docs/the-readme-layout-tree-lists-every-test-case.maxtest`
+gates it: a new case adds its entry to its corpus's section in the same change, and the `docs/` section
+below says what counts as listed.
+
 ```
 tests/
   support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
@@ -107,6 +111,8 @@ tests/
     engine-cases.maxtest         the engine corpus: 4 tests, on the staging and spawn the file above exports
     content-gate.maxtest         the content gate both corpora compare with, and its 19 red checks
     the-library-tiers-are-already-formatted.maxtest   every `stdlib/` and `runtime/` source is staged, and `fmt` must rewrite none of them
+    fmt-formats-a-file-reached-through-a-link-once.maxtest   fmt over a tree holding a link to a sibling directory formats each file once
+    fmt-over-a-link-back-to-its-own-root-terminates.maxtest   fmt over a tree holding a link back to its own root formats each file once
     generate-expectations.py     mints every expectation BY RUNNING THE COMPILER
     census-sources.txt           the real compiler files the scale case formats
     engine-cases/<Name>.in       formatter engine cases, with .expected beside them
@@ -223,6 +229,16 @@ tests/
     maxproj-built-from-inside-a-nested-project-refused.maxtest   a bare `build` inside that nested project is refused too, naming both project files
     manifest-unchanged-target-is-up-to-date.maxtest           a second path-less `build` of an unchanged target reuses the runner, says `Up to date ->` and compiles nothing
     manifest-up-to-date-target-still-runs-a-pending-second-stage.maxtest   an up-to-date target that asks to rebuild with its output still runs that second stage
+    delegated-build-asking-to-rebuild-refused.maxtest                      a delegated build that also asks to rebuild with its output is refused, naming the key
+    delegated-build-stating-sources-refused.maxtest                        a delegated build that also states sources is refused, naming the key
+    manifest-reports-the-build-runner.maxtest                              a path-less build names the build runner once and compiles it silently
+    manifest-sees-the-compiler-running-it.maxtest                          a manifest program sees MAXON_COMPILER naming the compiler that runs it
+    manifest-source-naming-a-library-file-through-a-parent-segment-reads-it-once.maxtest   a manifest source naming a runtime file through parent segments reads that file once, as the tiers
+    rebuild-with-output-for-another-target-is-not-repeated.maxtest         a build asking to rebuild with its output does not run an output built for another target
+    rebuild-with-output-keeps-an-argument-holding-a-space.maxtest          a build asking to rebuild with its output hands the written program an argument holding a space intact
+    rebuild-with-output-runs-the-written-program.maxtest                   a build asking to rebuild with its output runs the written program with the same arguments
+    second-stage-does-not-rebuild-again.maxtest                            a build already in its second stage does not run its output again
+    version-too-many-components-refused.maxtest                            a manifest version with more components than the PE field is refused
     fixtures/<project>/app.maxproj.fixture  main.maxon.fixture   stored names only, subdirectories included - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader, and `sessionHeldAt`: a `debug` REPL holding the program at the breakpoint on an anchor's line
@@ -395,6 +411,41 @@ tests/
     trace-unavailable-without-debugstream.maxtest      a build with no producer says so, and answers no list
     trace-unavailable-without-the-flag.maxtest         the same build without `--trace` names the other reason
     a-process-a-debug-stream-program-starts-does-not-attach-to-its-ring.maxtest      a process a monitored program starts finds the ring claimed and reports no events into it
+    a-detach-right-after-a-kill-of-a-held-program-reports-its-end.maxtest            a detach issued right after the held program was killed outright reports the program ending instead of hanging
+    a-detach-whose-acknowledgement-never-arrives-reports-the-program-ending.maxtest   a detach the stub never acknowledges, because the program ended during it, reports the program ending instead of waiting out the reply budget
+    a-detached-programs-parent-is-the-session.maxtest                                the program a session detached from is the session's own child again, alive, by the time the debug stub is gone
+    a-line-breakpoint-refused-at-an-armed-offset-answers-that-offset.maxtest         a line breakpoint refused at a byte another condition holds answers that byte, and no other row of the line
+    a-quit-after-a-held-program-was-killed-outright-leaves-no-defunct-process.maxtest   a session told to quit after the held program was killed outright leaves neither the program nor its stub defunct
+    a-released-program-refuses-live-commands.maxtest                                 a command that needs the program held is refused once the session has detached from it, and the program runs on to its own end
+    a-traced-child-held-at-a-stop-is-not-reported-as-exited.maxtest                  an unbounded wait on a traced child held at a ptrace stop keeps waiting and leaves the stop for its tracer
+    a-traced-childs-deadline-kill-ends-though-its-threads-died-unreaped.maxtest      a deadline wait on a traced child whose threads died while their tracer was not waiting ends and leaves no process behind
+    a-traced-childs-exit-is-polled-though-its-threads-died-unreaped.maxtest          a poll of a traced child whose threads died while their tracer was not waiting sees the child exit
+    a-traced-childs-long-deadline-wait-returns-though-its-threads-died-unreaped.maxtest   a wait with a long deadline on a traced child whose threads died while their tracer was not waiting sees the child exit before the deadline
+    a-traced-childs-unbounded-wait-returns-though-its-threads-died-unreaped.maxtest   an unbounded wait on a traced child whose threads died while their tracer was not waiting sees the child exit
+    a-wait-on-a-program-the-stub-reaped-on-a-kill-request-reports-the-status-the-stub-hands-back.maxtest   a wait on a program killed while the debugger held it, after the stub reaped it on a kill request, reports the status the stub handed back
+    an-address-inside-a-handler-inlined-into-a-synthesized-behaviour-is-armed.maxtest   an address inside an authored handler inlined into a synthesized behaviour function is armed and stops as the handler
+    clear-of-a-line-with-no-breakpoint-answers-no-offset.maxtest                     clearing a line no breakpoint was set on answers not-set and names no offset
+    clear-of-a-line-with-no-breakpoint-claims-no-sites.maxtest                       the REPL answers a clear of a line no breakpoint was set on without claiming a site
+    sidecar-a-local-defined-early-stays-readable-to-the-end-of-the-function.maxtest   locals defined at the top of a function are still read at its last line, across every block between
+    sidecar-a-local-rebound-after-an-inlined-call-opens-after-the-call.maxtest       a var rebound to another name right after an inlined call is not shown as the new value inside the call
+    sidecar-a-match-arm-binding-a-shadowing-name-ends-with-the-arm.maxtest           a let in a match arm that shadows an outer let is the outer one again after the match
+    sidecar-a-reassigned-slot-local-reads-its-new-value.maxtest                      a var the allocator keeps in a stack slot reads its new value after it is assigned again
+    sidecar-a-shadowing-local-after-a-block-split-keeps-its-own-value.maxtest        a let that shadows an outer let is its own value after an inlined call splits its block, and the outer one again past its block
+    sidecar-a-shadowing-local-in-a-loop-with-a-break-ends-at-the-break.maxtest       a let that shadows an outer let inside a loop left by a break is the outer one again after the loop
+    sidecar-a-shadowing-slot-local-is-not-shown-after-its-scope-ends.maxtest         a let that shadows an outer let in a nested block is not read after the block ends
+    sidecar-a-sibling-arm-does-not-see-a-slot-local-of-the-other.maxtest             a stop in one arm of an if reads a slot local of the other arm as not live here
+    sidecar-a-slot-local-assigned-in-a-loop-is-not-shown-stale-after-it.maxtest      a var held in a stack slot that a later loop assigns again is not read as its old value after the loop
+    sidecar-a-slot-local-assigned-in-an-arm-is-not-shown-stale-after-the-join.maxtest   a var held in a stack slot that one arm assigns again is not read as its old value after the join
+    sidecar-a-slot-local-before-a-dead-store-in-a-split-block-reads-its-value.maxtest   a var held in a stack slot reads its value on the lines before a dead store in a split block
+    sidecar-a-slot-local-is-live-only-once-its-store-has-run.maxtest                 a var held in a stack slot reads its value from the first byte its row covers
+    sidecar-a-slot-local-whose-dead-store-sits-beyond-a-split-block-is-not-shown-stale.maxtest   a var held in a stack slot whose dead store lies beyond a split block is not read as its older value
+    sidecar-a-slot-local-whose-merge-phi-was-pruned-is-not-shown-stale-after-the-join.maxtest   a var held in a stack slot whose merge phi was pruned is not read as its older value after the join
+    sidecar-a-slot-local-with-a-dead-trailing-store-is-not-shown-stale.maxtest       a var held in a stack slot whose last assignment was optimised away is not read as its older value
+    sidecar-closure-capture-types.maxtest                                            every value a closure of a later file captures is described under the type its own file declared it with
+    sidecar-rows-of-one-name-do-not-shadow-each-other.maxtest                        two rows of one local in different places overlap by no more than the instruction that hands one over to the next
+    sidecar-rows-of-one-name-in-registers-do-not-overlap-in-any-function.maxtest     no two rows of one name in different places overlap by more than one instruction, in any function of the program
+    sidecar-two-rebinds-at-one-point-resolve-to-the-later-binding.maxtest            two rebinds of a var to existing values that open at one point show the later binding
+    sidecar-versions-of-one-var-rebound-around-calls-do-not-shadow-each-other.maxtest   one var whose versions sit in different places is built and its rows overlap by no more than a handover
     fixtures/ownring/main.maxon.fixture     the ring-ownership program: it prints whether it is attached to the ring, runs itself as a child that prints the same - stored name only, see rule 1
     fixtures/<name>/main.maxon.fixture      stored names only - see rule 1
   dap/
@@ -436,11 +487,15 @@ tests/
     a-stop-timeout-past-the-bound-is-refused-by-name.maxtest      a `launch` stop timeout past the CLI's `--stop-timeout` bound is refused, naming the argument
     green-thread-ids-never-name-the-main-thread.maxtest      the id a program with no scheduler runs under belongs to no green thread, and every listed green thread id walks
     stderr-is-not-starved-behind-a-stdout-backlog.maxtest      a stderr line written behind a stdout backlog arrives ahead of the stdout written after it
+    a-console-clear-of-a-walks-return-point-leaves-no-trap.maxtest   a breakpoint the console clears at the address a next walk returns to leaves no trap behind it
+    pause-stops-an-idle-program-with-the-stack-it-waits-in.maxtest   pause stops a program idle in the scheduler, walks the runtime frames it waits in and refuses to step out of them
   coverage/
     CoverageHarness.maxon                   the shared half: the instrumented build, the report readers
     coverage-line-states.maxtest            the four line states, each attached to its own line
     coverage-branch-arms.maxtest            the implicit `else` and the `match` case no run reached
     coverage-byte-identical.maxtest         instrumentation reaches the flagged build and no other
+    coverage-timeout-accepts-the-least-a-target-takes.maxtest   a coverage deadline of exactly the least a target takes passes the flag and fails only at the missing program
+    coverage-timeout-refuses-below-the-least-a-target-takes.maxtest   a coverage deadline shorter than a millisecond is refused with the range every target deadline shares
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
   cli/
     CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, reading and forging library cache lines and entries, reading a cell of a build's `--metrics=` table, the error-path drop family, the recorded build and its compiled / up-to-date readers, and the wait past the filesystem clock
@@ -584,6 +639,78 @@ tests/
     scratch-name-segment-form-fits-the-portable-name-limit.maxtest   a shared segment's minted name fits 31 bytes for any pid and serial
     scratch-name-stranger-goes-stale-by-age.maxtest         a file is a stale stranger once it is as old as the age asked, and not before
     scratch-name-host-identity-leads-with-the-target-os-word.maxtest   the host identity a lock record and a scratch-name tag are made from begins with the target's OS word
+    a-build-is-compiled-by-the-compile-driver.maxtest                  a build is one job of the compile driver, and its answer is the only thing the command waits for
+    a-command-given-too-many-positionals-is-refused.maxtest            a command given more positionals than it reads refuses the first beyond them, naming it
+    a-hygiene-refusal-stops-before-register-allocation.maxtest         a program refused only for an unused binding never reaches register allocation
+    a-literal-spelling-a-surrogate-in-raw-bytes-is-refused.maxtest     a character literal and a string literal holding a surrogate or a malformed sequence in raw bytes are refused
+    a-refused-os-allocation-ends-the-program-with-an-out-of-memory-diagnostic.maxtest   a program whose memory request the operating system refuses prints an out-of-memory diagnostic and exits 82
+    a-reversed-source-order-keeps-a-literal-closed-in-column-one.maxtest   reversing the declarations of a file keeps a multi-line literal whose closing bracket is in column one
+    a-reversed-source-order-refuses-a-declaration-whose-end-is-not-in-its-column.maxtest   a reversed source order refuses a declaration whose end is not in its column rather than reading the file as written
+    a-reversed-source-order-reports-a-refused-declaration-instead-of-panicking.maxtest   a refused declaration is reported, not tripped over, when the declarations that follow it are read before it
+    a-struct-of-more-fields-than-sixteen-bits-can-number-is-refused.maxtest   a struct that declares 65,536 fields is refused where the 65,536th is declared
+    a-tuple-of-more-elements-than-sixteen-bits-can-number-is-refused.maxtest   a tuple type of 65,536 elements is refused
+    a-union-case-of-more-payload-fields-than-sixteen-bits-can-number-is-refused.maxtest   a union case that declares 65,536 payload fields is refused
+    allocations-by-tag-names-a-phase-and-tallies-that-phase-alone.maxtest   a named phase is tallied by tag, and that phase alone
+    allocations-by-tag-reports-a-table.maxtest                         the allocation tally is printed only when it is asked for
+    an-enum-case-of-more-backing-entries-than-sixteen-bits-can-number-is-refused.maxtest   an enum case whose struct backing writes more than 65,536 entries is refused
+    an-enum-of-more-cases-than-sixteen-bits-can-number-is-refused.maxtest   an enum that declares 65,536 cases is refused where the 65,536th is declared
+    an-error-logged-before-a-refused-os-allocation-is-written.maxtest   an error logged before the operating system refuses a memory request reaches stderr ahead of the out-of-memory diagnostic
+    an-interface-of-more-methods-than-sixteen-bits-can-number-is-refused.maxtest   an interface that declares 65,536 methods is refused
+    an-interface-whose-inherited-slots-pass-sixteen-bits-is-refused.maxtest   an interface whose own and inherited methods pass 65,535 is refused
+    an-unrecognized-source-order-is-refused.maxtest                    an unrecognized source order is refused naming the one value there is
+    build-a-changed-source-order-recompiles.maxtest                    a build whose source order differs from the last compile is compiled again
+    build-a-file-private-closure-let-builds-the-same-bytes-from-two-roots.maxtest   a file-private closure let builds the same bytes from two checkout roots
+    build-a-library-tier-project-named-through-a-link-reads-each-file-once.maxtest   a project inside stdlib named through a link to it reads each file once and keeps the library tier
+    build-a-named-directory-under-a-maxonignore.maxtest                a named directory under a .maxonignore is built
+    build-a-project-holding-a-source-in-an-unsearchable-directory-reports-that-it-could-not-read-it.maxtest   a project holding a source in a directory the process may list but not search is refused for reading it, not for identifying it
+    build-a-project-holding-an-unreadable-source-reports-that-it-could-not-read-it.maxtest   a project holding a source the process may not read is refused for reading it, not for identifying it
+    build-a-project-with-a-link-cycle-builds.maxtest                   a project holding a link back to its own root builds, each file counted once
+    build-a-project-with-a-link-to-a-directory-outside-it-builds-the-files-there.maxtest   a project holding a link to a directory outside its root builds the files there
+    build-a-project-with-a-link-to-a-sibling-directory-builds-it-once.maxtest   a project holding a link to a sibling directory builds, the files below it counted once
+    build-a-project-with-a-link-to-a-source-file-loads-it-once.maxtest   a project holding a link to one of its source files builds, the file loaded once
+    build-an-output-below-a-directory-the-host-will-not-search-is-refused-by-name.maxtest   a build whose output sits below a directory the process may not search is refused by name, never keyed by its spelling
+    build-dot-without-output-names-the-directory.maxtest               a directory built as . without --output= is named for the directory
+    build-header.maxtest                                               build opens with the version and the early-preview warning, and keeps them off stderr
+    build-naming-a-dot-prefixed-runtime-file-beside-a-program-loads-it-once.maxtest   a build naming a runtime file with a leading dot segment compiles that file once, as the tiers
+    build-naming-a-dot-prefixed-stdlib-file-beside-a-program-parses-it-once.maxtest   a build naming a stdlib file with a leading dot segment beside a program parses that file under one identity
+    build-naming-a-file-through-a-link-and-then-its-directory-loads-it-once.maxtest   a file named through a link and then the directory holding it is loaded once
+    build-naming-a-runtime-file-beside-a-program-loads-it-once.maxtest   a build naming a runtime file beside a program compiles that file once, as the tiers
+    build-naming-a-runtime-file-through-an-inner-dot-segment-loads-it-once.maxtest   a build naming a runtime file through an inner dot segment compiles that file once, as the tiers
+    build-naming-a-stdlib-file-beside-a-program-loads-it-once.maxtest   a build naming a stdlib file beside a program compiles that file once, as the librarys
+    build-naming-a-stdlib-file-through-a-link-beside-a-program-emits-the-same-bytes.maxtest   a stdlib file named through a link beside a program emits the same bytes as the file named directly
+    build-output-that-is-not-a-path-is-an-error.maxtest                an --output= value that is not a path is an error, not a panic
+    build-surveys-every-function-whose-address-is-taken.maxtest        a build surveys every function whose address is taken
+    cache-clear-counts-one-root-once.maxtest                           two variables naming one cache directory clear it once and count it once
+    cache-clear-empties-the-cache.maxtest                              cache clear leaves nothing Maxon put in the cache
+    cache-clear-keeps-what-maxon-did-not-put-there.maxtest             cache clear keeps a file Maxon did not write into the root it was given
+    cache-clear-sweeps-every-root.maxtest                              cache clear empties every cache root this host names
+    cache-clear-with-nothing-to-remove.maxtest                         cache clear over a cache that holds nothing succeeds and says so
+    cache-marks-the-root-a-run-can-use.maxtest                         bare cache names a root it cannot create and marks the one a run can use
+    cache-refuses-a-verb-it-does-not-have.maxtest                      cache with a word that is not a verb and cache with an option both refuse, naming clear
+    cache-reports-an-empty-cache.maxtest                               bare cache over a cache holding nothing names the root and says it is empty
+    cache-reports-every-root.maxtest                                   bare cache names every cache root and marks the one a run uses
+    cache-reports-what-it-holds.maxtest                                bare cache names the root in use and states how many builds it holds
+    cache-says-so-when-no-root-can-be-created.maxtest                  bare cache says so when no candidate root can be created, and names every variable it consulted
+    census-by-tag-names-a-phase-and-censuses-that-phase-alone.maxtest   a named front-end phase is censused by tag, and that phase alone
+    execute-falls-through-a-root-it-cannot-create.maxtest              execute falls through to the next root when the highest-ranked one cannot be created
+    execute-refuses-when-no-root-can-be-created.maxtest                execute refuses when no candidate root can be created, and names every variable it consulted
+    mcp-server-takes-no-other-option.maxtest                           mcp-server refuses an option that is not --dev
+    regalloc-a-colorer-repair-after-the-split-index-was-released-compiles-and-runs.maxtest   a value the colorer repairs after the splitter released its index compiles and runs
+    regalloc-live-row-walks-scale-with-the-live-set.maxtest            a live row walk costs its live values, not the value space
+    regalloc-splitting-stays-linear-over-one-reassigned-variable.maxtest   splitting a function of branches that reassign one variable costs time in proportion to the branches
+    run-a-task-whose-file-declares-another-task.maxtest                a task runs while its file declares another task nothing calls
+    run-in-a-directory-with-no-tasks-file-is-refused.maxtest           a directory holding no tasks file is refused by name
+    run-lists-the-tasks-a-directory-declares.maxtest                   a bare run lists the exported tasks and nothing else
+    run-refuses-a-task-nobody-declared.maxtest                         a task nobody declared is refused and the tasks that are there are listed
+    run-streams-a-task-and-forwards-its-exit-code.maxtest              a task prints on the callers stdout and its exit code is the commands
+    scale-test-rung-zero-compiles-and-every-witness-holds.maxtest      scale-test compiles and runs its generated rung 0, with every witness holding
+    stage-library-tier-stages-the-tier-and-the-compiler.maxtest        stage-library-tier copies both tiers and the compiler into the directory it is given
+    test-default-deadline-outlasts-a-file-that-runs-past-five-seconds.maxtest   maxon test with no --timeout= lets a test file run past five seconds
+    the-diagnostics-a-compile-reports-are-in-source-order.maxtest      a compile reports its diagnostics in source order whatever phase found each, and the same in any declaration order
+    the-source-order-a-compile-reads-changes-nothing-it-emits.maxtest   the order a compile reads its sources in changes no byte of the executable or the Target IR it emits
+    upgrade-dry-run-names-the-child-environment.maxtest                upgrade --dry-run names every variable the run would set for the child
+    wasm-call-free-functions-record-no-frame.maxtest                   a wasm function that calls nothing records no frame and one that calls does
+    wasm-fixed-array-stores-take-each-value-once.maxtest               a wasm store at a proven index consumes its value once and calls no runtime store
   profile/
     ProfileHarness.maxon                    the shared half: the profiler run, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -604,6 +731,9 @@ tests/
     profile-leaves-the-profiled-image-unchanged.maxtest  the image and its sidecar are byte-identical after a profile
     profile-refuses-a-build-whose-signature-is-malformed.maxtest   on macOS, a spoiled SuperBlob is refused as malformed
     profile-refuses-an-image-this-compiler-did-not-write.maxtest   on macOS, an ELF image and an image with no CodeDirectory are refused, saying why
+    profile-an-os-call-in-a-program-without-a-scheduler-is-named-by-the-program.maxtest   every stack of a scheduler-less program spending its time in OS calls is named by a frame of the program
+    profile-service-handler-is-attributed-as-itself.maxtest        a service handler inlined into its synthesized loop is attributed as itself and a switch is not a stack of its own
+    profile-signs-an-already-signed-image-to-the-same-bytes.maxtest   a profile of an image that is already re-signed launches an image byte-identical to the one a single re-sign makes
     fixtures/hotwarm/main.maxon.fixture     stored name only - see rule 1
     fixtures/greenthreads/main.maxon.fixture   stored name only - see rule 1
     fixtures/selfcopy/main.maxon.fixture    stored name only - see rule 1
@@ -639,7 +769,7 @@ tests/
     scriptlib-a-package-member-named-like-a-shadowed-type-is-refused.maxtest   a package method named `Clock` beside that script is refused with E3112, naming scriptlib
     scriptlib-a-package-names-another-packages-type-by-its-qualified-name.maxtest   a package builds `scriptlib.shapes.Square` from another package, and the script prints `9`
     scriptlib-a-script-shadowing-a-package-type-leaves-the-package-whole.maxtest   a script declaring `type Widget` beside a package whose `use()` reads its own `Widget.make()` prints `7`
-    scriptlib-an-unreached-package-var-a-let-could-not-replace-compiles.maxtest   a package function the script never calls keeps a `var` a `let` could not replace, and the script still runs
+    scriptlib-an-unreached-package-var-that-is-reassigned-compiles.maxtest   a package function the script never calls keeps a `var` a `let` could not replace, and the script still runs
     fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
   consoleWrite/
     console-write-imports.maxtest           which console API an emitted x64-windows image imports
@@ -657,6 +787,12 @@ tests/
     SafePointTable.maxon                    the second shared half: finds `__symtable` in a built executable and reads one symbol's safe-point byte
     the-cown-queue-publishers-are-never-stopped-by-asynchronous-preemption.maxtest     every cown queue publisher's safe-point byte is `never`, on x64-windows, x64-linux, arm64-linux and arm64-macos
     the-cown-runner-links-no-queue-node-inline.maxtest     `__cown_run` carries no release store and `__cown_enqueue_finish` exactly one, on both arm64 lanes
+    a-debug-stream-program-on-every-linux-target-lays-out-the-sleep-its-child-reap-steps-on.maxtest   a debug stream program on every Linux target lays out the sleep its child reap steps on
+    a-freed-box-is-filled-only-when-the-build-asks-for-it.maxtest   a freed box is filled only when the build asks for it
+    a-macos-image-that-never-reads-the-trust-store-links-no-security-framework.maxtest   a macOS image that never reads the trust store links no Security framework and imports none of the walk
+    a-new-green-threads-saved-context-lives-in-its-record-not-on-its-stack.maxtest   a new green thread is seeded with its stack top and no frame below it
+    published-scheduler-words-are-stored-with-release-and-loaded-with-acquire.maxtest   the scheduler words published from under the lock are stored with a release and loaded with an acquire
+    the-macos-trust-store-reads-the-admin-and-user-trust-settings-domains.maxtest   a macOS image that reads the trust store imports the trust-settings walk and no anchor-only call
     fixtures/cown/main.maxon.fixture        stored name only - see rule 1
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
@@ -707,6 +843,14 @@ tests/
     a-program-whose-first-file-never-parses-refuses-the-invalidation-probe.maxtest `verify-warm-rebuild` names the broken probe premise when the edited file fails to parse with one error before and after every probe edit
     a-program-with-a-parse-error-keeps-every-parse-memoized.maxtest `verify-warm-rebuild` holds the cache property and runs invalidation over a program with a function body that does not parse, and reports the properties that need a compile as not run
     a-program-with-a-file-that-fails-outright-keeps-every-parse-memoized.maxtest `verify-warm-rebuild` holds the cache property over a program with a file whose parse fails outright, without panicking on the re-query after the fold
+    a-batch-shaped-program-reuses-library-parses-from-another-shape.maxtest      a program of per-case directories with contested element names reuses the library parses a program of another shape left
+    a-program-cloning-nested-managed-elements-reuses-library-parses.maxtest      a program that deep-clones an array of nested managed records leaves the shared index at its baseline for every library parse it reuses
+    a-program-declaring-a-library-function-in-per-case-directories-parses-the-library-cold.maxtest   a program whose per-case directories each declare a function the library declares parses the library cold
+    a-program-declaring-a-probe-name-reports-the-property-it-could-not-check.maxtest   a program that declares a name the library-reuse probe declares has that property reported as not checkable
+    a-program-declaring-an-interface-reuses-library-parses.maxtest               a program that declares an interface ahead of the library ones still reuses the library parses that dispatch through them
+    a-program-with-aliases-implementing-library-interfaces-reuses-library-parses.maxtest   a program whose typealiases implement library interfaces still has a third program served every library parse
+    a-program-with-its-own-types-reuses-library-parses.maxtest                   a program that declares its own types, enums, unions, aliases and generic instances still reuses every library parse
+    a-second-program-with-different-type-names-reuses-library-parses.maxtest     a second program whose own type names differ from the first one and outnumber them still reuses every library parse
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
     McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, the spec-file staging, and JSON helpers
@@ -769,6 +913,8 @@ tests/
     an-empty-string-argument-is-refused-by-name.maxtest      an empty string given to an argument is refused by name, never read as absent
     execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
     build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
+    a-refused-check-does-not-stop-the-next-check-in-its-session-being-answered.maxtest   a refused check, a well-formed check and a dump_ir in one session are each answered
+    run-spec-test-lists-a-harness-error-raised-outside-every-case.maxtest   run_spec_test lists a harness error the run raised outside every case in harnessErrors
   docs/
     StdlibRoster.maxon                                       the shared half: reads the `public` declarations of a stdlib source and indexes the reference by heading-delimited block
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`, a member under its owner
@@ -778,6 +924,7 @@ tests/
     a-member-spelled-with-its-owner-in-another-types-section-is-documented.maxtest         `Owner.member` documents a member wherever the document spells it
     a-member-of-a-non-public-extension-belongs-to-the-extended-type.maxtest               a `public` member of an `extension` is owned by the extended type whatever the extension's own modifier
     each-shared-harness-helper-is-defined-once.maxtest       every `public function` in `tests/support/*.maxon` is declared by that one file and by no other `.maxon` or `.maxtest` under `tests/`
+    the-readme-layout-tree-lists-every-test-case.maxtest     the layout tree lists every test case
   targets/
     the-compiler-accepts-exactly-the-targets-the-table-lists.maxtest     `--target`'s refusal lists the table's `target` column, in its order
     fetch-vendor-pins-every-tool-for-every-native-target.maxtest         `scripts/fetch-vendor.sh` has a URL and a hash for every tool on exactly the native targets
@@ -1739,9 +1886,9 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
 on a copy costs a file write rather than 25 s, and the whole corpus therefore runs at the default deadline: `maxon test tests/mcp`.
 
 
-## `docs/` — the stdlib reference names every public declaration, and every shared helper has one home
+## `docs/` — the stdlib reference names every public declaration, every shared helper has one home, and the layout tree lists every case
 
-Seven cases, and none spawns anything. `stdlib-reference-documents-every-public-api.maxtest` reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
+No case here spawns anything. `stdlib-reference-documents-every-public-api.maxtest` reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
 fails listing, file by file, each `public` declaration the document does not name. A top-level declaration, or a
 member of a type that is not `public`, is named when its name appears in the document as a whole word. A `public` member of a `public` type, enum, union
 or interface, and of any `extension` (owned by the extended type whatever the extension's own modifier), is named
@@ -1762,7 +1909,16 @@ skipped would drop out of the roster and read exactly like a documented name.
 `each-shared-harness-helper-is-defined-once.maxtest` reads every `public function` in `tests/support/*.maxon`
 and fails naming each one that another `.maxon` or `.maxtest` under `tests/` declares again.
 
-The two real cases read the checkout itself and the five roster cases read nothing, so the corpus needs no staging. Run it as `maxon test tests/docs`.
+`the-readme-layout-tree-lists-every-test-case.maxtest` reads the fenced tree in this file and every `.maxtest`
+under each directory directly under `tests/`, descending into all but `fixtures/` and dot-directories, which
+hold stored or staged copies. A case is listed when its corpus's section holds an entry naming its path
+exactly, or an entry whose `<…>` part stands for any run of characters inside one path segment; a section
+header written with `<…>` (`test-fixtures/<case>/`) prefixes its path to each of its entries. The case fails,
+grouped by corpus, on a case no entry lists, on an entry or pattern that matches no case, and on a directory
+holding cases with no section. A bare catch-all entry such as `<case>.maxtest` lists every case at the top of
+its corpus, so a section holding one covers those cases with that single entry.
+
+The real cases read the checkout itself and the roster cases read nothing, so the corpus needs no staging. Run it as `maxon test tests/docs`.
 
 ## `targets/` — every target is named once, in `maxon-bin/targets.tsv`
 
