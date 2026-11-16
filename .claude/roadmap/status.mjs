@@ -4,7 +4,9 @@ import { execFileSync } from 'node:child_process';
 const OWNER = 'maxon-lang';
 const REPO = 'maxon-lang/maxon';
 const PROJECT_NUMBER = '4';
+const BACKLOG_PROJECT_NUMBER = 3;
 const STATUS_FIELD = 'Status';
+const ITEMS_PER_ISSUE = 20;
 
 function fail(message) {
   console.error(`status: ${message}`);
@@ -28,4 +30,18 @@ if (!option) fail(`no status "${status}"; the project's are: ${field.options.map
 const url = `https://github.com/${REPO}/issues/${issue}`;
 const item = JSON.parse(gh(['project', 'item-add', PROJECT_NUMBER, '--owner', OWNER, '--url', url, '--format', 'json']));
 gh(['project', 'item-edit', '--project-id', project.id, '--id', item.id, '--field-id', field.id, '--single-select-option-id', option.id]);
-console.log(`#${issue} is ${status}`);
+
+const [repoOwner, repoName] = REPO.split('/');
+const query = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) { projectItems(first: ${ITEMS_PER_ISSUE}) { nodes { id project { number } } } }
+  }
+}`;
+const boards = JSON.parse(gh(['api', 'graphql', '-f', `query=${query}`, '-f', `owner=${repoOwner}`, '-f', `name=${repoName}`, '-F', `number=${issue}`]));
+const backlogItems = boards.data.repository.issue.projectItems.nodes.filter(node => node.project.number === BACKLOG_PROJECT_NUMBER);
+
+for (const backlogItem of backlogItems) {
+  gh(['project', 'item-delete', String(BACKLOG_PROJECT_NUMBER), '--owner', OWNER, '--id', backlogItem.id]);
+}
+
+console.log(`#${issue} is ${status}${backlogItems.length > 0 ? ', and off the Backlog' : ''}`);
