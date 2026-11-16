@@ -41,7 +41,7 @@ type RefusedRemovalOfAHeldImage implements OutsideCheckoutCase
 			changeModeOf(bin, words: RefusedRemovalRemoveWriteWords)
 		#endif
 
-		let report = stuckEntriesReport(Directory.removeTree(held))
+		let removal = stagedRemoval(held, reach: StagedReach.tree)
 
 		#if not os(Windows)
 			changeModeOf(bin, words: RefusedRemovalRestoreWriteWords)
@@ -57,19 +57,27 @@ type RefusedRemovalOfAHeldImage implements OutsideCheckoutCase
 
 		// Every expectation follows the release, so a failing one leaves nothing running.
 		try Expect.equal(exitStatus, expected: 0, message: "the program the case kept running exited {exitStatus} once its stdin closed.")
-		try Expect.isTrue(namesARefusalOf(report, entry: image), message: "the report of a tree whose removal was refused does not say why {image.toString()} stayed: no refusal class {OnTheSecondAskWording}. It said:{report}")
+
+		let report = try removal.stuckReport() otherwise 'removedWhole'
+			try Expect.fail("the door removed a tree whose removal was refused, {held.toString()}, and reported nothing.")
+			return
+		end 'removedWhole'
+
+		try Expect.contains(report.text, needle: NotWaitedForVerdict, message: "the report of a tree whose removal was refused for a reason no wait outlasts does not say {image.toString()} was not waited for. It said:{report.text}")
+		try Expect.lessThan(report.elapsedMs, than: report.boundMs / 2, message: "the door spent {report.elapsedMs} ms of its {report.boundMs} ms bound on an entry no wait outlasts.")
+		try Expect.isTrue(namesARefusalOf(report.text, entry: image), message: "the report of a tree whose removal was refused does not say why {image.toString()} stayed: no refusal class on its last ask. It said:{report.text}")
 
 		#if os(Windows)
-			try Expect.contains(report, needle: probedHolderWording(holder), message: "the report of a tree whose removal a running image refused does not name the process that runs it, {holder}. It said:{report}")
+			try Expect.contains(report.text, needle: probedHolderWording(holder), message: "the report of a tree whose removal a running image refused does not name the process that runs it, {holder}. It said:{report.text}")
 		#else
-			try Expect.isFalse(report.contains(HolderProbeHeading), message: "the report on a host with no holder probe carries a holders section. It said:{report}")
+			try Expect.isFalse(report.text.contains(HolderProbeHeading), message: "the report on a host with no holder probe carries a holders section. It said:{report.text}")
 		#endif
 	end 'requireHeldIn'
 end 'RefusedRemovalOfAHeldImage'
 
 function namesARefusalOf(report String, entry FilePath) returns bool
 	for refusal in FileDeleteError.allCases 'eachRefusal'
-		if report.contains(secondAskRefusalOf(entry, refusal: refusal.name)) 'named'
+		if report.contains(lastAskRefusalOf(entry, refusal: refusal.name)) 'named'
 			return true
 		end 'named'
 	end 'eachRefusal'

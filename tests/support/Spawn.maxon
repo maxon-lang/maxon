@@ -8,15 +8,26 @@ let PosixTouchName = "touch"
 let PosixTouchTimeFlag = "-t"
 let PosixYear2000Stamp = "200001010000"
 let ProcessEndPollMs = 20
+let FileHolderAnnouncementPrefix = "holding "
+let FileHolderUntilReleasedWord = "untilReleased"
+let FileHolderEndMs = 10000
+let FileHolderWhat = "the file holder"
 
 #if os(Windows)
 	let WindowsLinkToolName = "cmd"
 	let WindowsLinkToolRunFlag = "/c"
 	let WindowsLinkToolCommand = "mklink"
 	let WindowsJunctionFlag = "/J"
+	let ExecutionPolicyFlag = "-ExecutionPolicy"
+	let ExecutionPolicyBypass = "Bypass"
+	let ScriptFileFlag = "-File"
+	let FileHolderFixtureName = "fileholder"
+	let FileHolderScriptName = "fileholder.ps1"
 #else
 	let PosixLinkToolName = "ln"
 	let PosixSymbolicFlag = "-s"
+	let PosixShellCommandFlag = "-c"
+	let FileHolderShellArgumentZero = "fileholder"
 #endif
 
 #if not os(Windows)
@@ -177,3 +188,93 @@ public function requireBuiltExecutable(build CollectedOutput, output FilePath, w
 	try Expect.equal(build.exitCode(), expected: 0, message: "`{what}` exited {build.exitCode()}. {reason} It wrote to stderr: {build.stderr}")
 	try Expect.isTrue(File.exists(output), message: "`{what}` exited 0 and wrote no executable to {output.toString()}.")
 end 'requireBuiltExecutable'
+
+#if os(Windows)
+	function supportFixtureScript(fixture String, script String) returns FilePath
+		let spelled = "{SupportFixturesDirName}/{fixture}/{script}"
+
+		return try FilePath.from(spelled) otherwise panic("the gate could not run — '{spelled}' is not a spellable path")
+	end 'supportFixtureScript'
+
+	function windowsScriptArguments(script FilePath) returns StringArray
+		return [WindowsShellNoProfileFlag, ExecutionPolicyFlag, ExecutionPolicyBypass, ScriptFileFlag, script.resolve(Directory.currentPath()).toString()].clone()
+	end 'windowsScriptArguments'
+#else
+	function fileHolderShellScript() returns String
+		return "exec 3<\"$1\" || exit 1\necho \"{FileHolderAnnouncementPrefix}$$\"\nif [ \"$2\" = {FileHolderUntilReleasedWord} ]; then read -r _; else sleep \"$(($2 / 1000)).$(printf '%03d' $(($2 % 1000)))\"; fi\nexit 0\n"
+	end 'fileHolderShellScript'
+#endif
+
+// Below `FileHolderEndMs`, so `FileHolder.ended` cannot time out on a hold that is still running.
+public typealias FileHoldMs = int(1 to 5000)
+
+public union FileHold
+	forMs(holdMs FileHoldMs)
+	untilReleased
+end 'FileHold'
+
+public type FileHolder
+	var child as StreamingSubprocess
+	export let pid as Pid
+
+	static function over(child StreamingSubprocess, pid Pid) returns FileHolder
+		return Self{child: child, pid: pid}
+	end 'over'
+
+	export function ended() returns ExitInt
+		child.closeStdin()
+
+		let status = try child.wait(deadline: WaitDeadline.within(FileHolderEndMs)) otherwise (failure) 'notEnded'
+			panic("the gate could not run — waiting for {FileHolderWhat} ({pid}) to end ended in {failure.displayReason()}.")
+		end 'notEnded'
+
+		child.release()
+
+		return status
+	end 'ended'
+end 'FileHolder'
+
+public function fileHeldOpen(path FilePath, hold FileHold) returns FileHolder
+	#if os(Windows)
+		let executable = Executable.name(WindowsShellName)
+		let arguments = windowsScriptArguments(supportFixtureScript(FileHolderFixtureName, script: FileHolderScriptName))
+	#else
+		let executable = Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path"))
+		let arguments = [PosixShellCommandFlag, fileHolderShellScript(), FileHolderShellArgumentZero].clone()
+	#endif
+
+	arguments.push(path.toString())
+	arguments.push(fileHoldWord(hold))
+
+	let child = try StreamingSubprocess.spawn(executable, arguments: arguments) otherwise (failure) 'notStarted'
+		panic("{spawnFailureMessage(FileHolderWhat, failure: failure)}")
+	end 'notStarted'
+
+	let announcements = try child.takeStdout() otherwise (failure) 'notTaken'
+		panic("{brokenReadMessage(FileHolderWhat, stream: StdioStream.stdout, reason: failure.displayReason())}")
+	end 'notTaken'
+
+	let announcement = try announcements.readLine() otherwise (failure) 'unread'
+		panic("{brokenReadMessage(FileHolderWhat, stream: StdioStream.stdout, reason: failure.displayReason())}")
+	end 'unread'
+
+	let said = match announcement 'announcement'
+		line(text) gives withoutCarriageReturns(text)
+		ended panic("the gate could not run — {FileHolderWhat} ended without announcing that it holds {path.toString()}.")
+	end 'announcement'
+
+	if not said.startsWith(FileHolderAnnouncementPrefix) 'notAnAnnouncement'
+		panic("the gate could not run — {FileHolderWhat} announced '{said}', not `{FileHolderAnnouncementPrefix}<pid>`.")
+	end 'notAnAnnouncement'
+
+	let holder = try int.fromString(said.replaceFirst(FileHolderAnnouncementPrefix, with: "")) otherwise panic("the gate could not run — {FileHolderWhat} announced '{said}', whose pid is not a number.")
+
+	return FileHolder.over(child, pid: holder as Pid)
+end 'fileHeldOpen'
+
+function fileHoldWord(hold FileHold) returns String
+	return match hold 'hold'
+		forMs(holdMs) gives "{holdMs}"
+		untilReleased gives FileHolderUntilReleasedWord
+	end 'hold'
+end 'fileHoldWord'

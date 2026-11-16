@@ -199,8 +199,8 @@ Every method takes a [FilePath](#filepath) of any length on Windows, as `File` d
 | `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
 | `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
 | `Directory.delete(path FilePath)` | — | `DirectoryDeleteError` | Remove an empty directory. A directory that still holds an entry throws `notEmpty`. A file or a link at `path`, a dangling link included, throws `deleteFailed`; `notFound` means nothing is at `path`. |
-| `Directory.removeTree(path FilePath)` | `FilePathArray` | — | Remove `path` and everything below it, and answer the entries that could not be removed; an empty answer means nothing is left, and a path that does not exist answers empty. A symbolic link or junction is removed as one entry, and what it points at stays as it was. |
-| `Directory.removeContents(path FilePath)` | `FilePathArray` | — | Remove everything inside the directory `path` and keep the directory, answering what could not be removed as `removeTree` does. |
+| `Directory.removeTree(path FilePath, waitForBusy WaitDeadline = WaitDeadline.none)` | `FilePathArray` | — | Remove `path` and everything below it, and answer the entries that could not be removed; an empty answer means nothing is left, and a path that does not exist answers empty. A symbolic link or junction is removed as one entry, and what it points at stays as it was. With `waitForBusy` `none`, the removal is one pass. With `within(timeoutMs)` ([WaitDeadline](#waitdeadline)), a file refused as `busy` — on Windows, a process holds it open without sharing its deletion — is asked again, at once and then after pauses that start at 1 ms and double up to 100 ms, and once the busy files are gone the directories that stayed only for them are removed. Any other reason an entry stays ends the wait at once. The deadline covers the whole call, and the answer is what stays at return. A POSIX host unlinks a file that is held open, so there the wait seldom applies. |
+| `Directory.removeContents(path FilePath, waitForBusy WaitDeadline = WaitDeadline.none)` | `FilePathArray` | — | Remove everything inside the directory `path` and keep the directory, answering what could not be removed and waiting for busy files as `removeTree` does. |
 | `Directory.currentPath()` | `FilePath` | — | The working directory. |
 
 ```maxon
@@ -731,7 +731,8 @@ end 'WaitDeadline'
 How long a run or a `StreamingSubprocess.wait` waits for the child: `none` until it exits, `within(timeoutMs)`
 at most `timeoutMs` milliseconds, which is at least one (`WaitDeadlineMs` is `int(1 to u64.max)`). A deadline
 that passes kills the child's whole process tree and throws `timeout`, or `treeNotEnded` when that tree cannot
-be fully ended ([SubprocessError](#subprocesserror)).
+be fully ended ([SubprocessError](#subprocesserror)). `Directory.removeTree` and `Directory.removeContents` take
+one as `waitForBusy`, the time they wait for a file another process holds open ([Directory](#directory)).
 
 ### Executable
 

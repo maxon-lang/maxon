@@ -92,23 +92,27 @@ Check if a path is a directory. Alias for `exists`.
 
 Remove a file, a directory with everything under it, or a directory link.
 
-**Signature:** `static function removeTree(path FilePath) returns FilePathArray`
+**Signature:** `static function removeTree(path FilePath, waitForBusy WaitDeadline = WaitDeadline.none) returns FilePathArray`
 
 **Parameters:**
 - `path`: The entry to remove
+- `waitForBusy`: How long to wait for a file another process holds open. `WaitDeadline.none`, the default, removes in one pass and waits for nothing
 
 **Returns:** The paths that could not be removed; empty when everything is gone. A path nothing is at removes nothing and reports nothing.
 
 A directory link (a symbolic link on POSIX, a junction or directory symbolic link on Windows) is removed as an entry: what it points at is never entered, listed or removed. An entry the process may not list or delete is reported and the walk goes on, so one stuck entry does not hide the rest; a directory holding a reported entry is itself reported only through that entry.
 
+With `WaitDeadline.within(ms)`, a file whose removal is refused as `busy` (`FileDeleteError.busy`: another process holds it open without sharing its deletion) is waited for. After the pass, each entry that stayed is asked once more, at once and then at pauses that start at 1 ms and double up to 100 ms, and once the busy files are gone the directories that stayed only because of them are removed. The wait ends at once when an entry stays for any other reason — access denied, a directory that cannot be listed or deleted — and it ends when the deadline passes, which covers the whole call: no pause runs past it. The answer is what stays at return.
+
 ### Directory.removeContents
 
 Remove everything inside a directory and keep the directory.
 
-**Signature:** `static function removeContents(path FilePath) returns FilePathArray`
+**Signature:** `static function removeContents(path FilePath, waitForBusy WaitDeadline = WaitDeadline.none) returns FilePathArray`
 
 **Parameters:**
 - `path`: The directory to empty
+- `waitForBusy`: How long to wait for a file another process holds open, as `removeTree` waits
 
 **Returns:** The paths that could not be removed, as `removeTree` reports them. A path that is not a directory removes nothing and reports nothing.
 
@@ -857,6 +861,98 @@ end 'main'
 42
 ```
 
+A call that waits for busy files removes what nothing holds exactly as the one-pass call does: the three cases below
+hold nothing open, so the wait has nothing to wait for and each answers what its one-pass twin answers.
+
+<!-- test: remove-tree-waiting-for-busy-removes-a-nested-tree -->
+```maxon
+function main() returns ExitCode
+	let base = FilePath from "test_remove_tree_waiting_nested_4b8e"
+	let deep = base.join("a").join("b")
+
+	if not Directory.create(deep) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(base.join("top.txt"), content: "x") otherwise return 2
+	try File.writeText(base.join("a").join("mid.txt"), content: "x") otherwise return 3
+	try File.writeText(deep.join("leaf.txt"), content: "x") otherwise return 4
+
+	let unremoved = Directory.removeTree(base, waitForBusy: WaitDeadline.within(60000))
+
+	if not unremoved.isEmpty() 'reportedAFailure'
+		return 5
+	end 'reportedAFailure'
+
+	if Directory.exists(base) 'stillThere'
+		return 6
+	end 'stillThere'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-tree-waiting-for-busy-of-a-path-nothing-is-at-reports-nothing -->
+```maxon
+function main() returns ExitCode
+	let missing = FilePath from "test_remove_tree_waiting_absent_7e15"
+
+	if Directory.exists(missing) or File.exists(missing) 'somethingIsThere'
+		return 1
+	end 'somethingIsThere'
+
+	if not Directory.removeTree(missing, waitForBusy: WaitDeadline.within(60000)).isEmpty() 'reportedAFailure'
+		return 2
+	end 'reportedAFailure'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-contents-waiting-for-busy-empties-a-directory-and-keeps-it -->
+```maxon
+function main() returns ExitCode
+	let base = FilePath from "test_remove_contents_waiting_d3a6"
+	let nested = base.join("sub")
+
+	if not Directory.create(nested) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(base.join("top.txt"), content: "x") otherwise return 2
+	try File.writeText(nested.join("leaf.txt"), content: "x") otherwise return 3
+
+	let unremoved = Directory.removeContents(base, waitForBusy: WaitDeadline.within(60000))
+
+	if not unremoved.isEmpty() 'reportedAFailure'
+		return 4
+	end 'reportedAFailure'
+
+	if not Directory.exists(base) 'directoryWentToo'
+		return 5
+	end 'directoryWentToo'
+
+	let left = try Directory.list(base) otherwise return 6
+
+	if not left.isEmpty() 'somethingStays'
+		return 7
+	end 'somethingStays'
+
+	try Directory.delete(base) otherwise return 8
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: remove-tree-removes-a-directory-link-and-not-what-it-points-at -->
 <!-- unsupported-targets: wasm32-wasi -->
 A directory link inside the tree is removed as an entry. The directory it points at, and what that holds, is
@@ -1083,6 +1179,390 @@ end 'main'
 ```stdout
 removeTree reported what the host refused true
 a denial that did not bind is a privileged token's true
+```
+
+<!-- test: remove-tree-waiting-for-busy-reports-a-refusal-of-another-class-at-once -->
+<!-- unsupported-targets: wasm32-wasi -->
+Only a file refused as busy is waited for. A directory the process may not list stays for another reason, so a call
+given a minute to wait reports it and returns without spending the minute: the case fails if the call takes half of
+it. It denies itself the listing as `remove-tree-reports-what-it-cannot-remove` does, asks the host's own lister
+whether the denial binds this process, then restores access and removes what it made; a denial that does not bind
+must be one the process's own token explains.
+```maxon
+let accessToolTimeoutMs = 30000
+let waitForBusyMs = 60000
+
+#if os(Windows)
+let listerRefusedExit = 5
+#else
+let listerRefusedExit = 1
+#endif
+
+function runAccessTool(tool String, arguments StringArray) returns bool
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise return false
+
+	return result.succeeded()
+end 'runAccessTool'
+
+function hostRefusesListing(directory FilePath) returns bool
+	let arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("-NoProfile")
+	arguments.push("-Command")
+	arguments.push("try \{ [void][System.IO.Directory]::GetFileSystemEntries('{directory.toString()}'); exit 0 \} catch [System.UnauthorizedAccessException] \{ exit {listerRefusedExit} \}")
+	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's lister did not run")
+	#else
+	arguments.push("-r")
+	arguments.push(directory.toString())
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's lister did not run")
+	#endif
+
+	if result.succeeded() 'listable'
+		return false
+	end 'listable'
+
+	if result.exitCode() != listerRefusedExit 'unanswered'
+		panic("the host's lister answered {result.exitCode()}, neither listing nor refusing")
+	end 'unanswered'
+
+	return true
+end 'hostRefusesListing'
+
+function tokenBypassesDenial() returns bool
+	let arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("/priv")
+	arguments.push("/fo")
+	arguments.push("csv")
+	arguments.push("/nh")
+	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's privilege report did not run")
+
+	return result.succeeded() and (result.stdout.contains("SeBackupPrivilege") or result.stdout.contains("SeRestorePrivilege"))
+	#else
+	arguments.push("-u")
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, deadline: WaitDeadline.within(accessToolTimeoutMs)) otherwise panic("the host's privilege report did not run")
+
+	return result.succeeded() and result.stdout.trim() == "0"
+	#endif
+end 'tokenBypassesDenial'
+
+function denyListing(directory FilePath) returns bool
+	let arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push(directory.toString())
+	arguments.push("/deny")
+	arguments.push("*S-1-1-0:(RD)")
+	return runAccessTool("icacls", arguments: arguments)
+	#else
+	arguments.push("000")
+	arguments.push(directory.toString())
+	return runAccessTool("chmod", arguments: arguments)
+	#endif
+end 'denyListing'
+
+function restoreListing(directory FilePath) returns bool
+	let arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push(directory.toString())
+	arguments.push("/remove:d")
+	arguments.push("*S-1-1-0")
+	return runAccessTool("icacls", arguments: arguments)
+	#else
+	arguments.push("755")
+	arguments.push(directory.toString())
+	return runAccessTool("chmod", arguments: arguments)
+	#endif
+end 'restoreListing'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_remove_tree_waiting_refused_5c3f")
+	let locked = base.join("locked")
+
+	if not Directory.create(locked) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(base.join("loose.txt"), content: "x") otherwise return 2
+	try File.writeText(locked.join("held.txt"), content: "x") otherwise return 3
+
+	if not denyListing(locked) 'denied'
+		return 4
+	end 'denied'
+
+	let hostRefuses = hostRefusesListing(locked)
+	let started = Clock.nowMs()
+	let unremoved = Directory.removeTree(base, waitForBusy: WaitDeadline.within(waitForBusyMs))
+	let tookMs = Clock.elapsedMs(started)
+	var reportedLocked = false
+
+	for stuck in unremoved 'eachStuck'
+		reportedLocked = reportedLocked or stuck.filename() == "locked"
+	end 'eachStuck'
+
+	let looseGone = not File.exists(base.join("loose.txt"))
+	let baseStands = Directory.exists(base)
+	let expectedUnremoved = 1 if hostRefuses else 0
+	let matches = unremoved.count() == expectedUnremoved and reportedLocked == hostRefuses and looseGone and baseStands == hostRefuses
+	let answeredAtOnce = tookMs < waitForBusyMs / 2
+
+	let denialExplained = hostRefuses or tokenBypassesDenial()
+
+	print("removeTree reported what the host refused {matches}\n")
+	print("it answered without spending the wait {answeredAtOnce}\n")
+	print("a denial that did not bind is a privileged token's {denialExplained}\n")
+
+	if not matches 'disagreed'
+		print("the host refuses listing {hostRefuses}, unremoved {unremoved.count()}, locked reported {reportedLocked}, loose.txt gone {looseGone}, base stands {baseStands}\n")
+	end 'disagreed'
+
+	if not answeredAtOnce 'waited'
+		print("removeTree took {tookMs} ms of a {waitForBusyMs} ms wait\n")
+	end 'waited'
+
+	if Directory.exists(locked) 'stillDenied'
+		if not restoreListing(locked) 'restored'
+			return 5
+		end 'restored'
+	end 'stillDenied'
+
+	if not Directory.removeTree(base).isEmpty() 'stillStuck'
+		return 6
+	end 'stillStuck'
+
+	if Directory.exists(base) 'stillThere'
+		return 7
+	end 'stillThere'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+removeTree reported what the host refused true
+it answered without spending the wait true
+a denial that did not bind is a privileged token's true
+```
+
+A file another process holds open without sharing its deletion is waited for until it is released or the deadline
+passes; the two cases below hold one with a PowerShell child that opens it sharing reads only.
+
+<!-- test: remove-tree-waiting-for-busy-waits-for-a-file-held-without-delete-sharing -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+The child announces once it holds the file and lets go of it after a fixed hold. A one-pass call made at once
+reports exactly the held file, which shows the file is busy and that the one-pass call does not wait; the waiting
+call then spends at least half the hold and removes the whole tree, the directory that stayed only because of the
+file included. Only Windows refuses to delete a file that is held open: a POSIX host unlinks it at once, so nothing
+is busy there, and wasm32-wasi starts no child process.
+```maxon
+let holdMs = 1500
+let waitForBusyMs = 60000
+let holderEndMs = 30000
+let holderAnnouncement = "holding"
+
+function holderArguments(file FilePath) returns StringArray
+	let arguments = StringArray.create(0)
+	arguments.push("-NoProfile")
+	arguments.push("-NonInteractive")
+	arguments.push("-Command")
+	arguments.push("$ErrorActionPreference = 'Stop'; $held = [System.IO.File]::Open('{file.toString()}', 'Open', 'Read', 'Read'); try \{ [Console]::Out.WriteLine('{holderAnnouncement}'); [Console]::Out.Flush(); Start-Sleep -Milliseconds {holdMs} \} finally \{ $held.Dispose() \}")
+
+	return arguments
+end 'holderArguments'
+
+function heldAnnounced(holder StreamingSubprocess) returns bool
+	let output = try holder.takeStdout() otherwise return false
+	let announcement = try output.readLine() otherwise return false
+
+	return match announcement 'announcement'
+		line(text) gives text.trim() == holderAnnouncement
+		ended gives false
+	end 'announcement'
+end 'heldAnnounced'
+
+function endedCleanly(holder StreamingSubprocess) returns bool
+	let status = try holder.wait(deadline: WaitDeadline.within(holderEndMs)) otherwise return false
+
+	return status == 0
+end 'endedCleanly'
+
+function answersOnly(unremoved FilePathArray, file FilePath) returns bool
+	var namesFile = false
+
+	for stuck in unremoved 'eachStuck'
+		namesFile = namesFile or stuck.toString() == file.toString()
+	end 'eachStuck'
+
+	return unremoved.count() == 1 and namesFile
+end 'answersOnly'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_remove_tree_waiting_held_9d27")
+	let held = base.join("held")
+	let file = held.join("held.txt")
+
+	if not Directory.create(held) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(file, content: "x") otherwise return 2
+
+	let holder = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: holderArguments(file)) otherwise return 3
+	let announced = heldAnnounced(holder)
+	let onePass = Directory.removeTree(base)
+	let started = Clock.nowMs()
+	let unremoved = Directory.removeTree(base, waitForBusy: WaitDeadline.within(waitForBusyMs))
+	let tookMs = Clock.elapsedMs(started)
+	holder.closeStdin()
+	let ended = endedCleanly(holder)
+	holder.release()
+
+	let onePassReportedTheHeldFile = answersOnly(onePass, file: file)
+	let treeGone = unremoved.isEmpty() and not Directory.exists(base)
+	let waited = tookMs >= holdMs / 2
+	let answeredInside = tookMs < waitForBusyMs / 2
+
+	print("the holder announced its hold {announced}\n")
+	print("the one-pass call reported only the held file {onePassReportedTheHeldFile}\n")
+	print("the waiting call removed the whole tree {treeGone}\n")
+	print("it waited for the hold {waited}\n")
+	print("it answered far inside its deadline {answeredInside}\n")
+	print("the holder ended cleanly {ended}\n")
+
+	if not (onePassReportedTheHeldFile and treeGone and waited and answeredInside) 'disagreed'
+		print("one pass left {onePass.count()}, the waiting call left {unremoved.count()} after {tookMs} ms of a {holdMs} ms hold, base stands {Directory.exists(base)}\n")
+	end 'disagreed'
+
+	if not Directory.removeTree(base).isEmpty() 'stillStuck'
+		return 4
+	end 'stillStuck'
+
+	if Directory.exists(base) 'stillThere'
+		return 5
+	end 'stillThere'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the holder announced its hold true
+the one-pass call reported only the held file true
+the waiting call removed the whole tree true
+it waited for the hold true
+it answered far inside its deadline true
+the holder ended cleanly true
+```
+
+<!-- test: remove-tree-waiting-for-busy-answers-a-file-still-held-at-the-deadline -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+The child holds the file until its stdin closes, so the file is still busy when the deadline passes: the call
+answers the held file, having spent at least its deadline and not ten times it. The case then releases the child,
+waits for it to end, and removes the tree in one pass. The lanes are Windows's alone for the reasons the case above
+gives.
+```maxon
+let waitForBusyMs = 300
+let longestWaitMs = waitForBusyMs * 10
+let holderEndMs = 30000
+let holderAnnouncement = "holding"
+
+function holderArguments(file FilePath) returns StringArray
+	let arguments = StringArray.create(0)
+	arguments.push("-NoProfile")
+	arguments.push("-NonInteractive")
+	arguments.push("-Command")
+	arguments.push("$ErrorActionPreference = 'Stop'; $held = [System.IO.File]::Open('{file.toString()}', 'Open', 'Read', 'Read'); try \{ [Console]::Out.WriteLine('{holderAnnouncement}'); [Console]::Out.Flush(); [void][Console]::In.ReadToEnd() \} finally \{ $held.Dispose() \}")
+
+	return arguments
+end 'holderArguments'
+
+function heldAnnounced(holder StreamingSubprocess) returns bool
+	let output = try holder.takeStdout() otherwise return false
+	let announcement = try output.readLine() otherwise return false
+
+	return match announcement 'announcement'
+		line(text) gives text.trim() == holderAnnouncement
+		ended gives false
+	end 'announcement'
+end 'heldAnnounced'
+
+function endedCleanly(holder StreamingSubprocess) returns bool
+	let status = try holder.wait(deadline: WaitDeadline.within(holderEndMs)) otherwise return false
+
+	return status == 0
+end 'endedCleanly'
+
+function answersOnly(unremoved FilePathArray, file FilePath) returns bool
+	var namesFile = false
+
+	for stuck in unremoved 'eachStuck'
+		namesFile = namesFile or stuck.toString() == file.toString()
+	end 'eachStuck'
+
+	return unremoved.count() == 1 and namesFile
+end 'answersOnly'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_remove_tree_waiting_deadline_e61a")
+	let held = base.join("held")
+	let file = held.join("held.txt")
+
+	if not Directory.create(held) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(file, content: "x") otherwise return 2
+
+	let holder = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: holderArguments(file)) otherwise return 3
+	let announced = heldAnnounced(holder)
+	let started = Clock.nowMs()
+	let unremoved = Directory.removeTree(base, waitForBusy: WaitDeadline.within(waitForBusyMs))
+	let tookMs = Clock.elapsedMs(started)
+	holder.closeStdin()
+	let ended = endedCleanly(holder)
+	holder.release()
+
+	let answeredTheHeldFile = answersOnly(unremoved, file: file)
+	let waitedOut = tookMs >= waitForBusyMs
+	let gaveUpSoon = tookMs < longestWaitMs
+
+	print("the holder announced its hold {announced}\n")
+	print("the waiting call answered only the held file {answeredTheHeldFile}\n")
+	print("it waited out its deadline {waitedOut}\n")
+	print("it gave up soon after the deadline {gaveUpSoon}\n")
+	print("the holder ended once released {ended}\n")
+
+	if not (answeredTheHeldFile and waitedOut and gaveUpSoon) 'disagreed'
+		print("the waiting call left {unremoved.count()} after {tookMs} ms of a {waitForBusyMs} ms deadline\n")
+	end 'disagreed'
+
+	if not Directory.removeTree(base).isEmpty() 'stillStuck'
+		return 4
+	end 'stillStuck'
+
+	if Directory.exists(base) 'stillThere'
+		return 5
+	end 'stillThere'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the holder announced its hold true
+the waiting call answered only the held file true
+it waited out its deadline true
+it gave up soon after the deadline true
+the holder ended once released true
 ```
 
 <!-- test: remove-tree-reports-a-dangling-link-it-cannot-remove -->

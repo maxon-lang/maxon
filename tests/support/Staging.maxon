@@ -34,14 +34,78 @@ end 'stagingDir'
 // The directories go too: a case asserting a directory is absent holds only if no earlier run left
 // one standing.
 public function clearStagedTree(dir FilePath)
-	requireNothingStays(Directory.removeContents(dir), what: "the staged tree {dir.toString()}")
+	requireNothingStays(stagedRemoval(dir, reach: StagedReach.contents), what: "the staged tree {dir.toString()}")
 end 'clearStagedTree'
 
 public function discardStagedDir(dir FilePath)
-	requireNothingStays(Directory.removeTree(dir), what: "the staged directory {dir.toString()}")
+	requireNothingStays(stagedRemoval(dir, reach: StagedReach.tree), what: "the staged directory {dir.toString()}")
 end 'discardStagedDir'
 
-public let OnTheSecondAskWording = "on the second ask"
+public let StagedRemovalBoundMs = 10000
+public let WaitedForVerdict = "; waited for "
+public let NotWaitedForVerdict = "; not waited for"
+
+public enum StagedReach
+	tree
+	contents
+end 'StagedReach'
+
+public enum StagedRemovalError implements Error
+	nothingStayed
+end 'StagedRemovalError'
+
+public type StuckReport
+	export let text as String
+	export let elapsedMs as DurationMs
+	export let boundMs as DurationMs
+
+	static function of(text String, elapsedMs DurationMs, boundMs WaitDeadlineMs) returns StuckReport
+		return Self{text: text, elapsedMs: elapsedMs, boundMs: boundMs as DurationMs}
+	end 'of'
+end 'StuckReport'
+
+public union StagedRemoval
+	nothingStays
+	entriesStay(report StuckReport)
+
+	export function stuckReport() returns StuckReport throws StagedRemovalError
+		match self 'removal'
+			entriesStay(report) then return report
+			nothingStays then throw StagedRemovalError.nothingStayed
+		end 'removal'
+	end 'stuckReport'
+end 'StagedRemoval'
+
+public function stagedRemoval(dir FilePath, reach StagedReach, boundMs WaitDeadlineMs = StagedRemovalBoundMs) returns StagedRemoval
+	let waitForBusy = WaitDeadline.within(boundMs)
+	let started = Clock.nowMs()
+	let unremoved = match reach 'reach'
+		tree gives Directory.removeTree(dir, waitForBusy: waitForBusy)
+		contents gives Directory.removeContents(dir, waitForBusy: waitForBusy)
+	end 'reach'
+
+	let elapsedMs = Clock.elapsedMs(started)
+
+	if unremoved.isEmpty() 'nothingStays'
+		return StagedRemoval.nothingStays
+	end 'nothingStays'
+
+	let spent = "{elapsedMs} {boundWording(boundMs)}"
+
+	return StagedRemoval.entriesStay(StuckReport.of(stuckEntriesReport(unremoved, spent: spent), elapsedMs: elapsedMs, boundMs: boundMs))
+end 'stagedRemoval'
+
+public function lastAskRefusalOf(entry FilePath, refusal String) returns String
+	return "{entry.toString()}: {refusal} {OnTheLastAskWording}"
+end 'lastAskRefusalOf'
+
+public function boundWording(boundMs WaitDeadlineMs) returns String
+	return "ms of the {boundMs} ms bound"
+end 'boundWording'
+
+let OnTheLastAskWording = "on the last ask"
+let NotWaitableReason = "only a file refused as busy is waited for"
+let WaitEndedByAnotherReason = "another entry's refusal of another class ended the wait"
 public let HolderProbeHeading = "holders, as the probe found them"
 let RefusalWithNoClassMeaning = "a refusal the standard library names no class for"
 let EntryInsideStaysMeaning = "an entry inside it stays"
@@ -58,32 +122,38 @@ let NothingFoundIsNoRefusalReason = "a delete that found nothing at the path is 
 	let ProbeNotRunWording = "the probe could not run"
 	let ProbeStderrPrefix = "stderr: "
 	let UnmarkedProbeLinePrefix = ""
-	let ExecutionPolicyFlag = "-ExecutionPolicy"
-	let ExecutionPolicyBypass = "Bypass"
-	let ScriptFileFlag = "-File"
 #else
 	let AccessDeniedMeaning = "the host refused the unlink, which the permissions of the directory holding it decide"
 	let BusyMeaning = "the host reported it in use"
 #endif
 
-function requireNothingStays(unremoved FilePathArray, what String)
-	if not unremoved.isEmpty() 'somethingStays'
-		panic("the gate could not run — could not remove {what}:{stuckEntriesReport(unremoved)}")
-	end 'somethingStays'
+function requireNothingStays(removal StagedRemoval, what String)
+	match removal 'removal'
+		nothingStays then return
+		entriesStay(report) then panic("the gate could not run — could not remove {what}:{report.text}")
+	end 'removal'
 end 'requireNothingStays'
 
-// Every entry gets its second ask before the probe runs: a holder may last only a fraction of a
+// Every entry gets its last ask before the probe runs: a holder may last only a fraction of a
 // second, and a probe between asks would let it go before a later entry is asked.
-public function stuckEntriesReport(unremoved FilePathArray) returns String
-	let firstAskReturned = Clock.nowMs()
-	let stillThere = FilePathArray.create(0)
-	let lines = StringArray.create(unremoved.count(), zeroed: false)
+function stuckEntriesReport(unremoved FilePathArray, spent String) returns String
+	let removalReturned = Clock.nowMs()
+	let asked = StuckEntryArray.create(unremoved.count(), zeroed: false)
 
 	for entry in unremoved 'eachStuck'
-		lines.push(secondAskOutcome(entry, firstAskReturned: firstAskReturned, stillThere: stillThere))
+		asked.push(StuckEntry.askedAgain(entry, removalReturned: removalReturned))
 	end 'eachStuck'
 
+	let waitEnded = waitEndedByAnEntry(asked)
+	let lines = StringArray.create(asked.count(), zeroed: false)
+
+	for stuck in asked 'eachAsked'
+		lines.push(stuck.line(spent, waitEnded: waitEnded))
+	end 'eachAsked'
+
 	#if os(Windows)
+		let stillThere = entriesStillThere(asked)
+
 		if not stillThere.isEmpty() 'someStay'
 			probeHolders(stillThere, lines: lines)
 		end 'someStay'
@@ -92,47 +162,107 @@ public function stuckEntriesReport(unremoved FilePathArray) returns String
 	return listedLines(lines)
 end 'stuckEntriesReport'
 
-public function secondAskRefusalOf(entry FilePath, refusal String) returns String
-	return "{entry.toString()}: {refusal} {OnTheSecondAskWording}"
-end 'secondAskRefusalOf'
+union LastAsk
+	refused(refusal String, meaning String, waitable bool)
+	removed
+	gone
 
-// The holder probe's script spells this wording again; only the Windows run of the
-// a-staged-tree-whose-removal-is-refused case holds the two equal.
+	function endsTheWait() returns bool
+		return match self 'ask'
+			refused(_, _, waitable) gives not waitable
+			removed or
+			gone gives false
+		end 'ask'
+	end 'endsTheWait'
+end 'LastAsk'
+
+typealias StuckEntryArray = Array with StuckEntry
+
+type StuckEntry
+	let entry as FilePath
+	let ask as LastAsk
+	let afterMs as DurationMs
+
+	static function askedAgain(entry FilePath, removalReturned InstantMs) returns StuckEntry
+		let ask = lastAskOf(entry)
+
+		return Self{entry: entry, ask: ask, afterMs: Clock.elapsedMs(removalReturned)}
+	end 'askedAgain'
+
+	function line(spent String, waitEnded bool) returns String
+		let after = "{afterMs} ms after the removal returned"
+
+		return match ask 'ask'
+			refused(refusal, meaning, waitable) gives "{lastAskRefusalOf(entry, refusal: refusal)}, {after}: {meaning}{waitVerdict(waitable, waitEnded: waitEnded, spent: spent)}"
+			removed gives "{entry.toString()}: stayed past the waiting removal and was removed {OnTheLastAskWording}, {after}; {removalReturnedAfter(spent)}"
+			gone gives "{entry.toString()}: stayed past the waiting removal and was gone at the last ask, {after}: something else removed it; {removalReturnedAfter(spent)}"
+		end 'ask'
+	end 'line'
+end 'StuckEntry'
+
+function waitVerdict(waitable bool, waitEnded bool, spent String) returns String
+	if waitable and not waitEnded 'waitedFor'
+		return "{WaitedForVerdict}{spent}"
+	end 'waitedFor'
+
+	let reason = WaitEndedByAnotherReason if waitable else NotWaitableReason
+
+	return "{NotWaitedForVerdict}: {reason}; {removalReturnedAfter(spent)}"
+end 'waitVerdict'
+
+function removalReturnedAfter(spent String) returns String
+	return "the removal returned after {spent}"
+end 'removalReturnedAfter'
+
+function waitEndedByAnEntry(asked StuckEntryArray) returns bool
+	for stuck in asked 'eachAsked'
+		if stuck.ask.endsTheWait() 'endsTheWait'
+			return true
+		end 'endsTheWait'
+	end 'eachAsked'
+
+	return false
+end 'waitEndedByAnEntry'
+
+// The holder probe's script spells this wording again; only the Windows runs of the cases
+// a-staged-tree-whose-removal-is-refused and a-staged-file-held-past-the-bound hold the two equal.
 public function probedHolderWording(holder Pid) returns String
 	return "pid {holder},"
 end 'probedHolderWording'
 
-function secondAskOutcome(entry FilePath, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+function lastAskOf(entry FilePath) returns LastAsk
 	if Directory.isDirectory(entry) 'aDirectory'
-		return secondAskOfADirectory(entry, firstAskReturned: firstAskReturned, stillThere: stillThere)
+		return lastAskOfADirectory(entry)
 	end 'aDirectory'
 
-	return secondAskOfAFile(entry, firstAskReturned: firstAskReturned, stillThere: stillThere)
-end 'secondAskOutcome'
+	return lastAskOfAFile(entry)
+end 'lastAskOf'
 
-function secondAskOfAFile(entry FilePath, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+// `waitable` restates the class `Directory.removeTree` waits for, which it does not report: the
+// report's waited-for verdict turns false the day the two differ.
+function lastAskOfAFile(entry FilePath) returns LastAsk
 	try File.delete(entry) otherwise (refusal) 'refused'
 		if refusal == FileDeleteError.notFound 'gone'
-			return goneBeforeTheSecondAsk(entry, firstAskReturned: firstAskReturned)
+			return LastAsk.gone
 		end 'gone'
 
-		return refusedOnTheSecondAsk(entry, refusal: refusal.name, meaning: fileRefusalMeaning(refusal), firstAskReturned: firstAskReturned, stillThere: stillThere)
+		return LastAsk.refused(refusal.name, meaning: fileRefusalMeaning(refusal), waitable: refusal == FileDeleteError.busy)
 	end 'refused'
 
-	return removedOnTheSecondAsk(entry, firstAskReturned: firstAskReturned)
-end 'secondAskOfAFile'
+	return LastAsk.removed
+end 'lastAskOfAFile'
 
-function secondAskOfADirectory(entry FilePath, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+function lastAskOfADirectory(entry FilePath) returns LastAsk
 	try Directory.delete(entry) otherwise (refusal) 'refused'
 		if refusal == DirectoryDeleteError.notFound 'gone'
-			return goneBeforeTheSecondAsk(entry, firstAskReturned: firstAskReturned)
+			return LastAsk.gone
 		end 'gone'
 
-		return refusedOnTheSecondAsk(entry, refusal: refusal.name, meaning: directoryRefusalMeaning(refusal), firstAskReturned: firstAskReturned, stillThere: stillThere)
+		return LastAsk.refused(refusal.name, meaning: directoryRefusalMeaning(refusal), waitable: false)
 	end 'refused'
 
-	return removedOnTheSecondAsk(entry, firstAskReturned: firstAskReturned)
-end 'secondAskOfADirectory'
+	return LastAsk.removed
+end 'lastAskOfADirectory'
 
 function fileRefusalMeaning(refusal FileDeleteError) returns String
 	return match refusal 'meaning'
@@ -151,33 +281,27 @@ function directoryRefusalMeaning(refusal DirectoryDeleteError) returns String
 	end 'meaning'
 end 'directoryRefusalMeaning'
 
-function afterTheFirstAsk(firstAskReturned InstantMs) returns String
-	return "{Clock.elapsedMs(firstAskReturned)} ms after the first returned"
-end 'afterTheFirstAsk'
-
-function refusedOnTheSecondAsk(entry FilePath, refusal String, meaning String, firstAskReturned InstantMs, stillThere FilePathArray) returns String
-	let after = afterTheFirstAsk(firstAskReturned)
-	stillThere.push(entry)
-
-	return "{secondAskRefusalOf(entry, refusal: refusal)}, {after}: {meaning}"
-end 'refusedOnTheSecondAsk'
-
-function removedOnTheSecondAsk(entry FilePath, firstAskReturned InstantMs) returns String
-	return "{entry.toString()}: removed {OnTheSecondAskWording}, {afterTheFirstAsk(firstAskReturned)}; it outlasted the first, so the gate fails all the same"
-end 'removedOnTheSecondAsk'
-
-function goneBeforeTheSecondAsk(entry FilePath, firstAskReturned InstantMs) returns String
-	return "{entry.toString()}: gone before the second ask, {afterTheFirstAsk(firstAskReturned)}; something else removed it, so the gate fails all the same"
-end 'goneBeforeTheSecondAsk'
-
 #if os(Windows)
+	function entriesStillThere(asked StuckEntryArray) returns FilePathArray
+		let stillThere = FilePathArray.create(0)
+
+		for stuck in asked 'eachAsked'
+			match stuck.ask 'ask'
+				refused then stillThere.push(stuck.entry)
+				removed or
+				gone then continue
+			end 'ask'
+		end 'eachAsked'
+
+		return stillThere
+	end 'entriesStillThere'
+
 	// A probe that cannot run becomes a line of the report, never a panic that would replace it: hence
-	// `runIn` with a deadline over `runSystemTool`, and a script path no panicking helper checks.
+	// `runIn` with a deadline over `runSystemTool`, and a missing script left to the probe's own exit.
 	function probeHolders(stillThere FilePathArray, lines StringArray)
 		let checkout = Directory.currentPath()
-		let spelled = "{SupportFixturesDirName}/{HolderProbeFixtureName}/{HolderProbeScriptName}"
-		let script = try FilePath.from(spelled) otherwise panic("the gate could not run — '{spelled}' is not a spellable path")
-		let arguments = [WindowsShellNoProfileFlag, ExecutionPolicyFlag, ExecutionPolicyBypass, ScriptFileFlag, script.resolve(checkout).toString()].clone()
+		let script = supportFixtureScript(HolderProbeFixtureName, script: HolderProbeScriptName)
+		let arguments = windowsScriptArguments(script)
 
 		for entry in stillThere 'eachEntry'
 			arguments.push(entry.resolve(checkout).toString())

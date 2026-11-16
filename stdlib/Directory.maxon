@@ -16,6 +16,22 @@ end 'DirectoryDeleteError'
 
 public typealias FilePathArray = Array with FilePath
 
+typealias BusyPauseMs = int(1 to 100)
+
+let FirstBusyPauseMs = 1
+let LongestBusyPauseMs = 100
+
+enum RemovalScope
+	tree
+	contents
+end 'RemovalScope'
+
+enum StuckAnswer
+	stillBusy
+	stuckOtherwise
+	gone
+end 'StuckAnswer'
+
 /// Static directory operations.
 public type Directory
 	var dir as __ManagedDirectory
@@ -94,27 +110,112 @@ public type Directory
 
 	/// Remove `path` and everything below it, and answer the entries that could not be removed; an empty
 	/// answer means nothing is left. A path that does not exist answers empty. A link is removed as one
-	/// entry and never followed.
-	public static function removeTree(path FilePath) returns FilePathArray
-		let unremoved = FilePathArray.create(0)
-		Directory.removeEntry(path, unremoved: unremoved)
-
-		return unremoved
+	/// entry and never followed. `waitForBusy` `none` removes in one pass; `within(ms)` asks a file
+	/// refused as `busy` again, at growing pauses, until it goes or the deadline, which covers the whole
+	/// call, passes. Any other reason an entry stays ends the wait at once.
+	public static function removeTree(path FilePath, waitForBusy WaitDeadline = WaitDeadline.none) returns FilePathArray
+		return Directory.removeReporting(path, scope: RemovalScope.tree, waitForBusy: waitForBusy)
 	end 'removeTree'
 
 	/// Remove everything inside the directory `path` and keep the directory, answering the entries that
-	/// could not be removed, as `removeTree` does.
-	public static function removeContents(path FilePath) returns FilePathArray
+	/// could not be removed and waiting for busy files as `removeTree` does.
+	public static function removeContents(path FilePath, waitForBusy WaitDeadline = WaitDeadline.none) returns FilePathArray
+		return Directory.removeReporting(path, scope: RemovalScope.contents, waitForBusy: waitForBusy)
+	end 'removeContents'
+
+	static function removeReporting(path FilePath, scope RemovalScope, waitForBusy WaitDeadline) returns FilePathArray
+		return match waitForBusy 'bound'
+			none gives Directory.removeOnce(path, scope: scope)
+			within(timeoutMs) gives Directory.removeWaitingForBusy(path, scope: scope, deadlineMs: timeoutMs)
+		end 'bound'
+	end 'removeReporting'
+
+	static function removeOnce(path FilePath, scope RemovalScope) returns FilePathArray
 		let unremoved = FilePathArray.create(0)
 
-		if not Directory.exists(path) 'nothingThere'
-			return unremoved
-		end 'nothingThere'
-
-		Directory.removeEntriesOf(path, unremoved: unremoved)
+		match scope 'reach'
+			tree then Directory.removeEntry(path, unremoved: unremoved)
+			contents then Directory.removeContentsOf(path, unremoved: unremoved)
+		end 'reach'
 
 		return unremoved
-	end 'removeContents'
+	end 'removeOnce'
+
+	static function removeContentsOf(directory FilePath, unremoved FilePathArray)
+		if Directory.exists(directory) 'isADirectory'
+			Directory.removeEntriesOf(directory, unremoved: unremoved)
+		end 'isADirectory'
+	end 'removeContentsOf'
+
+	static function removeWaitingForBusy(path FilePath, scope RemovalScope, deadlineMs WaitDeadlineMs) returns FilePathArray
+		let started = Clock.nowMs()
+		var unremoved = Directory.removeOnce(path, scope: scope)
+		var pauseMs = FirstBusyPauseMs as BusyPauseMs
+
+		while not unremoved.isEmpty() 'waiting'
+			let answer = Directory.reaskStuck(unremoved)
+
+			if answer == StuckAnswer.stuckOtherwise 'notBusy'
+				return unremoved
+			end 'notBusy'
+
+			// A re-ask that removed an entry leaves the list stale, a parent perhaps now removable, so
+			// the pass runs again before anything is returned.
+			if answer == StuckAnswer.gone 'someWent'
+				unremoved = Directory.removeOnce(path, scope: scope)
+			end 'someWent'
+
+			let remainingMs = Clock.remainingMs(started, deadlineMs: deadlineMs as DurationMs)
+
+			if unremoved.isEmpty() or remainingMs == 0 'lapEnds'
+				return unremoved
+			end 'lapEnds'
+
+			pauseMs = Directory.pauseForBusyFiles(pauseMs, remainingMs: remainingMs)
+		end 'waiting'
+
+		return unremoved
+	end 'removeWaitingForBusy'
+
+	// Every entry is asked even once the answer is decided: a re-ask can itself delete a just-released
+	// file, and the answer is then `gone`, which makes the caller run the pass again.
+	static function reaskStuck(unremoved FilePathArray) returns StuckAnswer
+		var answer = StuckAnswer.stillBusy
+
+		for entry in unremoved 'eachStuck'
+			answer = Directory.outweighing(answer, entryAnswer: Directory.reaskEntry(entry))
+		end 'eachStuck'
+
+		return answer
+	end 'reaskStuck'
+
+	static function outweighing(answer StuckAnswer, entryAnswer StuckAnswer) returns StuckAnswer
+		return match answer 'sofar'
+			gone gives StuckAnswer.gone
+			stuckOtherwise gives StuckAnswer.gone if entryAnswer == StuckAnswer.gone else StuckAnswer.stuckOtherwise
+			stillBusy gives entryAnswer
+		end 'sofar'
+	end 'outweighing'
+
+	static function reaskEntry(entry FilePath) returns StuckAnswer
+		try File.delete(entry) otherwise (refusal) 'stays'
+			return match refusal 'why'
+				notFound gives StuckAnswer.gone
+				busy gives StuckAnswer.stillBusy
+				accessDenied or
+				failed gives StuckAnswer.stuckOtherwise
+			end 'why'
+		end 'stays'
+
+		return StuckAnswer.gone
+	end 'reaskEntry'
+
+	static function pauseForBusyFiles(pauseMs BusyPauseMs, remainingMs DurationMs) returns BusyPauseMs
+		let fullPauseMs = pauseMs as DurationMs
+		sleep((fullPauseMs if fullPauseMs < remainingMs else remainingMs) as Milliseconds)
+
+		return pauseMs * 2 if pauseMs < LongestBusyPauseMs / 2 else LongestBusyPauseMs
+	end 'pauseForBusyFiles'
 
 	static function removeEntriesOf(directory FilePath, unremoved FilePathArray)
 		let entries = try Directory.list(directory) otherwise (e) 'unlistable'

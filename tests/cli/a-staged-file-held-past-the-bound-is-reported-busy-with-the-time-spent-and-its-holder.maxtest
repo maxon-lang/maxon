@@ -1,0 +1,45 @@
+let HeldPastBoundCaseDirName = "held-past-the-bound-is-reported"
+let HeldPastBoundDirName = "held"
+let HeldPastBoundFileName = "held.txt"
+let HeldPastBoundShortBoundMs = 300
+let HeldPastBoundLongestSpentMs = HeldPastBoundShortBoundMs * 10
+
+test 'a staged file held past the bound is reported busy with the time spent and its holder'
+	requireHeldOutsideCheckout(HeldPastBoundCaseDirName, check: HeldPastBoundRemoval.create())
+end 'a staged file held past the bound is reported busy with the time spent and its holder'
+
+type HeldPastBoundRemoval implements OutsideCheckoutCase
+	static function create() returns HeldPastBoundRemoval
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let held = stagingDir(dir.join(HeldPastBoundDirName).toString())
+		let file = held.join(HeldPastBoundFileName)
+		writeStagedFile(file, content: HeldPastBoundFileName)
+
+		let holder = fileHeldOpen(file, hold: FileHold.untilReleased)
+		let removal = stagedRemoval(held, reach: StagedReach.tree, boundMs: HeldPastBoundShortBoundMs)
+		let holderExit = holder.ended()
+
+		try Expect.equal(holderExit, expected: 0, message: "the file holder exited {holderExit} once it was released.")
+
+		#if os(Windows)
+			let report = try removal.stuckReport() otherwise 'removedWhole'
+				try Expect.fail("the door removed {file.toString()} while the file holder {holder.pid} held it without delete sharing.")
+				return
+			end 'removedWhole'
+
+			try Expect.contains(report.text, needle: lastAskRefusalOf(file, refusal: FileDeleteError.busy.name), message: "the report does not name {file.toString()} as busy on its last ask. It said:{report.text}")
+			try Expect.contains(report.text, needle: WaitedForVerdict, message: "the report does not say the busy file was waited for. It said:{report.text}")
+			try Expect.contains(report.text, needle: boundWording(HeldPastBoundShortBoundMs), message: "the report does not set the time spent against the {HeldPastBoundShortBoundMs} ms bound. It said:{report.text}")
+			try Expect.atLeast(report.elapsedMs, than: report.boundMs, message: "the door gave up on a busy file after {report.elapsedMs} ms of its {report.boundMs} ms bound.")
+			try Expect.lessThan(report.elapsedMs, than: HeldPastBoundLongestSpentMs, message: "the door waited {report.elapsedMs} ms for a busy file past its {report.boundMs} ms bound.")
+			try Expect.contains(report.text, needle: probedHolderWording(holder.pid), message: "the report does not name the process that held the file, {holder.pid}. It said:{report.text}")
+		#else
+			if let report = try removal.stuckReport() 'stayed'
+				try Expect.fail("a file held open is unlinked on this host, and the door reported {file.toString()} as staying. It said:{report.text}")
+			end 'stayed'
+		#endif
+	end 'requireHeldIn'
+end 'HeldPastBoundRemoval'

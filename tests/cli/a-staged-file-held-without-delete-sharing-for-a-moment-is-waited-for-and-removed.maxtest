@@ -1,0 +1,44 @@
+let BrieflyHeldCaseDirName = "briefly-held-is-waited-for"
+let BrieflyHeldDirName = "held"
+let BrieflyHeldFileName = "held.txt"
+let BrieflyHeldHoldMs = 1500
+let BrieflyHeldWaitedLeastMs = BrieflyHeldHoldMs / 2
+
+test 'a staged file held without delete sharing for a moment is waited for and removed'
+	requireHeldOutsideCheckout(BrieflyHeldCaseDirName, check: BrieflyHeldRemoval.create())
+end 'a staged file held without delete sharing for a moment is waited for and removed'
+
+type BrieflyHeldRemoval implements OutsideCheckoutCase
+	static function create() returns BrieflyHeldRemoval
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let held = stagingDir(dir.join(BrieflyHeldDirName).toString())
+		let file = held.join(BrieflyHeldFileName)
+		writeStagedFile(file, content: BrieflyHeldFileName)
+
+		let holder = fileHeldOpen(file, hold: FileHold.forMs(BrieflyHeldHoldMs))
+		let holderPid = holder.pid
+		let heldAtTheDoor = Process.isAlive(holderPid)
+		let started = Clock.nowMs()
+		let removal = stagedRemoval(held, reach: StagedReach.tree)
+		let tookMs = Clock.elapsedMs(started)
+		let holderExit = holder.ended()
+
+		try Expect.equal(holderExit, expected: 0, message: "the file holder exited {holderExit} once its hold ended.")
+		try Expect.isTrue(heldAtTheDoor, message: "the file holder {holderPid} had ended before the door was asked to remove {file.toString()}, so the case tested no wait.")
+
+		if let report = try removal.stuckReport() 'stayed'
+			try Expect.fail("the door reported a file held for {BrieflyHeldHoldMs} ms, far inside its {StagedRemovalBoundMs} ms bound, instead of waiting for it. It said:{report.text}")
+		end 'stayed'
+
+		try Expect.isFalse(Directory.exists(held), message: "the door passed and {held.toString()} is still there.")
+
+		#if os(Windows)
+			try Expect.atLeast(tookMs, than: BrieflyHeldWaitedLeastMs, message: "the door removed a file held for {BrieflyHeldHoldMs} ms after {tookMs} ms, so the file was not held when it went.")
+		#else
+			try Expect.lessThan(tookMs, than: BrieflyHeldWaitedLeastMs, message: "a file held open is unlinked at once on this host, and the door took {tookMs} ms to remove it.")
+		#endif
+	end 'requireHeldIn'
+end 'BrieflyHeldRemoval'
