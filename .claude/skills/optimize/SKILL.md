@@ -162,9 +162,8 @@ it is answered by four instruments, none of which is a single command:
   says so. ⚠ It compares one compiler against its OWN successor, never two compilers: its header states
   the limit — *a wrong answer both stages agree on is invisible here*.
 - **`scripts/emitted-code-count.py`** (~10 s) — a per-program op census over a fixed corpus, the cheap
-  standing read on emitted-code debris. ⚠ Its unit changed on 2026-08-29 when `--emit-ir` stopped
-  emitting library bodies; they are now opt-in BY NAME, so a count taken before that date is not
-  comparable with one taken after.
+  standing read on emitted-code debris. `--emit-ir` renders library bodies only when they are named,
+  so the census counts the program's own code.
 - **`--emit-ir --emit-ir-function=<name>,<name>`** — renders the named functions (withheld bodies or the
   program's own) as Target IR, the same text a spec's ```RequiredFunctions block pins. This is the
   instrument when the subject is a SPECIFIC body rather than the corpus: point two compilers at one
