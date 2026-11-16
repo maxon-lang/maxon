@@ -5226,3 +5226,29 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-closure-cast-to-another-function-alias-outlives-its-var-being-reassigned -->
+```maxon
+typealias Small = int(0 to 100)
+typealias Callback = function() returns Small
+typealias Other = function() returns Small
+
+function make(label String) returns Callback
+	return function() gives label.count() as Small
+end 'make'
+
+function main() returns ExitCode
+	var f = make("abc")
+	let g = f as Other
+	f = make("abcdefgh")
+	let n = 5
+	print("{n}\n")
+	print("{g()} {f()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+5
+3 8
+```

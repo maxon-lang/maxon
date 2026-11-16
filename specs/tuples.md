@@ -4396,3 +4396,155 @@ mm_alloc __Tuple2.Word.Word #4 size=16
 mm_decref __Tuple2.Word.Word #4 rc=0
 mm_free __Tuple2.Word.Word #4
 ```
+
+<!-- test: a-cast-tuple-literal-read-by-a-call-in-the-return-expression -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+
+function sumOf(triple MyTriple) returns MyWord
+	let (a, b, c) = triple
+
+	return a + b + c
+end 'sumOf'
+
+function main() returns ExitCode
+	let triple = (1, 2, 3) as MyTriple
+	let first = sumOf(triple)
+	let second = sumOf(triple)
+	print("{first} {second}\n")
+
+	return sumOf(triple) as ExitCode
+end 'main'
+```
+```stdout
+6 6
+```
+```exitcode
+6
+```
+
+<!-- test: a-cast-tuple-literal-outlives-an-interpolation -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+
+function main() returns ExitCode
+	let triple = (1, 2, 3) as MyTriple
+	let k = triple.0 + 6
+	print("{k}\n")
+	print("{triple.0} {triple.1} {triple.2}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7
+1 2 3
+```
+
+<!-- test: a-cast-tuple-literal-with-a-managed-field-outlives-an-interpolation -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Labelled = (MyWord, MyWord, String)
+
+function main() returns ExitCode
+	let labelled = (1, 2, "abc") as Labelled
+	let k = labelled.0 + 6
+	print("{k}\n")
+	print("{labelled.0} {labelled.1} {labelled.2}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7
+1 2 abc
+```
+
+<!-- test: a-call-result-cast-between-tuple-aliases-outlives-an-interpolation -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias OtherWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+typealias OtherTriple = (OtherWord, OtherWord, OtherWord)
+
+function raw(seed MyWord) returns MyTriple
+	return (seed, seed, seed)
+end 'raw'
+
+function main() returns ExitCode
+	let t = raw(4) as OtherTriple
+	let k = t.0 + 6
+	print("{k}\n")
+	print("{t.0} {t.1} {t.2}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+10
+4 4 4
+```
+
+<!-- test: a-field-read-cast-to-a-tuple-alias-outlives-the-field-being-replaced -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias OtherWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, String)
+typealias OtherTriple = (OtherWord, OtherWord, String)
+
+type Holder
+	var p as MyTriple
+
+	static function create() returns Holder
+		return Self{p: (1, 2, "abc")}
+	end 'create'
+
+	function swap()
+		self.p = (7, 8, "xyz")
+	end 'swap'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let t = h.p as OtherTriple
+	h.swap()
+	let n = 5
+	print("{n}\n")
+	print("{t.0} {t.1} {t.2}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+5
+1 2 abc
+```
+
+<!-- test: a-var-cast-to-a-tuple-alias-outlives-the-var-being-reassigned -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias OtherWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, String)
+typealias OtherTriple = (OtherWord, OtherWord, String)
+
+function make(n MyWord) returns MyTriple
+	return (n, n, "abc{n}")
+end 'make'
+
+function main() returns ExitCode
+	var src = make(1)
+	let t = src as OtherTriple
+	src = make(2)
+	let n = 5
+	print("{n}\n")
+	print("{t.0} {t.1} {t.2} {src.0}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+5
+1 1 abc1 2
+```

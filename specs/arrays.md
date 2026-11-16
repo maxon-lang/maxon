@@ -5837,3 +5837,57 @@ end 'main'
 ```maxoncstderr
 error E3195: <fragment>:3:14: 'ByteArray.create()' needs a capacity: write 'create(0)' for an empty array, 'create(n)' for n zero elements, or 'create(n, zeroed: false)' for an empty array with room for n
 ```
+
+<!-- test: an-array-cast-to-another-alias-outlives-its-var-being-reassigned -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Words = Array with MyWord
+typealias Nums = Array with MyWord
+
+function main() returns ExitCode
+	var ws = Words.create(0)
+	ws.push(1)
+	ws.push(2)
+	let ns = ws as Nums
+	ws = Words.create(0)
+	ws.push(9)
+	let other = Words.create(0)
+	other.push(7)
+	other.push(8)
+	other.push(6)
+	other.push(5)
+	let n = 5
+	print("{n}\n")
+	print("{ns.count()} {ws.count()} {other.count()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+5
+2 1 4
+```
+
+<!-- test: an-array-local-returned-as-another-alias-is-released-once -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Words = Array with MyWord
+typealias Nums = Array with MyWord
+
+function build() returns Nums
+	let ws = Words.create(0)
+	ws.push(1)
+	ws.push(2)
+
+	return ws
+end 'build'
+
+function main() returns ExitCode
+	print("{build().count()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+2
+```

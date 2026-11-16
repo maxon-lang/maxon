@@ -3642,6 +3642,10 @@ extension Parser
 				return self.finishCast(value, source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 			end 'thisExpressionsOwnInteger'
 
+			if self.valueIsAHeapRecord(value) 'aRecordTakesItsOwnReference'
+				return self.finishCast(self.emitRetaggedCastTakingItsOwnReference(value, targetType: targetType, range: SourceRange.ofToken(opTok)), source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
+			end 'aRecordTakesItsOwnReference'
+
 			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, range: SourceRange.ofToken(opTok)), source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
@@ -3890,7 +3894,8 @@ extension Parser
 	// answers.
 	//
 	// A BARE LOCAL GETS A FRESH ID, because renaming the binding's own value in place would make `h` a
-	// `Callback` for its later readers too. The fresh id is a BORROW of the same record.
+	// `Callback` for its later readers too. The fresh id holds its own reference to any record the value
+	// owns.
 	//
 	// ⚠ **A FUNCTION VALUE KEEPS ITS OWN TYPE AND WEARS THE TARGET AS ITS BRAND.** Its own type is its SHAPE,
 	// which every later call (arity, argument types) and the recorded cast door (E3009, whole-program) read;
@@ -3907,7 +3912,7 @@ extension Parser
 			return value
 		end 'thisExpressionsOwnResult'
 
-		let rebranded = self.emitRetaggedCastValue(value, targetType: rebrandedType, range: SourceRange.ofToken(opTok))
+		let rebranded = self.emitRetaggedCastTakingItsOwnReference(value, targetType: rebrandedType, range: SourceRange.ofToken(opTok))
 		self.carryImmortalFunctionMark(rebranded, source: value)
 		self.brandValue(rebranded, brand: rebrandedBrand)
 		return rebranded
@@ -4412,9 +4417,10 @@ extension Parser
 	// its RESULT is the arithmetic identity — one op, minted with a FRESH ValueId typed as the target
 	// — which leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag`
 	// when a later use reads it as `WA.Idx`, and would make `x` unsigned after `let w = x as Word`).
-	// ONE emitter for every reason a cast mints, in both domains. Both directions of the per-instance
-	// case ride it — STAMP (`x as StrWrapper.Idx`, result typed the per-instance alias) and STRIP
-	// (`idx as ExitCode`, result the plain target, so a per-instance Idx decays to the numeric it is).
+	// ONE emitter for every reason a cast mints a value that owns no reference, in both domains. Both
+	// directions of the per-instance case ride it — STAMP (`x as StrWrapper.Idx`, result typed the
+	// per-instance alias) and STRIP (`idx as ExitCode`, result the plain target, so a per-instance Idx
+	// decays to the numeric it is).
 	// `foldConstOperands` folds the op to a single `binOpImm add 0`.
 	//
 	// ⭐ **AND IT HAS A CALLER THAT IS NOT A CAST AT ALL: `emitFieldLoad`'s PROMISE ARM.** Reading
@@ -4464,6 +4470,16 @@ extension Parser
 
 		return result
 	end 'emitRetaggedCastValue'
+
+	function emitRetaggedCastTakingItsOwnReference(value ValueId, targetType MaxonType, range SourceRange) returns ValueId
+		if self.valueIsImmortalFunction(value) or not self.valueIsNonTextAggregate(value) 'ownsNothingToRetain'
+			return self.emitRetaggedCastValue(value, targetType: targetType, range: range)
+		end 'ownsNothingToRetain'
+
+		let retained = self.coOwnAggregateAsTemp(value, range: range)
+		self.retypeValue(retained, valueType: targetType)
+		return retained
+	end 'emitRetaggedCastTakingItsOwnReference'
 
 	// ⭐⭐ **THE FLOAT DOMAIN'S FORM OF THE SAME MINT — `x - 0.0`, AND THE SUBTRACTION IS NOT THE ADDITION.**
 	// IEEE-754 makes `x - (+0.0)` the identity for every input INCLUDING `-0.0`, where `x + 0.0` would answer
