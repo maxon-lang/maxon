@@ -38,6 +38,8 @@ checkout.
   `--state idle` (or `paused`) before you start it.
 - **Stay in the assigned area.** Needing a file outside it is a `PROGRESS` naming the file before you
   edit it; one that another task owns is a `BLOCKED`.
+- **Use the model the `ASSIGN` names.** When it names one (`haiku`, `sonnet` or `opus`), dispatch the
+  task's implementer subagents on that model, in place of their default.
 - **Design rulings come from the orchestrator, not the user.** Every halt that `/land` and
   `/plan-and-land` send "to the user" for a design ruling or an approval is a `QUESTION` to it; wait for
   its `RULING`.
