@@ -39,6 +39,20 @@ It folds in the issue's siblings, open or not yet found. It does not patch the i
 as more per-site bugs. Name the structural cause in what you return, and list the open issues it
 absorbs. A fix that must stay local, because the class is truly one instance, says why.
 
+## Evidence a model round owes
+
+**A model round, and a red team, gates only what its change can see.** When a ruling asks for evidence
+from the region model, it names only:
+- the change's switches and their tests;
+- a hand corpus for the change;
+- one gadget per new surface, at 2,000 programs per oracle;
+- a mutation gate per switch;
+- a verdict diff over the corpus programs the switches can touch;
+- the standing tests.
+
+It does not ask for the full corpora, older suites, large campaigns or re-runs of earlier gadgets. A red
+team aims at the changed surface only.
+
 ## What you return
 
 Your final message is all the orchestrator sees. It holds one or both of these, as the work needs, or a
