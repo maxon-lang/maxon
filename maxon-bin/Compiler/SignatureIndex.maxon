@@ -6770,15 +6770,22 @@ type InFlightNames
 	end 'push'
 
 	function truncate(depth ElementIndex)
-		while self.names.count() > depth 'eachLeavingName'
-			_ = self.depths.remove(try self.names.pop() otherwise panic("InFlightNames.truncate: no name is left above depth {depth}"))
-		end 'eachLeavingName'
+		self.names.truncate(depth)
 	end 'truncate'
 
-	function inFlightDepthOf(name ByteArray) returns CascadeWalkBreak
-		let depth = try self.depths.get(name) otherwise return CascadeWalkBreak.nothingBroke()
-		return CascadeWalkBreak.atDepth(depth)
-	end 'inFlightDepthOf'
+	function depthOf(name ByteArray) returns ElementIndex throws AbsentError
+		let depth = try self.depths.get(name) otherwise throw AbsentError.absent
+
+		if depth >= self.names.count() 'leftSinceItsPush'
+			throw AbsentError.absent
+		end 'leftSinceItsPush'
+
+		if not self.nameAt(depth).equals(name) 'anotherNameAtItsDepth'
+			throw AbsentError.absent
+		end 'anotherNameAtItsDepth'
+
+		return depth
+	end 'depthOf'
 
 	function nameAt(depth ElementIndex) returns immutable ByteArray
 		return try self.names.get(depth) otherwise panic("InFlightNames.nameAt: no name is in flight at depth {depth} of {self.names.count()}")

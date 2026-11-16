@@ -8592,12 +8592,9 @@ function settleOwnershipAnswer(declarations SettledDeclarations, name ByteArray,
 end 'settleOwnershipAnswer'
 
 function settleCutAnswers(declarations SettledDeclarations, walk OwnershipWalk)
-	for (name, walked) in walk.done 'eachWalked'
-		match walked.assumed 'assumed'
-			none then continue
-			at then settleOwnershipAnswer(declarations, name: name, ownership: walked.ownership)
-		end 'assumed'
-	end 'eachWalked'
+	for (name, _) in walk.assumedCuts 'eachCutAnswer'
+		settleOwnershipAnswer(declarations, name: name, ownership: try walk.done.get(name) otherwise panic("settleCutAnswers: `{String.from(name)}` assumed a cut but left no answer"))
+	end 'eachCutAnswer'
 end 'settleCutAnswers'
 
 export union RegionClosure
@@ -8644,21 +8641,9 @@ end 'TypeOwnership'
 
 typealias RegionClosureMap = Map with (ByteArray, RegionClosure)
 
-union AssumedCut
-	none
-	at(ancestor immutable ByteArray)
-end 'AssumedCut'
+typealias TypeOwnershipMap = Map with (ByteArray, TypeOwnership)
 
-type WalkedOwnership
-	let ownership as TypeOwnership
-	let assumed as AssumedCut
-
-	static function create(ownership TypeOwnership, assumed AssumedCut) returns WalkedOwnership
-		return Self{ownership: ownership, assumed: assumed}
-	end 'create'
-end 'WalkedOwnership'
-
-typealias WalkedOwnershipMap = Map with (ByteArray, WalkedOwnership)
+typealias AssumedCutMap = Map with (ByteArray, immutable ByteArray)
 
 let OwnershipWalkRootDepth = 0
 
@@ -8666,53 +8651,61 @@ type OwnershipWalk
 	let mode as HoldingWalk
 	let wantsClosure as bool
 	let path as InFlightNames
-	let done as WalkedOwnershipMap
+	let done as TypeOwnershipMap
+	let assumedCuts as AssumedCutMap
+	let nothingBroke as CascadeWalkBreak
 	var cutReached as CascadeWalkBreak
 
-	static function create(mode HoldingWalk, wantsClosure bool) returns OwnershipWalk
-		return Self{mode: mode, wantsClosure: wantsClosure, path: InFlightNames.create(), done: WalkedOwnershipMap.create(), cutReached: CascadeWalkBreak.nothingBroke()}
+	static function create(mode HoldingWalk, wantsClosure bool, path InFlightNames) returns OwnershipWalk
+		let nothingBroke = CascadeWalkBreak.nothingBroke()
+		return Self{mode: mode, wantsClosure: wantsClosure, path: path, done: TypeOwnershipMap.create(), assumedCuts: AssumedCutMap.create(), nothingBroke: nothingBroke, cutReached: nothingBroke}
 	end 'create'
+
+	function uncutAnswer(name ByteArray) returns TypeOwnership throws AbsentError
+		if self.assumedCuts.contains(name) 'leanedOnACut'
+			throw AbsentError.absent
+		end 'leanedOnACut'
+
+		return try self.done.get(name) otherwise throw AbsentError.absent
+	end 'uncutAnswer'
+
+	function reusedAnswer(name ByteArray) returns TypeOwnership throws AbsentError
+		let ownership = try self.done.get(name) otherwise throw AbsentError.absent
+
+		if let ancestor = try self.assumedCuts.get(name) 'leanedOnACut'
+			self.noteCutAt(ancestor)
+		end 'leanedOnACut'
+
+		return ownership
+	end 'reusedAnswer'
 
 	function noteCut(reached CascadeWalkBreak)
 		self.cutReached = reached.shallowerOf(self.cutReached)
 	end 'noteCut'
 
-	function noteReuse(walked WalkedOwnership)
-		match walked.assumed 'assumed'
-			none then return
-			at(ancestor) then self.noteCutAt(ancestor)
-		end 'assumed'
-	end 'noteReuse'
-
 	function noteCutAt(ancestor ByteArray)
-		let inFlight = self.path.inFlightDepthOf(ancestor)
-		self.noteCut(inFlight if inFlight.reached else CascadeWalkBreak.atDepth(OwnershipWalkRootDepth))
+		self.noteCut(CascadeWalkBreak.atDepth(try self.path.depthOf(ancestor) otherwise OwnershipWalkRootDepth))
 	end 'noteCutAt'
 
 	function enter(name immutable ByteArray) returns CascadeWalkBreak
 		let outerCut = self.cutReached
 		self.path.push(name)
-		self.cutReached = CascadeWalkBreak.nothingBroke()
+		self.cutReached = self.nothingBroke
 		return outerCut
 	end 'enter'
 
 	function leave(name immutable ByteArray, outerCut CascadeWalkBreak, ownership TypeOwnership) returns bool
-		let entered = self.path.inFlightDepthOf(name)
-
-		if not entered.reached 'neverEntered'
-			panic("OwnershipWalk.leave: `{String.from(name)}` left a walk it never entered")
-		end 'neverEntered'
-
-		self.path.truncate(entered.depth)
+		let entered = try self.path.depthOf(name) otherwise panic("OwnershipWalk.leave: `{String.from(name)}` left a walk it never entered")
+		self.path.truncate(entered)
 		let cut = self.cutReached
 		self.cutReached = outerCut.shallowerOf(cut)
+		self.done.upsert(name, value: ownership)
 
-		if cut.restsWithin(entered.depth) 'noCutAboveIt'
-			self.done.upsert(name, value: WalkedOwnership.create(ownership, assumed: AssumedCut.none))
+		if cut.restsWithin(entered) 'noCutAboveIt'
 			return true
 		end 'noCutAboveIt'
 
-		self.done.upsert(name, value: WalkedOwnership.create(ownership, assumed: AssumedCut.at(self.path.nameAt(cut.depth))))
+		self.assumedCuts.upsert(name, value: self.path.nameAt(cut.depth))
 		return false
 	end 'leave'
 end 'OwnershipWalk'

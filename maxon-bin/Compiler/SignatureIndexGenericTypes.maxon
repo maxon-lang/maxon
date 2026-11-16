@@ -1566,11 +1566,15 @@ extension ProgramSignatures
 			return answered
 		end 'answeredWithoutWalking'
 
-		return self.walkedOwnership(subject, name: name, walk: OwnershipWalk.create(HoldingWalk.answering, wantsClosure: wantsClosure))
+		return self.walkedOwnership(subject, name: name, walk: OwnershipWalk.create(HoldingWalk.answering, wantsClosure: wantsClosure, path: InFlightNames.create()))
 	end 'answeredOwnership'
 
 	function subjectOwnership(subject OwnershipSubject, walk OwnershipWalk) returns TypeOwnership
 		let name = self.ownershipSubjectName(subject)
+
+		if let walked = try walk.uncutAnswer(name) 'walkedWithoutACut'
+			return walked
+		end 'walkedWithoutACut'
 
 		if let answered = try self.ownershipWithoutWalk(subject, name: name, walk: walk.mode, wantsClosure: walk.wantsClosure) 'answeredWithoutWalking'
 			return answered
@@ -1623,15 +1627,12 @@ extension ProgramSignatures
 	end 'promiseHandleOwnership'
 
 	function walkedOwnership(subject OwnershipSubject, name immutable ByteArray, walk OwnershipWalk) returns TypeOwnership
-		if let walked = try walk.done.get(name) 'alreadyWalked'
-			walk.noteReuse(walked)
-			return walked.ownership
+		if let walked = try walk.reusedAnswer(name) 'alreadyWalked'
+			return walked
 		end 'alreadyWalked'
 
-		let inFlight = walk.path.inFlightDepthOf(name)
-
-		if inFlight.reached 'onThisWalk'
-			walk.noteCut(inFlight)
+		if let inFlightDepth = try walk.path.depthOf(name) 'onThisWalk'
+			walk.noteCut(CascadeWalkBreak.atDepth(inFlightDepth))
 			return TypeOwnership.holdingNothing()
 		end 'onThisWalk'
 
@@ -3213,10 +3214,8 @@ extension ProgramSignatures
 			return walked
 		end 'alreadyAnswered'
 
-		let inFlight = self.cascadeWalkRoots.inFlightDepthOf(aggregateName)
-
-		if inFlight.reached 'alreadyInFlight'
-			return self.noteCascadeWalkBreakAt(inFlight.depth)
+		if let inFlightDepth = try self.cascadeWalkRoots.depthOf(aggregateName) 'alreadyInFlight'
+			return self.noteCascadeWalkBreakAt(inFlightDepth)
 		end 'alreadyInFlight'
 
 		let frame = self.openCascadeWalk()
@@ -6416,6 +6415,7 @@ extension ProgramSignatures
 	function settleOwnership()
 		self.openParseBand(RowSetOverrideTable.create())
 		let settled = self.mainThreadSettled()
+		let path = InFlightNames.create()
 
 		for name in self.declaredAggregateNames() 'eachAggregate'
 			if settled.settledUniqueHoldings.contains(name) and settled.settledRegionClosures.contains(name) 'alreadySettled'
@@ -6429,7 +6429,7 @@ extension ProgramSignatures
 				continue
 			end 'answeredWithoutWalking'
 
-			let walk = OwnershipWalk.create(HoldingWalk.settling, wantsClosure: true)
+			let walk = OwnershipWalk.create(HoldingWalk.settling, wantsClosure: true, path: path)
 
 			if not self.walkedOwnership(subject, name: name, walk: walk).cause.holdsAUnique() 'aRootHoldingNothing'
 				settleCutAnswers(settled, walk: walk)

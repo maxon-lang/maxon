@@ -2914,13 +2914,58 @@ from the parent commit:
 
 The net term read ×3.76, ×3.81, ×3.87 per doubling and reads ×2.86, ×2.30, ×2.13. `unique`'s `signatures` CPU at
 depth 128 falls from 6.31 G to 2.02 G ticks, level with `control`'s 2.10 G. `control` rises by 10,646, 17,018, 29,726
-and 55,106 allocations, ×1.60, ×1.75, ×1.85 per doubling: every ownership walk and the cascade walks' roots keep an
-in-flight stack with a depth map, each walked answer carries the cut it assumed, and a closure is stored where a bool
-was; how the rise splits between them was not measured. At the default depth, N = 250 to 2,000, `unique`'s
+and 55,106 allocations, ×1.60, ×1.75, ×1.85 per doubling. At the default depth, N = 250 to 2,000, `unique`'s
 `signatures` reads 1,747,270, 1,911,909, 2,255,431, 2,931,122 (before 1,776,797 to 3,184,772), `parse` rises by 48,
-176, 504 and 1,000 allocations in both modes, and `semanticCheck` is +66 at every rung in both modes, a fixed cost
-not attributed. Every ladder program compiles and exits 0. The first compile after the rebuild also rebuilt the
-library cache (0.6 M more allocations in `signatures`), so the depth-16 `unique` row is a second compile.
+176, 504 and 1,000 allocations in both modes, and `semanticCheck` is +66 at every rung in both modes. Every ladder
+program compiles and exits 0. The first compile after the rebuild also rebuilt the library cache (0.6 M more
+allocations in `signatures`), so the depth-16 `unique` row is a second compile.
+
+**Where `control`'s rise came from, and its removal.** `--allocations-by-tag` on `--debugstream` builds of the parent
+and of this change, `control`, N = 250, depth 128, `signatures` +55,237:
+
+- `CascadeWalkBreak` +30,517. `InFlightNames.inFlightDepthOf` returned a fresh record per call, a miss included, and
+  `walkedOwnership` asked it on every type it entered, `OwnershipWalk.leave` again, and `enter` reset the cut with
+  one more: three records per walked type.
+- `WalkedOwnership` +9,990: the record pairing each `done` entry with its assumed cut, one per walked type.
+- `TypeOwnership` +9,128 and `UniqueCause` +9,108. A type is now settled as it returns, so a second edge to it in the
+  same walk (each chain type has three parents) took `ownershipWithoutWalk`, which builds a new `TypeOwnership` from
+  the settled tables, instead of the walk's own answer.
+- `ArrayRecord` +1,596, `ElementBuffer` +1,221, `InFlightNames` +547: a stack and a depth map per walk, 547 walks.
+- `RegionClosure` −5,212: a settled closure is read back, where a `plainPart` was rebuilt per read.
+
+`parse` moved only by `ArrayRecord` and `ElementBuffer` in equal numbers (+4 each at N = 250, +460 at 2,000), the four
+arrays of a `Map` table. The cascade walk's root depth map removed each root as it left, and `Map` counts a tombstone
+toward its load, so with 16 slots about every 12th root push rehashed the table at the same capacity.
+`semanticCheck`'s +66 is six answering walks, each 4 `CascadeWalkBreak`, 3 `ArrayRecord`, 2 `ElementBuffer`, one
+`InFlightNames` and one `WalkedOwnership`.
+
+The follow-up keeps a name's depth in the map until it is pushed again and checks it against the stack
+(`InFlightNames.depthOf`, which returns the depth and allocates nothing), so leaving a walk only shortens the roster;
+keeps `done` as plain answers and the cut-leaning ones in their own `assumedCuts` map; reuses the walk's own
+cut-free answer before the settled tables (`OwnershipWalk.uncutAnswer`); shares one "nothing broke" record per walk;
+and gives the settle's root walks one stack between them. Same ladders, where "parent" is the follow-up's base tree
+with this change's compiler diff reversed:
+
+| depth | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|
+| `control` `signatures`, parent | 1,877,352 | 2,152,929 | 2,703,859 | 3,805,460 |
+| `control` `signatures`, follow-up | 1,869,623 | 2,144,703 | 2,694,559 | 3,793,616 |
+| `unique` `signatures`, follow-up | 1,869,799 | 2,145,086 | 2,695,256 | 3,795,305 |
+| net, follow-up | 176 | 383 | 697 | 1,689 |
+
+`control` now reads 7,729 to 11,844 below the parent, and the net term ×2.18, ×1.82, ×2.42 per doubling. At the
+default depth, N = 250 to 2,000, `parse` reads 24, 77, 462 and 779 below the parent in both modes (the cascade walk's
+in-flight check allocated a record on every miss in the parent too), `control`'s `signatures` 7,318 to 12,819 below,
+and `unique`'s 1,732,126, 1,893,387, 2,229,732, 2,891,363. `semanticCheck` is +72 at every rung: each of the six
+answering walks builds its own stack, depth map, `assumedCuts` map and "nothing broke" record, the fixed price of
+tracking cuts.
+
+One more term moved with this change and stays: `frontEndPool` reads +2,030, 3,182, 5,486 and 10,094 in `control` at
+depth 16 to 128, the same with 1, 2 or 6 processors, so once per compile, and exactly 2 allocations per type the
+deeper chains add. The one once-per-compile copy in that bracket is `publishedDeclarations`, the clone of the settled
+tables handed to the front-end workers, and `settledRegionClosures` is the one table whose value changed, from a bool
+to a closure with its holder, part and held type: that copy is the price of the workers reading a closure's detail
+instead of walking for it. The `--debugstream` builds do not show this term, so it is not tagged.
 
 ### Result — 2026-11-16, a row carries its corpus and tree digests, and a delta is withheld across a corpus or a place
 
