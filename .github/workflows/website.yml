@@ -19,8 +19,9 @@
 # records it. The connection points at the archived `maxon-lang/maxon.dev`, so nothing fires from it
 # regardless; branch control is what keeps that true if anyone pushes there.
 #
-# ⚠ NODE 22, NOT 20. Astro 7's minimum is 22.12, while `vscode-extension.yml` pins 20 for a
-# TypeScript build that has no reason to move. Per-workflow `setup-node` is what lets both be right.
+# ⚠ NODE 24, AND 22.12 FOR THE LOCKFILE, NOT 20. Astro 7's minimum is 22.12, while
+# `vscode-extension.yml` pins 20 for a TypeScript build that has no reason to move. Per-workflow
+# `setup-node` is what lets both be right.
 
 name: website
 
@@ -57,6 +58,21 @@ defaults:
     working-directory: website
 
 jobs:
+  # Exactly CONTRIBUTING.md's minimum Node, so the npm 10 it ships must accept the lockfile; `build`
+  # covers npm 11. Raising this to 24 leaves npm 10 untested.
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - run: npm ci --ignore-scripts
+
   build:
     runs-on: ubuntu-latest
     steps:
