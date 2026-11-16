@@ -1573,9 +1573,10 @@ extension Parser
 			direct then break
 		end 'spawning'
 
+		try self.requireOpenedRootInsideTheOpenBlock(firstValue, pathText: self.tokenTextFrom(firstSpan.startIndex, endIndex: firstSpan.endIndex), line: firstTok.line, column: firstTok.column)
 		let rootName = self.openedRootName(firstValue, openedTok: firstTok)
 
-		if let second = try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: first + 1) 'aSecondRegion'
+		if let second =try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: first + 1) 'aSecondRegion'
 			let secondTok = self.tokenAt(self.openedPositionSpan(second, argAnchors: argAnchors, receiver: receiver).startIndex)
 			let secondName = self.openedRootName(try args.get(second) otherwise panic("openIsolatedPositions: args.get OOB at {second}"), openedTok: secondTok)
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: self.twoRootsMessage(rootName, second: secondName), line: secondTok.line, column: secondTok.column)
@@ -2184,7 +2185,7 @@ extension Parser
 
 		if declared == ResultCapability.isolated 'anIsolatedResult'
 			self.setValueCapability(result, capability: ValueCapability.isolated)
-			self.carryWindowBirth(result, sources: args)
+			self.carryWindowBirth(result, sources: self.argumentsWhoseBirthTheResultCarries(callee, args: args, receiver: receiver))
 			return
 		end 'anIsolatedResult'
 
@@ -2271,6 +2272,24 @@ extension Parser
 
 		notes.undecidedResultOps = kept
 	end 'forgetUndecidedResult'
+
+	// Sound only because `checkWindowReceiversKeepNothing` refuses a consuming receiver that may keep `self`;
+	// one that only ends owns nothing the result holds.
+	function argumentsWhoseBirthTheResultCarries(callee immutable ByteArray, args ValueIdArray, receiver ReceiverArg) returns ValueIdArray
+		let declaration = try self.declarationNameableHere(callee) otherwise return args
+
+		if not self.receiverIsPassed(receiver) or declaration.selfCapability != ParamCapability.consuming 'noConsumedReceiver'
+			return args
+		end 'noConsumedReceiver'
+
+		let rest = ValueIdArray.create(args.count(), zeroed: false)
+
+		for position in 1 upto args.count() 'eachOtherArgument'
+			rest.push(try args.get(position) otherwise panic("argumentsWhoseBirthTheResultCarries: args.get OOB at {position} below the count just read"))
+		end 'eachOtherArgument'
+
+		return rest
+	end 'argumentsWhoseBirthTheResultCarries'
 
 	function argumentsThatCanReachTheResult(callee immutable ByteArray, args ValueIdArray, argLabels NameRoster, receiver ReceiverArg) returns ValueIdArray
 		let declaration = try self.declarationNameableHere(callee) otherwise return args
@@ -2571,6 +2590,8 @@ extension Parser
 		if self.valueIsBesideAnotherStatesWindow(target) 'anotherStatesData'
 			try self.requireHolderCapabilityWritable(ValueCapability.paused, pathText: rootText, action: "opened", joinedAtALoop: false, line: targetTok.line, column: targetTok.column)
 		end 'anotherStatesData'
+
+		try self.requireOpenedRootInsideTheOpenBlock(target, pathText: rootText, line: targetTok.line, column: targetTok.column)
 
 		var holderValue = 0 as ValueId
 		var holderField = 0 as FieldIndex
@@ -2954,6 +2975,7 @@ extension Parser
 			end 'alreadyOpen'
 
 			let rootName = try self.layoutOfOrigin(origin).fieldNames.get(origin.field) otherwise panic("openStatementWindowThrough: fieldNames.get OOB at {origin.field}")
+			self.noteOpenedRootOutsideTheOpenBlock(box, range: range)
 			self.noteSecondRootOfAStatement(origin.holder, field: origin.field, name: rootName, range: range)
 			windows.push(OpenWindow.create(rootName, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.oneStatement, floor: floor, openedValue: box, holderValue: origin.holder, holderField: origin.field, opensAField: true, ownerStatement: self.bodyState.statementStart))
 			return
@@ -2967,6 +2989,7 @@ extension Parser
 			return
 		end 'aNumberReadFromAnIsolatedParameter'
 
+		self.noteOpenedRootOutsideTheOpenBlock(box, range: range)
 		windows.push(OpenWindow.create(IsolatedValueLabel, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.oneStatement, floor: floor, openedValue: box, holderValue: 0, holderField: 0, opensAField: false, ownerStatement: self.bodyState.statementStart))
 	end 'openStatementWindowThrough'
 

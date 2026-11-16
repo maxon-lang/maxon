@@ -416,6 +416,20 @@ function rowsFrom(lines LineArray, maker KeyMaker) returns RowArray
 	return rows
 end 'rowsFrom'
 
+function textsOf(rows RowArray) returns isolated LineArray
+	let texts = LineArray.create(0) as isolated LineArray
+
+	modify texts 'write'
+		texts.reserve(rows.count())
+
+		for row in rows 'eachRow'
+			texts.push(row.text)
+		end 'eachRow'
+	end 'write'
+
+	return texts
+end 'textsOf'
+
 type Sorter
 	var settings as immutable SortSettings
 
@@ -424,21 +438,9 @@ type Sorter
 	end 'create'
 
 	export function sortLines(lines isolated LineArray) returns isolated LineArray
-		let sorted = LineArray.create(0) as isolated LineArray
-
 		modify lines 'read'
-			let rows = self.sortRows(lines)
-
-			modify sorted 'write'
-				sorted.reserve(rows.count())
-
-				for row in rows 'eachRow'
-					sorted.push(row.text)
-				end 'eachRow'
-			end 'write'
+			return textsOf(self.sortRows(lines))
 		end 'read'
-
-		return sorted
 	end 'sortLines'
 
 	function sortRows(lines LineArray) returns RowArray

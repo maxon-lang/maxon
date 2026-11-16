@@ -317,8 +317,8 @@ type Pair
 	end 'create'
 
 	function both()
-		let spare = Box.create(0) as isolated Box
 		modify self.left 'outer'
+			let spare = Box.create(0) as isolated Box
 			modify spare 'inner'
 				self.left.n = 5
 			end 'inner'

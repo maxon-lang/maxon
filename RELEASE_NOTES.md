@@ -54,6 +54,14 @@ release's version as its heading when the release is cut.
   Fix: do the write before or after the `match`, or carry what the arm decided in a variable that holds a number
   or a value and write the record afterwards.
 
+- Inside a `modify` or `acquire` block, an `isolated` local or parameter declared outside the block cannot be
+  opened: passing it to a plain parameter or as a receiver, reading or writing through it, and a nested
+  `modify` of it are E3199 (`'outer' cannot be opened: the value that holds it is read-only while 'w' is open`).
+  It still moves into an `isolated` parameter or slot, is sent, or is merged. A `consuming self` method that
+  builds a one-payload union around `self` keeps it, so such a value is E3201 as the receiver.
+  Fix: open the value before or after the block, or move it in with `merge`, an `isolated` parameter or an
+  `isolated` slot.
+
 - `module` is not a visibility modifier: it is an ordinary identifier, and written before a declaration it is
   a syntax error (`E2001 … Expected function declaration, got 'module'`; in a type body `E2010 … Expected
   'function' but got 'module'`). An unmarked declaration has the visibility `module` gave.

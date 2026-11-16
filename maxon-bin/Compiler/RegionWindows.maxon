@@ -1430,6 +1430,31 @@ function valueIsOutsideInnermostWindow(windows WindowStack, value ValueId) retur
 	end 'standing'
 end 'valueIsOutsideInnermostWindow'
 
+function innermostStrandBlockPosition(windows WindowStack) returns ElementIndex throws AbsentError
+	var position = windows.count()
+
+	while position > 0 'outwardFromTheInnermost'
+		position = position - 1
+
+		if windowIsAStrandBlock(try windows.get(position) otherwise panic("innermostStrandBlockPosition: windows.get OOB at {position} below the count just read")) 'anExplicitBlock'
+			return position
+		end 'anExplicitBlock'
+	end 'outwardFromTheInnermost'
+
+	throw AbsentError.absent
+end 'innermostStrandBlockPosition'
+
+function valueIsOutsideInnermostBlock(windows WindowStack, value ValueId) returns bool
+	let position = try innermostStrandBlockPosition(windows) otherwise return false
+
+	return match standingInWindowAt(windows, position: position, value: value) 'standing'
+		anEnclosingRoot or
+		outerData gives true
+		theOpenedRoot or
+		bornInside gives false
+	end 'standing'
+end 'valueIsOutsideInnermostBlock'
+
 function keepingPositionText(callee ByteArray, parameter ByteArray) returns String
 	return "the parameter '{displayParamName(parameter)}' of '{String.from(callee)}', which keeps it"
 end 'keepingPositionText'

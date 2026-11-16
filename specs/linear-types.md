@@ -6445,3 +6445,61 @@ fin 6
 ```exitcode
 0
 ```
+
+<!-- test: an-outer-isolated-linear-value-cannot-enter-a-modify-block-through-a-consuming-receiver-that-builds-a-union-around-it -->
+`wrap` takes `consuming self` and builds a `Sent` around it, so the call moves `v` into the open region just as a keeping parameter does. A union with one payload is held in a word, and the word still keeps what it is built from.
+
+```maxon
+typealias Code = int(0 to 999)
+
+union Sent
+	delivered
+	notSent(r Resp)
+end 'Sent'
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+
+	function wrap(consuming self) returns Sent
+		return Sent.notSent(self)
+	end 'wrap'
+end 'Resp'
+
+type Bag
+	var n as Code
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Bag'
+
+function settle(s Sent)
+	match s 'x1'
+		delivered then break
+		notSent(r) then r.fin()
+	end 'x1'
+end 'settle'
+
+function main() returns ExitCode
+	let v = Resp.create(1) as isolated Resp
+	let bx = Bag.create() as isolated Bag
+
+	modify bx 'w'
+		settle(v.wrap())
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:46:10: an isolated value from outside 'w' cannot be moved into the parameter 'self' of 'Resp.wrap', which keeps it while 'w' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```

@@ -106,6 +106,7 @@ function scanParamAliases(ir MaxonModule, func IrFunction, captured CapturedLoad
 			retainOf(operand) then noteRetain(captured, retainedFrom: retainedFrom, func: func, op: op, operand: operand)
 			none or
 			store or
+			wordConstruct or
 			wordPayload then break
 		end 'read'
 	end 'eachOp'
@@ -254,6 +255,7 @@ type ParamSources
 				wordPayload(result, holder) then self.noteWordPayload(result, holder: holder)
 				store or
 				retainOf or
+				wordConstruct or
 				none then break
 			end 'read'
 		end 'eachOp'
@@ -383,6 +385,7 @@ type ParamSources
 
 			match slotReadOfOp(op, opIndex: opIdx) 'read'
 				store(addr, _, value) then self.noteStoredValue(row, addr: addr, value: value)
+				wordConstruct(payload) then self.noteWordUnionPayload(row, payload: payload)
 				load or
 				wordPayload or
 				retainOf then break
@@ -415,6 +418,14 @@ type ParamSources
 			row.movedUnique = row.movedUnique or sources
 		end 'mayMoveAUnique'
 	end 'noteMovedValue'
+
+	// A one-payload union is a tagged word, so no store op records its payload; without this arm a parameter
+	// wrapped in one reads as kept by nothing.
+	function noteWordUnionPayload(row ParamWriteSeedRow, payload ValueId)
+		if valueCarriesACapability(self.project, func: self.func, value: payload) 'aPayloadThatHoldsRecords'
+			self.noteMovedValue(row, value: payload, sources: self.maskOf(payload))
+		end 'aPayloadThatHoldsRecords'
+	end 'noteWordUnionPayload'
 
 	function noteStoredValue(row ParamWriteSeedRow, addr ValueId, value ValueId)
 		self.noteMovedValue(row, value: value, sources: self.maskOf(value))
@@ -713,14 +724,15 @@ type ParamSourceIndex
 	end 'ofFunction'
 end 'ParamSourceIndex'
 
-// What an op does with a field slot: reads it, stores into it, or retains a value — which a `let` bound out of a
-// rebindable slot is — or none of these.
+// What an op does with a field slot: reads it, stores into it, retains a value — which a `let` bound out of a
+// rebindable slot is — builds or reads a word union's payload, or none of these.
 union SlotRead
 	none
 	load(opIndex ElementIndex, addr ValueId, offset ByteOffset)
 	store(addr ValueId, offset ByteOffset, value ValueId)
 	retainOf(operand ValueId)
 	wordPayload(result ValueId, holder ValueId)
+	wordConstruct(payload ValueId)
 end 'SlotRead'
 
 function slotReadOfOp(op MaxonOp, opIndex ElementIndex) returns SlotRead
@@ -729,7 +741,7 @@ function slotReadOfOp(op MaxonOp, opIndex ElementIndex) returns SlotRead
 		storeIndirect(addr, offset, value, _) then return SlotRead.store(addr, offset: offset, value: value)
 		call(_, callee, args, _, _, _, _) then return SlotRead.retainOf(try args.get(0) otherwise panic("slotReadOfOp: a retain has no operand")) if ownershipBookkeepingCallee(callee) and args.count() > 0 else SlotRead.none
 		holdValue(_, held, _, _, _) then return SlotRead.retainOf(held)
-		binOp(result, lhs, _, binary) then return SlotRead.wordPayload(result, holder: lhs) if binary == MaxonBinOp.sub else SlotRead.none
+		binOp(result, lhs, _, binary) then return wordUnionSlotRead(result, lhs: lhs, binary: binary)
 		literal or
 		ret or
 		retVoid or
@@ -766,3 +778,23 @@ function slotReadOfOp(op MaxonOp, opIndex ElementIndex) returns SlotRead
 		holdEnd then return SlotRead.none
 	end 'op'
 end 'slotReadOfOp'
+
+function wordUnionSlotRead(result ValueId, lhs ValueId, binary MaxonBinOp) returns SlotRead
+	return match binary 'binary'
+		sub gives SlotRead.wordPayload(result, holder: lhs)
+		bitOr gives SlotRead.wordConstruct(lhs)
+		add or
+		mul or
+		div or
+		mod or
+		bitAnd or
+		bitXor or
+		shl or
+		shr or
+		shrLogical or
+		min or
+		max or
+		divUnsigned or
+		modUnsigned gives SlotRead.none
+	end 'binary'
+end 'wordUnionSlotRead'

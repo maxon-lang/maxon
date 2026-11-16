@@ -354,7 +354,7 @@ error E3207: <fragment>:31:16: 'view' needs a writable parameter 'tV'; 'tV' is r
 ```
 
 <!-- test: model-finding-ad-modify-nested-window -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `modify-nested-window` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `modify-nested-window` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -409,7 +409,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:47:15: an isolated value from outside 'm2' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm2' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+error E3199: <fragment>:46:10: 'by' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-finding-ad-modify-in-if-both -->
@@ -474,6 +474,62 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:50:15: an isolated value from outside 'm2' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm2' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
+<!-- test: model-finding-ad-recv-wrap-in-window -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `recv-wrap-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	modify bx 'm1'
+		useS(v.wrap())
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:45:8: an isolated value from outside 'm1' cannot be moved into the parameter 'self' of 'Rl.wrap', which keeps it while 'm1' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
 ```
 
 <!-- test: model-finding-ad-recv-fin-in-window -->
@@ -1015,7 +1071,7 @@ error E3201: <fragment>:33:8: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-finding-ad-h1-box -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3202. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `h1-box` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h1-box` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1047,7 +1103,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3202: <fragment>:25:11: 'wrap(v)' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
+error E3199: <fragment>:25:16: 'v' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-finding-ad-v-state-modify-ok -->
@@ -1282,7 +1338,7 @@ error E3201: <fragment>:37:14: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-finding-ad-tok-unique-into-window-lend -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `tok-unique-into-window-lend` of redteamAD/t8.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `tok-unique-into-window-lend` of redteamAD/t8.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1327,7 +1383,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:38:8: 'h' is mutable outside 'tV'; a call into an isolated region takes values, immutable or isolated
+error E3199: <fragment>:38:15: 'tV' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-finding-ae-union-payload-launder -->
@@ -2784,8 +2840,55 @@ end 'main'
 error E3204: <fragment>:33:3: 'r' holds a record from outside 'm1' and cannot be reassigned while 'm1' is open
 ```
 
+<!-- test: model-hand-ab-w-modify-nested -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-nested` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Box
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.create(0) as isolated Box
+	let b = Box.create(1) as isolated Box
+	modify a 'm1'
+		let r = Resp.create(0)
+		modify b 'm2'
+			r.fin(1)
+		end 'm2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:34:10: 'b' cannot be opened: the value that holds it is read-only while 'm1' is open
+```
+
 <!-- test: model-hand-ab-w-modify-nested-consume-twice -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-modify-nested-consume-twice` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-nested-consume-twice` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2829,7 +2932,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:37:3: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+error E3199: <fragment>:34:10: 'b' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-hand-ab-w-modify-live-across-window -->
@@ -3486,6 +3589,62 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:50:15: an isolated value from outside 'm2' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm2' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
+<!-- test: model-hand-ad-hole-receiver -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-receiver` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sw
+	ok
+	notSent(r Rw)
+end 'Sw'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Rw
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function wrap(consuming self) returns Sw
+		return Sw.notSent(self)
+	end 'wrap'
+end 'Rw'
+
+function useSw(s Sw)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useSw'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rw.create(0) as isolated Rw
+	modify bx 'm1'
+		useSw(v.wrap())
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:45:9: an isolated value from outside 'm1' cannot be moved into the parameter 'self' of 'Rw.wrap', which keeps it while 'm1' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
 ```
 
 <!-- test: model-hand-ae-method-root-window -->
@@ -4926,8 +5085,65 @@ end 'main'
 error E3201: <fragment>:58:30: 'hi' is mutable outside 'o'; a call into an isolated region takes values, immutable or isolated
 ```
 
+<!-- test: model-hand-af-u-direct-keep -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `u-direct-keep` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hs
+	var item as isolated Bx
+	var keep as Bx
+
+	static function create(item isolated Bx, keep Bx) returns Self
+		return Self{item: item, keep: keep}
+	end 'create'
+end 'Hs'
+
+type Sx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeB(b isolated Bx)
+		b.n = 1
+	end 'takeB'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Sx'
+
+function keepB(b Bx)
+	b.n = 7
+end 'keepB'
+
+function main() returns ExitCode
+	let hi = Hs.create(Bx.create(1), keep: Bx.create(2)) as isolated Hs
+	let rb = Bx.create(5) as isolated Bx
+	let _ = spawn Sx.create(0)
+	modify hi 'm1'
+		keepB(rb)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:46:9: 'rb' cannot be opened: the value that holds it is read-only while 'm1' is open
+```
+
 <!-- test: model-hand-af-u-direct-keep-into -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `u-direct-keep-into` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `u-direct-keep-into` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4980,7 +5196,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:46:19: 'hi' is mutable outside 'rb'; a call into an isolated region takes values, immutable or isolated
+error E3199: <fragment>:46:12: 'rb' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-hand-af-n9-modify-then-match -->
@@ -7455,7 +7671,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-f1-control-iso-payload -->
-The model (`core-m3w-fa13`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `f1-control-iso-payload` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-ONECALL`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f1-control-iso-payload` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7521,7 +7737,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:58:28: 'h' is mutable outside 'y'; a call into an isolated region takes values, immutable or isolated
+error E3199: <fragment>:58:22: 'y' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-hand-ag-f1-control-plain-var -->
@@ -8766,8 +8982,96 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ag-k3-nested-windows-both -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `k3-nested-windows-both` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias BxArray = Array with Bx
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hw
+	var arr as BxArray
+	var k as Bx
+
+	static function create(arr BxArray, k Bx) returns Self
+		return Self{arr: arr, k: k}
+	end 'create'
+end 'Hw'
+
+function main() returns ExitCode
+	let h = Wo.create(Bx.create(0), item: Bx.create(1)) as isolated Wo
+	let _ = Hw.create(BxArray.create(0), k: Bx.create(2)) as isolated Hw
+	let g = Wo.create(Bx.create(0), item: Bx.create(1)) as isolated Wo
+	let u = Mp.m1(Bx.create(1)) as isolated Mp
+	modify g 'm1'
+		modify h 'm2'
+			match u 'x3'
+				m0(x) then x.fin(1)
+				m1(y) then h.keep = y
+			end 'x3'
+		end 'm2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:72:10: 'h' cannot be opened: the value that holds it is read-only while 'm1' is open
+```
+
 <!-- test: model-hand-ag-k4-nested-windows-outer-store -->
-The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3197. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k4-nested-windows-outer-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `k4-nested-windows-outer-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8851,7 +9155,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:75:16: cannot write 'keep' through 'g', which is read-only while 'm2' is open
+error E3199: <fragment>:72:10: 'h' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-hand-ag-beh-win-mr-modify-item-store -->
@@ -10973,6 +11277,93 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: model-hand-ag-l10-wrap-in-nested-modify -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `l10-wrap-in-nested-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mx
+	m0(x Rl)
+	m1(y isolated Bx)
+end 'Mx'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Hx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Hx'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let h = Hx.create(0) as isolated Hx
+	let g = Hx.create(1) as isolated Hx
+	let u = Mx.m0(Rl.create(1)) as isolated Mx
+	modify h 'm1'
+		modify g 'm2'
+			match u 'x3'
+				m0(x) then useS(x.wrap())
+				m1(y) then takeB(y)
+			end 'x3'
+		end 'm2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:71:10: 'g' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-hand-ag-l14-plain-var-union-in-modify -->

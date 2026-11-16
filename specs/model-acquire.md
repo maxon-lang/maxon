@@ -3901,6 +3901,75 @@ end 'main'
 error E3201: <fragment>:33:9: one statement reaches through two isolated values, 'a' and 'r'; a statement opens one isolated value, so open one with `modify` or split the statement
 ```
 
+<!-- test: model-finding-ad-recv-wrap-in-acquire-modify -->
+The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `recv-wrap-in-acquire-modify` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type S
+	var k as Num
+	var b as isolated Bx
+
+	static function create(k Num, b isolated Bx) returns Self
+		return Self{k: k, b: b}
+	end 'create'
+end 'S'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let s = spawn S.create(0, b: Bx.create(0))
+	acquire s 'a1'
+		let v = Rl.create(0) as isolated Rl
+		modify s.b 'm3'
+			useS(v.wrap())
+		end 'm3'
+	end 'a1' otherwise 's2'
+		let _ = 0 as Num
+	end 's2'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:55:9: an isolated value from outside 'm3' cannot be moved into the parameter 'self' of 'Rl.wrap', which keeps it while 'm3' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
 <!-- test: model-finding-ad-l-state-method-acquire-window -->
 The model (`core-m3w-fa13`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `l-state-method-acquire-window` of redteamAD/t6.txt, in capmodel `reggio/REPORTRTAD.txt`.
 

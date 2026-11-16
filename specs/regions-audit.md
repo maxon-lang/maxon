@@ -24,8 +24,9 @@ mutable-only.
 ```maxon
 typealias LineArray = Array with String
 
-function f(lines isolated LineArray, other isolated LineArray)
+function f(lines isolated LineArray)
 	modify lines 'outer'
+		let other = LineArray.create(0) as isolated LineArray
 		modify other 'inner'
 			_ = freeze lines
 		end 'inner'
@@ -37,7 +38,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:7:15: 'lines' is used as mutable; freeze a copy: `freeze lines.clone()`
+error E3200: <fragment>:8:15: 'lines' is used as mutable; freeze a copy: `freeze lines.clone()`
 ```
 
 <!-- test: writing-an-enclosing-windows-root-inside-a-nested-window-is-refused -->
@@ -46,8 +47,9 @@ error E3200: <fragment>:7:15: 'lines' is used as mutable; freeze a copy: `freeze
 ```maxon
 typealias LineArray = Array with String
 
-function f(lines isolated LineArray, other isolated LineArray)
+function f(lines isolated LineArray)
 	modify lines 'outer'
+		let other = LineArray.create(0) as isolated LineArray
 		modify other 'inner'
 			lines.push("x")
 		end 'inner'
@@ -59,7 +61,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:7:10: cannot write through a read-only value while 'inner' is open
+error E3197: <fragment>:8:10: cannot write through a read-only value while 'inner' is open
 ```
 
 <!-- test: a-result-through-an-interface-requirement-is-read-only -->

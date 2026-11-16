@@ -2572,3 +2572,260 @@ end 'main'
 ```maxoncstderr
 error E3197: <fragment>:30:12: cannot write 'part' through 'holder(frozen).part', which is immutable
 ```
+
+<!-- test: a-call-inside-a-modify-block-cannot-open-an-isolated-local-from-outside-it -->
+`outer` is `isolated` and lives outside `w`, so it is read-only there: handing it to `reset`, which writes its parameter, would open a second region while `shelf` is open.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+type Shelf
+	var item as isolated Gauge
+	var spare as Gauge
+
+	static function create() returns Self
+		return Self{item: Gauge.create(1), spare: Gauge.create(2)}
+	end 'create'
+end 'Shelf'
+
+function reset(g Gauge)
+	g.n = 7
+end 'reset'
+
+function main() returns ExitCode
+	let shelf = Shelf.create() as isolated Shelf
+	let outer = Gauge.create(5) as isolated Gauge
+
+	modify shelf 'w'
+		reset(outer)
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:30:9: 'outer' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-write-inside-a-modify-block-cannot-open-an-isolated-local-from-outside-it -->
+A store through an `isolated` local that lives outside the block opens that local, which the block does not allow.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+type Shelf
+	var item as isolated Gauge
+	var spare as Gauge
+
+	static function create() returns Self
+		return Self{item: Gauge.create(1), spare: Gauge.create(2)}
+	end 'create'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create() as isolated Shelf
+	let outer = Gauge.create(5) as isolated Gauge
+
+	modify shelf 'w'
+		outer.n = 3
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:26:3: 'outer' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-method-call-inside-a-modify-block-cannot-open-an-isolated-receiver-from-outside-it -->
+The receiver of a call is opened for the call, so an `isolated` local from outside the block is refused as a receiver too.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function bump()
+		self.n = 1
+	end 'bump'
+end 'Gauge'
+
+type Shelf
+	var item as isolated Gauge
+	var spare as Gauge
+
+	static function create() returns Self
+		return Self{item: Gauge.create(1), spare: Gauge.create(2)}
+	end 'create'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create() as isolated Shelf
+	let outer = Gauge.create(5) as isolated Gauge
+
+	modify shelf 'w'
+		outer.bump()
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:30:3: 'outer' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-read-inside-a-modify-block-cannot-open-an-isolated-local-from-outside-it -->
+Reading a field through an `isolated` local from outside the block opens it for the statement, which the block does not allow.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+type Shelf
+	var item as isolated Gauge
+	var spare as Gauge
+
+	static function create() returns Self
+		return Self{item: Gauge.create(1), spare: Gauge.create(2)}
+	end 'create'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create() as isolated Shelf
+	let outer = Gauge.create(5) as isolated Gauge
+
+	modify shelf 'w'
+		let seen = outer.n
+		shelf.spare.n = seen
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:26:14: 'outer' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-nested-modify-cannot-open-an-isolated-local-from-outside-the-enclosing-block -->
+A nested `modify` leaves the root of every enclosing block read-only, and an `isolated` local declared outside the enclosing block is one more root it cannot open.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+type Shelf
+	var item as isolated Gauge
+	var spare as Gauge
+
+	static function create() returns Self
+		return Self{item: Gauge.create(1), spare: Gauge.create(2)}
+	end 'create'
+end 'Shelf'
+
+function main() returns ExitCode
+	let outer = Shelf.create() as isolated Shelf
+	let inner = Shelf.create() as isolated Shelf
+
+	modify outer 'w'
+		modify inner 'v'
+			inner.spare.n = 1
+		end 'v'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:26:10: 'inner' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: an-isolated-local-from-outside-a-modify-block-moves-into-an-isolated-parameter-and-block-locals-open -->
+An outer `isolated` local goes where an `isolated` value goes (an `isolated` parameter, `merge`), and an `isolated` local the block creates is opened like any block local.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Gauge'
+
+type Shelf
+	var item as isolated Gauge
+	var spare as Gauge
+
+	static function create() returns Self
+		return Self{item: Gauge.create(1), spare: Gauge.create(2)}
+	end 'create'
+end 'Shelf'
+
+function adopt(g isolated Gauge) returns Code
+	return g.n
+end 'adopt'
+
+function main() returns ExitCode
+	let shelf = Shelf.create() as isolated Shelf
+	let outer = Gauge.create(5) as isolated Gauge
+	let merged = Gauge.create(6) as isolated Gauge
+	var total = 0 as Code
+
+	modify shelf 'w'
+		let inside = Gauge.create(7) as isolated Gauge
+		inside.bump()
+		total = total + inside.n
+		shelf.spare = merge merged
+		total = total + adopt(outer)
+	end 'w'
+
+	print("{total} {shelf.spare.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+13 6
+```

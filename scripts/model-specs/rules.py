@@ -17,7 +17,7 @@ RULE_CODES = {
     "R-LIN-ASYNC": {"E3224"},
     "R18-UNIQUE": {"E3214"},
     "C-STORE": {"E3196", "E3201"},
-    "C-HOLDER": {"E3201", "E3207"},
+    "C-HOLDER": {"E3199", "E3201", "E3207"},
     "C-WRITE": {"E3197", "E3199"},
     "C-ONECALL": {"E3201"},
     "C-EXIT": {"E3202"},

@@ -9155,6 +9155,41 @@ extension Parser
 		end 'eachIsolatedHop'
 	end 'requireIsolatedSlotHolderWritable'
 
+	// A linear value is moved, not opened; the keeping-position checks judge it.
+	function openedRootIsOutsideTheOpenBlock(opened ValueId) returns bool
+		let root = self.rootValueOf(opened)
+
+		if not self.valueIsAnOwnedIsolatedRegion(root) or self.valueIsLinear(root) 'notAnIsolatedRootToOpen'
+			return false
+		end 'notAnIsolatedRootToOpen'
+
+		let table = self.regionFactsForRead()
+		return valueIsOutsideInnermostBlock(table.windows, value: table.birthOf(root))
+	end 'openedRootIsOutsideTheOpenBlock'
+
+	function openedRootOutsideRefusalMessage(pathText String) returns String
+		return "'{pathText}' cannot be opened: the value that holds it is read-only{self.readOnlyReasonOf(false)}"
+	end 'openedRootOutsideRefusalMessage'
+
+	function requireOpenedRootInsideTheOpenBlock(opened ValueId, pathText String, line LineNumber, column ColumnNumber) throws SourceParseError
+		if self.openedRootIsOutsideTheOpenBlock(opened) 'outsideTheBlock'
+			throw self.regionRefusal(ErrorCode.semanticIsolatedHolderNotWritable, message: self.openedRootOutsideRefusalMessage(pathText), line: line, column: column)
+		end 'outsideTheBlock'
+	end 'requireOpenedRootInsideTheOpenBlock'
+
+	function noteOpenedRootOutsideTheOpenBlock(opened ValueId, range SourceRange)
+		if self.openedRootIsOutsideTheOpenBlock(opened) 'outsideTheBlock'
+			self.deferRegionRefusal(ErrorCode.semanticIsolatedHolderNotWritable, message: self.openedRootOutsideRefusalMessage(self.isolatedRootNameOf(opened)), line: range.line, column: range.column)
+		end 'outsideTheBlock'
+	end 'noteOpenedRootOutsideTheOpenBlock'
+
+	function isolatedRootNameOf(opened ValueId) returns String
+		let root = self.rootValueOf(opened)
+		let index = try self.liveOwnerIndexOf(root) otherwise return String.from(IsolatedValueLabel)
+
+		return String.from((try self.bodyState.ownedBindings.get(index) otherwise panic("isolatedRootNameOf: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf`")).name)
+	end 'isolatedRootNameOf'
+
 	function isolatedSlotFieldName(hop ValueId) returns String
 		let origin = try self.regionFactsForRead().fieldOrigins.get(hop) otherwise panic("isolatedSlotFieldName: v{hop} is an isolated hop, and a hop is a value some field was read into")
 
@@ -9339,6 +9374,7 @@ extension Parser
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{self.tokenTextFrom(valueStart, endIndex: self.pos)}' is mutable outside '{placeText}'; a store into an isolated region takes values, immutable or isolated", line: outerTok.line, column: outerTok.column)
 		end 'outerDataIntoARegion'
 
+		try self.requireOpenedRootInsideTheOpenBlock(box, pathText: placeText, line: line, column: column)
 		try self.requireIsolatedSlotHolderWritable(box, placeText: placeText, line: line, column: column)
 		self.noteMutableUse(box, line: line)
 		self.noteUseSite(func, value: box, mutable: true, line: line)

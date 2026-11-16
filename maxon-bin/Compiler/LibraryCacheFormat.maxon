@@ -121,11 +121,12 @@ export type LibraryCacheWriter
 	export function sealed() returns immutable ByteArray
 		let image = LibraryCacheMagic.toByteArray() as isolated ByteArray
 		let body = swap self.buffer with ByteArray.create(0)
+		let bodyDigest = mixBytes(Hasher.empty(), bytes: body) as CacheWord
 
 		modify image 'fill'
 			image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
-			image.append(headerWordBytes(mixBytes(Hasher.empty(), bytes: body) as CacheWord))
-			image.append(body)
+			image.append(headerWordBytes(bodyDigest))
+			image.append(merge body)
 		end 'fill'
 
 		return freeze image

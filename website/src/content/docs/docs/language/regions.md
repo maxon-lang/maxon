@@ -326,6 +326,11 @@ Inside a block:
 - A mutable value cannot leave the block by `return`, by `throw` or by an outer variable (**E3202**): what
   leaves is a value, `immutable` data or a fresh `isolated` region.
 - A nested `modify` leaves the root of every enclosing block read-only.
+- An `isolated` local or parameter declared outside the block is read-only inside it and cannot be opened: a
+  call that passes it in an unmarked position (as argument or receiver), a read or write through it, and a
+  nested `modify` of it are **E3199** (``'outer' cannot be opened: the value that holds it is read-only while
+  'fill' is open``). It still goes where an `isolated` value goes: an `isolated` parameter or slot, a send,
+  `merge`. An `isolated` local the block creates is opened like any block local.
 - Waiting on another party and running a coroutine are refused: `await`, `awaitAny`, `acquire`, a runtime park
   such as `Scheduler.quiesce()`, and a call that may wait or may yield are **E3205**
   ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable

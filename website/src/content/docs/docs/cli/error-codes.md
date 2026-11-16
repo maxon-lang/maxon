@@ -831,7 +831,7 @@ An isolated value is used where its region is not open. Refused: `modify` of a v
 
 ### E3199 — `semanticIsolatedHolderNotWritable`
 
-An isolated value is reached through a holder that is not writable: it is opened, swapped, or moved on (bound, assigned, stored, given or returned) while the value that holds it is `immutable`, read-only as the result of joining immutable and mutable data, or outside an open `modify` block, where every root other than the opened value is read-only. Reported at the isolated value. Open it from writable data, or inside the block that opened its holder.
+An isolated value is reached through a holder that is not writable: it is opened, swapped, or moved on (bound, assigned, stored, given or returned) while the value that holds it is `immutable`, read-only as the result of joining immutable and mutable data, or outside an open `modify` block, where every root other than the opened value is read-only. An `isolated` local or parameter declared outside an open `modify` or `acquire` block is such a root: passing it in an unmarked position (argument or receiver), reading or writing through it, and a nested `modify` of it open it. It still moves into an `isolated` parameter or slot, is sent, or is merged. Reported at the isolated value. Open it from writable data, or inside the block that opened its holder, or before or after the block.
 
 ### E3200 — `semanticIsolatedRecoverNeedsCleanInputs`
 
