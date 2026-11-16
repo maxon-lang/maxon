@@ -334,7 +334,7 @@ function commandStatus() {
     .sort((a, b) => a.account.localeCompare(b.account) || a.id.localeCompare(b.id));
 
   for (const row of rows) {
-    const live = ageMinutes(row.at) < LIVE_HEARTBEAT_MINUTES ? 'live' : 'stale';
+    const live = row.state !== 'working' ? 'waiting' : ageMinutes(row.at) < LIVE_HEARTBEAT_MINUTES ? 'live' : 'stale';
     console.log(`${row.account}  ${row.id.padEnd(24)} ${row.state.padEnd(8)} ${String(row.model).padEnd(18)} ${row.machine.padEnd(16)} ${live} ${Math.round(ageMinutes(row.at))}m  ${row.task ?? ''}`);
   }
 }
