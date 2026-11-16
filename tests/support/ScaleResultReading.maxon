@@ -1,0 +1,56 @@
+public let ScaleDigestLength = 16
+
+let ScaleDigestHexDigits = "0123456789abcdef"
+
+public function isScaleDigest(text String) returns bool
+	if text.count() != ScaleDigestLength 'wrongLength'
+		return false
+	end 'wrongLength'
+
+	for c in text 'eachCharacter'
+		if not ScaleDigestHexDigits.contains(c.toString()) 'notLowerHex'
+			return false
+		end 'notLowerHex'
+	end 'eachCharacter'
+
+	return true
+end 'isScaleDigest'
+
+public function scaleDigestsIn(text String) returns StringArray
+	let digests = StringArray.create(0)
+	var word = ""
+
+	for c in "{text} " 'eachCharacter'
+		if Ascii.isAlphanumeric(c) 'insideAWord'
+			word.append(c.toString())
+			continue
+		end 'insideAWord'
+
+		if isScaleDigest(word) 'aDigest'
+			digests.push(word)
+		end 'aDigest'
+
+		word = ""
+	end 'eachCharacter'
+
+	return digests
+end 'scaleDigestsIn'
+
+public function childOfKind(document JsonDoc, parent JsonNodeId, key String, kind JsonKind, said String) returns JsonNodeId throws TestFailure
+	try Expect.isTrue(document.hasChild(parent, key: key), message: "the document has no `{key}` where one was expected. {said}")
+
+	let child = try document.getChild(parent, key: key) otherwise panic("a key `hasChild` just reported is held")
+
+	try Expect.isTrue(document.get(child).kind == kind, message: "`{key}` is not a {kind.name}. {said}")
+
+	return child
+end 'childOfKind'
+
+public function digestChild(document JsonDoc, parent JsonNodeId, key String, said String) returns String throws TestFailure
+	let child = try childOfKind(document, parent: parent, key: key, kind: JsonKind.jsonString, said: said)
+	let digest = document.get(child).stringValue
+
+	try Expect.isTrue(isScaleDigest(digest), message: "`{key}` is '{digest}', which is not {ScaleDigestLength} lower-case hex characters. {said}")
+
+	return digest
+end 'digestChild'

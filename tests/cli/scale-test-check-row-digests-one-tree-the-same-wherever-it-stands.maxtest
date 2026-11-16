@@ -1,0 +1,24 @@
+let WhereverItStandsFirstDirName = "scale-row-tree-first"
+let WhereverItStandsSecondDirName = "scale-row-tree-second"
+let WhereverItStandsExtendedDirName = "scale-row-tree-extended"
+let ExtraSourceName = "Extra.maxon"
+
+test 'scale-test --check-row digests two trees of the same files alike wherever they stand, and a tree with one more file differently'
+	let unrecordedLog = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded)
+	let first = stagedScaleTree(WhereverItStandsFirstDirName, log: unrecordedLog)
+	let second = stagedScaleTree(WhereverItStandsSecondDirName, log: unrecordedLog)
+	let extended = stagedScaleTree(WhereverItStandsExtendedDirName, log: unrecordedLog)
+
+	writeStagedFile(extended.join(RuntimeDirName).join(ExtraSourceName), content: ScaleRowTreeSourceText)
+
+	let digestOfFirst = thisTreesDigest(first)
+	let digestOfSecond = thisTreesDigest(second)
+	let digestOfExtended = thisTreesDigest(extended)
+
+	Expect.equal(digestOfSecond, expected: digestOfFirst, message: "two trees holding the same files digest differently ({digestOfFirst} at {first.toString()}, {digestOfSecond} at {second.toString()}), so the digest reads where the tree stands and not only what it holds.")
+	Expect.notEqual(digestOfExtended, expected: digestOfFirst, message: "a tree holding one more source digests as the tree without it ({digestOfFirst}), so the digest does not read every file.")
+
+	for dir in [first, second, extended] 'eachDir'
+		discardStagedDir(dir)
+	end 'eachDir'
+end 'scale-test --check-row digests two trees of the same files alike wherever they stand, and a tree with one more file differently'

@@ -1,0 +1,29 @@
+let DigestsToolName = "run_scale_test"
+let DigestsSmallestLadder = 1
+let DigestsResultKey = "result"
+let DigestsCorpusKey = "corpusDigest"
+let DigestsTreeKey = "treeDigest"
+let DigestsPreviousKey = "previous"
+let DigestsComparableKey = "comparable"
+let DigestsWithheldKey = "withheld"
+let DigestsRetiredComparableKey = "bytesComparable"
+let DigestsRetiredWithheldKey = "bytesWithheld"
+
+test 'run_scale_test answers the corpus digest and the tree digest of its run, and whether the last row was comparable with it'
+	let answer = callTool(DigestsToolName, argumentsJson: argumentsOf(["\"rungs\":{DigestsSmallestLadder}"]), devMode: true)
+	let text = toolCallText(answer)
+
+	Expect.isFalse(toolCallIsError(answer), message: "a one-rung ladder is a legal run. It answered: {text}")
+
+	let payload = toolPayload(answer)
+	let result = childOfKind(payload, parent: payload.root, key: DigestsResultKey, kind: JsonKind.jsonObject, said: text)
+	let corpus = digestChild(payload, parent: result, key: DigestsCorpusKey, said: text)
+	let tree = digestChild(payload, parent: result, key: DigestsTreeKey, said: text)
+	let previous = childOfKind(payload, parent: result, key: DigestsPreviousKey, kind: JsonKind.jsonObject, said: text)
+	let comparable = childOfKind(payload, parent: previous, key: DigestsComparableKey, kind: JsonKind.jsonBool, said: text)
+
+	Expect.notEqual(corpus, expected: tree, message: "the corpus digest and the tree digest are one string, {corpus}. It answered: {text}")
+	Expect.equal(payload.hasChild(previous, key: DigestsWithheldKey), expected: not payload.get(comparable).boolValue, message: "`previous.{DigestsWithheldKey}` is present exactly when `previous.{DigestsComparableKey}` is false. It answered: {text}")
+	Expect.isFalse(payload.hasChild(previous, key: DigestsRetiredComparableKey), message: "`previous` still carries `{DigestsRetiredComparableKey}`, which `{DigestsComparableKey}` replaces. It answered: {text}")
+	Expect.isFalse(payload.hasChild(previous, key: DigestsRetiredWithheldKey), message: "`previous` still carries `{DigestsRetiredWithheldKey}`, which `{DigestsWithheldKey}` replaces. It answered: {text}")
+end 'run_scale_test answers the corpus digest and the tree digest of its run, and whether the last row was comparable with it'

@@ -1,0 +1,19 @@
+let UnrecordedTreeCaseDirName = "scale-row-unrecorded-tree"
+let UnrecordedTreeWording = "unrecorded"
+let TreeWording = "tree"
+
+test 'scale-test --check-row refuses a last row whose tree cell is unrecorded, saying so and naming the fix'
+	let log = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowStrangerDigest, tree: ScaleRowUnrecorded)
+	let dir = stagedScaleTree(UnrecordedTreeCaseDirName, log: log)
+	let run = spawnScaleTest(dir, arguments: [ScaleRowCheckFlag])
+	let said = scaleRunSaid(run)
+
+	requireCheckRowIsAMode(run)
+
+	Expect.equal(run.exitCode(), expected: ScaleRowRefusedExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` over a last row whose tree cell is {ScaleRowUnrecorded} did not exit {ScaleRowRefusedExit}. {said}")
+	Expect.contains(said, needle: UnrecordedTreeWording, message: "the refusal does not say the tree cell is {ScaleRowUnrecorded}. {said}")
+	Expect.contains(said, needle: TreeWording, message: "the refusal does not say it is the TREE the row fails to record. {said}")
+	Expect.contains(said, needle: ScaleRowNoteFlagName, message: "the refusal does not name the fix, a re-run of `{ScaleTestCommandWord} {ScaleRowNoteFlagName}=...` on this tree. {said}")
+
+	discardStagedDir(dir)
+end 'scale-test --check-row refuses a last row whose tree cell is unrecorded, saying so and naming the fix'

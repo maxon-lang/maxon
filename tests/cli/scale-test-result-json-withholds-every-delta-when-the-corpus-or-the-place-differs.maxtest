@@ -1,0 +1,32 @@
+let DifferingDirName = "scale-row-differing"
+let CorpusChangedWording = "the corpus changed"
+let MintedElsewhereWording = "minted elsewhere"
+let DifferingPlace = "/another/place/maxon (corpus /another/place/.scale-tmp)"
+
+test 'scale-test --result-json withholds the allocation and byte deltas alike when the last row has another corpus or was minted elsewhere, saying which'
+	let dir = stagedScaleDirectory(DifferingDirName, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded))
+	let probe = ladderRunIn(dir, rungs: ScaleRowOneRung)
+	let mintedAt = probe.mintedAt()
+	let corpus = probe.corpusDigest()
+
+	writeScaleLog(dir, log: scaleLogDocument(mintedAt, corpus: ScaleRowStrangerDigest, tree: ScaleRowUnrecorded))
+
+	let anotherCorpus = ladderRunIn(dir, rungs: ScaleRowOneRung)
+
+	Expect.equal(anotherCorpus.corpusDigest(), expected: corpus, message: "the same ladder generated in the same directory reported another corpus digest the second time. {anotherCorpus.said}")
+	Expect.isFalse(anotherCorpus.previousFlag(ScaleRowComparableKey), message: "a last row recording the corpus {ScaleRowStrangerDigest} was reported comparable with a run of {corpus}. {anotherCorpus.said}")
+	Expect.contains(anotherCorpus.previousText(ScaleRowWithheldKey), needle: CorpusChangedWording, message: "`previous.{ScaleRowWithheldKey}` does not say the corpus changed. {anotherCorpus.said}")
+	Expect.isFalse(anotherCorpus.rungZeroHas(ScaleRowAllocationsDeltaKey), message: "rung 0 carries an `{ScaleRowAllocationsDeltaKey}` against a row of another corpus. {anotherCorpus.said}")
+	Expect.isFalse(anotherCorpus.rungZeroHas(ScaleRowBytesDeltaKey), message: "rung 0 carries a `{ScaleRowBytesDeltaKey}` against a row of another corpus. {anotherCorpus.said}")
+
+	writeScaleLog(dir, log: scaleLogDocument(DifferingPlace, corpus: corpus, tree: ScaleRowUnrecorded))
+
+	let anotherPlace = ladderRunIn(dir, rungs: ScaleRowOneRung)
+
+	Expect.isFalse(anotherPlace.previousFlag(ScaleRowComparableKey), message: "a last row minted at {DifferingPlace} was reported comparable with a run minted at {mintedAt}. {anotherPlace.said}")
+	Expect.contains(anotherPlace.previousText(ScaleRowWithheldKey), needle: MintedElsewhereWording, message: "`previous.{ScaleRowWithheldKey}` does not say the row was minted elsewhere. {anotherPlace.said}")
+	Expect.isFalse(anotherPlace.rungZeroHas(ScaleRowAllocationsDeltaKey), message: "rung 0 carries an `{ScaleRowAllocationsDeltaKey}` against a row minted elsewhere. {anotherPlace.said}")
+	Expect.isFalse(anotherPlace.rungZeroHas(ScaleRowBytesDeltaKey), message: "rung 0 carries a `{ScaleRowBytesDeltaKey}` against a row minted elsewhere. {anotherPlace.said}")
+
+	discardStagedDir(dir)
+end 'scale-test --result-json withholds the allocation and byte deltas alike when the last row has another corpus or was minted elsewhere, saying which'

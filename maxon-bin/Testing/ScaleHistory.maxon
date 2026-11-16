@@ -1,6 +1,6 @@
 // ScaleHistory — `docs/optimization-log.md`. The trend IS the deliverable.
 //
-// This instrument renders no verdict, so it needs a reference point, and the reference point is the
+// The ladder renders no verdict, so it needs a reference point, and the reference point is the
 // log: THE LAST ROW OF EACH TABLE IS THE PREVIOUS DATAPOINT. Every run reads it and reports the
 // delta from it, so you still see exactly what moved — without anything passing or failing. There is
 // no separate baseline file, and there is nothing to "accept".
@@ -23,107 +23,17 @@
 // ran the command, at the moment they ran it. So it is demanded there, rather than left as a
 // placeholder that would be committed unfilled.
 //
-// TWO TABLES, each read DOWNWARDS: one row per recorded change, one column per RUNG.
+// THREE TABLES — allocations, bytes and CPU ticks — each read DOWNWARDS: one row per recorded change,
+// one column per RUNG. Every row leads with the same cells in all three: date, minted at, corpus, tree,
+// change.
 //
-//   allocations  Exact and bit-for-bit reproducible for one checkout. Across two, it carries a
-//                CONSTANT offset — so its SHAPE survives and its constant term does not.
-//   bytes        Exact and bit-for-bit reproducible for one checkout, and NOT comparable across two.
+// A DELTA IS TAKEN ONLY AGAINST A ROW OF THE SAME CORPUS MINTED AT THE SAME PLACE (`rowComparability`);
+// otherwise every allocation and byte delta is withheld and the counts stand as measured. The place is
+// the compiler's path and the corpus root's, compared as a whole string: both reach the counts, and not
+// in proportion to their length, so no rule about which part of a path costs is relied on.
 //
-// ===========================================================================================
-// WHY EVERY ROW RECORDS WHERE IT WAS MINTED, AND WHAT EACH COLUMN CAN STILL CARRY WITHOUT IT
-// ===========================================================================================
-//
-// A compile ALLOCATES THE PATH STRINGS IT IS WORKING WITH, so the BYTE volume of a compile carries a
-// term proportional to the LENGTH of those paths. It is not small and it is not flat. There are TWO of
-// them, they come from two different places, and a key that names only one licenses exactly the
-// subtraction this file exists to refuse:
-//
-//   1. THE COMPILER'S OWN EXECUTABLE PATH. `locateStdlibDir` walks up from it and derives the absolute
-//      path of every stdlib source file from what it finds — and `runtime/`, the second library tier
-//      loaded on every compile, is derived from that same `stdlib/` (`runtimeDirBeside`), so its source
-//      paths ride on the identical term. MEASURED with one tier, one binary, two real checkouts
-//      44 characters apart, one working directory each, six rungs:
-//
-//        bytes        +92,576 / +102,740 / +123,068 / +163,724 / +245,036 / +407,660
-//        allocations  0 / 0 / 0 / 0 / 0 / 0
-//
-//   2. THE WORKING DIRECTORY. The rung sources are handed to the compiler as a RELATIVE path on purpose
-//      (see `ScaleCorpusDirName`), and that does NOT keep the checkout out of the byte column, because
-//      the compiler resolves each source path against `Directory.currentPath()` itself — the library
-//      classifier `Queries.fileProvenanceOf` does it PER FILE, per compile, answering for both tiers
-//      off the one resolve. MEASURED with one classifier, one binary at ONE
-//      executable path, two working directories 44 characters apart, six rungs:
-//
-//        bytes        +34,515 / +39,960 / +50,850 / +72,630 / +116,190 / +203,310
-//        allocations  0 / 0 / 0 / 0 / 0 / 0
-//
-// ⇒ BOTH are in the key, because either one alone answers "comparable" for a pair that is not. (2) was
-// found in review, by running one binary from a second directory: the guard said `comparable` and the
-// report printed a confident +203,310 at rung 5 — the very fiction it had just been built to withhold.
-//
-// ⚠ AND THE `allocations 0` ON BOTH ROWS ABOVE IS NOT THE GENERAL RESULT IT WAS READ AS. Both varied
-// the LENGTH of a path, and the allocation column happens not to see that. It sees something else, and
-// the two experiments could not have found it — see the third measurement below, which was run because
-// this file's own claim of `path-independent` cost an implementer most of a session.
-//
-// So the two columns are NOT the same kind of number across checkouts, they are BOTH spoiled by a
-// mismatched pair, and the whole mechanism here is the difference in HOW:
-//
-//   - BYTES CARRY A TERM THAT GROWS WITH THE PROGRAM. It sits in `phase:load` (flat),
-//     `phase:signatures` and `phase:parse` (both rising with it), so it is not a constant offset a
-//     reader could subtract — it ran ~2,100 bytes per character at rung 0 to ~9,300 at rung 5. There is
-//     nothing left of a byte A/B across two checkouts, so the delta is WITHHELD.
-//   - ALLOCATIONS CARRY A CONSTANT. The same number at every rung — which is exactly what a startup
-//     cost looks like, and the reason the delta is still PRINTED: a flat offset cancels out of every
-//     rung-over-rung RATIO and out of any delta that GROWS per rung, so the SHAPE of an allocation A/B
-//     across two checkouts stands. Its CONSTANT TERM does not, and a flat per-rung delta between two
-//     checkouts is therefore unattributable. MEASURED, ONE binary — built twice, in two worktrees of
-//     one commit, and confirmed byte-identical by hash — run at four real checkout paths, six rungs:
-//
-//       45 chars, 7 path components   778,291 … 18,109,206   a real worktree, AND a synthetic path of
-//                                                            the same length and depth: identical cells
-//       46 chars, 5 path components   778,147 … 18,109,062
-//       45 chars, 3 path components   778,018 … 18,108,933
-//       14 chars, 3 path components   778,018 … 18,108,933   identical to the 45-character row above it
-//
-//     ⇒ +273 at all six rungs between two paths of the SAME LENGTH, and 0 at all six between paths 31
-//     characters apart. The offset is flat in every pair and lands in `phase:parse` alone.
-//     ⚠ SO THE RULE IS NOT "EQUALISE THE PATH LENGTH". What this column tracks is measurably not the
-//     character count, and this file does not claim to know what it IS — which costs nothing, because
-//     the key below needs no such knowledge.
-//
-// ⇒ A byte delta between two rows minted at different paths is a CONFIDENT FICTION, and it has been
-// read as a per-function regression four times by two agents in one session — once as a sign reversal.
-// A CONSTANT allocation delta between them is the same fiction one column over, and it was nearly filed
-// as a rung's cost twice more. This file therefore records the minting paths in the row and
-// `byteComparability` decides; the runner WITHHOLDS the byte delta and prints the allocation delta under
-// the caveat that its constant term is not attributable. Nothing is normalised: the counts stay exactly
-// what was measured, and a subtraction that cannot be honest is simply not performed.
-//
-// THE PATHS THEMSELVES, NOT THEIR LENGTHS, and the third measurement above turned that from the
-// stronger key into the only correct one. For BYTES, length would do under an assumption (that the
-// executable's own file NAME is a build constant, so equal total length implies equal DIRECTORY length,
-// which is the component that multiplies). For ALLOCATIONS it would be simply WRONG: two 45-character
-// paths differ by 273. The whole string needs no assumption in either column — equal paths allocate
-// equally, full stop — and it is also the thing a human reading the log downwards actually wants, since
-// "this row came from a worktree" is the sentence that explains a step in the column.
-//
-// ⚠ A SYMLINK OR JUNCTION IS NOT A DIFFERENT PATH. Windows resolves one before the process sees its own
-// executable path, so an A/B run through two junctions of different lengths pointing at one tree
-// measures NOTHING and reads as proof of path-independence. Every reading above comes from real
-// directories. (`Process.executablePath()` is what is recorded, so whatever the OS reports is what the
-// compile saw — which is the correct thing to compare either way.)
-//
-// AND NOTHING ELSE — no time, and no fitted exponents. There WAS a third table of per-curve growth
-// exponents, `time / allocations`, and it is gone. Time is machine-dependent, so a dated column of it
-// compares a loaded box in July against an idle one in August and concludes nothing. And an exponent
-// added nothing to a ladder that DOUBLES: rung over rung, x2.00 is linear and x4.00 is quadratic, and
-// that is a division a reader can do on the numbers already in these tables. The row that exists
-// carries the raw counts, which is the thing that cannot go out of date.
-//
-// (The exponents table's rows are still in the document, under a heading that says they are CLOSED.
-// Deleting recorded history to tidy up a format change would be the worst of both: the numbers were
-// honestly measured, and they are simply no longer extended.)
+// THE TREE CELL TAKES NO PART IN THAT DECISION. It names the sources the row measured, and
+// `--check-row` refuses a last row that does not carry the digest of the tree it stands in.
 //
 // A new row goes immediately BEFORE the marker that closes its table. Anchoring on a marker rather
 // than appending to the end of the file is what lets the document keep prose after the tables — the
@@ -148,48 +58,44 @@ let CpuTableMarker = "<!-- scale-history:cpu -->"
 // (`insertRowBefore` is the backstop, and it reads the document rather than the cell.)
 let TableMarkerPrefix = "<!-- scale-history:"
 
-// The three fixed leading columns every table carries. The rest are rungs, which is what
-// `LeadingColumns` is subtracted to find.
+// The fixed leading columns every table carries. The rest are rungs, which is what `LeadingColumns` is
+// subtracted to find.
 //
 // EACH COLUMN'S HEADING, ITS INDEX AND THE COUNT ARE ONE FACT, so they are written to derive from each
 // other rather than to agree by hand. The count is the last index plus one, and `assertLeadingHeadings`
 // CHECKS the document's own header row against the headings at those indices: a reader that takes a new
-// width but keeps the old indices reads the note as a path and rung 0's count as the note, silently,
-// off a log whose header says otherwise.
+// width but keeps the old indices reads one leading cell as another and a leading cell as a rung's
+// count, silently, off a log whose header says otherwise.
 let DateColumnHeading = "date"
 let MintedAtColumnHeading = "minted at"
+let CorpusColumnHeading = "corpus"
+let TreeColumnHeading = "tree"
 let NoteColumnHeading = "change"
 
 let DateColumnIndex = 0
 let MintedAtColumnIndex = 1
-let NoteColumnIndex = 2
+let CorpusColumnIndex = 2
+let TreeColumnIndex = 3
+let NoteColumnIndex = 4
 let LeadingColumns = NoteColumnIndex + 1
 
-// WHERE A ROW WAS MEASURED — BOTH paths whose length reaches its byte column: the compiler that produced
-// it, and the corpus it compiled. The one thing that decides whether two rows' BYTE columns may be
-// subtracted; see this file's header for the two measurements.
-//
-// A UNION, because "this row does not say" is a real third answer and not a path. Every row written
-// before the column existed carries `MintedAtUnrecorded`, and those rows' byte deltas are as
-// unverifiable as a mismatched pair's — which is a different claim from "they match", and an empty
-// string would have said neither.
-union MintedAt
-	unrecorded
-	path(text String)
-end 'MintedAt'
-
 // THE CELL, COMPOSED IN ONE PLACE — so the string a row is WRITTEN with and the string a later run is
-// COMPARED against cannot be assembled differently. Both halves are in it because the byte column
-// carries a term proportional to each (see the header); comparison stays whole-string equality, which
-// needs no assumption about which half moved.
+// COMPARED against cannot be assembled differently. Both halves are in it because each reaches the
+// counts (see the header); comparison stays whole-string equality, which needs no assumption about
+// which half moved.
 function mintedAtCell(compilerPath String, corpusRoot String) returns String
 	return "{compilerPath} (corpus {corpusRoot})"
 end 'mintedAtCell'
 
-// What a row minted before this column existed carries. Deliberately not a path and not empty: the
-// document's own idiom for a cell with no value is an italic parenthetical (`*(baseline)*` in the
-// oldest note), and no absolute path can collide with it.
-let MintedAtUnrecorded = "*(unrecorded)*"
+// What a row carries in a provenance cell older than its column. Deliberately not a path, not a digest
+// and not empty: the document's own idiom for a cell with no value is an italic parenthetical
+// (`*(baseline)*` in the oldest note), and no absolute path or digest can collide with it.
+let UnrecordedCellText = "*(unrecorded)*"
+
+union RecordedCell
+	unrecorded
+	recorded(text String)
+end 'RecordedCell'
 
 // The counts as the tables print them. Signed because a delta is, and because `groupDigits` walks a
 // rendered number that may carry a minus sign.
@@ -200,7 +106,7 @@ typealias GroupIndex = int(0 to u64.max)
 let SecondsPerDay = 86400 as UnixSeconds
 let DigitGroupSize = 3 as GroupIndex
 
-// EVERYTHING THE LOG HAS TO SAY ABOUT THE RUN BEFORE THIS ONE — which is exactly its memory.
+// EVERYTHING THE LOG HAS TO SAY ABOUT THE RUN BEFORE THIS ONE — its provenance and its memory.
 //
 // It is not wrapped in a struct: a struct with this union as its one field is a wrapper that makes
 // every caller write `.memory` to say nothing.
@@ -210,63 +116,128 @@ let DigitGroupSize = 3 as GroupIndex
 // An empty array would say both.
 union LoggedMemory
 	absent
-	present(date String, mintedAt MintedAt, note String, allocs AllocCountArray, bytes ByteCountArray)
+	present(date String, mintedAt RecordedCell, corpus RecordedCell, tree RecordedCell, note String, allocs AllocCountArray, bytes ByteCountArray)
 
 	// How many rungs the memory tables are keyed by. A run with a different ladder length cannot be
 	// appended to them without going ragged — see `assertRecordable`.
 	function loggedRungCount() returns RungCount throws ScaleError
 		match self 'm'
 			absent then throw ScaleError.reason("the log has no rows, so it pins no ladder length")
-			present(_, _, _, allocs, _) then return allocs.count() as RungCount
+			present(_, _, _, _, _, allocs, _) then return allocs.count() as RungCount
 		end 'm'
 	end 'loggedRungCount'
 end 'LoggedMemory'
 
+type RowProvenance
+	let mintedAt as String
+	let corpus as String
+	let tree as String
+
+	static function create(mintedAt String, corpus String, tree String) returns RowProvenance
+		return Self{mintedAt: mintedAt, corpus: corpus, tree: tree}
+	end 'create'
+end 'RowProvenance'
+
 // ===========================================================================================
-// Were this run and the logged row minted at the SAME path?
+// May this run be differenced against the logged row?
 // ===========================================================================================
 
-// THE ONE DECISION THIS PROVENANCE EXISTS TO MAKE — asked once, and read by BOTH columns, because both
-// are spoiled by a mismatched pair and only the consequence differs (see this file's header). `withheld`
-// carries the sentence the report prints, because the answer is only useful with the reason attached — a
-// bare `false` in front of a blank column is the same silence the confident wrong number replaced.
-//
-// IT KEEPS THE BYTE COLUMN'S NAME because the byte column is the only thing it REFUSES. The allocation
-// column is printed either way; what the same answer buys there is the caveat under the table, and a
-// second union to say "the paths differ" a second time is the duplication this instrument is named for.
+// THE ONE DECISION EVERY DELTA READS — the report, `--result-json` and `anyMemoryMoved` alike, so no two
+// of them can answer differently for one pair of rows. `withheld` carries the sentence the report
+// prints, because the answer is only useful with the reason attached — a bare `false` in front of a
+// blank column is a silence the reader cannot tell from a bug.
 //
 // ⚠ IT IS NOT A VERDICT ABOUT THE COMPILER. The run still exits 0, still reports every count it
-// measured, and still records the row if it was asked to. What is refused is one SUBTRACTION, on the
+// measured, and still records the row if it was asked to. What is refused is the SUBTRACTION, on the
 // ground that its two operands were not measured against the same yardstick.
-union ByteDelta
+union RowComparability
 	comparable
 	withheld(why String)
-end 'ByteDelta'
+end 'RowComparability'
 
-// Compare the whole path, for the reason the header gives: equal paths allocate equally, and no
-// assumption about which PART of the path multiplies has to hold for that to be true — an assumption
-// the allocation column has since been measured to break.
-function byteComparability(trend LoggedMemory, mintedAt String) returns ByteDelta
+// Comparable only when the corpus digest and the place both match, the place as a whole string for the
+// reason the header gives. The tree cell is not read here: it is `lastRowCheck`'s.
+function rowComparability(trend LoggedMemory, mintedAt String, corpus String) returns RowComparability
 	match trend 'm'
-		absent then return ByteDelta.comparable
-		present(date, logged, _, _, _) then return byteComparabilityAgainst(logged, mintedAt: mintedAt, date: date)
+		absent then return RowComparability.comparable
+		present(date, loggedMintedAt, loggedCorpus, _, _, _, _) then return rowComparabilityAgainst(date, loggedMintedAt: loggedMintedAt, loggedCorpus: loggedCorpus, mintedAt: mintedAt, corpus: corpus)
 	end 'm'
-end 'byteComparability'
+end 'rowComparability'
 
-function byteComparabilityAgainst(logged MintedAt, mintedAt String, date String) returns ByteDelta
+function rowComparabilityAgainst(date String, loggedMintedAt RecordedCell, loggedCorpus RecordedCell, mintedAt String, corpus String) returns RowComparability
+	let differing = StringArray.create(0)
+	recordCorpusDifference(differing, logged: loggedCorpus, corpus: corpus, date: date)
+	recordPlaceDifference(differing, logged: loggedMintedAt, mintedAt: mintedAt, date: date)
+
+	if differing.isEmpty() 'sameCorpusAndPlace'
+		return RowComparability.comparable
+	end 'sameCorpusAndPlace'
+
+	return RowComparability.withheld(joinedWith(differing, separator: ComparabilityReasonSeparator))
+end 'rowComparabilityAgainst'
+
+let ComparabilityReasonSeparator = "; and "
+
+function recordCorpusDifference(differing StringArray, logged RecordedCell, corpus String, date String)
+	match logged 'c'
+		unrecorded then differing.push("the {date} row was written before rows recorded the corpus they measured, so there is no corpus to compare this run's {corpus} against")
+		recorded(text) then recordDigestDifference(differing, logged: text, corpus: corpus)
+	end 'c'
+end 'recordCorpusDifference'
+
+function recordDigestDifference(differing StringArray, logged String, corpus String)
+	if logged == corpus 'sameCorpus'
+		return
+	end 'sameCorpus'
+
+	differing.push("the corpus changed: that row measured the corpus {logged} and this run measured {corpus}")
+end 'recordDigestDifference'
+
+function recordPlaceDifference(differing StringArray, logged RecordedCell, mintedAt String, date String)
 	match logged 'l'
-		unrecorded then return ByteDelta.withheld("the {date} row was written before rows recorded where they were minted, so there is nothing to compare this run's path against")
-		path(text) then return byteComparabilityOfPaths(text, mintedAt: mintedAt)
+		unrecorded then differing.push("the {date} row was written before rows recorded where they were minted, so there is nothing to compare this run's path against")
+		recorded(text) then recordPathDifference(differing, logged: text, mintedAt: mintedAt)
 	end 'l'
-end 'byteComparabilityAgainst'
+end 'recordPlaceDifference'
 
-function byteComparabilityOfPaths(logged String, mintedAt String) returns ByteDelta
+function recordPathDifference(differing StringArray, logged String, mintedAt String)
 	if logged == mintedAt 'samePath'
-		return ByteDelta.comparable
+		return
 	end 'samePath'
 
-	return ByteDelta.withheld("that row was minted at `{logged}` ({logged.count()} characters) and this run at `{mintedAt}` ({mintedAt.count()})")
-end 'byteComparabilityOfPaths'
+	differing.push("minted elsewhere: that row was minted at `{logged}` ({logged.count()} characters) and this run at `{mintedAt}` ({mintedAt.count()})")
+end 'recordPathDifference'
+
+union RowCheck
+	carried(line String)
+	refused(message String)
+end 'RowCheck'
+
+function lastRowCheck(trend LoggedMemory, treeDigest String, source String) returns RowCheck
+	match trend 'm'
+		absent then return RowCheck.refused("{source} has no rows, so no row carries the digest {treeDigest} of this tree. {rowCheckFixText()}")
+		present(date, _, _, tree, note, _, _) then return lastRowTreeCheck(date, note: note, tree: tree, treeDigest: treeDigest, source: source)
+	end 'm'
+end 'lastRowCheck'
+
+function lastRowTreeCheck(date String, note String, tree RecordedCell, treeDigest String, source String) returns RowCheck
+	match tree 't'
+		unrecorded then return RowCheck.refused("the last row of {source}, dated {date}, has the `{TreeColumnHeading}` cell {UnrecordedCellText}: it was written before rows recorded the tree they measured, so it does not carry the digest {treeDigest} of this tree. {rowCheckFixText()}")
+		recorded(logged) then return loggedTreeCheck(date, note: note, logged: logged, treeDigest: treeDigest, source: source)
+	end 't'
+end 'lastRowTreeCheck'
+
+function loggedTreeCheck(date String, note String, logged String, treeDigest String, source String) returns RowCheck
+	if logged == treeDigest 'thisTree'
+		return RowCheck.carried("the last row of {source}, dated {date} ({note}), carries the digest {treeDigest} of this tree")
+	end 'thisTree'
+
+	return RowCheck.refused("the last row of {source}, dated {date}, records the `{TreeColumnHeading}` {logged}, and this tree's digest is {treeDigest}: the row was measured on another tree. {rowCheckFixText()}")
+end 'loggedTreeCheck'
+
+function rowCheckFixText() returns String
+	return "Re-run `maxon {ScaleTestCommandName} {NoteFlagPrefix}<text>` on this tree, so the last row is a measurement of it."
+end 'rowCheckFixText'
 
 // ===========================================================================================
 // Reading the log
@@ -293,16 +264,15 @@ union LogTableRow
 	cells(values StringArray)
 end 'LogTableRow'
 
-// Read the trend: the last row of the two memory tables, which are written together and must
-// therefore describe the same run.
+// Read the trend: the last row of the three tables, which are written together and must therefore
+// describe the same run.
 //
 // NOTHING IS READ BACK BUT NUMBERS AND PROVENANCE. The exponents table is closed, so there is no
 // cell to parse into a fitted value, no `n/a` token to round-trip, and no table header whose columns
 // have to be checked against the phases this compiler happens to have. Each of those is a way for
 // a document to be written in a shape it cannot be read in — the class of bug that produces a
-// write-only log. The `minted at` cell is
-// read back because it decides whether one of the two columns may be differenced at all, which is a
-// question about THIS document rather than about a curve.
+// write-only log. The provenance cells are read back because the corpus and `minted at` cells decide
+// whether the row may be differenced at all, and the tree cell is what `--check-row` reads.
 function loadScaleTrend() returns LoggedMemory throws ScaleError
 	let path = try FilePath.from(OptimizationLogRelativePath) otherwise throw ScaleError.reason("'{OptimizationLogRelativePath}' is not a valid path")
 
@@ -316,9 +286,7 @@ end 'loadScaleTrend'
 
 // THE PARSER, SEPARATED FROM THE FILE READ — and that separation is the whole seam.
 //
-// ⭐ **EVERY REFUSAL BELOW WAS RUN BY NOTHING.** There is no route to a damaged trend log from a spec
-// case, so around thirty throws describing exactly how this document can be hand-edited into a lie had
-// never once been observed to fire — a claim, not a door. `ScaleHistorySelfTest` now proves each of them
+// ⭐ **NO SPEC CASE CAN REACH A DAMAGED TREND LOG**, so `ScaleHistorySelfTest` proves every refusal below
 // by handing THIS function deliberately-damaged documents, in process, on every suite run.
 //
 // ⚠ **AND IT IS THIS FUNCTION, NOT A SECOND ONE WRITTEN TO BE TESTABLE.** A parser built for the test
@@ -384,7 +352,7 @@ function readTable(lines StringArray, marker String, source String) returns LogT
 	let rowCount = markerLine - top
 
 	if rowCount < TableHeaderLines 'noHeader'
-		throw ScaleError.reason("the table above `{marker}` in {source} has no header row and separator — it must be `| {DateColumnHeading} | {MintedAtColumnHeading} | {NoteColumnHeading} | ... |` followed by `| --- | ... |`")
+		throw ScaleError.reason("the table above `{marker}` in {source} has no header row and separator — it must be `| {DateColumnHeading} | {MintedAtColumnHeading} | {CorpusColumnHeading} | {TreeColumnHeading} | {NoteColumnHeading} | ... |` followed by `| --- | ... |`")
 	end 'noHeader'
 
 	let header = splitRow(try lines.get(top) otherwise panic("readTable: header line is inside the block"))
@@ -412,14 +380,15 @@ let TableHeaderLines = 2
 //
 // Every leading cell is fetched by INDEX (`memoryRowFrom`) and the rung columns begin at
 // `LeadingColumns`, so a log whose tables carry a different set of leading columns is not merely
-// mis-parsed, it is mis-parsed CONFIDENTLY: with the pre-`minted at` two-column header, cell 1 reads as
-// a minting path when it is the note, and rung 0's count reads as the note. That state arrives by
-// ordinary means — a rebase onto a branch whose log half was not migrated, a merge that took one side of
-// the document. The header row says plainly which columns the document has; this is the one place it is
-// believed.
+// mis-parsed, it is mis-parsed CONFIDENTLY: a note reads as a provenance cell, or a rung's count as the
+// note. That state arrives by ordinary means — a rebase onto a branch whose log half was not migrated, a
+// merge that took one side of the document. The header row says plainly which columns the document has;
+// this is the one place it is believed.
 function assertLeadingHeadings(header StringArray, marker String, source String) throws ScaleError
 	try assertHeading(header, index: DateColumnIndex, expected: DateColumnHeading, marker: marker, source: source)
 	try assertHeading(header, index: MintedAtColumnIndex, expected: MintedAtColumnHeading, marker: marker, source: source)
+	try assertHeading(header, index: CorpusColumnIndex, expected: CorpusColumnHeading, marker: marker, source: source)
+	try assertHeading(header, index: TreeColumnIndex, expected: TreeColumnHeading, marker: marker, source: source)
 	try assertHeading(header, index: NoteColumnIndex, expected: NoteColumnHeading, marker: marker, source: source)
 end 'assertLeadingHeadings'
 
@@ -427,7 +396,7 @@ function assertHeading(header StringArray, index ElementIndex, expected String, 
 	let heading = try cellAt(header, index: index, source: source)
 
 	if heading != expected 'wrongColumn'
-		throw ScaleError.reason("column {index} of the table above `{marker}` in {source} is headed '{heading}' and this compiler reads it as `{expected}` — the leading columns are `{DateColumnHeading}`, `{MintedAtColumnHeading}`, `{NoteColumnHeading}`, then one per rung. A row read against the wrong columns would take a note for a minting path and a rung's count for a note.")
+		throw ScaleError.reason("column {index} of the table above `{marker}` in {source} is headed '{heading}' and this compiler reads it as `{expected}` — the leading columns are `{DateColumnHeading}`, `{MintedAtColumnHeading}`, `{CorpusColumnHeading}`, `{TreeColumnHeading}`, `{NoteColumnHeading}`, then one per rung. A row read against the wrong columns would take a note for a minting path and a rung's count for a note.")
 	end 'wrongColumn'
 end 'assertHeading'
 
@@ -490,20 +459,34 @@ function readMemoryRow(allocations LogTable, bytesTable LogTable, cpuTable LogTa
 	end 'a'
 end 'readMemoryRow'
 
-// The `minted at` cell of a row. A row is written with a real path or with `MintedAtUnrecorded`, so an
-// EMPTY cell is a damaged row rather than a third state — and reading it as "unrecorded" would silently
-// turn a hand-edit that deleted a path into a row that merely declines to say.
-function mintedAtFrom(cell String, source String) returns MintedAt throws ScaleError
+function recordedCellFrom(cell String, heading String, holds String, source String) returns RecordedCell throws ScaleError
 	if cell.isEmpty() 'damaged'
-		throw ScaleError.reason("a row in {source} has an EMPTY `{MintedAtColumnHeading}` cell — a row records the compiler path it was measured at, or `{MintedAtUnrecorded}` if it predates the column, and an empty cell is neither")
+		throw ScaleError.reason("a row in {source} has an EMPTY `{heading}` cell — a row records {holds}, or `{UnrecordedCellText}` if it predates the column, and an empty cell is neither")
 	end 'damaged'
 
-	if cell == MintedAtUnrecorded 'predatesTheColumn'
-		return MintedAt.unrecorded
+	if cell == UnrecordedCellText 'predatesTheColumn'
+		return RecordedCell.unrecorded
 	end 'predatesTheColumn'
 
-	return MintedAt.path(cell)
-end 'mintedAtFrom'
+	return RecordedCell.recorded(cell)
+end 'recordedCellFrom'
+
+function recordedDigestFrom(cell String, heading String, source String) returns RecordedCell throws ScaleError
+	let read = try recordedCellFrom(cell, heading: heading, holds: "a digest there", source: source)
+
+	match read 'r'
+		unrecorded then break
+		recorded(text) then try assertLoggedDigest(text, heading: heading, source: source)
+	end 'r'
+
+	return read
+end 'recordedDigestFrom'
+
+function assertLoggedDigest(text String, heading String, source String) throws ScaleError
+	if not isHexOfLeadingBytes(text, count: ScaleDigestBytes) 'notADigest'
+		throw ScaleError.reason("a row in {source} has the `{heading}` cell '{text}', which is neither `{UnrecordedCellText}` nor {scaleDigestFormatText()}")
+	end 'notADigest'
+end 'assertLoggedDigest'
 
 // The last data row of a table the allocations table has a counterpart in. One function for all of them:
 // the message names the table by the marker every other message here identifies a table by, so a third
@@ -515,9 +498,9 @@ function lastRowOf(table LogTable) returns StringArray throws ScaleError
 	end 'b'
 end 'lastRowOf'
 
-// The last row of each table must agree on EVERY leading cell, provenance included. The minting path
-// decides whether the byte column may be differenced, so the row that carries the bytes and the row that
-// states where they came from being one and the same run is exactly the property being relied on.
+// The last row of each table must agree on EVERY leading cell, provenance included. The corpus and
+// `minted at` cells decide whether the counts may be differenced, so the rows that carry the counts and
+// the row that states where they came from being one and the same run is exactly the property relied on.
 function memoryRowFrom(allocCells StringArray, bytesTable LogTable, cpuTable LogTable) returns LoggedMemory throws ScaleError
 	// All three tables were read out of one document, so any of them names it.
 	let source = bytesTable.source
@@ -527,10 +510,12 @@ function memoryRowFrom(allocCells StringArray, bytesTable LogTable, cpuTable Log
 
 	let date = try cellAt(allocCells, index: DateColumnIndex, source: source)
 	let mintedAt = try cellAt(allocCells, index: MintedAtColumnIndex, source: source)
+	let corpus = try cellAt(allocCells, index: CorpusColumnIndex, source: source)
+	let tree = try cellAt(allocCells, index: TreeColumnIndex, source: source)
 	let note = try cellAt(allocCells, index: NoteColumnIndex, source: source)
 
-	try assertSameRun(byteCells, date: date, mintedAt: mintedAt, note: note, marker: bytesTable.marker, source: source)
-	try assertSameRun(cpuCells, date: date, mintedAt: mintedAt, note: note, marker: cpuTable.marker, source: source)
+	try assertSameRun(byteCells, allocCells: allocCells, table: bytesTable)
+	try assertSameRun(cpuCells, allocCells: allocCells, table: cpuTable)
 
 	let allocs = allocColumnOf(try rungCells(allocCells, source: source))
 	let bytes = byteColumnOf(try rungCells(byteCells, source: source))
@@ -544,37 +529,37 @@ function memoryRowFrom(allocCells StringArray, bytesTable LogTable, cpuTable Log
 		throw ScaleError.reason("the last rows of the three tables have {allocs.count()}, {bytes.count()} and {cpu.count()} rung(s) — they measure one ladder, so one of them has been hand-edited")
 	end 'differentLadders'
 
-	return LoggedMemory.present(date, mintedAt: try mintedAtFrom(mintedAt, source: source), note: note, allocs: allocs, bytes: bytes)
+	return LoggedMemory.present(date, mintedAt: try recordedCellFrom(mintedAt, heading: MintedAtColumnHeading, holds: "the compiler path it was measured at", source: source), corpus: try recordedDigestFrom(corpus, heading: CorpusColumnHeading, source: source), tree: try recordedDigestFrom(tree, heading: TreeColumnHeading, source: source), note: note, allocs: allocs, bytes: bytes)
 end 'memoryRowFrom'
 
-// One table's last row against the allocations table's, on the three leading cells.
+// One table's last row against the allocations table's, on every leading cell.
 //
-// ⭐ **IT NAMES THE CELL THAT DIFFERS, AND SHOWS BOTH OF THAT CELL'S VALUES.** A message that
-// interpolated the date and the minting path of both rows — and never the NOTE, which is the third cell
-// it COMPARES and by far the likeliest of the three to be hand-edited — prints two byte-identical
-// descriptors for the failure it is most often raised by, and tells the reader they described
-// different runs. (Reproduced: appending ` (hand-edited tail)` to the bytes table's note produced two
-// parentheticals the reader could not tell apart, and no sight of the text that had actually moved.)
+// ⭐ **IT NAMES THE CELL THAT DIFFERS, AND SHOWS BOTH OF THAT CELL'S VALUES.** The note is by far the
+// likeliest cell to be hand-edited, and a message that printed the other cells of both rows would show
+// two byte-identical descriptors for it and tell the reader they described different runs.
 //
-// Every differing cell is reported, not the first. One bad rebase moves all three at once, and a
+// Every differing cell is reported, not the first. One bad rebase moves all of them at once, and a
 // message naming one of them sends the reader back for another full sweep per remaining cell.
 //
-// ⚠ **THE NOTES ARE 2,205–3,753 CHARACTERS in the live log, so two of them cannot be printed whole — and
-// a bare head would not do either.** The failure that occurred differed in its LAST sentence, where the
-// first eighty characters of the two are identical, so a head would print two indistinguishable excerpts
-// and reproduce the original defect one layer down. The excerpt is therefore a window around the FIRST
-// character that differs, and `cellDifferenceReport` states that rule where the reader is looking at its
-// output rather than in a comment they are not reading.
-function assertSameRun(cells StringArray, date String, mintedAt String, note String, marker String, source String) throws ScaleError
+// ⚠ **A NOTE RUNS TO A FEW THOUSAND CHARACTERS, so two of them cannot be printed whole — and a bare head
+// would not do either:** two notes can differ only in their last sentence, and a head would print two
+// indistinguishable excerpts. The excerpt is therefore a window around the FIRST character that
+// differs, and `cellDifferenceReport` states that rule where the reader is looking at its output rather
+// than in a comment they are not reading.
+function assertSameRun(cells StringArray, allocCells StringArray, table LogTable) throws ScaleError
+	let source = table.source
 	let differing = StringArray.create(0)
-	recordCellDifference(differing, heading: DateColumnHeading, logged: date, other: try cellAt(cells, index: DateColumnIndex, source: source))
-	recordCellDifference(differing, heading: MintedAtColumnHeading, logged: mintedAt, other: try cellAt(cells, index: MintedAtColumnIndex, source: source))
-	recordCellDifference(differing, heading: NoteColumnHeading, logged: note, other: try cellAt(cells, index: NoteColumnIndex, source: source))
+
+	for index in 0 upto LeadingColumns 'eachLeadingCell'
+		let heading = try cellAt(table.header, index: index, source: source)
+		recordCellDifference(differing, heading: heading, logged: try cellAt(allocCells, index: index, source: source), other: try cellAt(cells, index: index, source: source))
+	end 'eachLeadingCell'
 
 	if differing.isEmpty() 'sameRun'
 		return
 	end 'sameRun'
 
+	let marker = table.marker
 	throw ScaleError.reason("the last row of the table above `{marker}` in {source} does not describe the same run as the last allocations row: {differing.count()} of its {LeadingColumns} leading cell(s) differ. All three tables are written together by one run, so one of them has been hand-edited.{cellDifferenceReport(differing)}")
 end 'assertSameRun'
 
@@ -761,40 +746,35 @@ end 'parseGroupedCount'
 // because a note is an instruction from the operator (see `recordRun`). It decides one sentence of
 // prose — whether the run is told that its allocations and bytes are unchanged.
 //
-// Everything this instrument measures is bit-for-bit reproducible for one checkout, so the same
-// compiler on the same corpus produces the same digits and a difference here is a REAL difference in
-// what the compiler does. There is nothing else to ask about: the machine-dependent half of the old
-// suite, which would have "moved" on every run without the compiler changing at all, is not measured
-// any more.
+// Allocations and bytes are bit-for-bit reproducible for one checkout, so the same compiler on the same
+// corpus produces the same digits and a difference here is a REAL difference in what the compiler
+// does. The CPU column is not reproducible, and is not asked.
 //
-// ⚠ THE BYTE COLUMN IS ONLY CONSULTED WHEN IT MAY BE. Across two checkouts it carries a path term that
-// GROWS with the program (see the header), so asking it whether the compiler moved would answer "yes"
-// for a run that changed nothing — and this reading decides the sentence that tells the operator exactly
-// that. When bytes are withheld the question is asked of the allocation column alone.
-//
-// ⚠ AND THAT IS THE BEST ANSWER AVAILABLE, NOT A CLEAN ONE — the allocation column is NOT
-// path-independent, which was measured: across two minting paths it carries a CONSTANT offset, so it
-// too can report a compiler that did not move. It is still the column to
-// ask: it is the only one left, and what it gets wrong is bounded — a flat per-rung delta may be the path,
-// a delta that GROWS per rung cannot be. The report does not resolve that for the reader and must not
-// pretend to; `printMintedElsewhere` prints the bound immediately above the sentence this decides.
+// ⚠ A WITHHELD COMPARISON HAS NOT MOVED. When `rowComparability` withholds, nothing was compared, so
+// this answers false and the sentence it decides says nothing was compared, never that nothing changed.
 //
 // ⚠ AND IT IS ASKED IN EXACTLY ONE PLACE. A delta report accumulating its own `moved` flag from its own
 // per-cell comparison, while this function answers the same question for the recording sentence, writes
 // the withheld rule twice in two files with nothing to make them agree — and they disagree about a run
 // whose ladder is shorter than the log's. One run, one answer.
-function anyMemoryMoved(trend LoggedMemory, results RungResultArray, bytes ByteDelta) returns bool
+function anyMemoryMoved(trend LoggedMemory, results RungResultArray, comparability RowComparability) returns bool
 	return match trend 'm'
 		absent gives true
-		present(_, _, _, allocs, loggedBytes) gives memoryDiffers(results, loggedAllocs: allocs, loggedBytes: loggedBytes, bytes: bytes)
+		present(_, _, _, _, _, allocs, loggedBytes) gives comparedMemoryMoved(results, loggedAllocs: allocs, loggedBytes: loggedBytes, comparability: comparability)
 	end 'm'
 end 'anyMemoryMoved'
 
-function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, bytes ByteDelta) returns bool
+function comparedMemoryMoved(results RungResultArray, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, comparability RowComparability) returns bool
+	return match comparability 'c'
+		withheld gives false
+		comparable gives memoryDiffers(results, loggedAllocs: loggedAllocs, loggedBytes: loggedBytes)
+	end 'c'
+end 'comparedMemoryMoved'
+
+function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, loggedBytes ByteCountArray) returns bool
 	// ONLY THE RUNGS BOTH RUNS CLIMBED WERE COMPARED, and a rung that was not compared cannot have moved
-	// — the same argument that withholds the byte column, applied to a rung with no past at all. This used
-	// to answer "moved" for a ladder of a different length, which reported a --rungs=3 run against a
-	// six-rung log as a movement in a compiler that had not moved.
+	// — the same argument that withholds a whole comparison, applied to a rung with no past at all: a
+	// shorter ladder than the log's is not a movement in the compiler.
 	var compared = results.count()
 
 	if loggedAllocs.count() < compared 'shorterPast'
@@ -811,20 +791,13 @@ function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, lo
 
 		let logged = try loggedBytes.get(i) otherwise panic("memoryDiffers: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
-		if bytesMoved(result.total.bytes as BytePos, logged: logged as BytePos, bytes: bytes) 'bytesMoved'
+		if result.total.bytes != logged 'bytesMoved'
 			return true
 		end 'bytesMoved'
 	end 'eachRung'
 
 	return false
 end 'memoryDiffers'
-
-function bytesMoved(current BytePos, logged BytePos, bytes ByteDelta) returns bool
-	return match bytes 'b'
-		withheld gives false
-		comparable gives current != logged
-	end 'b'
-end 'bytesMoved'
 
 // Refuse a `--note` this run could not honestly record — BEFORE the ladder is climbed, not after.
 // Rejecting the command line once the run has already spent thirty seconds compiling six rungs would
@@ -855,6 +828,12 @@ function assertRecordable(trend LoggedMemory, note String, mintedAt String, rung
 	end 'differentLadder'
 end 'assertRecordable'
 
+function assertDigestCell(text String, heading String) throws ScaleError
+	if not isHexOfLeadingBytes(text, count: ScaleDigestBytes) 'notADigest'
+		throw ScaleError.reason("this run's `{heading}` cell '{text}' is not {scaleDigestFormatText()}, so the row would not read back")
+	end 'notADigest'
+end 'assertDigestCell'
+
 // EVERY value written verbatim into a markdown cell comes through here — the operator's note and the
 // compiler path alike.
 //
@@ -873,32 +852,38 @@ function assertCellSafe(text String, what String) throws ScaleError
 	end 'wouldForgeAMarker'
 end 'assertCellSafe'
 
-// Append this run to both tables.
+// Append this run to every table.
 //
 // The file is re-read here rather than carried down from `loadScaleTrend`. It is a document a human
 // edits, and the edit that matters most — a paragraph of prose explaining the row about to be
 // written — is one they may well make WHILE the six rungs are compiling. Writing back a copy read
 // thirty seconds ago would silently discard it.
-function recordScaleRun(results RungResultArray, note String, mintedAt String) throws ScaleError
-	// SCREENED HERE, AT THE WRITE, and not only up front. `assertRecordable` asks the same question
+function recordScaleRun(results RungResultArray, note String, provenance RowProvenance) throws ScaleError
+	// SCREENED HERE, AT THE WRITE, and not only up front. `assertRecordable` screens the note and the place
 	// before the ladder is climbed so that a typo is reported in a second rather than in thirty — but
 	// that makes it a COURTESY, and if it were the only check then the guarantee would rest on every
 	// future caller remembering to ask. The function that writes the cell is the one that can promise it.
-	try assertCellSafe(note, what: "a --note")
-	try assertCellSafe(mintedAt, what: "the run's minting path ({mintedAt})")
+	try assertRowCells(note, provenance: provenance)
 
 	let path = try FilePath.from(OptimizationLogRelativePath) otherwise panic("recordScaleRun: '{OptimizationLogRelativePath}' parsed as a path when the trend was loaded")
 	let existing = try File.readText(path) otherwise throw ScaleError.reason("could not re-read {OptimizationLogRelativePath}")
 
 	let today = todayUtc()
-	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.allocations), source: OptimizationLogRelativePath)
-	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.bytes), source: OptimizationLogRelativePath)
-	updated = try insertRowBefore(updated, marker: CpuTableMarker, row: renderMemoryRow(results, note: note, mintedAt: mintedAt, date: today, measure: ScaleMeasure.cpuTicks), source: OptimizationLogRelativePath)
+	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, provenance: provenance, date: today, measure: ScaleMeasure.allocations), source: OptimizationLogRelativePath)
+	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, provenance: provenance, date: today, measure: ScaleMeasure.bytes), source: OptimizationLogRelativePath)
+	updated = try insertRowBefore(updated, marker: CpuTableMarker, row: renderMemoryRow(results, note: note, provenance: provenance, date: today, measure: ScaleMeasure.cpuTicks), source: OptimizationLogRelativePath)
 
 	try File.writeText(path, content: updated) otherwise throw ScaleError.reason("could not write {OptimizationLogRelativePath}")
 
 	print("\nscale-test: recorded '{note}' ({today}) in {OptimizationLogRelativePath}\n")
 end 'recordScaleRun'
+
+function assertRowCells(note String, provenance RowProvenance) throws ScaleError
+	try assertCellSafe(note, what: "a --note")
+	try assertCellSafe(provenance.mintedAt, what: "the run's minting path ({provenance.mintedAt})")
+	try assertDigestCell(provenance.corpus, heading: CorpusColumnHeading)
+	try assertDigestCell(provenance.tree, heading: TreeColumnHeading)
+end 'assertRowCells'
 
 // Insert one row immediately above one marker — THE way a row reaches any of the three tables.
 //
@@ -943,9 +928,8 @@ let MarkerSplitParts = 2
 // One memory row: the date, WHERE IT WAS MEASURED, the reason, then this run's number at every rung.
 //
 // The provenance is written into all three tables identically, exactly as the date and the note are —
-// `readTable` cross-checks the leading cells of the allocations and bytes rows against each other, and a
-// path recorded in one table but not the other would say the byte column came from a run the allocation
-// column did not.
+// `assertSameRun` cross-checks every leading cell of the three last rows, and a cell recorded in one
+// table but not another would say the tables came from different runs.
 //
 // The rows carry ABSOLUTE numbers, not deltas. A delta answers "did this change help", which the
 // report already told you at the moment you ran it; the column answers "where are we now, and how did
@@ -953,12 +937,14 @@ let MarkerSplitParts = 2
 // downwards IS the progression.
 //
 // FREES ARE NOT LOGGED, and their absence is deliberate. They track allocations almost exactly, so a
-// third table of them would be a near-duplicate paid for in width. They are measured, reported, and
+// table of them would be a near-duplicate paid for in width. They are measured, reported, and
 // carried in `--result-json` for anyone who wants them.
-function renderMemoryRow(results RungResultArray, note String, mintedAt String, date String, measure ScaleMeasure) returns String
+function renderMemoryRow(results RungResultArray, note String, provenance RowProvenance, date String, measure ScaleMeasure) returns String
 	let cells = StringArray.create(results.count() + LeadingColumns, zeroed: false)
 	cells.push(date)
-	cells.push(mintedAt)
+	cells.push(provenance.mintedAt)
+	cells.push(provenance.corpus)
+	cells.push(provenance.tree)
 	cells.push(note)
 
 	for result in results 'eachRung'

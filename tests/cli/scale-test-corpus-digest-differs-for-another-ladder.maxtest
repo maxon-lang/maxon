@@ -1,0 +1,17 @@
+let OneRungDirName = "scale-row-one-rung"
+let TwoRungsDirName = "scale-row-two-rungs"
+let TwoRungs = "2"
+
+test 'scale-test reports another corpus digest for a ladder of another height, and the same tree digest'
+	let log = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded)
+	let oneRungDir = stagedScaleDirectory(OneRungDirName, log: log)
+	let twoRungsDir = stagedScaleDirectory(TwoRungsDirName, log: log)
+	let oneRung = ladderRunIn(oneRungDir, rungs: ScaleRowOneRung)
+	let twoRungs = ladderRunIn(twoRungsDir, rungs: TwoRungs)
+
+	Expect.notEqual(twoRungs.corpusDigest(), expected: oneRung.corpusDigest(), message: "a ladder of two rungs and a ladder of one report one corpus digest, so the digest does not read what the ladder generates. {oneRung.said} {twoRungs.said}")
+	Expect.equal(twoRungs.treeDigest(), expected: oneRung.treeDigest(), message: "one compiler tree digests differently between two runs. {oneRung.said} {twoRungs.said}")
+
+	discardStagedDir(oneRungDir)
+	discardStagedDir(twoRungsDir)
+end 'scale-test reports another corpus digest for a ladder of another height, and the same tree digest'

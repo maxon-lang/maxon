@@ -1,0 +1,17 @@
+let NoteElsewhereCaseDirName = "scale-row-note-elsewhere"
+let NoteElsewhereNote = "--note=a row recorded for a tree the compiler was not built from"
+let BuiltFromWording = "built from"
+
+test 'scale-test --note is refused from a directory that is not the tree the compiler was built from, and records no row'
+	let log = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded)
+	let dir = stagedScaleDirectory(NoteElsewhereCaseDirName, log: log)
+	let run = spawnScaleTest(dir, arguments: ["{ScaleRowRungsFlagName}{ScaleRowOptionValueSeparator}1", NoteElsewhereNote])
+	let said = scaleRunSaid(run)
+
+	Expect.equal(run.exitCode(), expected: ScaleRowRefusedExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowRungsFlagName}=1 {ScaleRowNoteFlagName}=...` run in {dir.toString()}, which is not the compiler's tree, was not refused with exit {ScaleRowRefusedExit}. {said}")
+	Expect.equal(fileText(scaleLogPath(dir)), expected: log, message: "the refused run changed the log of the directory it ran in. {said}")
+	Expect.contains(said, needle: ScaleRowNoteFlagName, message: "the refusal does not name `{ScaleRowNoteFlagName}`. {said}")
+	Expect.contains(said, needle: BuiltFromWording, message: "the refusal does not say a row is recorded only in the tree the compiler was {BuiltFromWording}. {said}")
+
+	discardStagedDir(dir)
+end 'scale-test --note is refused from a directory that is not the tree the compiler was built from, and records no row'

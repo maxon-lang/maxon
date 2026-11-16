@@ -1,0 +1,22 @@
+let MeasuresNothingCaseDirName = "scale-row-measures-nothing"
+let LadderBannerWording = "generating"
+let RungWording = "rung"
+
+test 'scale-test --check-row compiles and measures no rung, and leaves the staged tree and its log as they were'
+	let log = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded)
+	let dir = stagedScaleTree(MeasuresNothingCaseDirName, log: log)
+	let held = HeldFiles.under(dir)
+	let run = spawnScaleTest(dir, arguments: [ScaleRowCheckFlag])
+	let said = scaleRunSaid(run)
+
+	requireCheckRowIsAMode(run)
+	requireNothingMeasured(dir, run: run)
+
+	Expect.isFalse(said.contains(LadderBannerWording), message: "the run announced a ladder it generates. {said}")
+	Expect.isFalse(said.contains(RungWording), message: "the run printed a rung, so it measured something. {said}")
+	Expect.equal(fileText(scaleLogPath(dir)), expected: log, message: "the check rewrote the log it only reads. {said}")
+
+	held.requireUnchangedBy("`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}`", said: said)
+
+	discardStagedDir(dir)
+end 'scale-test --check-row compiles and measures no rung, and leaves the staged tree and its log as they were'

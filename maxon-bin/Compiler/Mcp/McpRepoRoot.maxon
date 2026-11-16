@@ -9,13 +9,7 @@
 // standard library — a build that succeeds and answers about a library that is not the caller's. So a
 // tool acting on a tree runs THAT TREE's compiler, and refuses when it has not been built.
 
-// The three directories a tree must hold to be a checkout this server can act in. `stdlib/` and
-// `runtime/` are both loaded by every compile, so a tree missing either one compiles nothing at all;
-// `maxon-bin/` is where the compiler that would run is built.
-let StdlibMarkerDir = "stdlib"
-let RuntimeMarkerDir = "runtime"
-let CompilerMarkerDir = "maxon-bin"
-let CompilerSlotStem = "maxon-bin/.maxon/maxon"
+let CompilerSlotStem = "{CompilerSourceDirName}/.maxon/maxon"
 
 // A checkout nests at most a handful of levels below the executable that lives in it. The bound
 // exists so a path that is its own parent cannot spin forever.
@@ -79,15 +73,15 @@ function parentDirOrThrow(path FilePath) returns FilePath throws McpError
 end 'parentDirOrThrow'
 
 export function isMaxonCheckout(dir FilePath) returns bool
-	if not Directory.exists(childPath(dir, segment: StdlibMarkerDir)) 'noStdlib'
+	if not Directory.exists(childPath(dir, segment: StdlibDirName)) 'noStdlib'
 		return false
 	end 'noStdlib'
 
-	if not Directory.exists(childPath(dir, segment: RuntimeMarkerDir)) 'noRuntime'
+	if not Directory.exists(childPath(dir, segment: RuntimeDirName)) 'noRuntime'
 		return false
 	end 'noRuntime'
 
-	return Directory.exists(childPath(dir, segment: CompilerMarkerDir))
+	return Directory.exists(childPath(dir, segment: CompilerSourceDirName))
 end 'isMaxonCheckout'
 
 function findRepoRoot(exePath FilePath) returns FilePath throws McpError
@@ -124,7 +118,7 @@ function resolveTargetRepoRoot(reqDoc JsonDoc, args OptionalNode, exePath FilePa
 	end 'notAbs'
 
 	if not isMaxonCheckout(candidate) 'notCheckout'
-		return ResolvedRoot.refused("repoRoot \"{candidate.path}\" is not a Maxon checkout (missing {StdlibMarkerDir}/, {RuntimeMarkerDir}/ or {CompilerMarkerDir}/)")
+		return ResolvedRoot.refused("repoRoot \"{candidate.path}\" is not a Maxon checkout (missing {StdlibDirName}/, {RuntimeDirName}/ or {CompilerSourceDirName}/)")
 	end 'notCheckout'
 
 	return ResolvedRoot.found(candidate)

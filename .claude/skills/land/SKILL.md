@@ -45,7 +45,7 @@ gates and the commit.** Agents do the reading and the typing.
 | **1** | Decide the **MINIMAL** spec set, write it, **watch every case FAIL** | **scout** agent surveys · **you** decide · **spec-author** agent writes · **you** read the red | a case that is green *now* tests nothing about your change |
 | **2** | Write **all** the code | **implementer** agent(s) — one or more | |
 | **3** | Green the set — **on the FILTER, never the full suite** | same agent(s) · **you** integrate and confirm | keep going |
-| **4** | Optimization pass | the **`optimize`** skill, in a dispatched agent, on a trigger · **the ladder read is YOURS** | a ladder you cannot explain |
+| **4** | Optimization pass | the **`optimize`** skill, in a dispatched agent, on a trigger · **the ladder read is YOURS**; its row is minted in §8 | a ladder you cannot explain |
 | **5** | Independent review | the **`code-review`** skill, in a dispatched agent — never one that wrote the code | fix before the commit |
 | **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a non-empty code-identity proof |
 | **7** | **Rebase** on `origin/main` | **you** | resolve by hand |
@@ -84,8 +84,8 @@ still runs**, because independence is not a size question.
 - **The choice of spec set (§1).** An agent left to choose its own coverage tests what it remembered,
   and declares done against cases nobody chose. The scout returns facts; the set is yours.
 - **Reading the RED (§1) and confirming the GREEN (§3)** with your own filtered run.
-- **The `scale-test` ladder read and its `optimization-log.md` row (§4)** — attribution is only
-  available now, and only to whoever knows what changed.
+- **The `scale-test` ladder read (§4) and its `optimization-log.md` row (§8)** — attribution is only
+  available to whoever knows what changed, and the row is minted on the tree you push.
 - **The rebase (§7), the landing gates (§8), the commit and the push (§9).**
 
 ### ⛔ EACH GATE RUNS ONCE, AND THIS TABLE SAYS WHERE
@@ -98,7 +98,7 @@ five times per change and exactly one of those runs gates anything.
 | **build** | **only when the binary is stale** | **you, §8** — §6's documenter is the last editor and does not build; its comment edits make the binary stale | ⛔ **nobody builds a current binary** — see the box below |
 | **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
 | **the §8 gates** — final filtered specs · codecs check · lint · self-compile · seed chain · docs check | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before them, on the identical tree, and runs no tests at all. The full suite, the wasm lane and the tree corpora are CI's |
-| **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
+| **`scale-test` ladder** | **once to read, once to mint the row** | **you** — the read in §4, the row in §8 on the rebased, documented tree — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
 | **`git commit` / `git push` / `git rebase`** | **once** | **you, §7 and §9** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
 
 **When an agent suspects something it cannot cheaply confirm, it says so in its report** — a sentence
@@ -435,9 +435,12 @@ missing or something changed after it.
   trigger fired, say so in the report** — a superlinear hunt over a change that added no algorithm has
   nothing to find.
 
-**If you ran the ladder, write the row in `docs/optimization-log.md` now** — attribution is only
-available now; the instrument sees exactly WHAT moved and can never see WHY, and ten changes later
-neither can you. ⚠ **Write no row you did not measure.**
+**If you ran the ladder, the read is yours now and the row is §8's.** Settle the row's note now —
+attribution is only available now; the instrument sees exactly WHAT moved and can never see WHY, and ten
+changes later neither can you. The row itself is minted in §8, on the rebased, documented tree: the
+documenter's comments and the rebase change the tree digest the row carries, so a row taken before §8 is
+the defect `scale-test --check-row` reports.
+⚠ **Write no row you did not measure.**
 
 ## 5. The review
 
@@ -534,10 +537,8 @@ content. Stash and rebase only when the log above prints commits.
 **Rebase FIRST, so §8 runs on the tree you will actually push.** Other agents land on `main` between and
 during changes; gates run before the rebase measured a tree that no longer exists.
 
-- **A ladder row's absolute columns describe the whole tree.** After a rebase that brought in compiler
-  changes, re-run the ladder and rewrite them; the row's attribution (its difference from its own parent)
-  survives. A change to `ScaleCorpus.maxon` makes the delta column mostly "a bigger, different program":
-  say so in the row and give a same-tree parent-vs-commit A/B as the attributable figure.
+- **No ladder row exists yet**: §8 mints it on this rebased tree, `scripts/check-scale-rows.sh` checks
+  it, and its `corpus` cell is what withholds a delta across a corpus change.
 
 - **A conflict is resolved BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file to
   clear one: a whole-file resolution in a doc has silently reverted somebody else's landed section, and
@@ -571,6 +572,7 @@ fix commit; the cost of a local battery is paid on every change.
 | **The seed chain** — on a throwaway clone at a short path with the diff applied and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`; exit 0, or a refusal | **Where the tree's sources start using a declaration, intrinsic, language form, rule or runtime behaviour the change itself made legal or required, or the change alters a rule the seed applies to the compiler's own source.** CI builds from the pinned seed. Any failure is a refusal, except E6002, which is a locked slot. ⛔ **A refused commit lands through `scripts/pin-seed.sh`, never `git push`** (§9): it freezes `HEAD`, proves the seed, publishes it and pushes the commit with its pin. Naming the `--prove=<lane>` lanes is yours, by `docs/RELEASING.md` "Which lanes to prove"; that document owns the procedure |
 | **The codecs** — `python3 scripts/library-cache/generate-codecs.py --check` | exit 0: the library-cache codecs inside the compiler's sources match what the generator emits. On exit 1, run it without `--check` and stage what it rewrites |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` — which also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
+| **The ladder row** — `./maxon-bin/.maxon/maxon scale-test --note=…` (MCP `run_scale_test` with `note:`) on the rebased, documented, built tree, then `scripts/check-scale-rows.sh --working-tree` | **When §4 read the ladder.** Both exit 0, and the check reports one row added to each table, last, carrying this tree's digest. A delta the run withholds (the corpus changed, or the last row was minted elsewhere) is stated in the note, and the attributable figure there is an A/B against a control compiler built from the parent, run from the same location |
 | **No leftovers** — `python3 scripts/check-ignored-files.py` | exit 0, on every change: no untracked path and no gitignored path that is not on `scripts/allowed-ignored-paths.txt`. On exit 1, delete what your change's runs left (`git add` the change's own new files first: an untracked path fails too). A path a tool legitimately leaves is not deleted: add its pattern to the allow-list in the same commit. `maxon-bin/.maxon/` is a `closed-directory:` of the allow-list: only the names listed under it pass (the slot's `maxon[.exe]`, `maxon.previous[.exe]`, sidecars, compiler-minted `maxon.retired.<block>` images, `.staging-<hex>/`), so a hand-renamed compiler image there fails the gate: delete it and keep a compiler you need in `temp/<task>/`. CI runs the same script as its "No file left behind" step, after the test steps of the corpora, tools, suite and cross-suite jobs on every lane |
 | **§1's count check** on the final tree | markers == ran, no name spelled twice |
 
@@ -662,7 +664,11 @@ the user a seed to freeze or publish by hand.
 Once the push is accepted, delete `temp/land/` and every other `temp/` directory this change created.
 
 ⛔ **A REJECTED PUSH IS NOT A RETRY.** Someone landed while you were running, so the tree you tested is
-not the tree you would push: **rebase and RE-RUN §8** before pushing again.
+not the tree you would push: **rebase and RE-RUN §8** before pushing again. A ladder row the commit
+already carries measured the tree before that rebase: delete it from all three tables, mint it again on
+the rebased tree, amend the commit, and check the commit itself with
+`scripts/check-scale-rows.sh --range origin/main..HEAD --compiler ./maxon-bin/.maxon/maxon`
+(`--working-tree` compares against `HEAD`, which by then holds the row, so it reports that nothing was added).
 
 > ### ⛔ DO NOT WAIT FOR CI (user ruling)
 > **The push ends the change.** Do not watch, poll or schedule a check on the CI run; report and stop.

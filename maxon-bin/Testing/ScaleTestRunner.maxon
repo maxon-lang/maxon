@@ -1,6 +1,7 @@
 // ScaleTestRunner — climb the generated ladder, measure its COST, print it, and record the trend.
 //
-// IT RENDERS NO VERDICT. There is nothing here to pass.
+// THE LADDER RENDERS NO VERDICT. There is nothing in it to pass; `--check-row`, which measures nothing,
+// is the one mode that passes or fails.
 //
 // `spec-test` proves the compiler is CORRECT and gates on it. This is an INSTRUMENT: it compiles a
 // ladder of generated programs — six rungs, each double the last — measures ALLOCATIONS, FREES,
@@ -47,8 +48,8 @@
 // WHAT AN EXIT CODE STILL MEANS
 // ===========================================================================================
 //
-// Exit 0 on any successful run, whatever the numbers say. Non-zero ONLY when the run itself broke —
-// it could not measure, or could not deliver what it measured:
+// A ladder exits 0 on any successful run, whatever the numbers say. Non-zero ONLY when the run itself
+// broke — it could not measure, or could not deliver what it measured:
 //
 //   - a rung would not compile,
 //   - a metrics file was missing or malformed,
@@ -123,14 +124,11 @@ let ScaleHashSeedValue = "5ca1ab1e0ddba115"
 // BYTES. A relative path is the same string on every machine. The subprocess inherits this process's
 // working directory, which is the repo root (see Main.resolveSpecDir, which relies on the same).
 //
-// ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN. The COMPILER resolves each source path
-// against `Directory.currentPath()` itself — per file, per compile, in `Queries.fileProvenanceOf` — so
-// the working directory's length lands in the byte column whatever this side hands it. The reading that
-// shows it is ScaleHistory's header, under (2), and it is deliberately NOT copied here: a fourth copy
-// of a reading is a fourth site to correct, and the one left uncorrected costs an implementer most of a
-// session. Keeping this relative still removes the ARGV
-// copy of the path and is still right; the trend log's byte column is comparable across two runs only
-// when the working directory matches too, which is why `mintedAtCell` records both.
+// ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE COUNTS. The COMPILER resolves each source path against
+// `Directory.currentPath()` itself — per file, per compile, in `Queries.fileProvenanceOf` — so the
+// working directory reaches them whatever this side hands it. Keeping this relative still removes the
+// ARGV copy of the path and is still right; a logged row is differenced only against a run minted at
+// the same place, which is why `mintedAtCell` records the corpus root too.
 export let ScaleCorpusDirName = ".scale-tmp"
 
 // Everything in the scale suite that can go wrong at RUN time: a rung that would not compile, a
@@ -370,9 +368,9 @@ end 'parseRepeatCount'
 // Entry point
 // ===========================================================================================
 
-// The command, wrapped so the checkout's tree lock is taken for its whole duration and released
-// through one exit — `measureScaleLadder` below has a dozen returns, and a release written at each
-// of them is a release the next one forgets (see `Main.compileAndReport`).
+// The command. A ladder is wrapped so the checkout's tree lock is taken for its whole duration and
+// released through one exit — `measureScaleLadder` below has a dozen returns, and a release written at
+// each of them is a release the next one forgets (see `Main.compileAndReport`).
 //
 // A scale run compiles a generated ladder with the in-tree binary and writes its corpus into the
 // checkout, so it contends with a `build` (which replaces that binary mid-ladder) and with a suite
@@ -385,6 +383,10 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 0, usage: scaleTestUsage()) 'noPositional'
 		return OwnFailureExit
 	end 'noPositional'
+
+	if args.checkRow 'checksTheLastRow'
+		return checkLastRow(args)
+	end 'checksTheLastRow'
 
 	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
 		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={try args.emitCorpus.text() otherwise panic("runScaleTest: only a stated --emit-corpus names a path that can fail to parse")}")
@@ -403,8 +405,54 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 end 'runScaleTest'
 
 function scaleTestUsage() returns String
-	return "maxon {ScaleTestCommandName} [{RungsFlagPrefix}<n>] [{RepeatFlagPrefix}<n>] [{NoteFlagPrefix}<text>] [{EmitCorpusFlagPrefix}<dir>] [{ResultJsonFlagPrefix}<path>]"
+	return "maxon {ScaleTestCommandName} [{RungsFlagPrefix}<n>] [{RepeatFlagPrefix}<n>] [{NoteFlagPrefix}<text>] [{EmitCorpusFlagPrefix}<dir>] [{ResultJsonFlagPrefix}<path>]\n       maxon {ScaleTestCommandName} {CheckRowFlag}"
 end 'scaleTestUsage'
+
+// Takes neither the tree lock nor the staleness check: its answer depends only on the files in the
+// current directory, and CI runs a newer compiler inside a checkout of an older commit.
+function checkLastRow(args MaxonArgs) returns ExitCode
+	for spelling in args.optionsSeen 'eachOption'
+		if measuresOrRecords(spelling) 'refusedBesideTheCheck'
+			printError("error: {CheckRowFlag} measures nothing and records nothing, so {spelling} is refused beside it\n")
+			printError("Usage: {scaleTestUsage()}\n")
+			return OwnFailureExit
+		end 'refusedBesideTheCheck'
+	end 'eachOption'
+
+	let trend = try loadScaleTrend() otherwise (error) 'noTrend'
+		return brokenRun("the trend log could not be read", detail: scaleErrorText(error))
+	end 'noTrend'
+
+	let treeDigest = try treeDigestOf(Directory.currentPath()) otherwise (error) 'noTree'
+		return brokenRun("the tree in the current directory could not be digested", detail: scaleErrorText(error))
+	end 'noTree'
+
+	match lastRowCheck(trend, treeDigest: treeDigest, source: OptimizationLogRelativePath) 'verdict'
+		carried(line) then print("{ScaleTestCommandName} {CheckRowFlag}: {line}\n")
+		refused(message) then return refusedRow(message)
+	end 'verdict'
+
+	return SucceededExit
+end 'checkLastRow'
+
+// The only scale-test options admitted beside `--check-row`. Every other one is refused, so an option
+// added to the command is refused here until it is listed.
+let ScaleTestOptionsThatNeitherMeasureNorRecord = [HelpOption.checkRow, HelpOption.log]
+
+function measuresOrRecords(spelling String) returns bool
+	for option in optionsAdmitting(spelling) 'eachOption'
+		if optionReference(option).commands.contains(MaxonCommand.scaleTest) and not ScaleTestOptionsThatNeitherMeasureNorRecord.contains(option) 'aMeasuringOption'
+			return true
+		end 'aMeasuringOption'
+	end 'eachOption'
+
+	return false
+end 'measuresOrRecords'
+
+function refusedRow(message String) returns ExitCode
+	printError("{ScaleTestCommandName} {CheckRowFlag}: {message}\n")
+	return OwnFailureExit
+end 'refusedRow'
 
 function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHold) returns ExitCode
 	// Where this run is measured is resolved first, because it is two things at once: what each rung
@@ -412,8 +460,8 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHo
 	//
 	// Both paths, and neither is optional. A compile derives every stdlib source path from the
 	// compiler's own executable path, and it resolves every rung source path against the working
-	// directory (`Queries.fileProvenanceOf`, per file), so the byte column of this run is comparable
-	// only with a logged row that had the same two. See ScaleHistory's header.
+	// directory (`Queries.fileProvenanceOf`, per file), so this run is differenced only against a logged
+	// row that had the same two. See ScaleHistory's header.
 	let compilerExe = try Process.executablePath() otherwise 'noExe'
 		return brokenRun("the running compiler's own path could not be determined", detail: "Process.executablePath() failed")
 	end 'noExe'
@@ -440,21 +488,31 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHo
 		return brokenRun("the trend log could not be read", detail: scaleErrorText(error))
 	end 'noTrend'
 
+	let tree = try measuredTreeOf(compilerExe) otherwise (error) 'noTree'
+		return brokenRun("the tree the measured compiler was built from could not be digested", detail: scaleErrorText(error))
+	end 'noTree'
+
 	if let note = try args.note.text() 'wantsToRecord'
 		try assertRecordable(trend, note: note, mintedAt: mintedAt, rungs: args.rungs) otherwise (error) 'unrecordable'
 			return brokenRun("this run could not be recorded", detail: scaleErrorText(error))
 		end 'unrecordable'
+
+		_ = try treeToRecord(tree) otherwise (error) 'anotherTree'
+			return brokenRun("this run could not be recorded", detail: scaleErrorText(error))
+		end 'anotherTree'
 	end 'wantsToRecord'
 
-	// Whether this run's BYTES may be subtracted from the logged row's. Decided ONCE, here, and handed
-	// to every consumer of the comparison — the human report and `--result-json` alike — so the two
-	// cannot come to different conclusions about the same pair of rows.
-	let bytesComparable = byteComparability(trend, mintedAt: mintedAt)
-
 	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}, compiling each {args.repeat} time(s)\n")
-	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (error) 'genErr'
+	let generated = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (error) 'genErr'
 		return brokenRun("the corpus could not be generated", detail: scaleErrorText(error))
 	end 'genErr'
+
+	let ladder = generated.rungs
+
+	// Whether this run may be differenced against the logged row at all. Decided ONCE, here, and handed
+	// to every consumer of the comparison — the human report and `--result-json` alike — so the two
+	// cannot come to different conclusions about the same pair of rows.
+	let comparability = rowComparability(trend, mintedAt: mintedAt, corpus: generated.corpusDigest)
 
 	// Say what this corpus covers and what it cannot, on every run and before any number. An
 	// instrument that cannot state its blind spots produces confident zeros — see
@@ -533,19 +591,19 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHo
 	// Whether anything moved is decided once, like the comparability above it, and for the same
 	// reason: the report's closing sentence and the recording sentence are two statements of one
 	// fact, and two answers to one question is how they come to contradict each other in one run.
-	let memoryMoved = anyMemoryMoved(trend, results: results, bytes: bytesComparable)
+	let memoryMoved = anyMemoryMoved(trend, results: results, comparability: comparability)
 
-	printMemoryTrend(results, trend: trend, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
+	printMemoryTrend(results, trend: trend, corpus: generated.corpusDigest, tree: tree, comparability: comparability, moved: memoryMoved)
 	printCorpusGrowth(results)
 
 	if let resultJson = try args.resultJson.text() 'json'
-		try writeResultJson(resultJson, results: results, trend: trend, repeat: RepeatSampling.stated(args.repeat), mintedAt: mintedAt, bytes: bytesComparable) otherwise (error) 'jsonFailed'
+		try writeResultJson(resultJson, results: results, trend: trend, repeat: RepeatSampling.stated(args.repeat), mintedAt: mintedAt, corpus: generated.corpusDigest, tree: tree, comparability: comparability) otherwise (error) 'jsonFailed'
 			return brokenRun("the result document could not be written", detail: scaleErrorText(error))
 		end 'jsonFailed'
 	end 'json'
 
 	if let note = try args.note.text() 'record'
-		let recorded = recordRun(results, note: note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
+		let recorded = recordRun(results, note: note, mintedAt: mintedAt, corpus: generated.corpusDigest, tree: tree, comparability: comparability, moved: memoryMoved)
 
 		if not exitSucceeded(recorded) 'recordFailed'
 			return recorded
@@ -573,32 +631,37 @@ end 'brokenRun'
 // allocations and bytes both match the last logged row. Declining would fail silently, leaving the
 // operator who asked for the datapoint a line of prose and no row, and the operator is the only
 // party who knows why the run was made. The report stays honest: an unmoved run is told it did not
-// move.
+// move, and a withheld one that nothing was compared.
 //
 // Every guard that protects the log's integrity still refuses: a note carrying a `|` or a forged
-// marker, a duplicate marker, a ladder of the wrong width, a curve set that is not this compiler's.
-// Those reject bad input, which is a different thing from overruling a valid instruction.
-function recordRun(results RungResultArray, note String, mintedAt String, bytes ByteDelta, moved bool) returns ExitCode
+// marker, a duplicate marker, a ladder of the wrong width, a compiler built from a tree other than the
+// one the log stands in. Those reject bad input, which is a different thing from overruling a valid
+// instruction.
+function recordRun(results RungResultArray, note String, mintedAt String, corpus String, tree MeasuredTree, comparability RowComparability, moved bool) returns ExitCode
 	if not moved 'unchanged'
-		print("\nscale-test: {unchangedColumnsText(bytes)} since the last logged run — recording anyway, because --note was given.\n")
+		print("\nscale-test: {unmovedText(comparability)} — recording anyway, because --note was given.\n")
 	end 'unchanged'
 
-	try recordScaleRun(results, note: note, mintedAt: mintedAt) otherwise (error) 'writeFailed'
+	let recordedTree = try treeToRecord(tree) otherwise (error) 'anotherTree'
+		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
+	end 'anotherTree'
+
+	try recordScaleRun(results, note: note, provenance: RowProvenance.create(mintedAt, corpus: corpus, tree: recordedTree)) otherwise (error) 'writeFailed'
 		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
 	end 'writeFailed'
 
 	return SucceededExit
 end 'recordRun'
 
-// WHICH columns that "nothing moved" is a claim about. When the byte delta is withheld the sentence may
-// not say bytes are unchanged: nothing compared them, and reporting silence as agreement is the same
+// WHICH columns that "nothing moved" is a claim about. When the comparison is withheld the sentence may
+// not say anything is unchanged: nothing compared them, and reporting silence as agreement is the same
 // failure as reporting a path artifact as a regression, pointed the other way.
-function unchangedColumnsText(bytes ByteDelta) returns String
-	return match bytes 'b'
-		comparable gives "no change in allocations or bytes"
-		withheld gives "no change in allocations (bytes not compared)"
-	end 'b'
-end 'unchangedColumnsText'
+function unmovedText(comparability RowComparability) returns String
+	return match comparability 'c'
+		comparable gives "no change in allocations or bytes since the last logged run"
+		withheld gives "nothing compared against the last logged run (every delta {WithheldDeltaText})"
+	end 'c'
+end 'unmovedText'
 
 // Where the corpus is generated. `--emit-corpus=<dir>` puts it somewhere a human can read it;
 // otherwise it goes to the gitignored `.scale-tmp/`, relative to the working directory — see
@@ -1136,23 +1199,15 @@ end 'topRungGrowth'
 // a difference here is REAL — the same input through the same compiler cannot produce a different one by
 // accident. It is worth explaining rather than merely noticing.
 //
-// ⚠ AND NEITHER COLUMN IS COMPARABLE ACROSS CHECKOUTS — they are spoiled DIFFERENTLY, which is the one
-// asymmetry this report has to carry. The byte term GROWS with the program, so against a row minted
-// elsewhere the byte delta is WITHHELD rather than printed. The allocation term is a CONSTANT at every
-// rung, so that delta IS printed — a flat offset cancels out of every ratio and out of any delta that
-// grows per rung, so its shape survives — under a caveat that its constant term does not.
-//
-// ScaleHistory's header holds the readings. They appear in exactly one other place — the paragraph
-// `printMintedElsewhereReason` PRINTS, which is operator-facing and has to carry its own numbers — and
-// no comment anywhere restates them. That is not tidiness: the claim these paragraphs replaced was
-// written down in four files, so correcting it meant four hand-edits and three chances to leave one
-// saying `path-independent`.
-function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta, moved bool)
+// ⚠ NEITHER COLUMN IS COMPARABLE ACROSS CORPORA OR PLACES, so against such a row every delta is
+// WITHHELD, in both columns at once, under the reason `rowComparability` gives.
+function printMemoryTrend(results RungResultArray, trend LoggedMemory, corpus String, tree MeasuredTree, comparability RowComparability, moved bool)
 	print("\n")
+	print("  this run: corpus {corpus}, tree {measuredTreeText(tree)}\n")
 
 	match trend 'm'
 		absent then printNoPreviousRun()
-		present(date, _, note, allocs, loggedBytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: loggedBytes, mintedAt: mintedAt, bytes: bytes, moved: moved)
+		present(date, _, _, _, note, allocs, loggedBytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: loggedBytes, comparability: comparability, moved: moved)
 	end 'm'
 end 'printMemoryTrend'
 
@@ -1168,7 +1223,7 @@ let TrendDeltaColumnWidth = 14
 // `moved` is a PARAMETER, not a local: it is `anyMemoryMoved`'s answer, which the recording sentence also
 // reads. Accumulating its own here would make "did the memory move" — including the rule that a
 // withheld column has not — a decision written twice in two files.
-function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, mintedAt String, bytes ByteDelta, moved bool)
+function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, comparability RowComparability, moved bool)
 	print("  vs the last row of {OptimizationLogRelativePath} — {date}, \"{note}\"\n")
 	print("\n")
 	print("{padRight("  rung", width: TrendRungColumnWidth)}{padLeft("allocs", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}{padLeft("bytes", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}\n")
@@ -1179,90 +1234,71 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 		let line = StringBuilder.create()
 		line.append(padRight("  {result.rung}", width: TrendRungColumnWidth))
 		line.append(padLeft(groupDigits(result.total.allocs as Delta), width: TrendCountColumnWidth))
-		line.append(padLeft(countDeltaText(result.total.allocs, logged: loggedAllocs, rung: i), width: TrendDeltaColumnWidth))
+		line.append(padLeft(deltaCellText(result.total.allocs as Delta, before: rungBaselineAt(loggedAllocs, loggedBytes: loggedBytes, measure: ScaleMeasure.allocations, rung: i), comparability: comparability), width: TrendDeltaColumnWidth))
 		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
-		line.append(padLeft(byteDeltaText(result.total.bytes, logged: loggedBytes, rung: i, bytes: bytes), width: TrendDeltaColumnWidth))
+		line.append(padLeft(deltaCellText(result.total.bytes as Delta, before: rungBaselineAt(loggedAllocs, loggedBytes: loggedBytes, measure: ScaleMeasure.bytes, rung: i), comparability: comparability), width: TrendDeltaColumnWidth))
 		print("{line.build()}\n")
 	end 'eachRung'
 
-	printMintedElsewhere(bytes, mintedAt: mintedAt)
+	match comparability 'c'
+		withheld(why) then printWithheldReason(why)
+		comparable then printComparedReading(moved)
+	end 'c'
+end 'printMemoryDelta'
 
+function printWithheldReason(why String)
+	print("\n  ⚠ Every delta above is WITHHELD, not zero: {why}.\n")
+	print("    A row is differenced only against a row of the same corpus minted at the same place. The counts\n")
+	print("    are exactly what was measured, and their rung-over-rung ratios stand; only the subtraction is refused.\n")
+end 'printWithheldReason'
+
+function printComparedReading(moved bool)
 	if not moved 'unchanged'
 		// "every rung COMPARED", because a rung the logged row never climbed prints `-` above and was not
-		// compared at all — claiming it matches would be the withheld column's mistake in the other column.
-		print("\n  {unchangedColumnsText(bytes)} — every rung compared against the last logged run matches it exactly.\n")
+		// compared at all — claiming it matches would report silence as agreement.
+		print("\n  {unmovedText(RowComparability.comparable)} — every rung compared against it matches it exactly.\n")
 		return
 	end 'unchanged'
 
-	// "AT ONE PATH" IS THE WHOLE QUALIFIER, and it is three words rather than a paragraph because the
-	// paragraph is already printed directly above by `printMintedElsewhere` — on exactly the runs where
-	// the qualifier bites. Without it this sentence tells a reader that a cross-checkout delta must be
-	// the compiler, which is the attribution it was measured NOT to license.
 	print("\n  A number here MOVED, and it moved for a reason: these counts are bit-for-bit reproducible,\n")
 	print("  so the same input through the same compiler AT ONE PATH cannot produce a different one by\n")
 	print("  accident. Explain it, and record it with --note — the instrument sees WHAT moved and never why.\n")
-end 'printMemoryDelta'
+end 'printComparedReading'
 
-// WHAT THE TABLE ABOVE IS WORTH WHEN THE TWO ROWS WERE MINTED ELSEWHERE — printed under it, and only
-// when they were. One column is blank and the other is not, and a reader is owed both halves of why.
-//
-// The alternative was the confident wrong number this replaced, and the alternative to THAT would be a
-// blank column with no explanation, which reads as a bug in the tool. A reader who is refused a
-// subtraction is owed the reason and the way to get it: measure both binaries at ONE path.
-function printMintedElsewhere(bytes ByteDelta, mintedAt String)
-	match bytes 'b'
-		comparable then return
-		withheld(why) then printMintedElsewhereReason(why, mintedAt: mintedAt)
-	end 'b'
-end 'printMintedElsewhere'
-
-// ⚠ THE SECOND PARAGRAPH REPLACED A FALSE ONE, and the false one was this instrument's own sentence
-// about itself: "the ALLOCATION delta above is unaffected — path-independent in every A/B measured so
-// far". It was not. Saying LESS than the truth here would be the same defect: the shape of that column
-// really does survive, and withholding it too would throw away a reading that is sound.
-function printMintedElsewhereReason(why String, mintedAt String)
-	print("\n  ⚠ The BYTE delta is WITHHELD, not zero: {why}.\n")
-	print("    A compile allocates the path strings it works with: it derives every stdlib source path from\n")
-	print("    the COMPILER's own path, and resolves every rung source path against the WORKING DIRECTORY. So\n")
-	print("    the byte column carries a term proportional to each of their LENGTHS — measured at ~2,100 bytes\n")
-	print("    per character at rung 0 rising to ~9,300 at rung 5, which is not a constant a reader could\n")
-	print("    subtract. Nothing is normalised here: the counts are exactly what was measured, and the one\n")
-	print("    subtraction that cannot be honest is not performed.\n")
-	print("\n")
-	print("  ⚠ The ALLOCATION delta above is NOT clean either — it is spoiled DIFFERENTLY, and the difference\n")
-	print("    is what SURVIVES. Its path term is a CONSTANT, the same number at every rung, where the byte\n")
-	print("    term grows with the program. So the SHAPE of that column stands — a flat offset cancels out of\n")
-	print("    every rung-over-rung ratio and out of any delta that GROWS per rung — while a FLAT per-rung\n")
-	print("    delta between these two rows is unattributable and must not be filed as a cost.\n")
-	print("    ⇒ AND EQUALISING THE PATH LENGTH IS NOT THE FIX: measured on ONE byte-identical binary, two\n")
-	print("    45-character checkouts of different DEPTH read +273 allocations at every one of six rungs,\n")
-	print("    while a 45- and a 14-character checkout of the same depth read 0 at every one.\n")
-	print("    ⇒ Both columns take the SAME remedy: run both binaries from ONE directory, swapped into one\n")
-	print("    location. This run was minted at `{mintedAt}`.\n")
-end 'printMintedElsewhereReason'
+union RungBaseline
+	notClimbed
+	logged(count Delta)
+end 'RungBaseline'
 
 // A rung this run climbed that the logged row did not have is not a delta of zero; it is not a delta
 // at all. (`assertRecordable` refuses to LOG such a run, but a --rungs=3 run with no --note is a
 // perfectly reasonable thing to do while iterating, and it still prints.)
-function countDeltaText(current AllocCount, logged AllocCountArray, rung ElementIndex) returns String
-	let before = try logged.get(rung) otherwise return NoBaselineText
-	return signedDeltaText(current as Delta, before: before as Delta)
-end 'countDeltaText'
+function rungBaselineAt(loggedAllocs AllocCountArray, loggedBytes ByteCountArray, measure ScaleMeasure, rung ElementIndex) returns RungBaseline
+	if rung >= loggedAllocs.count() 'notClimbed'
+		return RungBaseline.notClimbed
+	end 'notClimbed'
 
-// The byte column's delta cell, which is the ONE cell of this table that can be refused.
-//
+	match measure 'm'
+		allocations then return RungBaseline.logged((try loggedAllocs.get(rung) otherwise panic("rungBaselineAt: rung {rung} < loggedAllocs.count() but get failed")) as Delta)
+		bytes then return RungBaseline.logged((try loggedBytes.get(rung) otherwise panic("rungBaselineAt: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")) as Delta)
+		cpuTicks then panic("rungBaselineAt: the last logged row is read for allocations and bytes only, so no CPU delta is taken against it")
+	end 'm'
+end 'rungBaselineAt'
+
 // `WithheldDeltaText` rather than `NoBaselineText`, and they must not look alike: "the logged run never
 // climbed this rung" and "these two rows were measured against different yardsticks" are different
 // facts, and a reader who cannot tell them apart learns neither.
-function byteDeltaText(current HeapByteCount, logged ByteCountArray, rung ElementIndex, bytes ByteDelta) returns String
-	match bytes 'b'
+function deltaCellText(current Delta, before RungBaseline, comparability RowComparability) returns String
+	match comparability 'c'
 		withheld then return WithheldDeltaText
 		comparable then break
-	end 'b'
+	end 'c'
 
-	let before = try logged.get(rung) otherwise return NoBaselineText
-	return signedDeltaText(current as Delta, before: before as Delta)
-end 'byteDeltaText'
+	return match before 'b'
+		notClimbed gives NoBaselineText
+		logged(count) gives signedDeltaText(current, before: count)
+	end 'b'
+end 'deltaCellText'
 
 // Short enough that `padLeft` still puts space in front of it at `TrendDeltaColumnWidth` — a cell that
 // exactly fills its column runs into the one beside it and the table stops being a table. The ⚠ block
@@ -1291,20 +1327,18 @@ end 'signedDeltaText'
 // per-directory cost — which is the bisect the number is supposed to replace. And that cost is neither
 // portable nor constant: measured at 12 allocations / 4,879 bytes per stray directory on arm64-macOS
 // against 14 / 829 on an x64-windows host, because `Directory.list` is `FindFirstFile` on Windows and
-// `opendir`/`readdir` here, and because the byte column carries the path-length term
-// `printMintedElsewhereReason` already documents. The COUNT is the only signal that survives the move.
+// `opendir`/`readdir` here, and because the byte column carries a path-length term. The COUNT is the
+// only signal that survives the move.
 //
 // ⭐⭐ **THE RULE THIS IS ONE HALF OF: AN A/B ACROSS TWO CHECKOUTS IS NOT SOUND BY DEFAULT.** Two known
-// ways it goes wrong are named by this instrument, and BOTH produce a FLAT per-rung delta — which is
-// precisely the shape of a real per-compile cost, and is why each has been read as one:
+// ways it goes wrong are named by this instrument:
 //
-//   - the TREE differs, because git cannot see ignored content (the census above);
-//   - the PATH differs, because a compile allocates the path strings it works with (see
-//     ScaleHistory's header for the readings, and `printMintedElsewhereReason` for what it prints).
+//   - the TREE differs, because git cannot see ignored content (the census above), which adds a FLAT
+//     per-rung delta — precisely the shape of a real per-compile cost;
+//   - the PATH differs, because a compile allocates the path strings it works with, so a row minted
+//     elsewhere has every delta withheld (`rowComparability`).
 //
-// They are separate mechanisms with separate remedies, so they are detected separately; what they share
-// is the reading they corrupt. ⇒ A FLAT delta between two checkouts is the one shape to distrust, and a
-// delta that GROWS per rung is the one neither mechanism can fake.
+// They are separate mechanisms with separate remedies, so they are detected separately.
 //
 // It is a number a reader COMPARES against the checkout a logged row was minted at, and nothing more.
 // No threshold, no baseline, no refusal — this instrument renders no verdicts (see this file's header),

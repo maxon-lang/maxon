@@ -416,11 +416,17 @@ last 4 KiB of output, starting on a character boundary).
 
 ### `run_scale_test`
 
-Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. It
-has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). Each rung's `phases`
-carry the `lint:` rows of [`maxon scale-test`](/docs/cli/compiler-development/#maxon-scale-test). The document is written
+Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. The
+ladder has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). Each rung's
+`phases` carry the `lint:` rows of [`maxon scale-test`](/docs/cli/compiler-development/#maxon-scale-test), and the document carries the
+run's `corpusDigest` and `treeDigest` and, under `previous`, whether the last logged row was comparable
+(see [the result document](/docs/cli/compiler-development/#the-result-document)). The document is written
 to `.scale-tmp/scale-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and
 deleted when the call ends.
+
+`checkRow: true` is the one call with a verdict: it runs `scale-test --check-row`, which measures nothing,
+and answers no `result`. Its `exitCode` is 0 when the last row of `docs/optimization-log.md` carries the
+digest of the checkout's tree and 1 when it does not, and `rawTail` says which.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -428,6 +434,7 @@ deleted when the call ends.
 | `repeat` | integer | Compiles per rung (1–25, default 1). CPU takes the minimum; memory is cross-checked. |
 | `note` | string | Record the run in `docs/optimization-log.md` with this text as the reason |
 | `emitCorpus` | string | Write the generated programs to this directory and stop there |
+| `checkRow` | boolean | Run `--check-row` instead of the ladder: no `result`, the verdict in `exitCode` and `rawTail` |
 | `log` | string | `--log=` value |
 | `timeoutSeconds` | number | Seconds the run may take (default 600) |
 | `repoRoot` | string | The checkout to run in |

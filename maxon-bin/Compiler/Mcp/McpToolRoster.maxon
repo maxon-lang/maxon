@@ -230,10 +230,11 @@ function mcpToolRoster() returns McpToolSpecArray
 	scaleProps.push(whole(RepeatOption, description: "How many times each rung is compiled ({MinRepeatCount}-{MaxRepeatCount}, default {DefaultRepeatCount}). CPU takes minimum; memory cross-checks.", least: MinRepeatCount as JsonInt, most: MaxRepeatCount as JsonInt, devOnly: true))
 	scaleProps.push(str(NoteOption, description: "Record this run in docs/optimization-log.md with this text as the reason.", devOnly: true))
 	scaleProps.push(str(EmitCorpusOption, description: "Write the generated corpus to this directory and compile nothing.", devOnly: true))
+	scaleProps.push(flag(CheckRowOption, description: "Measure nothing: check that the last row of {OptimizationLogRelativePath} carries the digest of the tree in the checkout ({CheckRowFlag}). `exitCode` 0 when it does, 1 when it does not, and `rawTail` says which; the fix is to re-run with `{NoteOption}` on this tree.", devOnly: true))
 	scaleProps.push(str(LogOption, description: "Passed to --log=<value>.", devOnly: true))
 	scaleProps.push(childTimeoutProperty())
 	scaleProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
-	tools.push(McpToolSpec.create(ScaleTestToolName, description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. It has no verdict — the RATIO between rungs is the reading.", properties: scaleProps, devOnly: true))
+	tools.push(McpToolSpec.create(ScaleTestToolName, description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. The ladder has no verdict — the RATIO between rungs is the reading; `{CheckRowOption}` is the one check with one.", properties: scaleProps, devOnly: true))
 
 	pushDebugTools(tools)
 

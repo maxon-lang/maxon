@@ -1404,8 +1404,37 @@ function knobAt(base KnobSize, rung RungIndex) returns KnobSize
 	return size
 end 'knobAt'
 
-// Generate the whole ladder under `root`, returning one ScaleRung per rung.
-function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray throws ScaleError
+type ScaleLadder
+	let rungs as ScaleRungArray
+	let corpusDigest as String
+
+	static function create(rungs ScaleRungArray, corpusDigest String) returns ScaleLadder
+		return Self{rungs: rungs, corpusDigest: corpusDigest}
+	end 'create'
+end 'ScaleLadder'
+
+// Each file reaches the corpus digest under its `rung<N>/`-relative name, never under the root, so one
+// ladder digests the same wherever it is generated.
+type RungFiles
+	let rungName as String
+	let names as StringArray
+	let corpus as Digest
+
+	static function create(rungName String, corpus Digest) returns RungFiles
+		return Self{rungName: rungName, names: StringArray.create(0), corpus: corpus}
+	end 'create'
+
+	function recordFile(fileName String, source String)
+		self.names.push(fileName)
+		digestNamedBytes(self.corpus, name: "{self.rungName}{PortablePathSeparator}{fileName}".toByteArray(), content: source.toByteArray())
+	end 'recordFile'
+
+	function recordDirectory(relative String)
+		self.names.push("{relative}{PortablePathSeparator}")
+	end 'recordDirectory'
+end 'RungFiles'
+
+function generateCorpus(root FilePath, rungs RungCount) returns ScaleLadder throws ScaleError
 	if not Directory.create(root) 'noRoot'
 		throw ScaleError.reason("could not create the corpus root {root.toString()}")
 	end 'noRoot'
@@ -1418,18 +1447,20 @@ function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray t
 	try File.writeText(marker, content: "") otherwise throw ScaleError.reason("could not write {marker.toString()}")
 
 	let ladder = ScaleRungArray.create(rungs as ElementIndex, zeroed: false)
+	let corpus = newScaleDigest()
 
 	for rung in 0 upto rungs as ElementIndex 'eachRung'
-		ladder.push(try generateRung(root, rung: rung as RungIndex))
+		ladder.push(try generateRung(root, rung: rung as RungIndex, corpus: corpus))
 	end 'eachRung'
 
-	return ladder
+	return ScaleLadder.create(ladder, corpusDigest: scaleDigestText(corpus))
 end 'generateCorpus'
 
 // Generate one rung: a DIRECTORY of `.maxon` files (the compiler's `build <dir>` walks them recursively),
 // so the `FilesBase` knob is expressed as real files on disk rather than simulated.
-function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws ScaleError
-	let dirName = try FilePath.from("{RungDirPrefix}{rung}") otherwise panic("ScaleCorpus: rung dir name must be valid")
+function generateRung(root FilePath, rung RungIndex, corpus Digest) returns ScaleRung throws ScaleError
+	let rungName = "{RungDirPrefix}{rung}"
+	let dirName = try FilePath.from(rungName) otherwise panic("ScaleCorpus: rung dir name must be valid")
 	let dir = root.joinPath(dirName)
 
 	if not Directory.create(dir) 'noDir'
@@ -1441,7 +1472,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	let localCount = knobAt(LocalsPerFunctionBase, rung: rung)
 
 	var sourceBytes = 0 as BytePos
-	let written = StringArray.create(0)
+	let written = RungFiles.create(rungName, corpus: corpus)
 
 	// Every generated entry point `main` threads the accumulator through, IN CALL ORDER — filled by
 	// the `writeRungFile` calls below as each file is written, read back by `main`. The generation
@@ -1539,7 +1570,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	// stale rung directory holds rather than leaving it to join the measurement.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "z_main", source: mainSource(drivers), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 
-	try pruneRungDir(dir, generated: written)
+	try pruneRungDir(dir, generated: written.names)
 
 	return ScaleRung.create(rung, dir: dir, sourceBytes: sourceBytes)
 end 'generateRung'
@@ -1578,8 +1609,9 @@ union RungDriver
 end 'RungDriver'
 
 // Write one generated file, returning its byte length so the caller can total the rung's source
-// size without stat-ing the directory back, recording its NAME so the prune below knows it belongs
-// there, and registering its entry point so `main` can call it without re-spelling the name.
+// size without stat-ing the directory back, recording it in `written` — its NAME so the prune below
+// knows it belongs there, its name and bytes for the corpus digest — and registering its entry point
+// so `main` can call it without re-spelling the name.
 //
 // ⭐ **`name` MAY CARRY A RUNG-RELATIVE DIRECTORY PREFIX (`"ns3/mod"`), WHICH IS HOW THE NAMESPACE KNOB
 // WRITES INTO A SUBDIRECTORY.** `FilePath.join` normalizes the separator to the host's, so the
@@ -1590,12 +1622,12 @@ end 'RungDriver'
 // ⚠ The caller owns creating the directory. This writes a file and does not mkdir, because the knob that
 // needs a subdirectory also needs it recorded in `written` — one caller, one place, rather than a
 // create-if-missing here that would leave the prune's set to be filled in somewhere else.
-function writeRungFile(dir FilePath, name String, source String, written StringArray, drivers StringArray, driver RungDriver) returns BytePos throws ScaleError
+function writeRungFile(dir FilePath, name String, source String, written RungFiles, drivers StringArray, driver RungDriver) returns BytePos throws ScaleError
 	let fileName = "{name}{MaxonSourceExtension}"
 	let path = dir.join(fileName)
 
 	try File.writeText(path, content: source) otherwise throw ScaleError.reason("could not write {path.toString()}")
-	written.push(fileName)
+	written.recordFile(fileName, source: source)
 
 	match driver 'driver'
 		threads(driverName) then drivers.push(driverName)
@@ -1783,7 +1815,7 @@ end 'opaqueCalleeValue'
 // This is the ONE file whose functions register individually rather than through `writeRungFile`'s
 // `driver` parameter: it writes N files holding N*k functions, so there is no single entry point to
 // declare, and the names are known only inside the loop that mints them.
-function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
+function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written RungFiles, drivers StringArray) returns BytePos throws ScaleError
 	let perFile = bucketCount(funcCount, perBucket: fileCount)
 
 	var total = 0 as BytePos
@@ -2015,7 +2047,7 @@ end 'chainLinkHeader'
 // ⚠ A one-link chain would make the base the DRIVER, and a driver must hand back its argument. The knob
 // cannot reach that (the smallest chain base is 8 and rungs only double it), and the check below says so rather
 // than leaving the next person to retune it to 1 and get a rung that exits 1 for no visible reason.
-function writeCallChain(dir FilePath, shape ChainShape, length KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
+function writeCallChain(dir FilePath, shape ChainShape, length KnobSize, written RungFiles, drivers StringArray) returns BytePos throws ScaleError
 	if length < MinCallChainLength 'baseWouldBeTheDriver'
 		panic("ScaleCorpus.writeCallChain: a chain of {length} makes the un-witnessed base link the knob's DRIVER, and a driver must return its argument — raise the chain's base back to at least {MinCallChainLength}")
 	end 'baseWouldBeTheDriver'
@@ -5142,7 +5174,7 @@ end 'tryCoOwnPick'
 // `isVisibleFrom`'s expensive `unexported` arm rather than only the cheap `global` one. This knob ADDS
 // unexported free functions and an unexported alias per module, and reaches one of them from a
 // subdirectory, so that arm gets MORE traffic here, not less.
-function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
+function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written RungFiles, drivers StringArray) returns BytePos throws ScaleError
 	var total = 0 as BytePos
 	let consumer = StringBuilder.create()
 	consumer.append("// Generated by ScaleCorpus: the namespace knob's CONSUMER — one qualified reference group per module, written from the ROOT namespace.\n")
@@ -5171,14 +5203,14 @@ end 'writeNamespacedModules'
 // is what `pruneRungDir` reads it back by. The two facts (it exists on disk, the prune knows it is ours)
 // are written here together, because a directory recorded but not created is a rung that fails to write
 // and a directory created but not recorded is a rung that fails to prune.
-function createRungSubdir(dir FilePath, relative String, written StringArray) throws ScaleError
+function createRungSubdir(dir FilePath, relative String, written RungFiles) throws ScaleError
 	let path = dir.join(relative)
 
 	if not Directory.create(path) 'noDir'
 		throw ScaleError.reason("could not create the module directory {path.toString()}")
 	end 'noDir'
 
-	written.push("{relative}{PortablePathSeparator}")
+	written.recordDirectory(relative)
 end 'createRungSubdir'
 
 // One module's own file. See `writeNamespacedModules` for what each declaration is here to price.
@@ -5339,7 +5371,7 @@ end 'qualifiedReferenceGroup'
 // (This corpus emits no `where` clause, so there are zero sites today. The shape is kept honest for the
 // knob that adds one — and that cost is in TIME, which this instrument cannot see, so the corpus paying
 // it would show nothing while slowing every run.)
-function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
+function writeInterfaceTypes(dir FilePath, count KnobSize, written RungFiles, drivers StringArray) returns BytePos throws ScaleError
 	let fileCount = bucketCount(count, perBucket: InterfacesPerFile)
 
 	var total = 0 as BytePos

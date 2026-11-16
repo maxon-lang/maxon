@@ -1,0 +1,30 @@
+let UnrecordedCorpusDirName = "scale-row-unrecorded-corpus"
+let WrittenBeforeWording = "before rows recorded"
+let OldAllocationCaveatWording = "NOT clean either"
+
+test 'scale-test --result-json withholds the allocation and byte deltas alike from a last row of the same place whose corpus is unrecorded'
+	let dir = stagedScaleDirectory(UnrecordedCorpusDirName, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded))
+	let probe = ladderRunIn(dir, rungs: ScaleRowOneRung)
+	let mintedAt = probe.mintedAt()
+
+	writeScaleLog(dir, log: scaleLogDocument(mintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded))
+
+	let run = ladderRunIn(dir, rungs: ScaleRowOneRung)
+	let corpus = run.corpusDigest()
+	let tree = run.treeDigest()
+	let withheld = run.previousText(ScaleRowWithheldKey)
+
+	Expect.equal(run.mintedAt(), expected: mintedAt, message: "the second run was minted at another place than the first, so the place cannot be what withholds. {run.said}")
+	Expect.isFalse(run.previousFlag(ScaleRowComparableKey), message: "a last row whose corpus is {ScaleRowUnrecorded} was reported comparable. {run.said}")
+	Expect.isFalse(withheld.isEmpty(), message: "`previous.{ScaleRowWithheldKey}` is empty, so a withheld comparison names no reason. {run.said}")
+	Expect.contains(withheld, needle: WrittenBeforeWording, message: "`previous.{ScaleRowWithheldKey}` does not say the row was written before rows recorded their corpus. {run.said}")
+	Expect.isFalse(run.previousHas(ScaleRowRetiredComparableKey), message: "`previous` still carries `{ScaleRowRetiredComparableKey}`, which `{ScaleRowComparableKey}` replaces. {run.said}")
+	Expect.isFalse(run.previousHas(ScaleRowRetiredWithheldKey), message: "`previous` still carries `{ScaleRowRetiredWithheldKey}`, which `{ScaleRowWithheldKey}` replaces. {run.said}")
+	Expect.isFalse(run.rungZeroHas(ScaleRowAllocationsDeltaKey), message: "rung 0 carries an `{ScaleRowAllocationsDeltaKey}` against a row whose corpus is {ScaleRowUnrecorded}. {run.said}")
+	Expect.isFalse(run.rungZeroHas(ScaleRowBytesDeltaKey), message: "rung 0 carries a `{ScaleRowBytesDeltaKey}` against a row whose corpus is {ScaleRowUnrecorded}. {run.said}")
+	Expect.contains(run.report, needle: corpus, message: "the report does not name the corpus digest {corpus} of this run. {run.said}")
+	Expect.contains(run.report, needle: tree, message: "the report does not name the tree digest {tree} of this run. {run.said}")
+	Expect.isFalse(run.report.contains(OldAllocationCaveatWording), message: "the report still prints the allocation caveat that the one comparability decision replaces. {run.said}")
+
+	discardStagedDir(dir)
+end 'scale-test --result-json withholds the allocation and byte deltas alike from a last row of the same place whose corpus is unrecorded'

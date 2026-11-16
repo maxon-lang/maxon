@@ -1,0 +1,17 @@
+let SameLadderFirstDirName = "scale-row-ladder-first"
+let SameLadderSecondDirName = "scale-row-ladder-second"
+
+test 'scale-test reports one corpus digest and one tree digest for one ladder, whichever directory generates it'
+	let log = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded)
+	let first = stagedScaleDirectory(SameLadderFirstDirName, log: log)
+	let second = stagedScaleDirectory(SameLadderSecondDirName, log: log)
+	let firstRun = ladderRunIn(first, rungs: ScaleRowOneRung)
+	let secondRun = ladderRunIn(second, rungs: ScaleRowOneRung)
+
+	Expect.notEqual(secondRun.mintedAt(), expected: firstRun.mintedAt(), message: "the two runs were minted at one place, so a corpus digest that reads the root path would not show here. {secondRun.said}")
+	Expect.equal(secondRun.corpusDigest(), expected: firstRun.corpusDigest(), message: "one ladder generated under two corpus roots digests differently, so the corpus digest reads the root path. {firstRun.said} {secondRun.said}")
+	Expect.equal(secondRun.treeDigest(), expected: firstRun.treeDigest(), message: "one compiler tree digests differently between two runs. {firstRun.said} {secondRun.said}")
+
+	discardStagedDir(first)
+	discardStagedDir(second)
+end 'scale-test reports one corpus digest and one tree digest for one ladder, whichever directory generates it'

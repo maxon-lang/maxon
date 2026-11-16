@@ -16,7 +16,9 @@
 # is excluded because no job here runs the rest of it, so a run on its change reports on code it never
 # touched; the scripts a job does run are re-included, and so are the website pages whose snippets
 # `tests/examples` compiles and the workflows and installers `tests/targets` reads. A step that starts
-# running another script needs that script, and any file it reads, re-included here.
+# running another script needs that script, and any file it reads, re-included here. The one exception
+# is `docs/optimization-log.md`, which the "Scale-ladder rows" step reads and which stays excluded: a push
+# that changes only the log costs no build matrix, and `scale-rows.yml` checks its history on every push.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
 # directory therefore runs CI until someone decides it need not, rather than being skipped silently
@@ -68,6 +70,7 @@ on:
       - 'scripts/test-bench-common.py'
       - 'scripts/check-ignored-files.py'
       - 'scripts/allowed-ignored-paths.txt'
+      - 'scripts/check-scale-rows.sh'
       - 'installer/docker/Dockerfile'
       - 'installer/homebrew/generate.sh'
       - '!.github/**'
@@ -393,6 +396,23 @@ jobs:
       - name: Targets table is generated and agrees with the compiler
         if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
         run: ./scripts/targets/generate.sh --check
+
+      # Every row a commit of the push or pull request adds to `docs/optimization-log.md` is the last row of
+      # its table and carries that commit's tree digest. The checkout is one commit deep, so the step fetches
+      # the history back to the range's base itself; with no base (a new branch, a manual run, a base the
+      # remote no longer has) it checks the head commit alone, or nothing when that commit has no parent.
+      # The log is not among this workflow's inputs, so a push that changes only it runs `scale-rows.yml`
+      # alone, which checks the history half of every push to `main`.
+      - name: Scale-ladder rows
+        if: steps.seed.outputs.seeded == 'yes' && runner.os == 'Linux' && contains(format(',{0},', matrix.roles), ',codecs,')
+        env:
+          RANGE_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          RANGE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/fetch-range.sh
+          fetch_range "$RANGE_BASE" "$RANGE_HEAD"
+          bash scripts/check-scale-rows.sh --range "$RangeBase..$RANGE_HEAD" --compiler ./maxon-bin/.maxon/maxon
 
       # A step with a timeout: a compile that hangs would otherwise run to the job's six-hour
       # default and end cancelled, not failed.

@@ -1,0 +1,239 @@
+let ScaleRowDocsDirName = "docs"
+let ScaleRowLogFileName = "optimization-log.md"
+let ScaleRowResultFileName = "scale-result.json"
+let ScaleRowCorpusDirName = ".scale-tmp"
+let ScaleRowUnrecorded = "*(unrecorded)*"
+let ScaleRowCheckFlag = "--check-row"
+let ScaleRowNoteFlagName = "--note"
+let ScaleRowRungsFlagName = "--rungs"
+let ScaleRowResultFlagPrefix = "--result-json="
+let ScaleRowOptionValueSeparator = "="
+let ScaleRowUnknownOptionWording = "unknown option"
+let ScaleRowFixtureDate = "2026-01-01"
+let ScaleRowFixtureChange = "the row a scale-row case planted"
+let ScaleRowFixtureMintedAt = "/fixture/maxon (corpus /fixture/.scale-tmp)"
+let ScaleRowFixtureAllocations = "1000"
+let ScaleRowFixtureBytes = "30000"
+let ScaleRowFixtureCpu = "500"
+let ScaleRowForeignDigest = "0000000000000000"
+let ScaleRowStrangerDigest = "1111111111111111"
+let ScaleRowCleanExit = 0
+let ScaleRowRefusedExit = 1
+let ScaleRowCompilerDirName = "maxon-bin"
+let ScaleRowTreeSourceName = "Probe.maxon"
+let ScaleRowTreeSourceText = "function probe() returns ExitCode\n\treturn 0\nend 'probe'\n"
+let ScaleRowEditedSourceText = "function probe() returns ExitCode\n\treturn 1\nend 'probe'\n"
+let ScaleRowAllocationsMarker = "<!-- scale-history:allocations -->"
+let ScaleRowBytesMarker = "<!-- scale-history:bytes -->"
+let ScaleRowCpuMarker = "<!-- scale-history:cpu -->"
+let ScaleRowLogHeading = "| date | minted at | corpus | tree | change | rung 0 |"
+let ScaleRowLogSeparator = "| --- | --- | --- | --- | --- | ---: |"
+let ScaleRowFirstRung = 0
+let ScaleRowCorpusDigestKey = "corpusDigest"
+let ScaleRowTreeDigestKey = "treeDigest"
+let ScaleRowMintedAtKey = "mintedAt"
+let ScaleRowComparableKey = "comparable"
+let ScaleRowWithheldKey = "withheld"
+let ScaleRowPreviousCorpusKey = "corpus"
+let ScaleRowPreviousTreeKey = "tree"
+let ScaleRowRetiredComparableKey = "bytesComparable"
+let ScaleRowRetiredWithheldKey = "bytesWithheld"
+let ScaleRowAllocationsKey = "allocs"
+let ScaleRowBytesKey = "bytes"
+let ScaleRowAllocationsDeltaKey = "allocsDelta"
+let ScaleRowBytesDeltaKey = "bytesDelta"
+let ScaleRowPreviousKey = "previous"
+let ScaleRowRungsKey = "rungs"
+let ScaleRowOneRung = "1"
+
+typealias ScaleRowFigure = int(i64.min to i64.max)
+
+function scaleLogRow(mintedAt String, corpus String, tree String, count String) returns String
+	return "| {ScaleRowFixtureDate} | {mintedAt} | {corpus} | {tree} | {ScaleRowFixtureChange} | {count} |"
+end 'scaleLogRow'
+
+function scaleLogTable(title String, marker String, row String) returns String
+	return "## {title}\n\n{ScaleRowLogHeading}\n{ScaleRowLogSeparator}\n{row}\n{marker}\n\n"
+end 'scaleLogTable'
+
+function scaleLogDocument(mintedAt String, corpus String, tree String, allocations String = ScaleRowFixtureAllocations, bytes String = ScaleRowFixtureBytes) returns String
+	let allocationsTable = scaleLogTable("Allocations", marker: ScaleRowAllocationsMarker, row: scaleLogRow(mintedAt, corpus: corpus, tree: tree, count: allocations))
+	let bytesTable = scaleLogTable("Bytes", marker: ScaleRowBytesMarker, row: scaleLogRow(mintedAt, corpus: corpus, tree: tree, count: bytes))
+	let cpuTable = scaleLogTable("CPU", marker: ScaleRowCpuMarker, row: scaleLogRow(mintedAt, corpus: corpus, tree: tree, count: ScaleRowFixtureCpu))
+
+	return "# a scale-row fixture\n\nprose the reader walks past.\n\n{allocationsTable}{bytesTable}{cpuTable}"
+end 'scaleLogDocument'
+
+function scaleLogPath(dir FilePath) returns FilePath
+	return dir.join(ScaleRowDocsDirName).join(ScaleRowLogFileName)
+end 'scaleLogPath'
+
+function writeScaleLog(dir FilePath, log String)
+	let docs = stagingDir(dir.join(ScaleRowDocsDirName).toString())
+
+	writeStagedFile(docs.join(ScaleRowLogFileName), content: log)
+end 'writeScaleLog'
+
+function stagedScaleDirectory(caseDirName String, log String) returns FilePath
+	let dir = freshOutsideCheckoutDir(caseDirName)
+
+	clearStagedTree(dir)
+	writeScaleLog(dir, log: log)
+
+	return dir
+end 'stagedScaleDirectory'
+
+function stagedScaleTree(caseDirName String, log String) returns FilePath
+	let dir = stagedScaleDirectory(caseDirName, log: log)
+
+	for tierDirName in [ScaleRowCompilerDirName, StdlibDirName, RuntimeDirName] 'eachTier'
+		let tier = stagingDir(dir.join(tierDirName).toString())
+
+		writeStagedFile(tier.join(ScaleRowTreeSourceName), content: ScaleRowTreeSourceText)
+	end 'eachTier'
+
+	return dir
+end 'stagedScaleTree'
+
+function editScaleTree(dir FilePath)
+	writeStagedFile(dir.join(StdlibDirName).join(ScaleRowTreeSourceName), content: ScaleRowEditedSourceText)
+end 'editScaleTree'
+
+function spawnScaleTest(dir FilePath, arguments StringArray) returns CollectedOutput
+	let line = StringArray.create(0)
+
+	line.push(ScaleTestCommandWord)
+	line.append(arguments)
+
+	return spawnCompiler(line, staged: dir, what: "`maxon {joined(line, separator: Space)}` in {dir.toString()}")
+end 'spawnScaleTest'
+
+function scaleRunSaid(run CollectedOutput) returns String
+	return "It exited {run.exitCode()}. stdout:\n{run.stdout}\nstderr:\n{run.stderr}"
+end 'scaleRunSaid'
+
+function requireCheckRowIsAMode(run CollectedOutput) throws TestFailure
+	try Expect.isFalse(scaleRunSaid(run).contains(ScaleRowUnknownOptionWording), message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` was refused as an unknown option, so {ScaleTestCommandWord} has no such mode. {scaleRunSaid(run)}")
+end 'requireCheckRowIsAMode'
+
+function requireNothingMeasured(dir FilePath, run CollectedOutput) throws TestFailure
+	try Expect.isFalse(Directory.isDirectory(dir.join(ScaleRowCorpusDirName)), message: "a corpus was generated under {dir.join(ScaleRowCorpusDirName).toString()}, so the run measured something. {scaleRunSaid(run)}")
+end 'requireNothingMeasured'
+
+function digestsBesides(said String, planted String) returns StringArray
+	let others = StringArray.create(0)
+
+	for digest in scaleDigestsIn(said) 'eachDigest'
+		if digest != planted and not others.contains(digest) 'anotherOne'
+			others.push(digest)
+		end 'anotherOne'
+	end 'eachDigest'
+
+	return others
+end 'digestsBesides'
+
+function soleDigestBesides(said String, planted String) returns String throws TestFailure
+	let others = digestsBesides(said, planted: planted)
+
+	try Expect.equal(others.count(), expected: 1, message: "the message was expected to show exactly one {ScaleDigestLength}-character digest besides {planted}, this tree's, and showed {others.count()}: {joined(others, separator: Space)}. {said}")
+
+	return try others.get(0) otherwise panic("scale-row: a list of one holds an element")
+end 'soleDigestBesides'
+
+function checkRowAgainst(dir FilePath, tree String) returns CollectedOutput
+	writeScaleLog(dir, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: tree))
+
+	return spawnScaleTest(dir, arguments: [ScaleRowCheckFlag])
+end 'checkRowAgainst'
+
+function thisTreesDigest(dir FilePath) returns String throws TestFailure
+	let run = checkRowAgainst(dir, tree: ScaleRowForeignDigest)
+
+	try requireCheckRowIsAMode(run)
+	try Expect.equal(run.exitCode(), expected: ScaleRowRefusedExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` over a row recording {ScaleRowForeignDigest} did not exit {ScaleRowRefusedExit}. {scaleRunSaid(run)}")
+
+	return try soleDigestBesides(scaleRunSaid(run), planted: ScaleRowForeignDigest)
+end 'thisTreesDigest'
+
+function textBeforeUsage(said String) returns String
+	return try said.split(UsageLinePrefix).get(0) otherwise panic("scale-row: splitting '{said}' yields a first part")
+end 'textBeforeUsage'
+
+type ScaleLadderRun
+	let document as JsonDoc
+	let said as String
+	let report as String
+
+	static function of(document JsonDoc, said String, report String) returns Self
+		return Self{document: document, said: said, report: report}
+	end 'of'
+
+	function corpusDigest() returns String throws TestFailure
+		return try digestChild(self.document, parent: self.document.root, key: ScaleRowCorpusDigestKey, said: self.said)
+	end 'corpusDigest'
+
+	function treeDigest() returns String throws TestFailure
+		return try digestChild(self.document, parent: self.document.root, key: ScaleRowTreeDigestKey, said: self.said)
+	end 'treeDigest'
+
+	function mintedAt() returns String throws TestFailure
+		let child = try childOfKind(self.document, parent: self.document.root, key: ScaleRowMintedAtKey, kind: JsonKind.jsonString, said: self.said)
+
+		return self.document.get(child).stringValue
+	end 'mintedAt'
+
+	function previous() returns JsonNodeId throws TestFailure
+		return try childOfKind(self.document, parent: self.document.root, key: ScaleRowPreviousKey, kind: JsonKind.jsonObject, said: self.said)
+	end 'previous'
+
+	function rungZero() returns JsonNodeId throws TestFailure
+		let rungs = try childOfKind(self.document, parent: self.document.root, key: ScaleRowRungsKey, kind: JsonKind.jsonArray, said: self.said)
+
+		return try self.document.arrayAt(rungs, index: ScaleRowFirstRung) otherwise panic("scale-row: the result document's ladder holds no rung 0: {self.said}")
+	end 'rungZero'
+
+	function rungZeroNumber(key String) returns ScaleRowFigure throws TestFailure
+		let rung = try rungZero()
+		let child = try childOfKind(self.document, parent: rung, key: key, kind: JsonKind.jsonNumber, said: self.said)
+
+		return trunc(self.document.get(child).numberValue)
+	end 'rungZeroNumber'
+
+	function previousFlag(key String) returns bool throws TestFailure
+		let previousNode = try previous()
+		let child = try childOfKind(self.document, parent: previousNode, key: key, kind: JsonKind.jsonBool, said: self.said)
+
+		return self.document.get(child).boolValue
+	end 'previousFlag'
+
+	function previousText(key String) returns String throws TestFailure
+		let previousNode = try previous()
+		let child = try childOfKind(self.document, parent: previousNode, key: key, kind: JsonKind.jsonString, said: self.said)
+
+		return self.document.get(child).stringValue
+	end 'previousText'
+
+	function previousHas(key String) returns bool throws TestFailure
+		let previousNode = try previous()
+
+		return self.document.hasChild(previousNode, key: key)
+	end 'previousHas'
+
+	function rungZeroHas(key String) returns bool throws TestFailure
+		let rung = try rungZero()
+
+		return self.document.hasChild(rung, key: key)
+	end 'rungZeroHas'
+end 'ScaleLadderRun'
+
+function ladderRunIn(dir FilePath, rungs String) returns ScaleLadderRun throws TestFailure
+	let resultPath = dir.join(ScaleRowResultFileName)
+	let run = spawnScaleTest(dir, arguments: ["{ScaleRowRungsFlagName}{ScaleRowOptionValueSeparator}{rungs}", "{ScaleRowResultFlagPrefix}{resultPath.toString()}"])
+
+	try Expect.equal(run.exitCode(), expected: ScaleRowCleanExit, message: "a {rungs}-rung `maxon {ScaleTestCommandWord}` over a staged log did not deliver its ladder. {scaleRunSaid(run)}")
+
+	let text = fileText(resultPath)
+	let document = try Json.parse(text) otherwise panic("scale-row: the result document {resultPath.toString()} is not JSON: {text}")
+
+	return ScaleLadderRun.of(document, said: scaleRunSaid(run), report: run.stdout)
+end 'ladderRunIn'

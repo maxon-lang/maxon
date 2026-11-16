@@ -1,0 +1,30 @@
+let CheckRowToolName = "run_scale_test"
+let CheckRowArguments = "\"checkRow\":true"
+let CheckRowFlag = "--check-row"
+let CheckRowErrorKey = "error"
+let CheckRowResultKey = "result"
+let CheckRowExitCodeKey = "exitCode"
+let CheckRowSuccessKey = "success"
+let CheckRowCommandKey = "command"
+let CheckRowTailKey = "rawTail"
+let CheckRowVerdictWording = "tree"
+let CheckRowPassedExit = 0
+let CheckRowRefusedExit = 1
+
+test 'run_scale_test with checkRow answers the verdict of the check on the last row, and runs no ladder'
+	let answer = callTool(CheckRowToolName, argumentsJson: argumentsOf([CheckRowArguments]), devMode: true)
+	let said = Json.stringify(answer)
+
+	Expect.isFalse(hasChildKey(answer, parent: answer.root, key: CheckRowErrorKey), message: "`{CheckRowToolName}` refused `checkRow` as a protocol error, so the tool has no such argument. It answered: {said}")
+
+	let payload = toolPayload(answer)
+	let exitCode = payloadInt(answer, key: CheckRowExitCodeKey)
+	let successNode = childOfKind(payload, parent: payload.root, key: CheckRowSuccessKey, kind: JsonKind.jsonBool, said: said)
+
+	Expect.contains(payloadString(answer, key: CheckRowCommandKey), needle: CheckRowFlag, message: "the command the tool ran does not carry `{CheckRowFlag}`. It answered: {said}")
+	Expect.isTrue(exitCode == CheckRowPassedExit or exitCode == CheckRowRefusedExit, message: "the check exited {exitCode}, which is neither a pass ({CheckRowPassedExit}) nor the check's refusal ({CheckRowRefusedExit}). It answered: {said}")
+	Expect.equal(payload.get(successNode).boolValue, expected: exitCode == CheckRowPassedExit, message: "`{CheckRowSuccessKey}` does not say whether the check passed. It answered: {said}")
+	Expect.contains(payloadString(answer, key: CheckRowTailKey), needle: CheckRowVerdictWording, message: "the tail of the check's output does not carry its verdict about the tree. It answered: {said}")
+
+	Expect.isFalse(payload.hasChild(payload.root, key: CheckRowResultKey), message: "a check that measures nothing answered a `{CheckRowResultKey}` document. It answered: {said}")
+end 'run_scale_test with checkRow answers the verdict of the check on the last row, and runs no ladder'

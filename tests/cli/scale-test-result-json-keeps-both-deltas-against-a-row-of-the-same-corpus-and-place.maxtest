@@ -1,0 +1,25 @@
+let ComparableDirName = "scale-row-comparable"
+let ComparableAllocationDrift = 7
+let ComparableByteDrift = 4096
+
+test 'scale-test --result-json differences both allocations and bytes against a last row of the same corpus and place, whatever its tree cell says'
+	let dir = stagedScaleDirectory(ComparableDirName, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded))
+	let probe = ladderRunIn(dir, rungs: ScaleRowOneRung)
+	let mintedAt = probe.mintedAt()
+	let corpus = probe.corpusDigest()
+	let allocations = probe.rungZeroNumber(ScaleRowAllocationsKey)
+	let bytes = probe.rungZeroNumber(ScaleRowBytesKey)
+
+	writeScaleLog(dir, log: scaleLogDocument(mintedAt, corpus: corpus, tree: ScaleRowUnrecorded, allocations: "{allocations - ComparableAllocationDrift}", bytes: "{bytes - ComparableByteDrift}"))
+
+	let run = ladderRunIn(dir, rungs: ScaleRowOneRung)
+
+	Expect.isTrue(run.previousFlag(ScaleRowComparableKey), message: "a last row minted at the same place over the same corpus {corpus} was withheld from. {run.said}")
+	Expect.isFalse(run.previousHas(ScaleRowWithheldKey), message: "`previous` carries a `{ScaleRowWithheldKey}` reason beside `{ScaleRowComparableKey}: true`. {run.said}")
+	Expect.equal(run.previousText(ScaleRowPreviousCorpusKey), expected: corpus, message: "`previous.{ScaleRowPreviousCorpusKey}` is not the corpus digest the row records. {run.said}")
+	Expect.isFalse(run.previousHas(ScaleRowPreviousTreeKey), message: "`previous.{ScaleRowPreviousTreeKey}` is present for a row whose tree cell is {ScaleRowUnrecorded}. {run.said}")
+	Expect.equal(run.rungZeroNumber(ScaleRowAllocationsDeltaKey), expected: ComparableAllocationDrift, message: "rung 0's `{ScaleRowAllocationsDeltaKey}` is not this run's allocations less the row's. {run.said}")
+	Expect.equal(run.rungZeroNumber(ScaleRowBytesDeltaKey), expected: ComparableByteDrift, message: "rung 0's `{ScaleRowBytesDeltaKey}` is not this run's bytes less the row's. {run.said}")
+
+	discardStagedDir(dir)
+end 'scale-test --result-json differences both allocations and bytes against a last row of the same corpus and place, whatever its tree cell says'

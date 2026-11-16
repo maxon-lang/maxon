@@ -107,6 +107,7 @@ tests/
     RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `CacheVendorDirName`, `VersionRecordSuffix`, `StdlibDirName`
     TargetIr.maxon               how the Target IR printer spells a function and a direct call, and the program's entry function name the debugger and profiler corpora also read: `FunctionHeaderPrefix`, `functionHeader`, `MainFunctionName` and `MainFunctionHeader`, the op prefixes `X64OpPrefix` and `Arm64OpPrefix`, the direct-call prefixes `X64DirectCallPrefix` and `Arm64DirectCallPrefix` (with their mnemonics), and `hostDirectCallLine`
     VersionRecord.maxon          the compiler-version record: `soleVersionRecordUnder` a cache root, `recordLine`, `OlderRelease`, `LastBuiltWording`
+    ScaleResultReading.maxon     how the scale ladder's digests and result document are read, for `cli/` and `mcp/`: `isScaleDigest` and `scaleDigestsIn` (a digest is 16 lower-case hex characters), `childOfKind` and `digestChild`, which fail a test naming the key, not panic
   fmt/
     fixtures.maxtest             the fixture corpus: the harness, the guards and 32 tests
     engine-cases.maxtest         the engine corpus: 4 tests, on the staging and spawn the file above exports
@@ -789,6 +790,19 @@ tests/
     run-streams-a-task-and-forwards-its-exit-code.maxtest              a task prints on the callers stdout and its exit code is the commands
     scale-test-repeated-compiles-of-a-rung-report-the-same-memory.maxtest   scale-test compiles one rung twice under a random harness seed, and both compiles report the same memory
     scale-test-rung-zero-compiles-and-every-witness-holds.maxtest      scale-test compiles and runs its generated rung 0, with every witness holding
+    ScaleRowHarness.maxon                   the shared half of the `scale-test` row cases: a fixture `docs/optimization-log.md` of the three tables with a `corpus` and a `tree` cell, staged into a directory outside the checkout (a bare one for a ladder run, or one holding a one-file `maxon-bin/`, `stdlib/` and `runtime/` for `--check-row`), the spawn of `scale-test` there, the digests a refusal shows, and `ScaleLadderRun`, which reads a run's `--result-json=` document
+    scale-test-check-row-refuses-a-last-row-with-no-tree-digest.maxtest   `scale-test --check-row` over a last row whose tree cell is unrecorded exits 1, says the tree is unrecorded and names `--note`
+    scale-test-check-row-refuses-a-last-row-of-another-tree-showing-both-digests.maxtest   over a last row recording another tree's digest it exits 1, shows that digest and the digest of this tree, and names `--note`
+    scale-test-check-row-accepts-a-row-carrying-the-digest-of-this-tree-and-follows-the-tree.maxtest   a row carrying the digest the check reported for the staged tree passes with its date and change text, and is refused again once a source of the tree changes
+    scale-test-check-row-digests-one-tree-the-same-wherever-it-stands.maxtest   two staged trees of the same files digest alike, and a tree holding one more file digests differently
+    scale-test-check-row-measures-nothing-and-writes-nothing.maxtest   `--check-row` generates no corpus, prints no rung and leaves the staged tree and its log as they were
+    scale-test-check-row-refuses-the-options-that-measure-or-record.maxtest   `--check-row` beside `--note`, `--rungs`, `--emit-corpus` or `--repeat` is refused naming both, and writes nothing
+    scale-test-note-is-refused-outside-the-tree-the-compiler-was-built-from.maxtest   `--note` run from a directory that is not the compiler's tree is refused, naming the tree it was built from, and the staged log is byte-identical
+    scale-test-result-json-withholds-every-delta-from-a-row-whose-corpus-is-unrecorded.maxtest   a last row of this place whose corpus is unrecorded is not comparable: `previous.withheld` says why, and rung 0 carries neither `allocsDelta` nor `bytesDelta`; the root and the report carry this run's two digests
+    scale-test-result-json-withholds-every-delta-when-the-corpus-or-the-place-differs.maxtest   a last row of another corpus, or minted elsewhere, withholds both deltas and names which differs
+    scale-test-result-json-keeps-both-deltas-against-a-row-of-the-same-corpus-and-place.maxtest   a last row of the same corpus and place is comparable whatever its tree cell says, and both deltas are this run's counts less the row's
+    scale-test-corpus-digest-is-the-same-for-one-ladder-wherever-it-is-generated.maxtest   one ladder generated under two corpus roots reports one corpus digest, and one tree digest
+    scale-test-corpus-digest-differs-for-another-ladder.maxtest   a ladder of two rungs reports another corpus digest than a ladder of one
     stage-library-tier-stages-the-tier-and-the-compiler.maxtest        stage-library-tier copies both tiers and the compiler into the directory it is given
     test-default-deadline-outlasts-a-file-that-runs-past-five-seconds.maxtest   maxon test with no --timeout= lets a test file run past five seconds
     the-diagnostics-a-compile-reports-are-in-source-order.maxtest      a compile reports its diagnostics in source order whatever phase found each, and the same in any declaration order
@@ -1014,6 +1028,8 @@ tests/
     run-spec-test-removes-the-document-of-a-stopped-run.maxtest      a run stopped at its bound leaves no result document behind
     run-scale-test-answers-its-document-and-leaves-none.maxtest      `run_scale_test` answers the document its own run wrote, and leaves none behind
     run-scale-test-measures-the-lint-checks.maxtest      each rung's `phases` carry the three `lint:` rows, with what they allocated
+    run-scale-test-answers-the-corpus-and-tree-digests-and-whether-the-last-row-was-comparable.maxtest      `result` carries a 16-hex `corpusDigest` and `treeDigest`, and `previous` carries `comparable` (with `withheld` exactly when it is false) in place of `bytesComparable` and `bytesWithheld`
+    run-scale-test-check-row-answers-the-verdict-and-runs-no-ladder.maxtest      `checkRow: true` is a declared argument: the call answers the check's verdict and its exit code, and no ladder
     an-empty-string-argument-is-refused-by-name.maxtest      an empty string given to an argument is refused by name, never read as absent
     execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
     build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
@@ -1060,7 +1076,7 @@ Two independent reasons, and the second is the one that bites:
 `.maxtest` drivers.** `lsp/LspClient.maxon` is an ordinary source — a JSON-RPC client the `lsp/` tests
 import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/DapClient.maxon`,
 `coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
-`cli/CliHarness.maxon`, `cli/LintFixHarness.maxon`, `lsp/QuickFixProbe.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
+`cli/CliHarness.maxon`, `cli/LintFixHarness.maxon`, `cli/ScaleRowHarness.maxon`, `lsp/QuickFixProbe.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
 `examples/ExamplesHarness.maxon`, `warmRebuild/WarmRebuildHarness.maxon`,
 `emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon` and `mcp/McpHarness.maxon` are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
 as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and
@@ -2009,6 +2025,12 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
   notification: over stdio it goes unanswered, and over HTTP it is 202 with an empty body.
 - `scale-defaults-agree-with-help.maxtest` reads the default each `run_scale_test` property states and the
   default `maxon help scale-test` states for the same option, and holds them equal. One server and one `help` run.
+- `run-scale-test-answers-the-corpus-and-tree-digests-and-whether-the-last-row-was-comparable.maxtest` and
+  `run-scale-test-check-row-answers-the-verdict-and-runs-no-ladder.maxtest` gate the two surfaces of the
+  scale log's row identity: the digests of the run and the one comparability verdict in `result`, and the
+  `checkRow` argument, which answers the check of the log's last row against this checkout's tree. The check
+  reads the checkout's own log and writes nothing, so the case holds only what every answer must say, and
+  not whether the checkout's last row happens to carry this tree's digest.
 - `rebuild.maxtest` gates the half of a self-rebuild that a live server depends on: its image is
   renamed out from under it and another is written in its place, and it keeps answering.
 - `rebuild-over-a-running-previous.maxtest` gates the other half: a compiler building over its own

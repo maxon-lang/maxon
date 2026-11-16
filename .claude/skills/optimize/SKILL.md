@@ -91,6 +91,9 @@ backwards makes you optimize the instrument instead of the compiler.
   REBUILD before measuring: the harness's staleness refusal compares modification times, so a binary
   newer than the reverted sources passes it while emitting the old code. Read emitted-code claims from
   disassembled bytes.
+- **The ladder's deltas against the last logged row are withheld across a corpus change or a row minted
+  elsewhere** — allocation and byte alike — so the attributable figure is then this A/B, against a
+  control built from the parent and run from the same location.
 - **`--repeat=N` bounds noise within a run, not drift between runs**; a baseline from another day,
   branch or session is not a measurement. Take the noise floor from the same binary run twice (control vs
   control); an effect inside it is no effect.
@@ -119,9 +122,13 @@ backwards makes you optimize the instrument instead of the compiler.
   and per-block explanation and points at the load phase. `collectMaxonSources` walks `stdlib/` once per
   compile and pays per entry, so a stray or gitignored directory moves the count, and it exists only in the
   checkout that holds it. Measure a free plausible explanation before writing it down.
-- **Correcting a logged row edits the last row of all three tables with the same note.** `ScaleHistory` holds
-  allocations, bytes and CPU to one date, path and note, and treats a mismatch as a hand-edited log, which
-  stops the next `scale-test`.
+- **A logged row is minted, never hand-edited.** `ScaleHistory` holds allocations, bytes and CPU to the same
+  five leading cells — date, `minted at`, `corpus`, `tree`, change — and treats a mismatch as a hand-edited
+  log, which stops the next `scale-test`. The `tree` cell must stay the digest of the tree the row is
+  committed with (`scale-test --check-row`, MCP `checkRow: true`), so a correction re-mints: a row not yet
+  on `origin/main` (uncommitted, or in a commit still to be pushed) is deleted from all three tables and
+  `--note=` run again, and a row already on `origin/main` stays as it is and is corrected by a new row
+  whose note names it. `scripts/check-scale-rows.sh` refuses an edited row of the parent commit.
 - ⚠ **`--repeat` can report NONDETERMINISTIC on a tree nothing is wrong with.** `__gt_free_get` takes a record
   from the current P's free list, then the global list, else allocates, and the process-wide count sees the
   allocation, so whether a pool worker lands on the P that retired the last record is timing. One allocation
@@ -208,10 +215,11 @@ inflate numbers.
   believe a delta only when the spreads are disjoint and the candidate wins at every padding.
 
 ⚠ **The trend log is a deliverable, and it must say WHY.** The instrument can see exactly *what* moved
-and can never see *why*. If your change moves the numbers, **record the reason in
-`docs/optimization-log.md` at the one moment it is still known** — a row that says only "-8733
+and can never see *why*. If your change moves the numbers, **settle the reason — the note of its
+`docs/optimization-log.md` row — at the one moment it is still known** — a row that says only "-8733
 allocations" is worth a fraction of one that says which allocation stopped happening and what stopped
-making it. **Write no row you did not measure.**
+making it. The row carrying that note is minted on the tree that is committed (`/land` §8). **Write no
+row you did not measure.**
 
 ## Rules of engagement
 

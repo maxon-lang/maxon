@@ -1,0 +1,27 @@
+let FollowsTheTreeCaseDirName = "scale-row-follows-the-tree"
+
+test 'scale-test --check-row passes a last row carrying the digest of this tree, and refuses it again once a source of the tree changes'
+	let dir = stagedScaleTree(FollowsTheTreeCaseDirName, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowForeignDigest))
+	let digestOfTree = thisTreesDigest(dir)
+
+	let accepted = checkRowAgainst(dir, tree: digestOfTree)
+	let acceptedSaid = scaleRunSaid(accepted)
+
+	Expect.equal(accepted.exitCode(), expected: ScaleRowCleanExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` over a last row recording the digest {digestOfTree} of this very tree did not exit {ScaleRowCleanExit}. {acceptedSaid}")
+	Expect.contains(accepted.stdout, needle: ScaleRowFixtureDate, message: "the line that passes the row does not name its date. {acceptedSaid}")
+	Expect.contains(accepted.stdout, needle: ScaleRowFixtureChange, message: "the line that passes the row does not name its change text. {acceptedSaid}")
+
+	editScaleTree(dir)
+
+	let stale = checkRowAgainst(dir, tree: digestOfTree)
+	let staleSaid = scaleRunSaid(stale)
+
+	Expect.equal(stale.exitCode(), expected: ScaleRowRefusedExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` still passed the row recording {digestOfTree} after a source of the tree changed, so the digest does not follow the tree's bytes. {staleSaid}")
+	Expect.contains(staleSaid, needle: digestOfTree, message: "the refusal does not show the digest the row records. {staleSaid}")
+
+	let digestAfterEdit = soleDigestBesides(staleSaid, planted: digestOfTree)
+
+	Expect.isTrue(isScaleDigest(digestAfterEdit), message: "the digest of the edited tree is not {ScaleDigestLength} lower-case hex characters. {staleSaid}")
+
+	discardStagedDir(dir)
+end 'scale-test --check-row passes a last row carrying the digest of this tree, and refuses it again once a source of the tree changes'

@@ -290,7 +290,8 @@ commands take a lock on the **checkout** they write into: the nearest directory 
 spelling (every symbolic link followed) that holds a `stdlib/` directory (a Maxon source checkout or
 install). A project with no `stdlib/` above it takes no lock.
 
-The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test`, and by a
+The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test` (but not
+`scale-test --check-row`, which writes nothing), and by a
 `build` of a directory without `--output=`. `run`, `test`, `fmt` and builds with `--output=` take none.
 
 The lock file is a record of `key=value` lines: the holder's `pid`, a `token`, `sinceUnix`, `heldSeconds`,

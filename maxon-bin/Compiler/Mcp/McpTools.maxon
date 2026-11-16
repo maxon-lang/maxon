@@ -23,6 +23,7 @@ let RebuildOption = "rebuild"
 let LogOption = "log"
 let NoteOption = "note"
 let EmitCorpusOption = "emitCorpus"
+let CheckRowOption = "checkRow"
 
 // =============================================================================
 // Spawning
@@ -971,15 +972,34 @@ function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Opti
 	argv.append(valuedOptionOf(reqDoc, args: args, key: EmitCorpusOption, prefix: EmitCorpusFlagPrefix))
 	argv.append(valuedOptionOf(reqDoc, args: args, key: LogOption, prefix: LogFlagPrefix))
 
+	if getOptionalBoolArg(reqDoc, args: args, key: CheckRowOption, defaultVal: false) 'checksTheLastRow'
+		argv.push(CheckRowFlag)
+
+		return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives checkRowReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took))
+	end 'checksTheLastRow'
+
 	return runWithResultDocument(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, family: StagedFamily.scaleResult, answer: function(parsed JsonDoc, ranArgv StringArray, res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took, parsed: parsed))
 end 'executeScaleTestToolWithin'
 
-function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, parsed JsonDoc) returns String
-	let doc = JsonDoc.create()
+function scaleRunPayload(doc JsonDoc, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs) returns JsonObjectBuilder
 	let payload = JsonObjectBuilder.create()
 	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
 	payload.addBool(doc, key: "success", value: res.succeeded())
+
+	return payload
+end 'scaleRunPayload'
+
+function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, parsed JsonDoc) returns String
+	let doc = JsonDoc.create()
+	let payload = scaleRunPayload(doc, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
 	payload.addNode("result", node: copyJsonNode(parsed, srcId: parsed.root, dst: doc))
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
 end 'scaleTestReply'
+
+function checkRowReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs) returns String
+	let doc = JsonDoc.create()
+	let payload = scaleRunPayload(doc, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
+
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
+end 'checkRowReply'

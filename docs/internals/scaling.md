@@ -33,13 +33,17 @@ and then checked by `maxon lint`, whose semantic check and two unused-declaratio
 rows: the work `maxon build` leaves to `maxon lint`.
 
 **Growth is read as the ratio between rungs.** ×2.00 is linear, ×4.00 quadratic, ×1.00 constant; nothing is
-fitted and there is no threshold (`ScaleRatio.maxon`). Allocation counts are exact and reproducible; bytes are
-comparable only between runs from the same checkout path, because they vary with it; CPU time is noisy,
-so a small movement in it is not a finding. The ladder has 6 rungs by default, 1 to 8 allowed.
+fitted and there is no threshold (`ScaleRatio.maxon`). Allocation counts and bytes are exact and reproducible
+for one compiler, corpus and place, and both move with the paths a compile works with, so two runs are
+differenced only when they compiled the same corpus from the same place; CPU time is noisy, so a small
+movement in it is not a finding. The ladder has 6 rungs by default, 1 to 8 allowed.
 
-`scale-test` is an instrument, not a gate: it exits 0 whatever the numbers say. A non-zero exit means the run
+The ladder is an instrument, not a gate: it exits 0 whatever the numbers say. A non-zero exit means the run
 itself failed — a rung did not compile, or the generated program folded to a constant and measured nothing.
-`--note` appends the run to `docs/optimization-log.md`, whose header gives the rules for reading its rows.
+`--note` appends the run to `docs/optimization-log.md`, in the tree the compiler was built from, as a row
+carrying a digest of the corpus and of that tree; the log's header gives the rules for reading its rows.
+`--check-row` is the one mode with a verdict: it measures nothing and exits 0 only when the log's last row
+carries the digest of the tree it is run in.
 
 ## The corpus
 

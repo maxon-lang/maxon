@@ -1,0 +1,17 @@
+let AnotherTreeCaseDirName = "scale-row-another-tree"
+
+test 'scale-test --check-row refuses a last row recording another tree, showing the digest it records and the digest of this tree, and naming the fix'
+	let log = scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowForeignDigest)
+	let dir = stagedScaleTree(AnotherTreeCaseDirName, log: log)
+	let run = spawnScaleTest(dir, arguments: [ScaleRowCheckFlag])
+	let said = scaleRunSaid(run)
+
+	requireCheckRowIsAMode(run)
+
+	Expect.equal(run.exitCode(), expected: ScaleRowRefusedExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` over a last row recording {ScaleRowForeignDigest} did not exit {ScaleRowRefusedExit}. {said}")
+	Expect.contains(said, needle: ScaleRowForeignDigest, message: "the refusal does not show the digest the row records. {said}")
+	Expect.isFalse(digestsBesides(said, planted: ScaleRowForeignDigest).isEmpty(), message: "the refusal shows no digest of this tree beside the one the row records. {said}")
+	Expect.contains(said, needle: ScaleRowNoteFlagName, message: "the refusal does not name the fix, a re-run of `{ScaleTestCommandWord} {ScaleRowNoteFlagName}=...` on this tree. {said}")
+
+	discardStagedDir(dir)
+end 'scale-test --check-row refuses a last row recording another tree, showing the digest it records and the digest of this tree, and naming the fix'

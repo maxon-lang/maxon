@@ -1,0 +1,35 @@
+let ConflictingOptionsCaseDirName = "scale-row-conflicting-options"
+let ConflictingNoteOption = "--note=a note"
+let ConflictingRungsOption = "--rungs=1"
+let ConflictingEmitCorpusOption = "--emit-corpus=emitted-corpus"
+let ConflictingRepeatOption = "--repeat=2"
+let ConflictingResultFileName = "refused-result.json"
+let RefusedBesideWording = "is refused beside it"
+
+test 'scale-test --check-row is refused together with --note, --rungs, --emit-corpus, --repeat and --result-json over a last row it passes alone, naming the option it refuses and writing nothing'
+	let dir = stagedScaleTree(ConflictingOptionsCaseDirName, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowForeignDigest))
+	let digestOfTree = thisTreesDigest(dir)
+	let alone = checkRowAgainst(dir, tree: digestOfTree)
+
+	Expect.equal(alone.exitCode(), expected: ScaleRowCleanExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag}` alone did not pass a last row recording {digestOfTree}, this tree's digest, so a refusal of an option beside it could not be told from the check refusing the row. {scaleRunSaid(alone)}")
+
+	let held = HeldFiles.under(dir)
+	let resultPath = dir.join(ConflictingResultFileName)
+	let options = StringArray from [ConflictingNoteOption, ConflictingRungsOption, ConflictingEmitCorpusOption, ConflictingRepeatOption, "{ScaleRowResultFlagPrefix}{resultPath.toString()}"]
+
+	for option in options 'eachOption'
+		let run = spawnScaleTest(dir, arguments: [ScaleRowCheckFlag, option])
+		let said = scaleRunSaid(run)
+		let refusal = textBeforeUsage(run.stderr)
+
+		Expect.equal(run.exitCode(), expected: ScaleRowRefusedExit, message: "`maxon {ScaleTestCommandWord} {ScaleRowCheckFlag} {option}` over a last row it passes alone did not exit {ScaleRowRefusedExit}. {said}")
+		Expect.contains(refusal, needle: ScaleRowCheckFlag, message: "the refusal of `{option}`, before the `{UsageLinePrefix}` line, does not name `{ScaleRowCheckFlag}`. {said}")
+		Expect.contains(refusal, needle: "{option} {RefusedBesideWording}", message: "the refusal before the `{UsageLinePrefix}` line does not say `{option} {RefusedBesideWording}`. {said}")
+
+		held.requireUnchangedBy("the refused `maxon {ScaleTestCommandWord} {ScaleRowCheckFlag} {option}`", said: said)
+	end 'eachOption'
+
+	Expect.isFalse(File.exists(resultPath), message: "the refused `{ScaleRowResultFlagPrefix}{resultPath.toString()}` wrote a result document there.")
+
+	discardStagedDir(dir)
+end 'scale-test --check-row is refused together with --note, --rungs, --emit-corpus, --repeat and --result-json over a last row it passes alone, naming the option it refuses and writing nothing'

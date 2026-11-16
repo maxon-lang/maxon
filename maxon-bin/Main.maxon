@@ -264,6 +264,7 @@ let RepeatFlagPrefix = "--repeat="
 let NoteFlagPrefix = "--note="
 let ResultJsonFlagPrefix = "--result-json="
 let EmitCorpusFlagPrefix = "--emit-corpus="
+let CheckRowFlag = "--check-row"
 
 // Comma, like the `<!-- unsupported-targets: … -->` marker: one separator for every list this
 // project reads.
@@ -1936,31 +1937,37 @@ end 'refusedAnOptionOfAnotherCommand'
 
 function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArray
 	let takers = MaxonCommandArray.create(0)
-	var admitted = false
+	let admitting = optionsAdmitting(spelling)
 
-	for option in HelpOption.allCases 'eachOption'
-		let entry = optionReference(option)
-
-		if entry.admits(spelling) 'admitted'
-			admitted = true
-
-			for command in entry.commands 'eachTaker'
-				if not takers.contains(command) 'notYetListed'
-					takers.push(command)
-				end 'notYetListed'
-			end 'eachTaker'
-		end 'admitted'
-	end 'eachOption'
+	for option in admitting 'eachAdmittingOption'
+		for command in optionReference(option).commands 'eachTaker'
+			if not takers.contains(command) 'notYetListed'
+				takers.push(command)
+			end 'notYetListed'
+		end 'eachTaker'
+	end 'eachAdmittingOption'
 
 	// A parser arm with no entry in `optionReference` panics here on first use, which keeps the table
 	// covering every option the parser accepts. Typed input cannot reach it: an option no arm accepts
 	// is refused as unknown.
-	if not admitted and not args.refusedAsUnknown(spelling) 'unreferenced'
+	if admitting.isEmpty() and not args.refusedAsUnknown(spelling) 'unreferenced'
 		panic("commandsTaking: the parser accepted {spelling}, and no option reference admits it")
 	end 'unreferenced'
 
 	return takers
 end 'commandsTaking'
+
+function optionsAdmitting(spelling String) returns HelpOptionArray
+	let admitting = HelpOptionArray.create(0)
+
+	for option in HelpOption.allCases 'eachOption'
+		if optionReference(option).admits(spelling) 'admitted'
+			admitting.push(option)
+		end 'admitted'
+	end 'eachOption'
+
+	return admitting
+end 'optionsAdmitting'
 
 function commandWordsOf(commands MaxonCommandArray) returns String
 	let words = StringArray.create(commands.count(), zeroed: false)
@@ -2230,6 +2237,8 @@ end 'HelpReferenceError'
 
 typealias MaxonCommandArray = Array with MaxonCommand
 
+typealias HelpOptionArray = Array with HelpOption
+
 // Ends in a colon, which no command label does: `tests/cli` tells a heading from a section by that.
 let CompilerWorkHeading = "Commands for working on the compiler itself:"
 
@@ -2297,7 +2306,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
 		execute gives CommandReference.create(ExecuteCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory this compiler can create, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
 		run gives CommandReference.create(RunCommandName, arguments: "[<task> [args...]]", summary: "Run a task declared in the `{TaskFileExtension}` file in the working directory.", detail: "A task is an exported function of no parameters returning `ExitCode`, asked for by its name with each `_` written `-` (`maxon {RunCommandName} build-ext` runs `build_ext`). With no task named, the tasks are listed. Everything after the task name reaches it as its own command line, and its stdin, stdout, stderr and exit code are this command's own.{ParagraphSeparator}A task that describes a build (`Build.build`, `Build.buildWithConfig` or `Build.delegate`) has that build performed once it exits 0, and the options listed below apply to it exactly as they do to `{BuildSubcommandName}`.", audience: CommandAudience.usingTheCompiler)
-		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
+		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}The ladder is an INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}, and {CheckRowFlag} is the one check with a verdict: whether its last row carries this tree's digest.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		stageLibraryTier gives CommandReference.create(StageLibraryTierCommandName, arguments: "<directory>", summary: "Stage a private copy of this compiler's library tiers and its binary under a directory.", detail: "Writes `<directory>/{StdlibDirName}`, `<directory>/{RuntimeDirName}` and `<directory>/{LibraryTierBinDirName}/<compiler>`: the sources this compiler loads, the unicode tables it embeds, and a copy of its executable. A program placed under `<directory>/{StdlibDirName}` and built by that copy is compiled as library tier. Anything already under `<directory>` is removed first.{ParagraphSeparator}Exit 0 the tier is staged; 1 it could not be.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[<target>] [<directory|file.maxtest>]", summary: "Run a PROJECT's own `test` declarations (default: the working dir), or one `.maxtest` file alone.", detail: "A project whose `{ProjectFileExtension}` file declares targets is the sources its target lists, chosen as `{BuildSubcommandName}` chooses one: its only target, or the one a word names, each `_` written `-`; with several and no word, the targets are listed. A lone word that names a target of the working directory's project is that target, and any other word is a path.{ParagraphSeparator}Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. A `.maxtest` file named instead of a directory is compiled alone, with the library tiers. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
@@ -2343,6 +2352,7 @@ enum HelpOption
 	repeat
 	note
 	emitCorpus
+	checkRow
 	resultJson
 	testFilter
 	testList
@@ -2444,6 +2454,7 @@ function optionReference(option HelpOption) returns OptionReference
 		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RepeatFlagPrefix)])
 		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(NoteFlagPrefix)])
 		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(EmitCorpusFlagPrefix)])
+		checkRow gives OptionReference.create(CheckRowFlag, description: "Measure nothing and record nothing: check that the last row of {OptimizationLogRelativePath} carries the digest of the tree in the current directory: the compiler's, the standard library's and the runtime's sources. Exit 0 when it does; exit 1 when the row's tree is unrecorded or another tree's, and the fix is to re-run `{ScaleTestCommandName} {NoteFlagPrefix}<text>` on this tree. Refused beside the options that measure or record.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.exactly(CheckRowFlag)])
 		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run to <path> as JSON, so a tool never has to scrape the human report. {ScaleTestCommandName}: per-rung and per-phase memory, and the deltas from the last recorded run. {SpecTestCommandName}: the passed, failed, skipped and not-run counts and every case in run order as `spec`, `test`, `verdict` ({spelledVerdictTokens()}) and, for a {VerdictToken.fail.rawValue}, its `reason`.", commands: [MaxonCommand.scaleTest, MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(ResultJsonFlagPrefix)])
 		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive). Repeatable, and each value may hold comma-separated patterns: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
 		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run, and compile nothing unless {TestBuildFlag} is given.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestListFlag)])
@@ -2826,6 +2837,8 @@ export type MaxonArgs
 	// silently the day a phase name outgrows its column.
 	export var resultJson as StatedText
 
+	export var checkRow as bool
+
 	export var targetSpec as StatedText
 
 	export var includeNetwork as bool
@@ -2879,7 +2892,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, requiredFunctionNames: RequiredFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, lintsTests: false, fixesLint: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, requiredFunctionNames: RequiredFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, checkRow: false, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, lintsTests: false, fixesLint: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -3175,7 +3188,9 @@ export type MaxonArgs
 				parsed.note = parsed.statedValueOf(arg)
 			end 'noteFlag' else if arg.startsWith(ResultJsonFlagPrefix) 'resultJsonFlag'
 				parsed.resultJson = parsed.statedValueOf(arg)
-			end 'resultJsonFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
+			end 'resultJsonFlag' else if arg == CheckRowFlag 'checkRowFlag'
+				parsed.checkRow = true
+			end 'checkRowFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
 				parsed.targetSpec = parsed.statedValueOf(arg)
 			end 'targetFlag' else if arg == TestListFlag 'listFlag'
 				parsed.listOnly = true

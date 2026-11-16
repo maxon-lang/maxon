@@ -35,37 +35,25 @@
 // CPU reading. Nothing else in this document distinguishes a single undefended sample from a
 // min-of-three, and that is the difference between a CPU number worth acting on and one that is not.
 //
-// AND `mintedAt` IS HERE FOR THE SAME REASON `repeat` IS: it says which numbers may be subtracted from
-// which. TWO absolute paths reach the BYTE volume of every compile — the compiler's own (every stdlib
-// source path is derived from it) and the working directory (every rung source path is resolved against
-// it) — so a byte delta between two documents minted at different paths is a confident fiction.
-// `mintedAt` is the pair, rendered by `mintedAtCell` so that what is written and what is compared are one
-// string. `bytesDelta` is therefore ABSENT when the logged row this run was differenced against was
-// minted elsewhere.
-//
-// ⚠ `allocsDelta` IS STILL ALWAYS PRESENT, AND IT IS NOT PATH-INDEPENDENT — this comment claimed it was
-// until it was measured. That column carries a CONSTANT offset across two checkouts, where the byte term
-// grows with the program. It stays present because a flat offset leaves the SHAPE intact — ratios between
-// rungs, and any delta that grows per rung — and a consumer reading the CONSTANT term across a mismatched
-// pair already has its signal in the same document: `previous.bytesComparable: false` is that pair, and it
-// is one flag rather than two spellings of it.
-//
-// ⚠ THE NUMBERS BEHIND BOTH PARAGRAPHS ARE IN ScaleHistory's HEADER AND ARE NOT REPEATED HERE. A copy
-// here carries a copy of whatever conclusion is drawn from them: the `path-independent` claim had to be
-// hand-corrected in four files, and a reading quoted in four places is three chances to correct only
-// three.
+// AND `mintedAt` AND `corpusDigest` ARE HERE FOR THE SAME REASON `repeat` IS: they say which numbers may
+// be subtracted from which. A delta is taken only against a logged row of the same corpus minted at the
+// same place (`rowComparability`); otherwise `allocsDelta` and `bytesDelta` are both ABSENT on every
+// rung, and `previous.comparable: false` with `previous.withheld` says why. `treeDigest` names the
+// sources the measured compiler was built from and decides nothing here.
 //
 // Shape:
 //   {
 //     "repeat": 3,                                    // compiles per rung; ABSENT if not stated
-//     "mintedAt": "<compiler path> (corpus <dir>)",   // what this run's bytes are comparable WITH
+//     "mintedAt": "<compiler path> (corpus <dir>)",   // where this run was measured
+//     "corpusDigest": "<digest>",                     // the corpus this run generated
+//     "treeDigest": "<digest>",                       // ABSENT for a compiler built from no tree
 //     "rungs":  [ { rung, sourceBytes, codeBytes, allocs, frees, bytes, cpuTicks,
-//                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none
-//                                                     // bytesDelta also ABSENT across minting paths
+//                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none,
+//                                                     // for a rung it never climbed, or when withheld
 //                   phases:   [ {name, allocs, frees, bytes, cpuTicks} ],
 //                   regalloc: [ {name, allocs, frees, bytes, cpuTicks} ] } ],
 //     "corpus": { grew, minGrowthPermille?, floorPermille, reason? },
-//     "previous": { present, date?, mintedAt?, note?, bytesComparable?, bytesWithheld? }
+//     "previous": { present, date?, mintedAt?, corpus?, tree?, comparable?, withheld?, note? }
 //   }
 
 // HOW MANY COMPILES each rung's numbers were folded from — the value of `--repeat`.
@@ -79,7 +67,7 @@ union RepeatSampling
 	unstated
 end 'RepeatSampling'
 
-function writeResultJson(path String, results RungResultArray, trend LoggedMemory, repeat RepeatSampling, mintedAt String, bytes ByteDelta) throws ScaleError
+function writeResultJson(path String, results RungResultArray, trend LoggedMemory, repeat RepeatSampling, mintedAt String, corpus String, tree MeasuredTree, comparability RowComparability) throws ScaleError
 	let target = try FilePath.from(path) otherwise throw ScaleError.reason("'{path}' is not a valid --result-json path")
 
 	let doc = JsonDoc.create()
@@ -89,15 +77,17 @@ function writeResultJson(path String, results RungResultArray, trend LoggedMemor
 	addRepeatSampling(doc, keys: keys, children: children, repeat: repeat)
 
 	pushJsonString(doc, keys: keys, children: children, key: "mintedAt", value: mintedAt)
+	pushJsonString(doc, keys: keys, children: children, key: "corpusDigest", value: corpus)
+	addTreeDigest(doc, keys: keys, children: children, tree: tree)
 
 	keys.push("rungs")
-	children.push(rungsNode(doc, results: results, trend: trend, bytes: bytes))
+	children.push(rungsNode(doc, results: results, trend: trend, comparability: comparability))
 
 	keys.push("corpus")
 	children.push(corpusNode(doc, results: results))
 
 	keys.push("previous")
-	children.push(previousNode(doc, trend: trend, bytes: bytes))
+	children.push(previousNode(doc, trend: trend, comparability: comparability))
 
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
@@ -121,11 +111,18 @@ function addRepeatSampling(doc JsonDoc, keys StringArray, children JsonNodeIdArr
 	end 'r'
 end 'addRepeatSampling'
 
+function addTreeDigest(doc JsonDoc, keys StringArray, children JsonNodeIdArray, tree MeasuredTree)
+	match tree 't'
+		noSourceTree then return
+		checkout(_, digest) then pushJsonString(doc, keys: keys, children: children, key: "treeDigest", value: digest)
+	end 't'
+end 'addTreeDigest'
+
 // ===========================================================================================
 // Rungs
 // ===========================================================================================
 
-function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
+function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, comparability RowComparability) returns JsonNodeId
 	let items = JsonNodeIdArray.create(results.count(), zeroed: false)
 
 	for i in 0 upto results.count() 'eachRung'
@@ -148,8 +145,8 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		// platform whose ticks are a different unit entirely — so the subtraction would be arithmetic
 		// over two numbers that are not the same quantity, and it would produce a confident one. The
 		// CPU column is compared as a RATIO between rungs of ONE run, which is unit-free and
-		// machine-free; `LoggedMemory` carries allocs and bytes and nothing else for the same reason.
-		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend, bytes: bytes)
+		// machine-free; `LoggedMemory` carries no CPU counts for the same reason.
+		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend, comparability: comparability)
 
 		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
 		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` or
@@ -178,32 +175,32 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 	return doc.add(JsonNode.arrayNode(items))
 end 'rungsNode'
 
-function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung ElementIndex, trend LoggedMemory, bytes ByteDelta)
+function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung ElementIndex, trend LoggedMemory, comparability RowComparability)
+	// OMITTED, never zero, when `rowComparability` withholds — the same rule a rung with no past follows.
+	// A consumer that finds no delta knows the subtraction was refused; one handed a number could not have
+	// known it was fiction.
+	match comparability 'c'
+		withheld then return
+		comparable then break
+	end 'c'
+
 	match trend 'm'
 		absent then return
-		present(_, _, _, allocs, loggedBytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: loggedBytes, bytes: bytes)
+		present(_, _, _, _, _, allocs, loggedBytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: loggedBytes)
 	end 'm'
 end 'addMemoryDeltas'
 
-function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung ElementIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, bytes ByteDelta)
-	let beforeAllocs = try loggedAllocs.get(rung) otherwise 'notLogged'
-		// This run climbed further than the logged one. The extra rungs have no past, and saying so by
-		// omission is exactly right.
-		return
-	end 'notLogged'
-
-	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
-
-	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: signedDifference(result.total.allocs as Delta, before: beforeAllocs as Delta))
-
-	// OMITTED, never zero, when the logged row was minted at another path — the same rule `allocsDelta`
-	// follows one line up when a rung has no past. A consumer that finds no `bytesDelta` knows the
-	// subtraction was refused; one handed a number could not have known it was fiction.
-	match bytes 'b'
-		withheld then return
-		comparable then pushJsonNumber(doc, keys: keys, children: children, key: "bytesDelta", value: signedDifference(result.total.bytes as Delta, before: beforeBytes as Delta))
-	end 'b'
+function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung ElementIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray)
+	addLoggedDelta(doc, keys: keys, children: children, key: "allocsDelta", current: result.total.allocs as Delta, before: rungBaselineAt(loggedAllocs, loggedBytes: loggedBytes, measure: ScaleMeasure.allocations, rung: rung))
+	addLoggedDelta(doc, keys: keys, children: children, key: "bytesDelta", current: result.total.bytes as Delta, before: rungBaselineAt(loggedAllocs, loggedBytes: loggedBytes, measure: ScaleMeasure.bytes, rung: rung))
 end 'addLoggedDeltas'
+
+function addLoggedDelta(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, current Delta, before RungBaseline)
+	match before 'b'
+		notClimbed then return
+		logged(count) then pushJsonNumber(doc, keys: keys, children: children, key: key, value: signedDifference(current, before: count))
+	end 'b'
+end 'addLoggedDelta'
 
 function signedDifference(current Delta, before Delta) returns JsonFloat
 	return (current - before) as JsonFloat
@@ -307,12 +304,12 @@ end 'addCorpusGrowth'
 // Which recorded run every delta above is a delta FROM. Without it the deltas are unattributed, and a
 // consumer comparing two result documents could not tell they had different reference points.
 //
-// It carries that row's OWN minting path beside this run's, because "was this comparison legitimate" is
-// a question about the pair and a consumer holding only one half of it cannot answer.
-function previousNode(doc JsonDoc, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
+// It carries that row's OWN provenance cells beside this run's, because "was this comparison legitimate"
+// is a question about the pair and a consumer holding only one half of it cannot answer.
+function previousNode(doc JsonDoc, trend LoggedMemory, comparability RowComparability) returns JsonNodeId
 	match trend 'm'
 		absent then return noPreviousNode(doc)
-		present(date, mintedAt, note, _, _) then return previousRunNode(doc, date: date, mintedAt: mintedAt, note: note, bytes: bytes)
+		present(date, mintedAt, corpus, tree, note, _, _) then return previousRunNode(doc, date: date, mintedAt: mintedAt, corpus: corpus, tree: tree, note: note, comparability: comparability)
 	end 'm'
 end 'previousNode'
 
@@ -323,36 +320,41 @@ function noPreviousNode(doc JsonDoc) returns JsonNodeId
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'noPreviousNode'
 
-function previousRunNode(doc JsonDoc, date String, mintedAt MintedAt, note String, bytes ByteDelta) returns JsonNodeId
+function previousRunNode(doc JsonDoc, date String, mintedAt RecordedCell, corpus RecordedCell, tree RecordedCell, note String, comparability RowComparability) returns JsonNodeId
 	let keys = StringArray.create(0)
 	let children = JsonNodeIdArray.create(0)
 	pushJsonBool(doc, keys: keys, children: children, key: "present", value: true)
 	pushJsonString(doc, keys: keys, children: children, key: "date", value: date)
 
-	// ABSENT when the row predates the column, rather than spelled as a string a consumer might compare
-	// against a real path. `bytesComparable: false` is what says so, and `bytesWithheld` says why.
-	match mintedAt 'p'
-		unrecorded then break
-		path(text) then pushJsonString(doc, keys: keys, children: children, key: "mintedAt", value: text)
-	end 'p'
-
-	addByteComparability(doc, keys: keys, children: children, bytes: bytes)
+	addRecordedCell(doc, keys: keys, children: children, key: "mintedAt", cell: mintedAt)
+	addRecordedCell(doc, keys: keys, children: children, key: "corpus", cell: corpus)
+	addRecordedCell(doc, keys: keys, children: children, key: "tree", cell: tree)
+	addComparability(doc, keys: keys, children: children, comparability: comparability)
 
 	pushJsonString(doc, keys: keys, children: children, key: "note", value: note)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'previousRunNode'
 
-// WHETHER THE BYTE DELTAS ABOVE EXIST, stated rather than left to be inferred from their absence. A
-// consumer can infer it — no `bytesDelta` on any rung means it was refused — but an inference from an
-// absence is exactly how "not measured" gets read as "zero", and the reason is not inferable at all.
-function addByteComparability(doc JsonDoc, keys StringArray, children JsonNodeIdArray, bytes ByteDelta)
-	match bytes 'b'
-		comparable then pushJsonBool(doc, keys: keys, children: children, key: "bytesComparable", value: true)
-		withheld(why) then addWithheldBytes(doc, keys: keys, children: children, why: why)
-	end 'b'
-end 'addByteComparability'
+function addRecordedCell(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, cell RecordedCell)
+	match cell 'r'
+		unrecorded then return
+		recorded(text) then pushJsonString(doc, keys: keys, children: children, key: key, value: text)
+	end 'r'
+end 'addRecordedCell'
 
-function addWithheldBytes(doc JsonDoc, keys StringArray, children JsonNodeIdArray, why String)
-	pushJsonBool(doc, keys: keys, children: children, key: "bytesComparable", value: false)
-	pushJsonString(doc, keys: keys, children: children, key: "bytesWithheld", value: why)
-end 'addWithheldBytes'
+// WHETHER THE DELTAS ABOVE EXIST, stated rather than left to be inferred from their absence. A consumer
+// can infer it — no delta on any rung means it was refused — but an inference from an absence is
+// exactly how "not measured" gets read as "zero", and the reason is not inferable at all.
+function addComparability(doc JsonDoc, keys StringArray, children JsonNodeIdArray, comparability RowComparability)
+	match comparability 'c'
+		comparable then pushJsonBool(doc, keys: keys, children: children, key: ComparableKey, value: true)
+		withheld(why) then addWithheld(doc, keys: keys, children: children, why: why)
+	end 'c'
+end 'addComparability'
+
+function addWithheld(doc JsonDoc, keys StringArray, children JsonNodeIdArray, why String)
+	pushJsonBool(doc, keys: keys, children: children, key: ComparableKey, value: false)
+	pushJsonString(doc, keys: keys, children: children, key: "withheld", value: why)
+end 'addWithheld'
+
+let ComparableKey = "comparable"

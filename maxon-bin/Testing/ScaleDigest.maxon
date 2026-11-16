@@ -1,0 +1,136 @@
+let ScaleDigestBytes = 8 as DigestPrefixBytes
+
+let FrameLengthBytes = 8 as ByteWordWidth
+
+function newScaleDigest() returns Digest
+	return Digest.create(HashAlgorithm.sha256)
+end 'newScaleDigest'
+
+function scaleDigestText(digest Digest) returns String
+	return hexOfLeadingBytes(digest.finalize(), count: ScaleDigestBytes)
+end 'scaleDigestText'
+
+function scaleDigestFormatText() returns String
+	return "a digest: the first {ScaleDigestBytes} bytes of a SHA-256 as {hexLengthOfLeadingBytes(ScaleDigestBytes)} lower-case hex characters"
+end 'scaleDigestFormatText'
+
+function digestNamedBytes(digest Digest, name ByteArray, content ByteArray)
+	digestFramed(digest, bytes: name)
+	digestFramed(digest, bytes: content)
+end 'digestNamedBytes'
+
+// Length-framed, so two different sets of names and contents never feed the digest one byte stream.
+function digestFramed(digest Digest, bytes ByteArray)
+	digest.update(frameLength(bytes.count()))
+	digest.update(bytes)
+end 'digestFramed'
+
+function frameLength(length Count) returns ByteArray
+	let frame = ByteArray.create(FrameLengthBytes, zeroed: false)
+	appendOrderedWord(frame, word: length as OrderedWord, width: FrameLengthBytes, order: ByteOrder.bigEndian)
+	return frame
+end 'frameLength'
+
+union MeasuredTree
+	checkout(root FilePath, digest String)
+	noSourceTree(reason String)
+end 'MeasuredTree'
+
+function measuredTreeText(tree MeasuredTree) returns String
+	return match tree 't'
+		checkout(_, digest) gives digest
+		noSourceTree(reason) gives "not digested, because this compiler was built from no tree: {reason}"
+	end 't'
+end 'measuredTreeText'
+
+function measuredTreeOf(compilerExe FilePath) returns MeasuredTree throws ScaleError
+	match binarySourceRootOf(compilerExe) 'origin'
+		elsewhere(reason) then return MeasuredTree.noSourceTree(reason)
+		checkout(sourceRoot) then return try measuredCheckout(sourceRoot)
+	end 'origin'
+end 'measuredTreeOf'
+
+function measuredCheckout(sourceRoot FilePath) returns MeasuredTree throws ScaleError
+	let root = try sourceRoot.parent() otherwise throw ScaleError.reason("{sourceRoot.toString()}, the measured compiler's source root, has no parent directory, so it belongs to no repository root")
+
+	if not sourceRoot.equals(root.join(CompilerSourceDirName)) 'notTheCompilerProject'
+		return MeasuredTree.noSourceTree("{sourceRoot.toString()}, the measured compiler's source root, is not the {CompilerSourceDirName}/ directory of {root.toString()}, so the tree digested there would not be the one this compiler was built from")
+	end 'notTheCompilerProject'
+
+	return MeasuredTree.checkout(root, digest: try treeDigestOf(root))
+end 'measuredCheckout'
+
+function treeDigestOf(repositoryRoot FilePath) returns String throws ScaleError
+	let sources = TreeSourceArray.create(0)
+
+	let compilerRoot = repositoryRoot.join(CompilerSourceDirName)
+	let compiled = try compiledSourcesUnder(compilerRoot) otherwise (error) 'compilerUnwalkable'
+		throw ScaleError.reason("{compilerRoot.toString()} could not be walked for the sources a compiler build reads: {driverErrorSentence(error)}")
+	end 'compilerUnwalkable'
+
+	try addTreeSources(compiled, repositoryRoot: repositoryRoot, into: sources)
+
+	for tierDirName in [StdlibDirName, RuntimeDirName] 'eachTier'
+		let tier = repositoryRoot.join(tierDirName)
+		let found = MaxonSourcePathArray.create(0)
+
+		_ = try collectMaxonSources(tier, into: found) otherwise (error) 'tierUnwalkable'
+			throw ScaleError.reason("{tier.toString()} could not be walked for the sources a compile reads: {driverErrorSentence(error)}")
+		end 'tierUnwalkable'
+
+		try addTreeSources(found, repositoryRoot: repositoryRoot, into: sources)
+	end 'eachTier'
+
+	sources.sortBy(function(left TreeSource, right TreeSource) gives compareBytesOrdinally(left.spelling, right: right.spelling))
+
+	let digest = newScaleDigest()
+
+	for source in sources 'eachSource'
+		let content = try File.readBinary(source.path) otherwise throw ScaleError.reason("could not read {source.path.toString()}, a source of the tree being digested")
+		digestNamedBytes(digest, name: source.spelling, content: content)
+	end 'eachSource'
+
+	return scaleDigestText(digest)
+end 'treeDigestOf'
+
+type TreeSource
+	let spelling as ByteArray
+	let path as FilePath
+
+	static function create(spelling ByteArray, path FilePath) returns TreeSource
+		return Self{spelling: spelling, path: path}
+	end 'create'
+end 'TreeSource'
+
+typealias TreeSourceArray = Array with TreeSource
+
+function addTreeSources(found MaxonSourcePathArray, repositoryRoot FilePath, into TreeSourceArray) throws ScaleError
+	for path in found 'eachSource'
+		let relative = try path.relativeTo(repositoryRoot) otherwise throw ScaleError.reason("{path.toString()} was found walking {repositoryRoot.toString()} and is not under it")
+		into.push(TreeSource.create(relative.toString().replace(FilePath.separator(), with: PortablePathSeparator).toByteArray(), path: path))
+	end 'eachSource'
+end 'addTreeSources'
+
+function treeToRecord(tree MeasuredTree) returns String throws ScaleError
+	match tree 't'
+		noSourceTree(reason) then throw ScaleError.reason("`{NoteFlagPrefix}<text>` records a row only into the tree the measured compiler was built from, and this compiler was built from no tree: {reason}")
+		checkout(root, digest) then return try digestOfTheTreeHere(root, digest: digest)
+	end 't'
+end 'treeToRecord'
+
+function digestOfTheTreeHere(root FilePath, digest String) returns String throws ScaleError
+	let here = Directory.currentPath()
+	let same = try samePhysicalDirectory(root, other: here)
+
+	if not same 'anotherTree'
+		throw ScaleError.reason("`{NoteFlagPrefix}<text>` records a row only into the tree the measured compiler was built from, which is {root.toString()}; this run is in {here.toString()}, whose {OptimizationLogRelativePath} would carry a row about a tree it does not hold. Run it from {root.toString()}.")
+	end 'anotherTree'
+
+	return digest
+end 'digestOfTheTreeHere'
+
+function samePhysicalDirectory(one FilePath, other FilePath) returns bool throws ScaleError
+	let left = try one.resolvedPhysically() otherwise throw ScaleError.reason("{one.toString()} could not be resolved to a physical directory")
+	let right = try other.resolvedPhysically() otherwise throw ScaleError.reason("{other.toString()} could not be resolved to a physical directory")
+	return left.equals(right)
+end 'samePhysicalDirectory'

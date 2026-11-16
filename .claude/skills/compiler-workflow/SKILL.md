@@ -28,6 +28,20 @@ the compiler indexes by, and READ it.
   reason — `note:` (`--note=` on the CLI) — and that reason is the WHY, recorded at the one moment it
   is still known: the instrument sees exactly WHAT moved and can never see WHY. **Write no row you did
   not measure.**
+- **One run writes one row to each of the three tables, and they share five leading cells**: date,
+  `minted at` (where the compiler and corpus ran), `corpus` (a digest of the generated ladder), `tree` (a
+  digest of the `maxon-bin/`, `stdlib/` and `runtime/` sources measured) and the change note; older rows
+  read `*(unrecorded)*` in the two digest cells. `--note=` writes only into the tree it measured. The
+  allocation and byte deltas against the last row are both withheld (the ladder computes no CPU delta), with the reason printed, when the
+  corpus or the place differs or was not recorded; the absolute counts and rung ratios still print, and the
+  attributable figure is then an A/B against a control compiler built from the parent, run from the same
+  location.
+- **A row is re-minted, never hand-edited**: the `tree` cell must be the digest of the tree the row is
+  committed with. `scale-test --check-row` (MCP `checkRow: true`) measures nothing and exits 0 only when
+  the last row carries the current directory's tree digest. `scripts/check-scale-rows.sh` checks the
+  history: every row a commit adds is the last of its table, the same in all three, and passes
+  `--check-row` in that commit's tree (`--working-tree` in `/land` §8, `--range` in CI where a compiler is
+  built). `scale-rows.yml` runs `--range --history-only`, every check but `--check-row`, on every push to `main`.
 - ⛔ **`ScaleHistory` checks only the LAST row of each table, so a well-formed row appended after a ragged one
   masks it**: the tip runs, the merge base reports BROKEN RUN, and the ragged row survives merges. The cause is
   a dropped trailing pipe or a literal pipe in the prose column (`splitRow` splits on every one): name that

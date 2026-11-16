@@ -162,6 +162,21 @@ function stalenessUnder(binary FilePath, sourceRoot FilePath) returns StalenessV
 	return StalenessVerdict.mayProceed
 end 'stalenessUnder'
 
+function compiledSourcesUnder(sourceRoot FilePath) returns MaxonSourcePathArray throws CompileError
+	let found = MaxonSourcePathArray.create(0)
+	_ = try collectMaxonSources(sourceRoot, into: found)
+
+	let compiled = MaxonSourcePathArray.create(found.count(), zeroed: false)
+
+	for source in found 'each'
+		if isCompiledInto(source, sourceRoot: sourceRoot) 'inTheBinary'
+			compiled.push(source)
+		end 'inTheBinary'
+	end 'each'
+
+	return compiled
+end 'compiledSourcesUnder'
+
 function modifiedTimeOf(path FilePath, why String) returns Timestamp
 	match fileStateOf(path) 'state'
 		present(_, modifiedTime, _) then return modifiedTime

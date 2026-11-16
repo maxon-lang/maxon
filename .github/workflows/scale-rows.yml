@@ -1,0 +1,42 @@
+# Every push to `main`: the history half of the scale-ladder row check, over each commit pushed.
+#
+# ⭐ A PUSH THAT CHANGES ONLY `docs/optimization-log.md` RUNS THIS AND NOT `ci.yml`. The log is not one of
+# `ci.yml`'s inputs, so a log-only push costs no build matrix; this workflow has no path filter and builds
+# nothing. Without a compiler it checks what is a fact about history — every row a commit adds is last in
+# its table and added to all three tables alike, and no existing row is edited or removed — and leaves the
+# tree digest to `ci.yml`'s "Scale-ladder rows" step, which runs where a compiler is built
+# (`scripts/check-scale-rows.sh`).
+#
+# ⚠ NO `concurrency` GROUP. Each push's range is checked exactly once: a group holds one pending run and
+# replaces it with the next push's, which would leave that range unchecked. The runs only read, so they
+# run independently.
+
+name: scale-rows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      # The checkout is one commit deep, so the step fetches the history back to the push's base itself
+      # (`scripts/lib/fetch-range.sh`); with no base (the branch's first push, a manual run, a base the
+      # remote no longer has) it checks the head commit alone, or nothing when that commit has no parent.
+      - name: Scale-ladder rows, history
+        env:
+          RANGE_BASE: ${{ github.event.before }}
+          RANGE_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/fetch-range.sh
+          fetch_range "$RANGE_BASE" "$RANGE_HEAD"
+          bash scripts/check-scale-rows.sh --range "$RangeBase..$RANGE_HEAD" --history-only

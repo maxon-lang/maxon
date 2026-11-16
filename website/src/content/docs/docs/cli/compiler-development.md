@@ -119,8 +119,9 @@ and reports each phase's **memory** (allocations, frees and bytes, which are exa
 the compiling thread spent. It does not report wall time, which depends on everything else the machine
 is doing. The ratio between rungs is the growth: ×2.00 is linear, ×4.00 quadratic.
 
-It is an instrument, not a gate: it exits 0 whatever the numbers say, and non-zero only when the run
-itself broke.
+The ladder is an instrument, not a gate: it renders no verdict, exits 0 whatever the numbers say, and
+exits non-zero only when the run itself broke. [`--check-row`](#checking-the-last-row) is the one mode with
+a verdict, and it judges the trend log, not the numbers.
 
 Before the first measured rung it compiles the smallest rung once, unmeasured, to warm the library cache,
 so every measured rung reads the cache the same way. A phase's memory counts the compile's own work: what
@@ -145,8 +146,63 @@ maxon scale-test [options]
 | `--note=<text>` | Record the run as a dated row in `docs/optimization-log.md` with `<text>` as the reason. Without it, nothing is recorded. |
 | `--emit-corpus=<dir>` | Write the generated programs to `<dir>` and compile nothing. |
 | `--result-json=<path>` | Also write the whole run, including the change since the last recorded row, to `<path>` as JSON. |
+| `--check-row` | Measure and record nothing: check that the last row of `docs/optimization-log.md` carries the digest of the tree in the current directory, exit 0 when it does and 1 when it does not, naming the fix (re-run `--note=<text>` on this tree); refused beside every other `scale-test` option that measures or records. |
 
 A value out of range is refused, never clamped.
+
+### The trend log
+
+`--note=<text>` records the run in `docs/optimization-log.md` as one row in each of its three tables
+(allocations, bytes and CPU per rung), and only in the tree the compiler was built from: run from any other
+directory, it is refused before anything is measured, and nothing is written. Each row carries:
+
+| Cell | What it holds |
+|------|---------------|
+| `date` | The UTC date of the run |
+| `minted at` | The place: the compiler's absolute path, and the corpus directory it compiled, which sits in the working directory |
+| `corpus` | A digest of the generated ladder: each generated file's corpus-relative name and bytes, in generation order. The corpus root's path is not in it. |
+| `tree` | A digest of the sources the compiler was built from: the `.maxon` sources a build reads under `maxon-bin/` (output directories and subtrees holding a `.maxonignore` left out), and those under `stdlib/` and `runtime/`, each as its repository-relative path and bytes, in ordinal path order |
+| `change` | The `--note` text |
+| `rung 0` … | The run's count at each rung |
+
+A digest is the first 8 bytes of a SHA-256, written as 16 lower-case hex characters. A row older than a
+column reads `*(unrecorded)*` in it.
+
+Every run reads the last row and reports itself against it, naming its own corpus and tree digests. It
+subtracts only when that row's `corpus` and `minted at` cells both equal this run's: then each rung shows
+its allocation and byte delta. Otherwise every delta reads `withheld`, and the reason is printed under the
+table: the corpus changed, the row was minted elsewhere, or the row does not record its corpus or its
+place. The absolute counts and the ratios between rungs are printed either way. The `tree` cell takes no
+part in this decision.
+
+### Checking the last row
+
+`maxon scale-test --check-row` compiles and measures nothing. It reads the last row of each table of
+`docs/optimization-log.md` in the current directory, digests the tree there, and compares the two.
+`scripts/check-scale-rows.sh` runs it for each commit that adds a row, unless given `--history-only`.
+
+| Code | Meaning |
+|------|---------|
+| `0` | The last row carries this tree's digest; one line names the row's date and change |
+| `1` | It does not: the row's `tree` cell is `*(unrecorded)*`, or another tree's digest (both digests are shown), and the fix is to re-run `scale-test --note=<text>` on this tree. Also a refused option, or a log or tree that cannot be read. |
+
+### The result document
+
+`--result-json=<path>` writes the run as one JSON object, which is also what the MCP tool
+[`run_scale_test`](/docs/cli/mcp-server/#run_scale_test) answers as `result`:
+
+| Key | Value |
+|-----|-------|
+| `repeat` | Compiles per rung |
+| `mintedAt` | This run's place, as its row's `minted at` cell spells it |
+| `corpusDigest` | This run's corpus digest |
+| `treeDigest` | The digest of the tree the compiler was built from; absent for a compiler built from no tree |
+| `rungs` | One object per rung: `rung`, `sourceBytes`, `codeBytes`, `allocs`, `frees`, `bytes`, `cpuTicks`, `allocsDelta` and `bytesDelta` (this run less the last row), `phases` and `regalloc` (each a list of `name`, `allocs`, `frees`, `bytes` and `cpuTicks`) |
+| `corpus` | Whether the generated code grew rung over rung: `grew`, `floorPermille`, and `minGrowthPermille` or a `reason` |
+| `previous` | The last row: `present`, and when it is `true`, `date`, `mintedAt`, `corpus`, `tree` (each absent when the row does not record it), `comparable`, `withheld` (the reason, present only when `comparable` is `false`) and `note` |
+
+`allocsDelta` and `bytesDelta` are both absent on every rung when `previous.comparable` is `false`, when
+there is no last row, and on a rung the last row does not have. No CPU delta is written.
 
 ## `maxon verify-warm-rebuild` and `maxon verify-recheck`
 
