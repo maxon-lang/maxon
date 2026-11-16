@@ -12,7 +12,7 @@ spec_mcp='"tool_name"[[:space:]]*:[[:space:]]*"mcp__maxon__run_spec_test"'
 
 if printf '%s' "$input" | grep -Eq "$shell"; then
 	if printf '%s' "$input" | grep -Eq 'run-test-corpora\.sh'; then refuse; fi
-	if printf '%s' "$input" | grep -Eq 'spec-test' && ! printf '%s' "$input" | grep -Eq -- '--filter|--update-required|--help'; then refuse; fi
+	if printf '%s' "$input" | grep -Eq 'maxon(\.exe)?[[:space:]]+spec-test' && ! printf '%s' "$input" | grep -Eq -- '--filter|--update-required|--help'; then refuse; fi
 fi
 
 if printf '%s' "$input" | grep -Eq "$spec_mcp" && ! printf '%s' "$input" | grep -Eq '"filter"[[:space:]]*:[[:space:]]*("[^"]+"|\[[[:space:]]*")'; then
