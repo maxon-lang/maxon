@@ -207,8 +207,8 @@ async function sdkUsage() {
       at: Math.round(nowSeconds()),
       source: 'sdk',
       limits: limits
-        .filter(limit => limit.is_active && limit.resets_at)
-        .map(limit => ({ key: limitKey(limit), used: limit.percent, resetsAt: Math.round(Date.parse(limit.resets_at) / 1000) })),
+        .filter(limit => limit.resets_at)
+        .map(limit => ({ key: limitKey(limit), used: limit.percent, resetsAt: Math.round(Date.parse(limit.resets_at) / 1000), active: limit.is_active })),
     };
   }
 
@@ -342,7 +342,7 @@ function commandStatus() {
 
 function openLimits(sample, now) {
   return Object.fromEntries((sample?.limits ?? [])
-    .filter(limit => limit.resetsAt > now)
+    .filter(limit => limit.resetsAt > now && limit.active !== false)
     .map(limit => [limit.key, { used: limit.used, resetsAt: limit.resetsAt }]));
 }
 
