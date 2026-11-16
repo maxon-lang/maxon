@@ -1385,14 +1385,55 @@ extension ProgramSignatures
 	// is again exactly one minter.
 	function registerTupleLayout(elements MaxonTypeArray, written NameRoster, capabilities ParamCapabilityArray, declFilePath FilePath) returns immutable ByteArray
 		let instanceBrands = instanceBrandsOf(elements, written: written)
-		let name = self.tupleLayoutNameOf(elements, instanceBrands: instanceBrands, capabilities: capabilities, declFilePath: declFilePath)
+		let canonicalCapabilities = self.canonicalTupleCapabilities(elements, capabilities: capabilities)
+		let name = self.tupleLayoutNameOf(elements, instanceBrands: instanceBrands, capabilities: canonicalCapabilities, declFilePath: declFilePath)
 
 		if not self.hasRegisteredLayout(name) 'notRegisteredYet'
-			self.mintTupleLayout(elements, instanceBrands: instanceBrands, capabilities: capabilities, declFilePath: declFilePath)
+			self.mintTupleLayout(elements, instanceBrands: instanceBrands, capabilities: canonicalCapabilities, declFilePath: declFilePath)
 		end 'notRegisteredYet'
 
 		return name
 	end 'registerTupleLayout'
+
+	function canonicalTupleCapabilities(elements MaxonTypeArray, capabilities ParamCapabilityArray) returns ParamCapabilityArray
+		if not self.tupleNamesAreCanonical() or not capabilities.contains(ParamCapability.immutable) 'nothingToCanonicalize'
+			return capabilities
+		end 'nothingToCanonicalize'
+
+		let canonical = ParamCapabilityArray.create(elements.count(), zeroed: false)
+
+		for i in 0 upto elements.count() 'eachElement'
+			let declared = declaredCapabilityAt(capabilities, position: i as ParamCount)
+			let element = try elements.get(i) otherwise panic("canonicalTupleCapabilities: elements.get OOB at {i} below count {elements.count()}")
+
+			if declared == ParamCapability.immutable and self.typeIsAValueType(element) 'aVacuousCapability'
+				canonical.push(ParamCapability.unmarked)
+				continue
+			end 'aVacuousCapability'
+
+			canonical.push(declared)
+		end 'eachElement'
+
+		return canonical
+	end 'canonicalTupleCapabilities'
+
+	function typeIsAValueType(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+
+		if tagIsByteRecord(tag) or typeIsPromiseStorage(self, t: t) 'aValueByKind'
+			return true
+		end 'aValueByKind'
+
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function 'opaque'
+			return false
+		end 'opaque'
+
+		if tag != ValueTypeTag.genericInstance and not self.tagMayNameAggregate(tag) 'namesNoAggregate'
+			return true
+		end 'namesNoAggregate'
+
+		return RecordKindWritability.of(self).namesAnImmutableAggregate(tag, nameId: typeNameIdOf(t), from: self.typeNames)
+	end 'typeIsAValueType'
 
 	function tupleLayoutNameOf(elements MaxonTypeArray, instanceBrands NameRoster, capabilities ParamCapabilityArray, declFilePath FilePath) returns immutable ByteArray
 		return self.sweepScopedTupleName(self.tupleTypeNameOf(elements, instanceBrands: instanceBrands, capabilities: capabilities), declFilePath: declFilePath)

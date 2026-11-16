@@ -640,6 +640,9 @@ export enum ErrorCode
 	// A cast that would forge a value is refused here too: an integer cast to an enum (use
 	// `Enum.fromRawValue(raw)`, which throws `noSuchRawValue` for a value no case carries) or to a union (build
 	// it with its case constructor), and an interface value cast to another interface.
+	// A tuple converts element by element, each element through the cast its own type would take, so a
+	// tuple cast is refused here when the cast of one of its elements would be (`(Color, Wide) as (Wide,
+	// Wide)`), and when the two tuples have different numbers of elements.
 	semanticUnsafeCast = "E3009"
 
 	// A cast converts nothing: it names the type the value already has -- its own typealias (`b as
@@ -2529,6 +2532,15 @@ export enum ErrorCode
 	// and a `default` arm cannot cover such a case. Carry the value in a local or a message argument, and
 	// consume it where it is received.
 	semanticLinearRefused = "E3224"
+
+	// A tuple cast gives an element a different capability: `(Box, Wide) as (immutable Box, Wide)`, or the
+	// reverse, at any nesting depth. An `as` neither freezes nor thaws, so each element keeps the capability
+	// it has; the message names the element's position and both types. An `immutable` written on an element
+	// of a value type (a number, `bool`, an enum, `String`, or a record that counts as a value) means the type
+	// itself, so `(immutable P, W)` is the type `(P, W)` and casts like it. For an `immutable` target element,
+	// build the tuple from a frozen element (`freeze x`, or `freeze x.clone()` to keep `x` writable); for an
+	// unmarked one, build it from a `clone()` of the element.
+	semanticTupleCastChangesCapability = "E3226"
 
 	// A member is used that its type does not have: a method the type does not declare, a method a
 	// conditional extension gives only to types meeting its `where` clause, or `allCases` on a union. The

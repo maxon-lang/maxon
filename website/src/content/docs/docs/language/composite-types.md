@@ -979,9 +979,53 @@ for (_, age) in ages 'loop'
 end 'loop'
 ```
 
+### Tuple Casts
+
+`t as T` between two tuple types converts element by element: each element whose type differs goes through
+the cast its own value would take, with that cast's refusals and range checks, and a nested tuple element
+converts the same way. So `(1, 2, big) as MyTriple` is **E3005** when the constant `big` is outside an
+element's range, a value computed at run time is checked there and panics when it is outside, and
+`(Color, Wide) as (Wide, Wide)` is **E3009**, as `Color.green as Wide` is. An unneeded cast (**E3010**) is
+judged once, for the cast as written.
+
+The result is a new tuple whenever any element type differs, even between aliases of one range, and the
+source stays as it was, so a write through either name reaches only that name's tuple:
+
+```maxon
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 100000)
+typealias SmallPair = (Small, Small)
+typealias BigPair = (Big, Big)
+
+function main() returns ExitCode
+	var wide = (1 as Big, 2 as Big)
+	let narrow = wide as SmallPair
+	wide.0 = 5000
+	print("{narrow.0}\n")        // 1
+
+	let small = (1 as Small, 2 as Small)
+	var widened = small as BigPair
+	widened.1 = 70000
+	print("{small.1}\n")         // 2
+	return 0
+end 'main'
+```
+
+- A cast whose elements each denote the same type and capability, such as two brands of one instance,
+  shares the record.
+- A cast written on a tuple literal (`(a, b) as T`) converts the literal's own element values, and retypes
+  the literal when no element converts.
+- The two tuples have the same number of elements: `(a, b) as (A, B, C)` is **E3009** (`a tuple converts
+  only to a tuple with the same number of elements`).
+- Each element keeps its capability: `(Box, Wide) as (immutable Box, Wide)` and the reverse are **E3226**.
+  Build the tuple from a frozen element (`freeze x.clone()`), or from a `clone()` for an unmarked element.
+  `immutable` on an element of a value type means the type itself, so `(immutable P, W)` is the type
+  `(P, W)` for a value-like record `P`.
+
 ### Memory Semantics
 
-A tuple is a reference-counted record, like a `type`. Assigning a tuple shares it; a tuple holding managed
+A tuple is a reference-counted record, like a `type`. Assigning a tuple shares it, and a cast between tuple
+types whose elements differ builds a new one (see [Tuple Casts](#tuple-casts)); a tuple holding managed
 values (strings, records) releases them when the last reference goes away. A returned pair is the one
 exception: a two-element tuple of register-wide elements (a whole-word integer or a `bool`), returned by a
 function that does not throw and whose address is not taken, comes back in the two return registers and

@@ -25,7 +25,21 @@ Casts between ranged-int typealiases (e.g. `int(0 to u8.max)` to `int(i64.min to
 always permitted, and they are REQUIRED: every `typealias` is a nominally distinct type, and `as` is
 the only door between two of them, in both directions (`nominal-typealias.md`). Out-of-range literals
 are rejected at compile time; out-of-range expressions are rejected at runtime by the target's range
-check, which a widening cast provably cannot fail and so does not emit.
+check, which a widening cast provably cannot fail and so does not emit. An int-to-float cast to a ranged
+float alias is checked against that range the same way: a constant out of range is E3005, and any other
+value is checked at run time.
+
+### Tuple Casts
+
+A cast between two tuple types converts element by element. Each element whose type differs goes through
+the cast its own value would take, with every refusal and range check that cast has, and a nested tuple
+converts the same way; E3010 is judged once, for the cast as written. The result is a new tuple, and the
+source is left as it was, so a later write through either name reaches only its own tuple. A cast
+whose elements each denote the same type and capability (a brand-only difference) shares the record. A cast
+written on a tuple literal converts the literal's own element values, so a constant element out of range is
+E3005. A cast between tuples of different numbers of elements is E3009, and one that changes an element's
+capability is E3226; `immutable` on a value-type element means the type itself, so `(immutable P, W)` is
+the type `(P, W)`.
 
 ### Syntax
 

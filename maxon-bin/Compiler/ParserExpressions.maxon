@@ -361,6 +361,7 @@ extension Parser
 	// float-converts.
 	function parseCast(func IrFunction) returns ValueId throws SourceParseError
 		let operandStart = self.pos
+		let operandFirstValue = self.bodyState.valueIds.nextId
 		let operand = try self.parseUnary(func)
 
 		// ⚠ Asked only once an `as` is actually there, and this is a HOT path — `parseCast` wraps every
@@ -404,7 +405,7 @@ extension Parser
 		let admittingAlias = self.aliasAdmittingLiteral(operand, targetType: targetType) if operandIsALiteral else self.anchors.undeclaredAlias
 		let admittingLetCast = self.aliasAdmittingLiteral(operand, targetType: targetType) if castReadsAwait else self.anchors.undeclaredAlias
 		let literalConstant = self.foldedConstantOf(operand) if operandIsALiteral else LetCastConstant.unknown
-		let result = try self.applyCast(operand, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: operandIsBareLocal)
+		let result = try self.applyCast(operand, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: operandIsBareLocal, operandFirstValue: operandFirstValue)
 		self.statement.lastCast = RecordedCast.recorded(operandStart, pastEnd: self.pos)
 
 		if castReadsAwait 'aCastConstantRead'
@@ -1576,7 +1577,7 @@ extension Parser
 		try self.requireOpenedRootInsideTheOpenBlock(firstValue, pathText: self.tokenTextFrom(firstSpan.startIndex, endIndex: firstSpan.endIndex), line: firstTok.line, column: firstTok.column)
 		let rootName = self.openedRootName(firstValue, openedTok: firstTok)
 
-		if let second =try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: first + 1) 'aSecondRegion'
+		if let second = try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: first + 1) 'aSecondRegion'
 			let secondTok = self.tokenAt(self.openedPositionSpan(second, argAnchors: argAnchors, receiver: receiver).startIndex)
 			let secondName = self.openedRootName(try args.get(second) otherwise panic("openIsolatedPositions: args.get OOB at {second}"), openedTok: secondTok)
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: self.twoRootsMessage(rootName, second: secondName), line: secondTok.line, column: secondTok.column)
@@ -3441,28 +3442,30 @@ extension Parser
 	// `sourceIsBareLocal` is whether the OPERAND was written as a bare reference to a local — the one fact
 	// `applyCast` cannot recover for itself (it holds a ValueId, and a ValueId does not say how many names
 	// point at it). It gates the declared-alias record the result carries; see `finishCast`.
-	function applyCast(value ValueId, targetType MaxonType, asTok Token, targetTok Token, sourceIsBareLocal bool) returns ValueId throws SourceParseError
-		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
-		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
-		// DIFFERENT aggregate; letting such a cast reach the float/no-op branches below would emit a
-		// `promoteToFloat` or a range check on a POINTER, or leave a mismatched drop (a String drop run on a
-		// struct box — a double free). See `castHasNoLegalConversion` and `SourceParseError.invalidCast`.
-		// ⭐ The legality guards are NOT here — they moved INTO `convertValueToDeclaredType` with the
-		// conversion they protect, so the second position that performs this conversion cannot be given
-		// fewer of them than this one. See that function's ⛔⛔ block.
-		let sourceTag = self.tagOf(value)
-		let widened = self.interfaceHandleOf(value, declared: targetType, first: asTok, last: targetTok)
+	function applyCast(value ValueId, targetType MaxonType, asTok Token, targetTok Token, sourceIsBareLocal bool, operandFirstValue ValueId) returns ValueId throws SourceParseError
+		let door = self.castDoorOf(value, targetType: targetType, first: asTok, last: targetTok)
+		self.recordUnneededCast(door, value: value, targetType: targetType, asTok: asTok)
+
+		return try self.castThroughDoor(door, value: value, targetType: targetType, brand: self.declaredBrand(targetTok.value, resolved: targetType, readerFilePath: self.job.path), asTok: asTok, sourceIsBareLocal: sourceIsBareLocal, tuple: self.tupleCastSourceOf(value, firstOwnValue: operandFirstValue))
+	end 'applyCast'
+
+	function castDoorOf(value ValueId, targetType MaxonType, first Token, last Token) returns CastDoor
+		let widened = self.interfaceHandleOf(value, declared: targetType, first: first, last: last)
 
 		if widened != value 'aHandleWidenedToItsInterface'
-			return widened
+			return CastDoor.handleWidened(widened)
 		end 'aHandleWidenedToItsInterface'
 
 		// ⭐ **`xs as Ys` OVER ONE INSTANCE IS A RE-BRAND**: the same record, the same layout, a different name.
 		// Asked ahead of every conversion rule, because none of them has anything to say about a value that
 		// keeps its representation — and ahead of the container refusal, which is about a DIFFERENT instance.
 		if self.castIsARebrand(value, targetType: targetType) 'aBrandOfTheSameInstance'
-			return self.rebrandValue(value, targetType: targetType, brand: self.declaredBrand(targetTok.value, resolved: targetType, readerFilePath: self.job.path), sourceIsBareLocal: sourceIsBareLocal, opTok: asTok)
+			return CastDoor.rebrand
 		end 'aBrandOfTheSameInstance'
+
+		if let ownType = try self.ownTypeNamedByCast(value, targetType: targetType) 'aCastToTheValuesOwnType'
+			return CastDoor.namesOwnType(ownType)
+		end 'aCastToTheValuesOwnType'
 
 		// The target's ranged-alias declaration, resolved ONCE for every question that needs it — WHICH
 		// alias a narrowing check names, and WHAT its range says about the shift fill. Each ask
@@ -3470,38 +3473,50 @@ extension Parser
 		//
 		// ⚠ It reads the RESOLVED target type and not the target TOKEN, which is what makes a qualified
 		// `x as Wrapper.Idx` ask about the joined name rather than about `Wrapper`.
-		let targetAlias = self.declaredAliasOfType(targetType)
+		return CastDoor.conversion(self.declaredAliasOfType(targetType))
+	end 'castDoorOf'
 
-		if let ownType = try self.ownTypeNamedByCast(value, targetType: targetType) 'aCastToTheValuesOwnType'
-			if not self.castIsTheWholeOfAFieldDefault(asTok) 'theCastGivesTheFieldItsType'
-				self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(ownType, targetName: ownType), range: SourceRange.ofToken(asTok))
-			end 'theCastGivesTheFieldItsType'
-
-			return value
-		end 'aCastToTheValuesOwnType'
-
-		// ⭐ **E3010, ABOVE THE THREE CONVERSION ARMS** — because it is a question about the two DECLARED
-		// types and not about the conversion any arm chooses: the int→float widening `i as JsonFloat` is as
-		// unneeded as the identity `b as Byte`. RECORDED rather than thrown, so the parse walks on and every
-		// unneeded cast in the file is reported by ONE compile — which is exactly what
-		// `error.unneeded.multiple-in-one-function` (three of them) and `.multiple-across-functions` (two,
-		// in two functions) pin, and what type-casting.md's prose calls a recoverable diagnostic.
-		//
-		// ⭐ **AND IT IS A DIFFERENT QUESTION FROM THE RANGE-CHECK SITE BELOW.** This one asks whether
-		// the cast NAMES the value's own alias; that one asks whether the source range is provably inside the
-		// target's. A widening cast between two names answers "no" here and "elide the guard" there, which is
-		// exactly the pair `a-widening-cast-emits-no-guard` pins: a real door, and no instruction behind it.
-		if not self.castIsTheWholeOfAFieldDefault(asTok) 'theCastGivesTheFieldItsType'
-			let castTarget = self.fileScopedOrInnerAliasOfType(targetAlias, t: targetType)
-			self.reportUnneededCast(self.unneededCastSourceAlias(value, target: castTarget), target: castTarget, asTok: asTok)
+	// ⭐ **E3010, ABOVE THE THREE CONVERSION ARMS** — because it is a question about the two DECLARED
+	// types and not about the conversion any arm chooses: the int→float widening `i as JsonFloat` is as
+	// unneeded as the identity `b as Byte`. RECORDED rather than thrown, so the parse walks on and every
+	// unneeded cast in the file is reported by ONE compile — which is exactly what
+	// `error.unneeded.multiple-in-one-function` and `.multiple-across-functions` pin. A tuple element's
+	// cast goes through `castDoorOf` without this record, so E3010 is judged once, for the cast as written.
+	//
+	// ⭐ **AND IT IS A DIFFERENT QUESTION FROM THE RANGE-CHECK SITE BELOW.** This one asks whether
+	// the cast NAMES the value's own alias; that one asks whether the source range is provably inside the
+	// target's. A widening cast between two names answers "no" here and "elide the guard" there, which is
+	// exactly the pair `a-widening-cast-emits-no-guard` pins: a real door, and no instruction behind it.
+	function recordUnneededCast(door CastDoor, value ValueId, targetType MaxonType, asTok Token)
+		if self.castIsTheWholeOfAFieldDefault(asTok) 'theCastGivesTheFieldItsType'
+			return
 		end 'theCastGivesTheFieldItsType'
 
-		return try self.convertValueToDeclaredType(value, sourceTag: sourceTag, targetType: targetType, targetAlias: targetAlias, opTok: asTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
-	end 'applyCast'
+		match door 'door'
+			handleWidened then break
+			rebrand then break
+			namesOwnType(ownType) then self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(ownType, targetName: ownType), range: SourceRange.ofToken(asTok))
+			conversion(targetAlias) then self.recordUnneededConversion(value, targetAlias: targetAlias, targetType: targetType, asTok: asTok)
+		end 'door'
+	end 'recordUnneededCast'
 
-	// The conversion itself: the three arms and the two records that turn a value of one declared type
-	// into a value of another. Split from `applyCast` because positions with no written `as` perform
-	// exactly this conversion and must not perform the step left behind: a return whose value
+	function recordUnneededConversion(value ValueId, targetAlias DeclaredAlias, targetType MaxonType, asTok Token)
+		let castTarget = self.fileScopedOrInnerAliasOfType(targetAlias, t: targetType)
+		self.reportUnneededCast(self.unneededCastSourceAlias(value, target: castTarget), target: castTarget, asTok: asTok)
+	end 'recordUnneededConversion'
+
+	function castThroughDoor(door CastDoor, value ValueId, targetType MaxonType, brand ByteArray, asTok Token, sourceIsBareLocal bool, tuple TupleCastSource) returns ValueId throws SourceParseError
+		match door 'door'
+			handleWidened(widened) then return widened
+			rebrand then return self.rebrandValue(value, targetType: targetType, brand: brand, sourceIsBareLocal: sourceIsBareLocal, opTok: asTok)
+			namesOwnType then return value
+			conversion(targetAlias) then return try self.convertValueToDeclaredType(value, sourceTag: self.tagOf(value), targetType: targetType, targetAlias: targetAlias, opTok: asTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false, tupleSource: tuple)
+		end 'door'
+	end 'castThroughDoor'
+
+	// The conversion itself: the arms and the records that turn a value of one declared type into a value
+	// of another. It is apart from `applyCast` because positions with no written `as` perform exactly this
+	// conversion and must not perform the step `applyCast` keeps: a return whose value
 	// names another scalar alias (`admitReturnedAggregate`), an array literal's element under an
 	// `<alias> from […]` head (`admitArrayLiteralElement`), and a `processIsAlive` pid.
 	//
@@ -3516,10 +3531,7 @@ extension Parser
 	// Byte` is E3009, while `ByteArray from [Color.red, Color.green]` would compile and stamp `Byte`
 	// onto an enum. A guard added below is a guard every position gets; there is no second list to
 	// forget.
-	//
-	// `sourceTag` is passed rather than re-read for `applyCast`'s stated reason — nothing between its binding
-	// and here re-tags `value`, so a re-read is the same answer twice.
-	function convertValueToDeclaredType(value ValueId, sourceTag ValueTypeTag, targetType MaxonType, targetAlias DeclaredAlias, opTok Token, sourceIsBareLocal bool, mustCarryTargetType bool) returns ValueId throws SourceParseError
+	function convertValueToDeclaredType(value ValueId, sourceTag ValueTypeTag, targetType MaxonType, targetAlias DeclaredAlias, opTok Token, sourceIsBareLocal bool, mustCarryTargetType bool, tupleSource TupleCastSource = TupleCastSource.anyValue) returns ValueId throws SourceParseError
 		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CONVERSION FIRST (E3009), before any arm is chosen. A
 		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
 		// DIFFERENT aggregate; letting one reach the float or no-op arms below would emit a `promoteToFloat`
@@ -3527,7 +3539,7 @@ extension Parser
 		// double free). See `castHasNoLegalConversion` and `SourceParseError.invalidCast`.
 		//
 		// ⭐ **AN ENUM SOURCE IS ITS OWN REFUSAL** — `requireCastSourceIsNotEnum` carries why both backings
-		// share one rule. It is the guard the element door was missing.
+		// share one rule.
 		self.admitUnsignedLiteral(value)
 
 		let targetTag = try self.castTargetTag(targetType, asTok: opTok)
@@ -3541,9 +3553,8 @@ extension Parser
 		// UNEXAMINED.** Both ends are `TypeClass.function`, so `castHasNoLegalConversion` sees the same class
 		// and stands aside, and the value then falls all the way to the representational no-op at the end of
 		// this function — untouched, and now claiming to be a function type it may share nothing with but its
-		// tag. `intish as FloatFn` compiled clean and the integer `intish` returns was read back out of the
-		// float return register. The id `castTargetTag` discards is exactly what names the target's
-		// signature, which is why this reads `targetType` and not the reduced tag.
+		// tag. The id `castTargetTag` discards is exactly what names the target's signature, which is why
+		// this reads `targetType` and not the reduced tag.
 		if isFunctionTypeDoor(targetTag, got: sourceTag) 'functionTypeDoor'
 			self.recordFunctionTypeDoor(typeNameIdOf(targetType), gotNameId: self.valueNameId(value), door: FunctionTypeDoor.cast, place: FunctionTypeDoorPlace.unnamed, anchor: opTok, handedAt: opTok)
 			return self.rebrandValue(value, targetType: targetType, brand: EmptySourceText, sourceIsBareLocal: sourceIsBareLocal, opTok: opTok)
@@ -3553,7 +3564,7 @@ extension Parser
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
 		if sourceIsFloat and not targetIsFloat 'floatToInt'
-			// ⚠ **A CONCRETE INTEGER TARGET NO LONGER REACHES HERE — it is E3009 above** (`float → int` is
+			// ⚠ **A CONCRETE INTEGER TARGET DOES NOT REACH HERE — it is E3009 above** (`float → int` is
 			// lossy; the language's answer is `trunc`/`round`/`floor`/`ceil`). What still does is a target no
 			// tag can judge: an opaque type parameter `T`, whose cast `castHasNoLegalConversion` deliberately
 			// stands aside from. The truncation is kept for it rather than deleted, because it is the only
@@ -3573,7 +3584,9 @@ extension Parser
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
-			return self.finishCast(self.promoteToFloat(value, opTok: opTok), source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
+			let promoted = self.promoteCastOperandToFloat(value, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
+			try self.requireCastInRangeAt(promoted, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
+			return self.finishCast(promoted, source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
 		end 'intToFloat'
 
 		// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE MINTED RESULT, AND THAT IS A CORRECTNESS
@@ -3586,11 +3599,136 @@ extension Parser
 		// time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is the case that says
 		// so. The float→int cast above anchors on its RESULT for the opposite reason, stated there:
 		// `trunc` changes the number, so the source is not the value being checked.
-		try self.requireConstantCastInRange(value, targetAlias: targetAlias, asTok: opTok)
-		self.recordCastRangeCheckSite(value, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
+		try self.requireCastInRangeAt(value, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
+
+		if self.typeNamesATuple(self.typeOf(value)) and self.typeNamesATuple(targetType) 'aTupleCast'
+			return try self.convertTupleValue(value, targetType: targetType, targetAlias: targetAlias, opTok: opTok, sourceIsBareLocal: sourceIsBareLocal, source: tupleSource)
+		end 'aTupleCast'
 
 		return self.nameValueAsDeclaredType(value, targetType: targetType, targetAlias: targetAlias, opTok: opTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: mustCarryTargetType)
 	end 'convertValueToDeclaredType'
+
+	function promoteCastOperandToFloat(value ValueId, targetAlias DeclaredAlias, targetType MaxonType, opTok Token) returns ValueId
+		if not self.constIsKnown(value) or not self.declaresARangedAlias(targetAlias, t: targetType) 'noLiteralToMaterialize'
+			return self.promoteToFloat(value, opTok: opTok)
+		end 'noLiteralToMaterialize'
+
+		return self.emitLiteral(self.foldLiteralToFloatBits(value), valueType: MaxonType.float, range: SourceRange.ofToken(opTok))
+	end 'promoteCastOperandToFloat'
+
+	function requireCastInRangeAt(site ValueId, targetAlias DeclaredAlias, targetType MaxonType, opTok Token) throws SourceParseError
+		try self.requireConstantCastInRange(site, targetAlias: targetAlias, asTok: opTok)
+		self.recordCastRangeCheckSite(site, targetAlias: targetAlias, targetType: targetType, opTok: opTok)
+	end 'requireCastInRangeAt'
+
+	function typeNamesATuple(t MaxonType) returns bool
+		return maxonTypeTag(t) == ValueTypeTag.structRef and internedNameIsATupleTypeName(self.artifact.typeNames, id: typeNameIdOf(t))
+	end 'typeNamesATuple'
+
+	// A binding names its literal's value with no load, so a literal built before `firstOwnValue` is a
+	// name's: retyping it in place would retype that name too.
+	function tupleCastSourceOf(value ValueId, firstOwnValue ValueId) returns TupleCastSource
+		match self.bodyState.lastTupleLiteral 'last'
+			none then return TupleCastSource.anyValue
+			built(literal, elements) then return TupleCastSource.literal(elements, firstOwnValue: firstOwnValue) if literal == value and literal >= firstOwnValue else TupleCastSource.anyValue
+		end 'last'
+	end 'tupleCastSourceOf'
+
+	function tupleElementTypeOf(layout StructLayout, index FieldIndex) returns MaxonType
+		return self.fieldTypeKeepingAlias(layout, index: index, collapsed: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
+	end 'tupleElementTypeOf'
+
+	function tupleElementIsCarriedOver(sourceLayout StructLayout, targetLayout StructLayout, index FieldIndex) returns bool
+		return maxonTypesDenoteSame(self.tupleElementTypeOf(sourceLayout, index: index), b: self.tupleElementTypeOf(targetLayout, index: index))
+	end 'tupleElementIsCarriedOver'
+
+	function tupleCastElementValue(value ValueId, layout StructLayout, index FieldIndex, source TupleCastSource, opTok Token) returns ValueId
+		if let own = try source.elementAt(index) 'theLiteralsOwnElement'
+			if not self.valueIsManagedHeap(own) 'aNumber'
+				return own
+			end 'aNumber'
+		end 'theLiteralsOwnElement'
+
+		return self.emitFieldLoad(value, layout: layout, index: index, range: SourceRange.ofToken(opTok))
+	end 'tupleCastElementValue'
+
+	function castTupleElementAs(element ValueId, targetLayout StructLayout, index FieldIndex, source TupleCastSource, opTok Token, elementIsAName bool) returns ValueId throws SourceParseError
+		let targetElement = self.tupleElementTypeOf(targetLayout, index: index)
+		let door = self.castDoorOf(element, targetType: targetElement, first: opTok, last: opTok)
+
+		return try self.castThroughDoor(door, value: element, targetType: targetElement, brand: self.fieldPlaceBrand(targetLayout, index: index, resolved: targetElement), asTok: opTok, sourceIsBareLocal: elementIsAName, tuple: TupleCastSource.nested(source.positionOf(index)))
+	end 'castTupleElementAs'
+
+	function requireTupleElementKeepsCapability(sourceLayout StructLayout, targetLayout StructLayout, index FieldIndex, source TupleCastSource, opTok Token) throws SourceParseError
+		let sourceCapability = sourceLayout.fieldTypeSites.capabilityAt(index)
+		let targetCapability = targetLayout.fieldTypeSites.capabilityAt(index)
+
+		if sourceCapability == targetCapability 'theCapabilityStands'
+			return
+		end 'theCapabilityStands'
+
+		let remedy = "freeze the element (freeze x.clone())" if targetCapability == ParamCapability.immutable else "copy the element (x.clone())"
+		let explanation = "Cannot cast element {source.positionOf(index)} of a tuple from '{self.signatures.tupleElementDisplayName(sourceLayout, index: index)}' to '{self.signatures.tupleElementDisplayName(targetLayout, index: index)}': a tuple cast keeps each element's capability; {remedy} and build the tuple from it"
+
+		throw SourceParseError.registryRefused(ErrorCode.semanticTupleCastChangesCapability, explanation: explanation, line: opTok.line, column: opTok.column, notes: PositionedNoteArray.create(0))
+	end 'requireTupleElementKeepsCapability'
+
+	function convertTupleValue(value ValueId, targetType MaxonType, targetAlias DeclaredAlias, opTok Token, sourceIsBareLocal bool, source TupleCastSource) returns ValueId throws SourceParseError
+		let sourceLayout = self.registeredTupleLayout(self.internedName(typeNameIdOf(self.typeOf(value))))
+		let targetLayout = self.registeredTupleLayout(self.internedName(typeNameIdOf(targetType)))
+
+		if sourceLayout.fieldCount() != targetLayout.fieldCount() 'differentArity'
+			throw SourceParseError.castFormsAValue("a tuple of {sourceLayout.fieldCount()} elements", targetType: "a tuple of {targetLayout.fieldCount()} elements", remedy: "a tuple converts only to a tuple with the same number of elements", line: opTok.line, column: opTok.column)
+		end 'differentArity'
+
+		let converted = ValueIdArray.create(0)
+		var theLiteralKeepsItsRecord = source.isLiteral()
+
+		for i in 0 upto targetLayout.fieldCount() 'eachElementThatDiffers'
+			// Ahead of the carry-over test, which compares element types alone: past it, a capability-only
+			// difference would share the record.
+			try self.requireTupleElementKeepsCapability(sourceLayout, targetLayout: targetLayout, index: i, source: source, opTok: opTok)
+
+			if self.tupleElementIsCarriedOver(sourceLayout, targetLayout: targetLayout, index: i) 'nothingConverts'
+				continue
+			end 'nothingConverts'
+
+			let element = self.tupleCastElementValue(value, layout: sourceLayout, index: i, source: source, opTok: opTok)
+			let result = try self.castTupleElementAs(element, targetLayout: targetLayout, index: i, source: source, opTok: opTok, elementIsAName: source.namesTheElement(element))
+			converted.push(result)
+
+			if result != element 'anElementConverts'
+				theLiteralKeepsItsRecord = false
+			end 'anElementConverts'
+		end 'eachElementThatDiffers'
+
+		if theLiteralKeepsItsRecord 'retypedInPlace'
+			self.retypeValue(value, valueType: targetType)
+			return self.finishCast(value, source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: false)
+		end 'retypedInPlace'
+
+		if converted.count() == 0 'aBrandOnlyDifference'
+			return self.nameValueAsDeclaredType(value, targetType: targetType, targetAlias: targetAlias, opTok: opTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
+		end 'aBrandOnlyDifference'
+
+		let elements = ValueIdArray.create(0)
+		let elementBareLocal = BoolArray.create(0)
+		var nextConverted = 0 as FieldIndex
+
+		for i in 0 upto targetLayout.fieldCount() 'eachElement'
+			if self.tupleElementIsCarriedOver(sourceLayout, targetLayout: targetLayout, index: i) 'carriedOver'
+				elements.push(self.tupleCastElementValue(value, layout: sourceLayout, index: i, source: source, opTok: opTok))
+			end 'carriedOver' else 'convertedAbove'
+				elements.push(try converted.get(nextConverted) otherwise panic("convertTupleValue: converted.get OOB at {nextConverted} for the {targetLayout.fieldCount()} elements of `{String.from(targetLayout.name)}`"))
+				nextConverted = nextConverted + 1
+			end 'convertedAbove'
+
+			elementBareLocal.push(false)
+		end 'eachElement'
+
+		let record = try self.emitStructLiteral(targetLayout, fieldValues: elements, fieldBareLocal: elementBareLocal, anchor: opTok, range: SourceRange.ofToken(opTok))
+		return self.finishCast(record, source: value, targetAlias: targetAlias, targetType: targetType, sourceIsBareLocal: sourceIsBareLocal)
+	end 'convertTupleValue'
 
 	function requireConstantCastInRange(value ValueId, targetAlias DeclaredAlias, asTok Token) throws SourceParseError
 		if self.job.initializerRole == InitializerRole.ordinary 'aBodyGuardsItAtRunTime'

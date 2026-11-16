@@ -9708,3 +9708,48 @@ type ExtensionAssociatedScope
 		return Self{names: freeze NameRoster.create(0), bindings: RequirementTypeArray.create(0), bindingFilePath: CompilerOwnedDeclFilePath, pass: ExtensionBodyPass.sweep, heldUses: HeldAssociatedUseArray.create(0)}
 	end 'empty'
 end 'ExtensionAssociatedScope'
+
+union CastDoor
+	handleWidened(widened ValueId)
+	rebrand
+	namesOwnType(ownType immutable ByteArray)
+	conversion(targetAlias DeclaredAlias)
+end 'CastDoor'
+
+union TupleCastSource
+	anyValue
+	literal(elements ValueIdArray, firstOwnValue ValueId)
+	nested(path String)
+
+	function isLiteral() returns bool
+		return match self 'source'
+			anyValue or
+			nested gives false
+			literal gives true
+		end 'source'
+	end 'isLiteral'
+
+	function elementAt(index FieldIndex) returns ValueId throws AbsentError
+		match self 'source'
+			anyValue or
+			nested then throw AbsentError.absent
+			literal(elements, _) then return try elements.get(index) otherwise panic("TupleCastSource.elementAt: elements.get OOB at {index}")
+		end 'source'
+	end 'elementAt'
+
+	function namesTheElement(element ValueId) returns bool
+		return match self 'source'
+			anyValue or
+			nested gives false
+			literal(_, firstOwnValue) gives element < firstOwnValue
+		end 'source'
+	end 'namesTheElement'
+
+	function positionOf(index FieldIndex) returns String
+		return match self 'source'
+			anyValue or
+			literal gives "{index}"
+			nested(path) gives "{path}.{index}"
+		end 'source'
+	end 'positionOf'
+end 'TupleCastSource'

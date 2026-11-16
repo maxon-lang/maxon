@@ -273,7 +273,7 @@ A symbol is referenced from outside its declaring directory's subtree but is not
 
 ### E3009 — `semanticUnsafeCast`
 
-A conversion that cannot be proven safe: an explicit cast whose source range does not fit the destination (`256 as Byte`), an explicit cast that is lossy or meaningless (`5.0 as int`, `true as int`), or the SAME lossy conversion reached IMPLICITLY, where a value meets a declared type it cannot reach without loss (`takeInt(3.7)`, `return 3.7` from a `returns int`). One code, because it is one fact: the answer to every one of them is an explicit `trunc`/`round`/`floor`/`ceil`. A cast that would forge a value is refused here too: an integer cast to an enum (use `Enum.fromRawValue(raw)`, which throws `noSuchRawValue` for a value no case carries) or to a union (build it with its case constructor), and an interface value cast to another interface.
+A conversion that cannot be proven safe: an explicit cast whose source range does not fit the destination (`256 as Byte`), an explicit cast that is lossy or meaningless (`5.0 as int`, `true as int`), or the SAME lossy conversion reached IMPLICITLY, where a value meets a declared type it cannot reach without loss (`takeInt(3.7)`, `return 3.7` from a `returns int`). One code, because it is one fact: the answer to every one of them is an explicit `trunc`/`round`/`floor`/`ceil`. A cast that would forge a value is refused here too: an integer cast to an enum (use `Enum.fromRawValue(raw)`, which throws `noSuchRawValue` for a value no case carries) or to a union (build it with its case constructor), and an interface value cast to another interface. A tuple converts element by element, each element through the cast its own type would take, so a tuple cast is refused here when the cast of one of its elements would be (`(Color, Wide) as (Wide, Wide)`), and when the two tuples have different numbers of elements.
 
 ### E3010 — `semanticUnneededCast`
 
@@ -936,6 +936,10 @@ A linear value is used where it cannot be consumed exactly once. It lives only i
 ### E3225 — `entryFunctionTakesParameters`
 
 An entry function declares parameters: a program's `main`, or any exported or `public` function of a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked on every build or run of that file, so `maxon build app` is refused when another export `helper` takes a parameter. An entry is called with no arguments, so a parameter with a default value is refused too: `function main(code ExitCode = 0)`. Remove the parameters and obtain the values another way; a program reads its command-line arguments with `CommandLine.args()`. In a `.maxproj` or `.maxtasks`, a function that is a helper drops its `export` (or `public`) instead.
+
+### E3226 — `semanticTupleCastChangesCapability`
+
+A tuple cast gives an element a different capability: `(Box, Wide) as (immutable Box, Wide)`, or the reverse, at any nesting depth. An `as` neither freezes nor thaws, so each element keeps the capability it has; the message names the element's position and both types. An `immutable` written on an element of a value type (a number, `bool`, an enum, `String`, or a record that counts as a value) means the type itself, so `(immutable P, W)` is the type `(P, W)` and casts like it. For an `immutable` target element, build the tuple from a frozen element (`freeze x`, or `freeze x.clone()` to keep `x` writable); for an unmarked one, build it from a `clone()` of the element.
 
 ## Intermediate Representation (E4xxx)
 

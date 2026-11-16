@@ -2846,9 +2846,9 @@ against the sixteen-register float pool. A class-blind "does this op free a regi
 GPR as relief and panicked the colorer in the XMM file. Gated to x64 because it counts against x64's
 sixteen-deep float pool. Every argument is `1.0`, so the sum is `16.0`.
 ```maxon
-typealias SmallReal = float(0.0 to 1000.0)
+
 function g(f0 Real, f1 Real, f2 Real, f3 Real, f4 Real, f5 Real, f6 Real, f7 Real, f8 Real, f9 Real, f10 Real, f11 Real, f12 Real, f13 Real, f14 Real, f15 Real, y Integer) returns Real
-	let unused = y as SmallReal
+	let unused = y as Real
 	print("{unused}")
 	return f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15
 end 'g'

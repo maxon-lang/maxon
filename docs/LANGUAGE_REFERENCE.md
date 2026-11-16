@@ -660,7 +660,7 @@ end 'main'
 | Cast | Result |
 |------|--------|
 | integer alias → integer alias | legal; widening emits no check, narrowing panics if the value is out of range |
-| integer alias or literal → float alias | legal; a value of an unsigned alias converts as the unsigned value |
+| integer alias or literal → float alias | legal; a value of an unsigned alias converts as the unsigned value, and the converted value is checked against the target's range (a constant out of range is **E3005**) |
 | float alias → float alias | legal; the value is checked against the target's range |
 | integer alias ↔ `bits(n)` | legal (see [Bit Patterns](#bit-patterns--bitsn)) |
 | literal → alias | checked at compile time: `256 as Byte` is **E3005** (`Value 256 is outside the range of 'Byte'`) |
@@ -671,6 +671,9 @@ end 'main'
 | a literal in an unannotated `let` every use of which takes the plain constant (`let p = 8080 as Port`, read only as a `Port` argument) | **E3010** `unneeded cast: the literal 8080 already fits every use of 'p'` |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 | a cast of a cast (`x as A as B`, `(x as A) as B`) | **E2079** `a cast cannot take another cast as its operand — cast directly to 'B'` |
+| tuple → tuple of the same number of elements | converts element by element, each element as its own cast would (see [Tuple Casts](#tuple-casts)) |
+| tuple → tuple of a different number of elements | **E3009** `a tuple converts only to a tuple with the same number of elements` |
+| tuple → tuple that gives an element another capability | **E3226** |
 
 A cast takes one step. Where two steps each do work — a range check, then a reinterpretation as a
 `bits(n)` pattern — bind the first result and cast that: `let a = x as A`, then `a as B`.
@@ -2161,9 +2164,53 @@ for (_, age) in ages 'loop'
 end 'loop'
 ```
 
+### Tuple Casts
+
+`t as T` between two tuple types converts element by element: each element whose type differs goes through
+the cast its own value would take, with that cast's refusals and range checks, and a nested tuple element
+converts the same way. So `(1, 2, big) as MyTriple` is **E3005** when the constant `big` is outside an
+element's range, a value computed at run time is checked there and panics when it is outside, and
+`(Color, Wide) as (Wide, Wide)` is **E3009**, as `Color.green as Wide` is. An unneeded cast (**E3010**) is
+judged once, for the cast as written.
+
+The result is a new tuple whenever any element type differs, even between aliases of one range, and the
+source stays as it was, so a write through either name reaches only that name's tuple:
+
+```maxon
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 100000)
+typealias SmallPair = (Small, Small)
+typealias BigPair = (Big, Big)
+
+function main() returns ExitCode
+	var wide = (1 as Big, 2 as Big)
+	let narrow = wide as SmallPair
+	wide.0 = 5000
+	print("{narrow.0}\n")        // 1
+
+	let small = (1 as Small, 2 as Small)
+	var widened = small as BigPair
+	widened.1 = 70000
+	print("{small.1}\n")         // 2
+	return 0
+end 'main'
+```
+
+- A cast whose elements each denote the same type and capability, such as two brands of one instance,
+  shares the record.
+- A cast written on a tuple literal (`(a, b) as T`) converts the literal's own element values, and retypes
+  the literal when no element converts.
+- The two tuples have the same number of elements: `(a, b) as (A, B, C)` is **E3009** (`a tuple converts
+  only to a tuple with the same number of elements`).
+- Each element keeps its capability: `(Box, Wide) as (immutable Box, Wide)` and the reverse are **E3226**.
+  Build the tuple from a frozen element (`freeze x.clone()`), or from a `clone()` for an unmarked element.
+  `immutable` on an element of a value type means the type itself, so `(immutable P, W)` is the type
+  `(P, W)` for a value-like record `P`.
+
 ### Memory Semantics
 
-A tuple is a reference-counted record, like a `type`. Assigning a tuple shares it; a tuple holding managed
+A tuple is a reference-counted record, like a `type`. Assigning a tuple shares it, and a cast between tuple
+types whose elements differ builds a new one (see [Tuple Casts](#tuple-casts)); a tuple holding managed
 values (strings, records) releases them when the last reference goes away. A returned pair is the one
 exception: a two-element tuple of register-wide elements (a whole-word integer or a `bool`), returned by a
 function that does not throw and whose address is not taken, comes back in the two return registers and
@@ -6557,6 +6604,7 @@ mutable record, and sending it as `immutable` needs `freeze`.
 
 A record that is an immutable aggregate counts as a value, like a `String`: `immutable` over it means the type
 itself, it enters an `immutable` slot or a service message with no `freeze`, and `freeze` of one is **E3200**.
+This holds in a tuple element too: `(immutable P, W)` is the type `(P, W)`.
 
 ### Parameter Capabilities Are Inferred
 
@@ -7088,6 +7136,7 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3222](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3222) | `reply.later()` or a `Reply` used where the holder could not answer it exactly once, or a `Reply` leaving its service's code |
 | [E3223](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3223) | a linear value dropped, overwritten, discarded, or live across a wait |
 | [E3224](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3224) | a linear value in a field, container, tuple, capture, promise, reply or other place that cannot consume it exactly once, and a finalizer or `consuming self` written outside its rules |
+| [E3226](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3226) | a tuple cast that gives an element a different capability |
 
 ## Memory Model
 

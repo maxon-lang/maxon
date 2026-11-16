@@ -1034,6 +1034,11 @@ A cast whose operand is a cast (`x as A as B`, `(x as A) as B`) is **E2079**: ca
 both steps do work — a range check, then a reinterpretation as `bits(n)` — bind the first:
 `let a = x as A`, then `a as B`.
 
+A tuple cast (`pair as WidePair`) converts element by element, each element as its own cast would, with
+the same refusals and range checks, and yields a new tuple; it shares the record only when every element
+denotes the same type. A cast between tuples of different sizes is **E3009**, and one that changes an
+element's capability is **E3226**.
+
 ## Other Features
 
 ### Closures

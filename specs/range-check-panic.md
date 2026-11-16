@@ -4289,3 +4289,47 @@ end 'main'
 ```stdout
 9223372036854775808 9223372036854775808 18446744073709551615
 ```
+
+<!-- test: error.an-integer-constant-cast-to-a-float-alias-outside-its-range -->
+```maxon
+typealias Real = float(-1000.0 to 1000.0)
+function main() returns ExitCode
+	let s = 3000 as Real
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:15: Value 3000 is outside the range of 'Real' (float(-1000 to 1000))
+```
+
+<!-- test: an-integer-cast-to-a-float-alias-outside-its-range-panics-at-run-time -->
+```maxon
+typealias Real = float(-1000.0 to 1000.0)
+typealias Wide = int(0 to 100000)
+
+function launder(n Wide) returns Wide
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let fits = launder(3) as Real
+	print("{fits}\n")
+	let s = launder(3000) as Real
+	print("{s}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+3.0
+```
+```exitcode
+1
+```
+```stderr
+panic at an-integer-cast-to-a-float-alias-outside-its-range-panics-at-run-time.test:12: Range check failed: value outside typealias 'Real'
+Stack trace:
+  in main
+  in mrt_start
+```

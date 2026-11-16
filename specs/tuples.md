@@ -61,6 +61,31 @@ integer or a `bool` — returned by a function that does not throw and whose add
 back in the two return registers and allocates nothing. Every other tuple is a heap record, and a pair
 that escapes into an array or any other container keeps its heap record.
 
+### Casts
+
+`t as T` between two tuple types converts element by element: each element whose type differs takes the
+cast its own value would, with that cast's refusals (E3009, E3131) and range checks (E3005 for a constant,
+a run-time panic otherwise), and a nested tuple converts the same way. The result is a new tuple and the
+source is left as it was, so a later write through either name reaches only its own tuple. A cast whose
+elements each denote the same type and capability, such as two brands of one instance, shares the record.
+A cast on a tuple literal converts the literal's own element values, and retypes the literal when no
+element converts.
+
+```text
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 100000)
+typealias SmallPair = (Small, Small)
+var wide = (1 as Big, 2 as Big)
+let narrow = wide as SmallPair
+wide.0 = 5000      // narrow.0 is 1
+```
+
+A tuple converts only to a tuple with the same number of elements (E3009), and each element keeps its
+capability (E3226): build the tuple from a frozen element (`freeze x.clone()`), or from a `clone()` for an
+unmarked element.
+`immutable` on an element of a value type means the type itself, so `(immutable P, W)` is the type
+`(P, W)`.
+
 ## Tests
 
 <!-- test: basic-tuple -->
@@ -4547,4 +4572,771 @@ end 'main'
 ```stdout
 5
 1 1 abc1 2
+```
+
+<!-- test: error.a-tuple-cast-refuses-a-constant-element-outside-its-target -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+function main() returns ExitCode
+	let big = 200000
+	let triple = (1, 2, big) as MyTriple
+	print("{triple.2}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:27: Value 200000 is outside the range of 'MyWord' (int(0 to 100000))
+```
+
+<!-- test: a-tuple-cast-panics-on-an-element-outside-its-target-at-run-time -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Wide = int(0 to 1000000)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+
+function launder(n Wide) returns Wide
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let triple = (1, 2, launder(200000)) as MyTriple
+	print("{triple.2}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-tuple-cast-panics-on-an-element-outside-its-target-at-run-time.test:11: Range check failed: value outside typealias 'MyWord'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-nested-tuple-cast-panics-on-an-inner-element-outside-its-target -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Wide = int(0 to 1000000)
+typealias Inner = (MyWord, MyWord)
+typealias Outer = (Inner, MyWord)
+
+function launder(n Wide) returns Wide
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let outer = ((1, launder(200000)), 2) as Outer
+	print("{outer.0.1}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-nested-tuple-cast-panics-on-an-inner-element-outside-its-target.test:12: Range check failed: value outside typealias 'MyWord'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-call-result-cast-to-a-narrower-tuple-alias-panics-on-an-element-outside-it -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Wide = int(0 to 1000000)
+typealias WideTriple = (Wide, Wide, Wide)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+
+function wide(n Wide) returns WideTriple
+	return (1, 2, n)
+end 'wide'
+
+function main() returns ExitCode
+	let fits = wide(3) as MyTriple
+	print("{fits.2}\n")
+	let triple = wide(200000) as MyTriple
+	print("{triple.2}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+1
+```
+```stderr
+panic at a-call-result-cast-to-a-narrower-tuple-alias-panics-on-an-element-outside-it.test:14: Range check failed: value outside typealias 'MyWord'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-tuple-cast-from-integer-to-float-elements-converts-each-element -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Real = float(-1000.0 to 1000.0)
+typealias WidePair = (Wide, Wide)
+typealias RealPair = (Real, Real)
+
+function launder(n Wide) returns Wide
+	return n
+end 'launder'
+
+function pairOf(a Wide, b Wide) returns WidePair
+	return (a, b)
+end 'pairOf'
+
+function main() returns ExitCode
+	let wide = pairOf(1, b: 2)
+	let real = wide as RealPair
+	print("{real.0} {real.1}\n")
+	let direct = (launder(3), 4) as RealPair
+	print("{direct.0} {direct.1}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1.0 2.0
+3.0 4.0
+```
+
+<!-- test: error.a-tuple-cast-from-float-to-integer-elements-is-refused-as-the-scalar-is -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Real = float(-1000.0 to 1000.0)
+typealias WidePair = (Wide, Wide)
+typealias RealPair = (Real, Real)
+function pairOf(a Real, b Real) returns RealPair
+	return (a, b)
+end 'pairOf'
+function main() returns ExitCode
+	let r = pairOf(1.5, b: 2.5)
+	let w = r as WidePair
+	print("{w.0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:11:12: Cannot cast from Real to int
+```
+
+<!-- test: error.a-tuple-cast-from-a-string-element-to-an-integer-is-refused-as-the-scalar-is -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Labelled = (Wide, String)
+typealias Numbers = (Wide, Wide)
+function labelOf(n Wide) returns Labelled
+	return (n, "abc")
+end 'labelOf'
+function main() returns ExitCode
+	let l = labelOf(1)
+	let n = l as Numbers
+	print("{n.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:10:12: Cannot cast from String to int
+```
+
+<!-- test: a-tuple-cast-converts-the-integer-elements-of-a-mixed-tuple-and-keeps-the-rest -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Real = float(-1000.0 to 1000.0)
+typealias Mixed = (Wide, String, Wide)
+typealias Converted = (Real, String, Wide)
+
+function mixedOf(n Wide) returns Mixed
+	return (n, "hello", 3)
+end 'mixedOf'
+
+function main() returns ExitCode
+	let source = mixedOf(1)
+	let converted = source as Converted
+	print("{converted.0} {converted.1} {converted.2}\n")
+	print("{source.1}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1.0 hello 3
+hello
+```
+
+<!-- test: a-nested-tuple-cast-converts-integer-elements-at-every-depth -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Real = float(-1000.0 to 1000.0)
+typealias WNest = ((Wide, Wide), Wide)
+typealias RNest = ((Real, Real), Real)
+
+function nestOf(n Wide) returns WNest
+	return ((n, 2), 3)
+end 'nestOf'
+
+function main() returns ExitCode
+	let r = nestOf(7) as RNest
+	print("{r.0.0} {r.0.1} {r.1}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+7.0 2.0 3.0
+```
+
+<!-- test: a-tuple-cast-rebuild-keeps-a-nested-managed-tuple-it-does-not-convert -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Real = float(-1000.0 to 1000.0)
+typealias Labelled = (Wide, String)
+typealias Target = (Labelled, Real)
+
+function launder(n Wide) returns Wide
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let t = ((launder(1), "a{launder(2)}"), launder(3)) as Target
+	print("{t.0.1} {t.1}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+a2 3.0
+```
+
+<!-- test: error.a-tuple-cast-refuses-an-enum-element-as-the-scalar-does -->
+```maxon
+typealias Wide = int(0 to 1000)
+enum Color
+	red
+	green
+end 'Color'
+typealias Tagged = (Color, Wide)
+typealias Numbers = (Wide, Wide)
+function taggedOf(n Wide) returns Tagged
+	return (Color.green, n)
+end 'taggedOf'
+function main() returns ExitCode
+	let t = taggedOf(1)
+	let n = t as Numbers
+	print("{n.0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:14:12: Cannot cast from enum to int
+```
+
+<!-- test: a-try-call-result-cast-to-a-narrower-tuple-alias-panics-on-an-element-outside-it -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Wide = int(0 to 1000000)
+typealias WideTriple = (Wide, Wide, Wide)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+
+enum Err
+	bad
+end 'Err'
+
+function wide(n Wide) returns WideTriple throws Err
+	if n > 900000 'tooBig'
+		throw Err.bad
+	end 'tooBig'
+
+	return (1, 2, n)
+end 'wide'
+
+function run() returns MyWord throws Err
+	let triple = try wide(200000) as MyTriple
+
+	return triple.2
+end 'run'
+
+function main() returns ExitCode
+	let last = try run() otherwise 0
+	print("{last}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-try-call-result-cast-to-a-narrower-tuple-alias-panics-on-an-element-outside-it.test:20: Range check failed: value outside typealias 'MyWord'
+Stack trace:
+  in run
+  in main
+  in mrt_start
+```
+
+<!-- test: a-tuple-cast-yields-a-new-tuple-so-a-write-through-the-source-or-the-result-reaches-neither-other -->
+A tuple cast between types whose elements differ is a conversion: the result is a new tuple, so a later
+write through either name cannot put a value into the other that its element type refuses.
+```maxon
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 100000)
+typealias SmallPair = (Small, Small)
+typealias BigPair = (Big, Big)
+
+function main() returns ExitCode
+	var wide = (1 as Big, 2 as Big)
+	let narrow = wide as SmallPair
+	wide.0 = 5000
+	print("{narrow.0}\n")
+
+	let small = (1 as Small, 2 as Small)
+	var widened = small as BigPair
+	widened.1 = 70000
+	print("{small.1}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1
+2
+```
+
+<!-- test: error.a-tuple-cast-refuses-an-integer-element-to-an-enum-as-the-scalar-does -->
+```maxon
+typealias Wide = int(0 to 1000)
+enum Color
+	red
+	green
+end 'Color'
+typealias Numbers = (Wide, Wide)
+typealias Tagged = (Color, Wide)
+function numbersOf(n Wide) returns Numbers
+	return (n, 2)
+end 'numbersOf'
+function main() returns ExitCode
+	let n = numbersOf(1)
+	let t = n as Tagged
+	print("{t.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:14:12: Cannot cast from Wide to enum 'Color' — an integer is not a case; use 'Color.fromRawValue(raw)', which throws 'noSuchRawValue' for a value no case carries
+```
+
+<!-- test: error.a-tuple-cast-refuses-a-container-element-as-the-scalar-does -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Narrow = int(0 to 100)
+typealias Wides = Array with Wide
+typealias Narrows = Array with Narrow
+typealias Holding = (Wides, Wide)
+typealias Narrowed = (Narrows, Wide)
+function holdingOf(n Wide) returns Holding
+	let w = Wides.create(0)
+	w.push(n)
+	return (w, n)
+end 'holdingOf'
+function main() returns ExitCode
+	let h = holdingOf(1)
+	let n = h as Narrowed
+	print("{n.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3131: <fragment>:15:12: Cannot cast to 'Narrows': a container's elements have a storage layout of their own, so 'Wides' cannot be retagged as one — build the container with the element type you need, or convert it element by element
+```
+
+<!-- test: a-tuple-literal-cast-whose-elements-already-fit-keeps-its-values -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias MyTriple = (MyWord, MyWord, MyWord)
+
+function main() returns ExitCode
+	let triple = (1, 2, 3) as MyTriple
+	print("{triple.0} {triple.1} {triple.2}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1 2 3
+```
+
+<!-- test: a-tuple-cast-whose-elements-differ-only-by-brand-shares-its-record -->
+A cast whose elements all denote the same type, here differing only by the brand of a container, is a retag: the two names share the record.
+```maxon
+typealias Item = int(0 to 1000)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+typealias XPair = (Xs, Item)
+typealias YPair = (Ys, Item)
+
+function pairOf(n Item) returns XPair
+	let xs = Xs.create(0)
+	xs.push(n)
+
+	return (xs, n)
+end 'pairOf'
+
+function main() returns ExitCode
+	let source = pairOf(7)
+	let result = source as YPair
+	source.1 = 8
+	result.1 = 9
+	print("{source.1} {result.1}\n")
+	print("{source.0.count()} {result.0.count()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+9 9
+1 1
+```
+
+<!-- test: error.a-tuple-cast-between-tuples-of-different-arity-is-refused -->
+```maxon
+typealias MyWord = int(0 to 100000)
+typealias Pair = (MyWord, MyWord)
+typealias Triple = (MyWord, MyWord, MyWord)
+function pairOf(n MyWord) returns Pair
+	return (n, 2)
+end 'pairOf'
+function main() returns ExitCode
+	let p = pairOf(1)
+	let t = p as Triple
+	print("{t.2}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:10:12: Cannot cast from a tuple of 2 elements to a tuple of 3 elements — a tuple converts only to a tuple with the same number of elements
+```
+
+<!-- test: error.a-tuple-cast-refuses-to-freeze-an-element -->
+A tuple cast keeps each element's capability: changing one would let a write through the other name reach a frozen element, or a frozen element be written.
+```maxon
+typealias Wide = int(0 to 1000)
+type Box
+	export var n as Wide
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+typealias Plain = (Box, Wide)
+typealias Frozen = (immutable Box, Wide)
+function plainOf(n Wide) returns Plain
+	return (Box.create(n), n)
+end 'plainOf'
+function main() returns ExitCode
+	let source = plainOf(4)
+	let result = source as Frozen
+	print("{result.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:16:22: Cannot cast element 0 of a tuple from 'Box' to 'immutable Box': a tuple cast keeps each element's capability; freeze the element (freeze x.clone()) and build the tuple from it
+```
+
+<!-- test: error.a-tuple-cast-refuses-to-thaw-an-element -->
+```maxon
+typealias Wide = int(0 to 1000)
+type Box
+	export var n as Wide
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+typealias Plain = (Box, Wide)
+typealias Frozen = (immutable Box, Wide)
+function frozenOf(n Wide) returns Frozen
+	return (freeze Box.create(n), n)
+end 'frozenOf'
+function main() returns ExitCode
+	let source = frozenOf(4)
+	let result = source as Plain
+	print("{result.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:16:22: Cannot cast element 0 of a tuple from 'immutable Box' to 'Box': a tuple cast keeps each element's capability; copy the element (x.clone()) and build the tuple from it
+```
+
+<!-- test: error.a-tuple-cast-refuses-to-freeze-an-element-of-a-nested-tuple -->
+```maxon
+typealias Wide = int(0 to 1000)
+type Box
+	export var n as Wide
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+typealias PlainNest = ((Wide, Box), Wide)
+typealias FrozenNest = ((Wide, immutable Box), Wide)
+function nestOf(n Wide) returns PlainNest
+	return ((n, Box.create(n)), n)
+end 'nestOf'
+function main() returns ExitCode
+	let source = nestOf(4)
+	let result = source as FrozenNest
+	print("{result.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:16:22: Cannot cast element 0.1 of a tuple from 'Box' to 'immutable Box': a tuple cast keeps each element's capability; freeze the element (freeze x.clone()) and build the tuple from it
+```
+
+<!-- test: error.a-tuple-literal-cast-refuses-to-freeze-a-mutable-element -->
+```maxon
+typealias Wide = int(0 to 1000)
+type Box
+	export var n as Wide
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+typealias Frozen = (immutable Box, Wide)
+function main() returns ExitCode
+	let b = Box.create(1)
+	let t = (b, 2) as Frozen
+	print("{t.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:12:17: Cannot cast element 0 of a tuple from 'Box' to 'immutable Box': a tuple cast keeps each element's capability; freeze the element (freeze x.clone()) and build the tuple from it
+```
+
+<!-- test: a-tuple-literal-cast-of-a-frozen-element-to-the-immutable-column-is-accepted -->
+```maxon
+typealias Wide = int(0 to 1000)
+
+type Box
+	export var n as Wide
+
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Frozen = (immutable Box, Wide)
+
+function main() returns ExitCode
+	let f = freeze Box.create(1)
+	let t = (f, 2) as Frozen
+	print("{t.0.n} {t.1}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: a-capability-on-a-value-type-tuple-element-names-the-same-type -->
+A capability word on a tuple element whose type is a value means the type itself: `(immutable P, Wide)` is the type `(P, Wide)`, so a cast between them keeps its values and the two pass for each other.
+```maxon
+typealias Wide = int(0 to 1000)
+
+type P
+	export let n as Wide
+
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'P'
+
+typealias PlainP = (P, Wide)
+typealias FrozenP = (immutable P, Wide)
+
+function total(pair PlainP) returns Wide
+	return pair.0.n + pair.1
+end 'total'
+
+function frozenOf(n Wide) returns FrozenP
+	return (P.create(n), 2)
+end 'frozenOf'
+
+function main() returns ExitCode
+	let p = P.create(1)
+	let t = (p, 2) as FrozenP
+	print("{t.0.n} {t.1}\n")
+	print("{total(frozenOf(5))}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1 2
+7
+```
+
+<!-- test: error.a-tuple-literal-cast-refuses-to-freeze-a-freshly-built-element -->
+```maxon
+typealias Wide = int(0 to 1000)
+type Box
+	export var n as Wide
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+typealias Frozen = (immutable Box, Wide)
+function main() returns ExitCode
+	let t = (Box.create(1), 2) as Frozen
+	print("{t.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:11:29: Cannot cast element 0 of a tuple from 'Box' to 'immutable Box': a tuple cast keeps each element's capability; freeze the element (freeze x.clone()) and build the tuple from it
+```
+
+<!-- test: a-capability-on-a-payload-union-element-with-immutable-payloads-names-the-same-type -->
+A union with a payload whose payloads are all immutable is a value, so a capability word on its tuple element names the same type.
+```maxon
+typealias Wide = int(0 to 1000)
+
+union U
+	num(n Wide)
+	none
+end 'U'
+
+typealias PlainU = (U, Wide)
+typealias FrozenU = (immutable U, Wide)
+
+function show(u U) returns Wide
+	return match u 'm'
+		num(n) gives n
+		none gives 0
+	end 'm'
+end 'show'
+
+function total(pair PlainU) returns Wide
+	return show(pair.0) + pair.1
+end 'total'
+
+function frozenOf(n Wide) returns FrozenU
+	return (U.num(n), 2)
+end 'frozenOf'
+
+function main() returns ExitCode
+	let u = U.num(1)
+	let t = (u, 2) as FrozenU
+	print("{show(t.0)} {t.1}\n")
+	print("{total(frozenOf(5))}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1 2
+7
+```
+
+<!-- test: a-capability-on-a-record-element-holding-only-an-immutable-field-names-the-same-type -->
+A record whose only field is an immutable `Box` is a value, so a capability word on its tuple element names the same type.
+```maxon
+typealias Wide = int(0 to 1000)
+
+type Box
+	export var n as Wide
+
+	static function create(n Wide) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type R
+	export let f as immutable Box
+
+	static function create(n Wide) returns Self
+		return Self{f: freeze Box.create(n)}
+	end 'create'
+end 'R'
+
+typealias PlainR = (R, Wide)
+typealias FrozenR = (immutable R, Wide)
+
+function total(pair PlainR) returns Wide
+	return pair.0.f.n + pair.1
+end 'total'
+
+function frozenOf(n Wide) returns FrozenR
+	return (R.create(n), 2)
+end 'frozenOf'
+
+function main() returns ExitCode
+	let r = R.create(1)
+	let t = (r, 2) as FrozenR
+	print("{t.0.f.n} {t.1}\n")
+	print("{total(frozenOf(5))}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1 2
+7
+```
+
+<!-- test: error.a-tuple-cast-refuses-to-freeze-a-generic-service-handle-element -->
+```maxon
+typealias Wide = int(0 to 1000)
+type Box uses T
+	var item as T
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+typealias WideBoxHandle = Box.handle with Wide
+typealias Plain = (WideBoxHandle, Wide)
+typealias Frozen = (immutable WideBoxHandle, Wide)
+function plainOf(n Wide) returns Plain
+	return (spawn Box.create(n), n)
+end 'plainOf'
+function main() returns ExitCode
+	let source = plainOf(4)
+	let result = source as Frozen
+	print("{result.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:20:22: Cannot cast element 0 of a tuple from 'WideBoxHandle' to 'immutable WideBoxHandle': a tuple cast keeps each element's capability; freeze the element (freeze x.clone()) and build the tuple from it
+```
+
+<!-- test: error.a-tuple-cast-refuses-to-freeze-a-shared-value-element -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias FlagCell = SharedValue with Wide
+typealias Plain = (FlagCell, Wide)
+typealias Frozen = (immutable FlagCell, Wide)
+function plainOf(n Wide) returns Plain
+	return (FlagCell.create(n), n)
+end 'plainOf'
+function main() returns ExitCode
+	let source = plainOf(4)
+	let result = source as Frozen
+	print("{result.1}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3226: <fragment>:11:22: Cannot cast element 0 of a tuple from 'FlagCell' to 'immutable FlagCell': a tuple cast keeps each element's capability; freeze the element (freeze x.clone()) and build the tuple from it
 ```

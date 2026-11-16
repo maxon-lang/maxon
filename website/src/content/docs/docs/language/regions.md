@@ -168,6 +168,7 @@ mutable record, and sending it as `immutable` needs `freeze`.
 
 A record that is an immutable aggregate counts as a value, like a `String`: `immutable` over it means the type
 itself, it enters an `immutable` slot or a service message with no `freeze`, and `freeze` of one is **E3200**.
+This holds in a tuple element too: `(immutable P, W)` is the type `(P, W)`.
 
 ## Parameter Capabilities Are Inferred
 
@@ -699,3 +700,4 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3222](/docs/cli/error-codes/#e3222--semanticreplydeferralrefused) | `reply.later()` or a `Reply` used where the holder could not answer it exactly once, or a `Reply` leaving its service's code |
 | [E3223](/docs/cli/error-codes/#e3223--semanticlinearvaluenotconsumed) | a linear value dropped, overwritten, discarded, or live across a wait |
 | [E3224](/docs/cli/error-codes/#e3224--semanticlinearrefused) | a linear value in a field, container, tuple, capture, promise, reply or other place that cannot consume it exactly once, and a finalizer or `consuming self` written outside its rules |
+| [E3226](/docs/cli/error-codes/#e3226--semantictuplecastchangescapability) | a tuple cast that gives an element a different capability |

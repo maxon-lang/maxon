@@ -257,7 +257,7 @@ end 'main'
 | Cast | Result |
 |------|--------|
 | integer alias → integer alias | legal; widening emits no check, narrowing panics if the value is out of range |
-| integer alias or literal → float alias | legal; a value of an unsigned alias converts as the unsigned value |
+| integer alias or literal → float alias | legal; a value of an unsigned alias converts as the unsigned value, and the converted value is checked against the target's range (a constant out of range is **E3005**) |
 | float alias → float alias | legal; the value is checked against the target's range |
 | integer alias ↔ `bits(n)` | legal (see [Bit Patterns](#bit-patterns--bitsn)) |
 | literal → alias | checked at compile time: `256 as Byte` is **E3005** (`Value 256 is outside the range of 'Byte'`) |
@@ -268,6 +268,9 @@ end 'main'
 | a literal in an unannotated `let` every use of which takes the plain constant (`let p = 8080 as Port`, read only as a `Port` argument) | **E3010** `unneeded cast: the literal 8080 already fits every use of 'p'` |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 | a cast of a cast (`x as A as B`, `(x as A) as B`) | **E2079** `a cast cannot take another cast as its operand — cast directly to 'B'` |
+| tuple → tuple of the same number of elements | converts element by element, each element as its own cast would (see [Tuple Casts](/docs/language/composite-types/#tuple-casts)) |
+| tuple → tuple of a different number of elements | **E3009** `a tuple converts only to a tuple with the same number of elements` |
+| tuple → tuple that gives an element another capability | **E3226** |
 
 A cast takes one step. Where two steps each do work — a range check, then a reinterpretation as a
 `bits(n)` pattern — bind the first result and cast that: `let a = x as A`, then `a as B`.

@@ -958,6 +958,32 @@ release's version as its heading when the release is cut.
   generic whose methods reach the enclosing type again at the same or permuted arguments compiles where it was
   E2015.
   Fix: give that type argument a concrete type, or pass the value it wraps as a type parameter of its own.
+- A tuple `as` cast between tuple types whose element types differ yields a new tuple: a write through the
+  source after the cast reaches only the source, and a write through the result reaches only the result,
+  where the two shared one record. Each element is checked against its target's range, so an element
+  computed at run time outside it panics (`Range check failed: value outside typealias 'MyWord'`).
+  Fix: write a value through the name that is read afterwards, or read the tuple the write went to; guard or
+  narrow an element that may be out of range before the cast.
+- A tuple cast whose constant element is outside its target element's range is E3005 (`(1, 2, big) as
+  MyTriple` with `let big = 200000` and `MyWord = int(0 to 100000)`).
+  Fix: correct the constant, or cast to a tuple type whose element admits it.
+- A tuple cast is refused wherever the cast of one of its elements is: a float element to an integer, a
+  `String` element to an integer, an enum element to an integer and an integer element to an enum are
+  E3009 (`(Color, Wide) as (Wide, Wide)`, as `Color.green as Wide` is), and a container element whose
+  element type differs is E3131.
+  Fix: convert the element first (`trunc`, `int.fromString`, `.rawValue`, `Enum.fromRawValue(raw)`, or a
+  container built with the element type needed) and build the tuple from the result.
+- A tuple cast between tuples of different numbers of elements is E3009 (`a tuple converts only to a tuple
+  with the same number of elements`).
+  Fix: build a tuple of the target type from the elements (`(t.0, t.1, extra) as Triple`).
+- A tuple cast that gives an element a different capability, such as `(Box, Wide) as (immutable Box, Wide)`
+  or the reverse, is E3226.
+  Fix: build the tuple from a frozen element (`freeze x.clone()`, or `freeze x` when `x` is not used
+  writable afterwards) for an `immutable` element, and from a `clone()` of the element for an unmarked one.
+- An integer cast to a ranged float alias is checked against the alias's range: a constant outside it is
+  E3005 (`5000 as SmallReal` for `float(0.0 to 1000.0)`), and a value computed at run time outside it
+  panics.
+  Fix: cast to a float alias whose range admits the value, or guard the value before the cast.
 
 - An entry function that declares a parameter, a parameter with a default value included, is E3225
   (`Function 'main' must take no parameters`). In a `.maxproj` or `.maxtasks` every exported or `public`
