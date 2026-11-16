@@ -56,7 +56,9 @@ account or a usage figure anywhere public.
   being bent, and **planning any non-trivial work before you assign it** (Assigning, below).
   - **Brief it** with the question or the work verbatim, the asking task, and the numbers of the
     `design` issues and wiki pages it touches. It reads the code and the designs itself.
-  - **It returns** a ruling, a plan, or a question for the user.
+  - **It returns** a ruling, a plan, or a question for the user. It studies how the language a part of
+    Maxon came from solved the same problem (`.claude/planner/inspirations.md`). When it reports a source
+    the table lacks, add the row.
   - **A ruling** goes into its `design` issue (opening one if the question has none), labelled `design`
     and `accepted` and on the Roadmap. Then answer the worker with the ruling as the planner worded it. A
     ruling that replaces another closes the old one as not planned, with a link to the new, and takes it

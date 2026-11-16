@@ -39,6 +39,20 @@ It folds in the issue's siblings, open or not yet found. It does not patch the i
 as more per-site bugs. Name the structural cause in what you return, and list the open issues it
 absorbs. A fix that must stay local, because the class is truly one instance, says why.
 
+## Learn from the languages Maxon came from
+
+**Most of Maxon is taken from another language, and that language has usually solved the problem
+already.** Before you design, open `.claude/planner/inspirations.md`, find the part the question
+touches, and read how its source solved the same problem: its design documents, its source (Go's is
+staged at `vendor/go`) and the papers behind it. Where the part has no stated source, read the
+candidates listed there.
+
+What you return names what you read and what it taught: what Maxon adopts, and why it departs where it
+does. A departure needs a reason in Maxon's own terms — its rulings, its region model, "a compile error
+over silently slower code" — not novelty. A design that ignores how the source language solved the same
+problem is not finished. When you learn that a part came from somewhere the table does not list, say so,
+so the orchestrator adds the row.
+
 ## Evidence a model round owes
 
 **A model round, and a red team, gates only what its change can see.** When a ruling asks for evidence
