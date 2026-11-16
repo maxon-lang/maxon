@@ -1434,27 +1434,34 @@ extension ProgramSignatures
 		throw AbsentError.absent
 	end 'settledUniqueCause'
 
-	function settledRegionClosure(name ByteArray, walk HoldingWalk) returns RegionClosure throws AbsentError
-		let closed = try self.settledDeclarations().settledClosedTypes.get(name) otherwise throw AbsentError.absent
-
-		if closed 'settledClosed'
-			return RegionClosure.closed
-		end 'settledClosed'
-
-		if walk == HoldingWalk.settling 'aSettledPlainPart'
-			return RegionClosure.plainPart(name, part: ElementCauseField, held: name)
-		end 'aSettledPlainPart'
-
-		throw AbsentError.absent
+	function settledRegionClosure(name ByteArray) returns RegionClosure throws AbsentError
+		return try self.settledDeclarations().settledRegionClosures.get(name) otherwise throw AbsentError.absent
 	end 'settledRegionClosure'
 
-	function noteSettledHolding(name ByteArray, family SettledHolding, holds bool, walk HoldingWalk) returns bool
-		if walk == HoldingWalk.settling and holds 'aSettledHolder'
-			holdingTableOf(self.mainThreadSettled(), family: family).upsert(name, value: true)
-		end 'aSettledHolder'
+	function noteSettledOwnership(name ByteArray, ownership TypeOwnership, noCutAbove bool)
+		let settled = self.mainThreadSettled()
 
-		return holds
-	end 'noteSettledHolding'
+		if noCutAbove 'noCutAboveIt'
+			settleOwnershipAnswer(settled, name: name, ownership: ownership)
+			return
+		end 'noCutAboveIt'
+
+		if ownership.cause.holdsAUnique() 'aHolder'
+			settled.settledUniqueHoldings.upsert(name, value: true)
+		end 'aHolder'
+
+		if ownership.closure.isClosed() 'aClosedType'
+			settled.settledRegionClosures.upsert(name, value: RegionClosure.closed)
+		end 'aClosedType'
+	end 'noteSettledOwnership'
+
+	function noteSettledLinearity(name ByteArray, linear bool, walk HoldingWalk) returns bool
+		if walk == HoldingWalk.settling and linear 'aSettledLinearType'
+			self.mainThreadSettled().settledLinearTypes.upsert(name, value: true)
+		end 'aSettledLinearType'
+
+		return linear
+	end 'noteSettledLinearity'
 
 	function uniqueHeldName(fieldType MaxonType) returns immutable ByteArray
 		let tag = maxonTypeTag(fieldType)
@@ -1505,7 +1512,7 @@ extension ProgramSignatures
 	function ownershipFact(subject OwnershipSubject, fact OwnershipFact) returns bool
 		let name = self.ownershipSubjectName(subject)
 
-		if let settled = try holdingTableOf(self.settledDeclarations(), family: ownershipFactFamily(fact)).get(name) 'alreadySettled'
+		if let settled = try self.settledOwnershipFact(name, fact: fact) 'alreadySettled'
 			return settled
 		end 'alreadySettled'
 
@@ -1525,6 +1532,13 @@ extension ProgramSignatures
 		self.rememberUniqueHolding(key, answer: answer)
 		return answer
 	end 'ownershipFact'
+
+	function settledOwnershipFact(name ByteArray, fact OwnershipFact) returns bool throws AbsentError
+		match fact 'fact'
+			holdsAUnique then return try self.settledDeclarations().settledUniqueHoldings.get(name) otherwise throw AbsentError.absent
+			isClosed then return (try self.settledRegionClosure(name)).isClosed()
+		end 'fact'
+	end 'settledOwnershipFact'
 
 	function ownershipSubjectName(subject OwnershipSubject) returns immutable ByteArray
 		return match subject 'subject'
@@ -1576,7 +1590,7 @@ extension ProgramSignatures
 			return TypeOwnership.create(cause, closure: RegionClosure.closed)
 		end 'theCauseAlone'
 
-		return TypeOwnership.create(cause, closure: try self.settledRegionClosure(name, walk: walk))
+		return TypeOwnership.create(cause, closure: try self.settledRegionClosure(name))
 	end 'ownershipWithoutWalk'
 
 	function ownershipFixedByKind(subject OwnershipSubject, name immutable ByteArray) returns TypeOwnership throws AbsentError
@@ -1610,23 +1624,29 @@ extension ProgramSignatures
 
 	function walkedOwnership(subject OwnershipSubject, name immutable ByteArray, walk OwnershipWalk) returns TypeOwnership
 		if let walked = try walk.done.get(name) 'alreadyWalked'
-			return walked
+			walk.noteReuse(walked)
+			return walked.ownership
 		end 'alreadyWalked'
 
-		if walk.inFlight.contains(name) 'onThisWalk'
+		let inFlight = walk.path.inFlightDepthOf(name)
+
+		if inFlight.reached 'onThisWalk'
+			walk.noteCut(inFlight)
 			return TypeOwnership.holdingNothing()
 		end 'onThisWalk'
 
-		walk.inFlight.insert(name)
+		let outerCut = walk.enter(name)
 
 		let ownership = match subject 'subject'
 			aggregate gives self.declaredAggregateOwnership(name, walk: walk)
 			instance(id) gives self.walkedInstanceOwnership(id, mangled: name, walk: walk)
 		end 'subject'
 
-		walk.done.upsert(name, value: ownership)
-		_ = self.noteSettledHolding(name, family: SettledHolding.unique, holds: ownership.cause.holdsAUnique(), walk: walk.mode)
-		_ = self.noteSettledHolding(name, family: SettledHolding.closed, holds: ownership.closure.isClosed(), walk: walk.mode)
+		let noCutAbove = walk.leave(name, outerCut: outerCut, ownership: ownership)
+
+		if walk.mode == HoldingWalk.settling 'aSettlingWalk'
+			self.noteSettledOwnership(name, ownership: ownership, noCutAbove: noCutAbove)
+		end 'aSettlingWalk'
 
 		return ownership
 	end 'walkedOwnership'
@@ -1852,7 +1872,7 @@ extension ProgramSignatures
 		visited.insert(name)
 
 		match self.enumInAnyFile(name) 'union'
-			declared(layout) then return self.noteSettledHolding(name, family: SettledHolding.linear, holds: self.unionPayloadsAreLinear(layout, visited: visited, walk: walk), walk: walk)
+			declared(layout) then return self.noteSettledLinearity(name, linear: self.unionPayloadsAreLinear(layout, visited: visited, walk: walk), walk: walk)
 			undeclared then return false
 		end 'union'
 	end 'walkedAggregateIsLinear'
@@ -3193,7 +3213,7 @@ extension ProgramSignatures
 			return walked
 		end 'alreadyAnswered'
 
-		let inFlight = self.inFlightCascadeWalkDepthOf(aggregateName)
+		let inFlight = self.cascadeWalkRoots.inFlightDepthOf(aggregateName)
 
 		if inFlight.reached 'alreadyInFlight'
 			return self.noteCascadeWalkBreakAt(inFlight.depth)
@@ -3215,32 +3235,17 @@ extension ProgramSignatures
 		return answer
 	end 'memoizedAggregateCascadeAnswer'
 
-	// A linear scan rather than a set membership test, because the answer wanted is the DEPTH the name is in
-	// flight at and a set cannot give it — and that depth is the whole of the keep rule in `closeCascadeWalk`.
-	// The stack holds one entry per NESTED walk, not per name visited.
-	function inFlightCascadeWalkDepthOf(name ByteArray) returns CascadeWalkBreak
-		for i in 0 upto self.cascadeWalkRoots.count() 'eachRoot'
-			let root = try self.cascadeWalkRoots.get(i) otherwise panic("ProgramSignatures.inFlightCascadeWalkDepthOf: cascadeWalkRoots.get OOB at {i} below count {self.cascadeWalkRoots.count()}")
-
-			if root.equals(name) 'thisRoot'
-				return CascadeWalkBreak.atDepth(i)
-			end 'thisRoot'
-		end 'eachRoot'
-
-		return CascadeWalkBreak.nothingBroke()
-	end 'inFlightCascadeWalkDepthOf'
-
 	function noteCascadeWalkBreakAt(reachedDepth ElementIndex) returns bool
 		self.cascadeBreakReached = CascadeWalkBreak.atDepth(reachedDepth).shallowerOf(self.cascadeBreakReached)
 		return true
 	end 'noteCascadeWalkBreakAt'
 
 	function noteCascadeWalkBreakAtEnclosingRoot() returns bool
-		if self.cascadeWalkRoots.count() == 0 'noWalkIsRooted'
+		if self.cascadeWalkRoots.depth() == 0 'noWalkIsRooted'
 			return true
 		end 'noWalkIsRooted'
 
-		return self.noteCascadeWalkBreakAt(self.cascadeWalkRoots.count() - 1)
+		return self.noteCascadeWalkBreakAt(self.cascadeWalkRoots.depth() - 1)
 	end 'noteCascadeWalkBreakAtEnclosingRoot'
 
 	// The read mark and the break are CLEARED for the walk about to run and SAVED for the one around it: each
@@ -3248,7 +3253,7 @@ extension ProgramSignatures
 	// an answer resting on a registry read or an optimistic break it really took. `closeCascadeWalk` merges
 	// them back.
 	export function openCascadeWalk() returns CascadeWalkFrame
-		let frame = CascadeWalkFrame.create(self.cascadeWalkRoots.count(), enclosingRead: self.deepCloneWalkReadInstances, enclosingBreak: self.cascadeBreakReached)
+		let frame = CascadeWalkFrame.create(self.cascadeWalkRoots.depth(), enclosingRead: self.deepCloneWalkReadInstances, enclosingBreak: self.cascadeBreakReached)
 		self.deepCloneWalkReadInstances = false
 		self.cascadeBreakReached = CascadeWalkBreak.nothingBroke()
 		return frame
@@ -6413,14 +6418,22 @@ extension ProgramSignatures
 		let settled = self.mainThreadSettled()
 
 		for name in self.declaredAggregateNames() 'eachAggregate'
-			if settled.settledUniqueHoldings.contains(name) and settled.settledClosedTypes.contains(name) 'alreadySettled'
+			if settled.settledUniqueHoldings.contains(name) and settled.settledRegionClosures.contains(name) 'alreadySettled'
 				continue
 			end 'alreadySettled'
 
+			let subject = OwnershipSubject.aggregate(name)
+
+			if let answered = try self.ownershipWithoutWalk(subject, name: name, walk: HoldingWalk.settling, wantsClosure: true) 'answeredWithoutWalking'
+				settleOwnershipAnswer(settled, name: name, ownership: answered)
+				continue
+			end 'answeredWithoutWalking'
+
 			let walk = OwnershipWalk.create(HoldingWalk.settling, wantsClosure: true)
-			let ownership = self.subjectOwnership(OwnershipSubject.aggregate(name), walk: walk)
-			settleWalkedAnswer(settled.settledUniqueHoldings, name: name, answer: ownership.cause.holdsAUnique(), walked: walk.inFlight)
-			settleWalkedClosures(settled.settledClosedTypes, name: name, ownership: ownership, walk: walk)
+
+			if not self.walkedOwnership(subject, name: name, walk: walk).cause.holdsAUnique() 'aRootHoldingNothing'
+				settleCutAnswers(settled, walk: walk)
+			end 'aRootHoldingNothing'
 		end 'eachAggregate'
 
 		_ = self.closeParseBand(CompilerOwnedDeclFilePath)

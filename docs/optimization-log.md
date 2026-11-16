@@ -2815,3 +2815,36 @@ Emitted code is unchanged: the compiler's own executable is byte-identical to th
 Every phase's delta approaches ×2 per rung (×1.94 to ×1.97 at the top), and the whole compile's is 0.24% of the top rung. `stdFanOut` is the record and the fold; the other three are the rows of the newly located versions. A build without debug info allocates no record: its `stdFanOut`, `regalloc` and `parse` counts are the parent's.
 
 A first form of this change forwarded a version through every replacement. It read +6,459,683 at the top rung and ×3.4 per doubling, because common-subexpression elimination merges many bindings onto one long-lived value and the debug-range harvest opens a run per (block, name); it also placed such versions wrongly, which is why it was dropped. The harvest's per-name cost for one value is still there for whatever names share a value.
+
+### Result — 2026-11-16, a type's region closure is settled once with its detail, so the ownership settle is linear in chain depth
+
+The ownership settle walks each declared struct and union and records whether it holds a unique value and whether
+its region is closed. A "not closed" answer reached below a root that holds a unique value was not settled, and a
+settled one carried no detail, so every later root that reached such a type walked its whole subtree again:
+`settleOwnership` cost the sum over every type of the types below it. Each walked answer now records the shallowest
+in-flight type its cycle cuts assumed. An answer that assumed no cut above itself is settled as it returns, both
+facts, with the closure's holder, part and held type; the walk stops at a settled answer. An answer
+that leaned on a cut above it settles only what a cut cannot falsify (a unique holder, a closed region), as before.
+An answering walk reads a settled closure with its detail instead of walking a type whose cause is settled `none`.
+
+`tests/ladders/gentypeprops.sh 250 <mode> <out> <depth>`, `phase:signatures` allocations, against the slot built
+from the parent commit:
+
+| depth | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|
+| `unique`, before | 2,017,950 | 2,680,937 | 4,713,995 | 11,576,780 |
+| `control`, before | 1,877,720 | 2,153,339 | 2,704,349 | 3,805,990 |
+| net, before | 140,230 | 527,598 | 2,009,646 | 7,770,790 |
+| `unique`, after | 1,888,675 | 2,171,242 | 2,736,112 | 3,865,437 |
+| `control`, after | 1,888,366 | 2,170,357 | 2,734,075 | 3,861,096 |
+| net, after | 309 | 885 | 2,037 | 4,341 |
+
+The net term read ×3.76, ×3.81, ×3.87 per doubling and reads ×2.86, ×2.30, ×2.13. `unique`'s `signatures` CPU at
+depth 128 falls from 6.31 G to 2.02 G ticks, level with `control`'s 2.10 G. `control` rises by 10,646, 17,018, 29,726
+and 55,106 allocations, ×1.60, ×1.75, ×1.85 per doubling: every ownership walk and the cascade walks' roots keep an
+in-flight stack with a depth map, each walked answer carries the cut it assumed, and a closure is stored where a bool
+was; how the rise splits between them was not measured. At the default depth, N = 250 to 2,000, `unique`'s
+`signatures` reads 1,747,270, 1,911,909, 2,255,431, 2,931,122 (before 1,776,797 to 3,184,772), `parse` rises by 48,
+176, 504 and 1,000 allocations in both modes, and `semanticCheck` is +66 at every rung in both modes, a fixed cost
+not attributed. Every ladder program compiles and exits 0. The first compile after the rebuild also rebuilt the
+library cache (0.6 M more allocations in `signatures`), so the depth-16 `unique` row is a second compile.

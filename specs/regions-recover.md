@@ -1184,6 +1184,286 @@ end 'main'
 error E3200: <fragment>:48:10: 't' crosses to the sender awaiting the reply only as the whole of its region, and 'Tp' is not closed: 'Tp.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
 ```
 
+<!-- test: a-unique-type-in-a-cycle-through-a-plain-payload-does-not-cross -->
+`U` and `Link` hold each other, and `Link` holds `U` as a plain payload, so `U` is not closed. A type cycle is also E4014.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type U is unique
+	var n as Num
+	var link as Link
+
+	static function create(n Num) returns Self
+		return Self{n: n, link: Link.stop}
+	end 'create'
+end 'U'
+
+union Link
+	stop
+	next(u U)
+end 'Link'
+
+type UTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(u U)
+		self.seen = u.n
+	end 'take'
+end 'UTaker'
+
+function relay(s UTaker.handle, u U)
+	try s.take(u) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn UTaker.create(0)
+	relay(s, u: U.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:4:6: type 'U' contains a reference cycle (via U → link: Link → next.u: U); recursive type references are not allowed
+error E3200: <fragment>:31:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'U' is not closed: 'U.link' is a plain 'Link' that other code may still name. Declare 'link' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-type-in-a-cycle-through-a-plain-payload-does-not-cross-when-the-union-is-declared-first -->
+The cycle above with `Link` declared first: the answer does not depend on the order the types are declared in.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Link
+	stop
+	next(u U)
+end 'Link'
+
+type U is unique
+	var n as Num
+	var link as Link
+
+	static function create(n Num) returns Self
+		return Self{n: n, link: Link.stop}
+	end 'create'
+end 'U'
+
+type UTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(u U)
+		self.seen = u.n
+	end 'take'
+end 'UTaker'
+
+function relay(s UTaker.handle, u U)
+	try s.take(u) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn UTaker.create(0)
+	relay(s, u: U.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:4:7: type 'Link' contains a reference cycle (via Link → next.u: U → link: Link); recursive type references are not allowed
+error E3200: <fragment>:31:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'U' is not closed: 'U.link' is a plain 'Link' that other code may still name. Declare 'link' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-type-in-a-cycle-through-an-isolated-payload-does-not-cross -->
+`Link` holds `U` as an `isolated` payload. Where the walk meets `U` again it counts `U` as holding nothing, so `U.link` is a plain `Link` and `U` is not closed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type U is unique
+	var n as Num
+	var link as Link
+
+	static function create(n Num) returns Self
+		return Self{n: n, link: Link.stop}
+	end 'create'
+end 'U'
+
+union Link
+	stop
+	next(u isolated U)
+end 'Link'
+
+type UTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(u U)
+		self.seen = u.n
+	end 'take'
+end 'UTaker'
+
+function relay(s UTaker.handle, u U)
+	try s.take(u) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn UTaker.create(0)
+	relay(s, u: U.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:4:6: type 'U' contains a reference cycle (via U → link: Link → next.u: U); recursive type references are not allowed
+error E3200: <fragment>:31:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'U' is not closed: 'U.link' is a plain 'Link' that other code may still name. Declare 'link' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-type-in-a-cycle-through-an-isolated-payload-does-not-cross-when-the-union-is-declared-first -->
+The cycle above with `Link` declared first.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Link
+	stop
+	next(u isolated U)
+end 'Link'
+
+type U is unique
+	var n as Num
+	var link as Link
+
+	static function create(n Num) returns Self
+		return Self{n: n, link: Link.stop}
+	end 'create'
+end 'U'
+
+type UTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(u U)
+		self.seen = u.n
+	end 'take'
+end 'UTaker'
+
+function relay(s UTaker.handle, u U)
+	try s.take(u) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn UTaker.create(0)
+	relay(s, u: U.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:4:7: type 'Link' contains a reference cycle (via Link → next.u: U → link: Link); recursive type references are not allowed
+error E3200: <fragment>:31:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'U' is not closed: 'U.link' is a plain 'Link' that other code may still name. Declare 'link' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-type-in-a-cycle-through-a-generic-instance-does-not-cross -->
+`U` reaches `Link` through the generic instance `LinkArray`, and `Link` holds `U` as a plain payload, so `U` is not closed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type U is unique
+	var n as Num
+	var links as LinkArray
+
+	static function create(n Num) returns Self
+		return Self{n: n, links: LinkArray.create(0)}
+	end 'create'
+end 'U'
+
+typealias LinkArray = Array with Link
+
+union Link
+	stop
+	next(u U)
+end 'Link'
+
+type UTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(u U)
+		self.seen = u.n
+	end 'take'
+end 'UTaker'
+
+function relay(s UTaker.handle, u U)
+	try s.take(u) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn UTaker.create(0)
+	relay(s, u: U.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:4:6: type 'U' contains a reference cycle (via U → links: LinkArray → Link → next.u: U); recursive type references are not allowed
+error E3200: <fragment>:33:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'U' is not closed: 'U.links' is a plain 'LinkArray' that other code may still name. Declare 'links' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-type-in-a-cycle-through-a-generic-instance-does-not-cross-when-the-union-is-declared-first -->
+The cycle above with `Link` declared first.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Link
+	stop
+	next(u U)
+end 'Link'
+
+type U is unique
+	var n as Num
+	var links as LinkArray
+
+	static function create(n Num) returns Self
+		return Self{n: n, links: LinkArray.create(0)}
+	end 'create'
+end 'U'
+
+typealias LinkArray = Array with Link
+
+type UTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(u U)
+		self.seen = u.n
+	end 'take'
+end 'UTaker'
+
+function relay(s UTaker.handle, u U)
+	try s.take(u) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn UTaker.create(0)
+	relay(s, u: U.create(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:4:7: type 'Link' contains a reference cycle (via Link → next.u: U → links: LinkArray → Link); recursive type references are not allowed
+error E3200: <fragment>:33:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'U' is not closed: 'U.links' is a plain 'LinkArray' that other code may still name. Declare 'links' `isolated`, pass a fresh value, or consume the value here
+```
+
 <!-- test: the-payload-of-a-message-parameter-whose-union-is-not-closed-is-not-isolated -->
 `Parcel` holds the plain payload `b`, so the behaviour's unmarked message parameter `p` is owned plain data and its payload goes to no `isolated` slot.
 ```maxon
