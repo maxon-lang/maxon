@@ -380,18 +380,21 @@ function commandBudget() {
     const workers = live.filter(row => row.id !== ORCHESTRATOR_ID);
     const working = workers.filter(row => row.state === 'working').length;
     const available = workers.length;
-    const sample = live.map(row => row.usage).filter(Boolean).sort((a, b) => b.at - a.at)[0] ?? null;
+    const liveSample = live.map(row => row.usage).filter(Boolean).sort((a, b) => b.at - a.at)[0] ?? null;
 
     const stored = histories.find(entry => entry.key === acct);
     let history = stored?.data ?? [];
+    const lastPoint = history[history.length - 1] ?? null;
 
+    const sample = liveSample ?? (lastPoint ? { at: lastPoint.at, limits: Object.entries(lastPoint.limits).map(([key, limit]) => ({ key, ...limit })) } : null);
     const limits = openLimits(sample, now);
 
-    if (sample && (history.length === 0 || sample.at - history[history.length - 1].at >= HISTORY_SPACING_SECONDS)) {
-      history.push({ at: sample.at, consumers: working, limits });
+    if (liveSample && (history.length === 0 || liveSample.at - history[history.length - 1].at >= HISTORY_SPACING_SECONDS)) {
+      history.push({ at: liveSample.at, consumers: working, limits });
     }
 
-    history = history.filter(point => point.at >= now - HISTORY_HOURS * 3600);
+    const newest = history[history.length - 1];
+    history = history.filter(point => point === newest || point.at >= now - HISTORY_HOURS * 3600);
     upsertComment(issue, stored?.comment, 'history', acct, history);
 
     const windows = Object.entries(limits).map(([key, current]) => {
@@ -403,12 +406,14 @@ function commandBudget() {
     for (const window of windows) window.limit = window.limit === Infinity ? 'unbounded' : Number(window.limit.toFixed(2));
     const ceiling = limit === Infinity ? working + 1 : Math.floor(limit);
     const target = sample ? Math.max(0, Math.min(ceiling, working + 1, available)) : working;
-    const action = !sample ? 'hold (no usage sample)'
+    const paced = !sample ? 'hold (no usage sample)'
       : target > working ? `start ${target - working}`
         : target < working ? `pause ${working - target}`
           : 'hold';
+    const sampleAgeMinutes = sample ? Math.round(ageMinutes(sample.at)) : null;
+    const action = sample && !liveSample ? `${paced} (last sample ${sampleAgeMinutes} min old)` : paced;
 
-    plan.push({ account: acct, working, available, target, action, sampleAgeMinutes: sample ? Math.round(ageMinutes(sample.at)) : null, windows });
+    plan.push({ account: acct, working, available, target, action, hasLiveSample: Boolean(liveSample), sampleAgeMinutes, windows });
   }
 
   console.log(JSON.stringify(plan, null, 2));
