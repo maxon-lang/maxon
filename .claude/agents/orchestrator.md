@@ -127,7 +127,7 @@ unknown work surfaces before you assign anything; start the `wait`.
 | `FOUND` | an unrelated defect. File it (`/land` §10, "Recording") unless an open issue already records it — then add the sighting as a comment — and reply with the issue number. Do not assign it to the finder mid-task |
 | `PROGRESS` | update the `task` issue only when its owner, area or state changed |
 | `DONE` | close the `task` naming the sha; the public issue it fixed is closed by the commit's `Fixes #<n>` — check, and close it yourself with the sha if not. Then treat it as `READY`, or, for a session being retired, reply `RETIRE` |
-| `ARCHIVING` | the session archives itself: delete its heartbeat and close its mailbox. A retired session that does not send it gets a `fleet-finished` marker on the fleet issue, which the panel shows until the user presses its "mark archived" button |
+| `ARCHIVING` | the session archives itself: delete its heartbeat and close its mailbox. A retired session that does not send it gets a `fleet-finished` marker on the fleet issue, which the panel shows until the user presses its "Reap" button |
 | `BLOCKED` | a ruling → the `planner`; another task's area → broker it between the two owners; otherwise reassign, or ask the user |
 
 ## Sizing the fleet to the plans
