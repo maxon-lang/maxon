@@ -341,6 +341,7 @@ ragged.
 | 2026-11-16 | /home/user/m42/maxon-bin/.maxon/maxon (corpus /home/user/m42/.scale-tmp) | *(unrecorded)* | *(unrecorded)* | A debug version follows a folded block argument: the replacement primitive notes folded arguments and one fold forwards the versions that named them; newly located versions add rows in regalloc, encode and writeDebugInfo, and code bytes are unchanged | 10,517,405 | 14,698,407 | 23,029,945 | 39,715,032 | 73,244,120 | 140,872,629 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | *(unrecorded)* | *(unrecorded)* | Seeded Go-style hash (ruling #78): String, Character, Array and Hasher hashes seeded per process on an aes or software tier, FNV-1a and djb2 removed, SHA-256 for output names, emitters walk type registries in name order, compiler digests are KeyedHasher folds through one digestOfBytes; against its parent before the rebase, +0.6% allocations at rung 5 | 10,644,130 | 14,831,929 | 23,176,986 | 39,889,342 | 73,473,448 | 141,210,595 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | 754a05f72ab7c881 | bead3004833656be | A row carries its corpus and tree digests, and a delta is withheld across a corpus or a place (maxon 131). Against a control compiler built from the parent commit, both run from one directory and swapped into one path, this change is 3 allocations and 144 bytes FEWER per compile at every rung; nothing in a compile phase moves, since the change is in the ladder tool. That A/B was taken a few main commits before this row's tree. This row's deltas against the row above are withheld by the tool: that row predates the corpus column. | 10,651,630 | 14,840,019 | 23,186,256 | 39,900,972 | 73,489,798 | 141,236,384 |
+| 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | 754a05f72ab7c881 | 54a04b0c83a44a59 | #118: a local's debug row covers the code where its location holds its value on every path (one must-hold harvest for slot and register rows; repeated-version search is one sweep per chain) | 10,546,498 | 14,626,140 | 22,753,688 | 39,031,748 | 71,745,458 | 137,740,952 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -435,6 +436,7 @@ ragged.
 | 2026-11-16 | /home/user/m42/maxon-bin/.maxon/maxon (corpus /home/user/m42/.scale-tmp) | *(unrecorded)* | *(unrecorded)* | A debug version follows a folded block argument: the replacement primitive notes folded arguments and one fold forwards the versions that named them; newly located versions add rows in regalloc, encode and writeDebugInfo, and code bytes are unchanged | 1,128,034,992 | 1,634,784,288 | 2,646,559,184 | 4,693,704,224 | 8,842,737,120 | 17,215,851,392 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | *(unrecorded)* | *(unrecorded)* | Seeded Go-style hash (ruling #78): String, Character, Array and Hasher hashes seeded per process on an aes or software tier, FNV-1a and djb2 removed, SHA-256 for output names, emitters walk type registries in name order, compiler digests are KeyedHasher folds through one digestOfBytes; against its parent before the rebase, +0.6% allocations at rung 5 | 1,141,850,368 | 1,648,730,016 | 2,663,224,912 | 4,710,294,496 | 8,862,908,496 | 17,243,217,424 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | 754a05f72ab7c881 | bead3004833656be | A row carries its corpus and tree digests, and a delta is withheld across a corpus or a place (maxon 131). Against a control compiler built from the parent commit, both run from one directory and swapped into one path, this change is 3 allocations and 144 bytes FEWER per compile at every rung; nothing in a compile phase moves, since the change is in the ladder tool. That A/B was taken a few main commits before this row's tree. This row's deltas against the row above are withheld by the tool: that row predates the corpus column. | 1,142,301,056 | 1,649,214,736 | 2,663,777,696 | 4,710,983,408 | 8,863,869,664 | 17,244,771,488 |
+| 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | 754a05f72ab7c881 | 54a04b0c83a44a59 | #118: a local's debug row covers the code where its location holds its value on every path (one must-hold harvest for slot and register rows; repeated-version search is one sweep per chain) | 1,150,121,344 | 1,662,584,064 | 2,688,567,024 | 4,752,073,520 | 8,946,363,984 | 17,379,474,000 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -572,6 +574,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-11-16 | /home/user/m42/maxon-bin/.maxon/maxon (corpus /home/user/m42/.scale-tmp) | *(unrecorded)* | *(unrecorded)* | A debug version follows a folded block argument: the replacement primitive notes folded arguments and one fold forwards the versions that named them; newly located versions add rows in regalloc, encode and writeDebugInfo, and code bytes are unchanged | 1,426,340,163 | 1,936,504,003 | 2,984,239,677 | 5,360,608,679 | 10,234,692,662 | 19,494,112,243 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | *(unrecorded)* | *(unrecorded)* | Seeded Go-style hash (ruling #78): String, Character, Array and Hasher hashes seeded per process on an aes or software tier, FNV-1a and djb2 removed, SHA-256 for output names, emitters walk type registries in name order, compiler digests are KeyedHasher folds through one digestOfBytes; against its parent before the rebase, +0.6% allocations at rung 5 | 1,152,042,899 | 1,479,300,251 | 2,728,221,277 | 4,157,284,015 | 8,338,051,391 | 17,141,882,583 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | 754a05f72ab7c881 | bead3004833656be | A row carries its corpus and tree digests, and a delta is withheld across a corpus or a place (maxon 131). Against a control compiler built from the parent commit, both run from one directory and swapped into one path, this change is 3 allocations and 144 bytes FEWER per compile at every rung; nothing in a compile phase moves, since the change is in the ladder tool. That A/B was taken a few main commits before this row's tree. This row's deltas against the row above are withheld by the tool: that row predates the corpus column. | 1,554,078,716 | 2,033,579,499 | 3,117,438,150 | 5,383,688,553 | 10,344,453,887 | 19,167,046,646 |
+| 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | 754a05f72ab7c881 | 54a04b0c83a44a59 | #118: a local's debug row covers the code where its location holds its value on every path (one must-hold harvest for slot and register rows; repeated-version search is one sweep per chain) | 2,060,327,473 | 2,892,722,983 | 3,907,444,727 | 7,166,839,088 | 12,576,401,628 | 24,449,143,708 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -3009,3 +3012,31 @@ the current directory; and `scripts/check-scale-rows.sh` checks that every row a
 table and carries that commit's tree digest. The place is compared as one whole string because the
 measurements above follow no single rule about which part of a path costs. The compiler's depth-dependent
 allocation cost is a separate known issue, maxon-lang/maxon#142.
+
+### Result — 2026-11-16, a local's debug row is the code where its location holds its value, and the repeated-version search is one sweep
+
+Slot rows and register rows of the `.mxdbg` sidecar come from one forward must-hold analysis over the allocated function (#118): a row is the code where its location holds the binding's current version on every path. It replaces a liveness harvest for registers and a whole-scope rule for slots.
+
+Emitted code is unchanged: the compiler's own executable was byte-identical to the one a compiler built from 69354ac produces from the same tree (35,980,832 bytes), two commits before the parent, as are the 102 `tests/debug` fixtures. Rows over those fixtures go from 42,172 (9,072 exact duplicates) to 48,396 with no duplicate; sidecars grow 1.7%.
+
+`scale-test`, against the last row:
+
+| rung | allocations | delta | bytes | delta |
+|---:|---:|---:|---:|---:|
+| 0 | 10,546,498 | −105,132 | 1,150,121,344 | +7,820,288 |
+| 1 | 14,626,140 | −213,879 | 1,662,584,064 | +13,369,328 |
+| 2 | 22,753,688 | −432,568 | 2,688,567,024 | +24,789,328 |
+| 3 | 39,031,748 | −869,224 | 4,752,073,520 | +41,090,112 |
+| 4 | 71,745,458 | −1,744,340 | 8,946,363,984 | +82,494,320 |
+| 5 | 137,740,952 | −3,495,432 | 17,379,474,000 | +134,702,512 |
+
+Both deltas double per rung: allocations are 2.5% below the last row at the top rung and bytes 0.8% above it. `regalloc:rewrite` CPU with debug info on read about 1.6 to 1.75 times the parent's on an earlier form of this change, against a compiler built from the parent on one tree; it was not re-taken on the final form.
+
+A cost the allocation columns cannot show. A name reassigned the value it already holds makes a repeated version, and the search for the join that covers it walked, for each version, every earlier version of the chain and their dominance frontiers: cubic CPU in the number of versions of one name in one function, with linear allocations. `tests/ladders/genrepeats.sh` builds the shape (`var k = p`, then `N` arms `if c > i … k = p`); `regalloc:rewrite` CPU ticks with debug info on:
+
+| N | 64 | 128 | 256 | 512 | 1024 | 2048 |
+|---|---:|---:|---:|---:|---:|---:|
+| per-version walk | 37 M | 232 M | 1.64 G | 12.6 G | 97.1 G | not run |
+| one sweep per chain | 4.2 M | 4.3 M | 15.7 M | 19.6 M | 32.8 M | 69.4 M |
+
+The search is now one pass per chain: a member tree with binary lifting gives each join the ordinal it needs covered, and a sweep in ordinal order over a lazy minimum segment tree answers every ahead version, O(n log n) per chain. The raw liveness runs are collected only for the names that read them, and the positionless and later-version checks are one stack sweep per group. The `funcs` mode (N functions of 8 arms) was linear before and after.

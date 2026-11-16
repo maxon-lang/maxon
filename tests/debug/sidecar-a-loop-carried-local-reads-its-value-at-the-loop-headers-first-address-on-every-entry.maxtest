@@ -1,0 +1,65 @@
+let HeaderPadCaseLabel = "sidecar-a-loop-carried-local-reads-its-value-at-the-loop-headers-first-address-on-every-entry"
+
+let HeaderPadFunctionName = "tally"
+let HeaderPadTotalName = "total"
+let HeaderPadRoundName = "round"
+let HeaderPadEntriesPerCall = 5
+let HeaderPadCalls = 2
+let HeaderPadTotals = ["5", "56", "8", "61", "15", "9", "64", "20", "77", "35"]
+let HeaderPadRounds = ["0", "1", "2", "3", "4", "0", "1", "2", "3", "4"]
+
+function registersOfRows(rows StringArray) returns StringArray
+	let registers = StringArray.create(0)
+
+	for row in rows 'eachRow'
+		if isRegisterRow(row) and not registers.contains(placeOfRow(row)) 'aNewRegister'
+			registers.push(placeOfRow(row))
+		end 'aNewRegister'
+	end 'eachRow'
+
+	return registers
+end 'registersOfRows'
+
+test 'a loop-carried local reads its value at the first address of a loop header entered by a jump, on the first entry and on every later one'
+	let staged = builtFixture(HeaderPadCaseLabel, fixture: HeaderPadFixtureName)
+	let executable = builtExecutable(staged)
+	let headerAt = anchorLine(staged.join(StagedProgramFileName), anchor: "header")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: HeaderPadFunctionName)
+	let totalRows = rowsNamed(locals, name: HeaderPadTotalName)
+
+	Expect.atLeast(registersOfRows(totalRows).count(), than: 2, message: "`{HeaderPadTotalName}` is no longer held in two registers in `{HeaderPadFunctionName}`, so the header no longer takes it in a register other than the one the loop body's call returns it in, and no row of the latch can run over the header's first address in the wrong register. Its rows were: {listedLines(totalRows)}")
+
+	let headerOffsets = statementOffsetsOfLine(executable, staged: staged, line: headerAt)
+
+	Expect.notEqual(headerOffsets.count(), expected: 0, message: "the `header` line has no statement rows, so there is no loop header to stop at.")
+
+	if headerOffsets.count() == 0 'noHeader'
+		discardStagedDir(staged)
+		return
+	end 'noHeader'
+
+	let headerStart = lowestOffsetOf(headerOffsets)
+	let commands = ["{BreakCommand} {lineTarget(headerAt)}", RunCommand]
+
+	for _ in 0 upto HeaderPadEntriesPerCall * HeaderPadCalls 'eachEntry'
+		commands.push("{PrintCommand} {HeaderPadTotalName}")
+		commands.push("{PrintCommand} {HeaderPadRoundName}")
+		commands.push(ContinueCommand)
+	end 'eachEntry'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let armed = armedOffsets(events)
+
+	Expect.isTrue(armed.count() == 1 and armed.contains(headerStart), message: "a breakpoint on the `while` line arms the loop header's first address, {hexSpelling(headerStart)}, the line's lowest statement row and the target of both the jump into the loop and the back edge, and nothing else. These were armed: {joined(spelledOffsets(armed), separator: ", ")}. {said}")
+
+	let totals = answersOfNameAtStopsAt(events, offset: headerStart, name: HeaderPadTotalName)
+	let rounds = answersOfNameAtStopsAt(events, offset: headerStart, name: HeaderPadRoundName)
+
+	Expect.equal(joined(rounds, separator: ", "), expected: joined(HeaderPadRounds, separator: ", "), message: "the header is entered {HeaderPadEntriesPerCall} times in each of the {HeaderPadCalls} calls of `{HeaderPadFunctionName}`, once by the jump into the loop and then by each back edge, and `{HeaderPadRoundName}` counts the entries. {said}")
+
+	Expect.equal(joined(totals, separator: ", "), expected: joined(HeaderPadTotals, separator: ", "), message: "at the loop header's first address `{HeaderPadTotalName}` reads its value on every entry, never another number and never unavailable: the jump into the loop and the back edge both leave it in the header's register before that address, so its row opens at the header's label, alignment pad included. On the FIRST entry, which comes by the jump, a row of the back-edge block that ran on over the pad shows the register the body's call returns into, which still holds the last call's result before the loop. {said}")
+
+	discardStagedDir(staged)
+end 'a loop-carried local reads its value at the first address of a loop header entered by a jump, on the first entry and on every later one'

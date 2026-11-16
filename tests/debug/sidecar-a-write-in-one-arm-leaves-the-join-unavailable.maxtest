@@ -1,0 +1,50 @@
+let ArmWriteCaseLabel = "sidecar-a-write-in-one-arm-leaves-the-join-unavailable"
+
+let ArmWriteFunctionName = "split"
+let ArmWriteLocalName = "kept"
+let ArmWriteFactor = 13
+let ArmWriteTerm = 1
+let ArmWritePasses = 2
+
+test 'a register written in one arm of a branch leaves its local unavailable at the join, never a wrong number'
+	let staged = builtFixture(ArmWriteCaseLabel, fixture: ArmWriteFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let writeAt = anchorLine(program, anchor: "write")
+	let joinAt = anchorLine(program, anchor: "join")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: ArmWriteFunctionName)
+	let rows = rowsNamed(locals, name: ArmWriteLocalName)
+
+	Expect.notEqual(rows.count(), expected: 0, message: "`{ArmWriteFunctionName}` describes no `{ArmWriteLocalName}`, so this case asks about nothing. Its locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(rowsNotInRegisters(rows)), message: "`{ArmWriteLocalName}` is no longer held only in registers, so this case no longer asks about a REGISTER row. These rows are not in a register: {listedLines(rowsNotInRegisters(rows))}")
+	Expect.notEqual(statementOffsetsOfLine(executable, staged: staged, line: writeAt).count(), expected: 0, message: "the `write` arm has no code, so no path to the join writes anything.")
+
+	let joinOffsets = statementOffsetsOfLine(executable, staged: staged, line: joinAt)
+
+	Expect.notEqual(joinOffsets.count(), expected: 0, message: "the `join` line has no statement rows, so there is nothing to stop at.")
+
+	let commands = ["{BreakCommand} {lineTarget(joinAt)}", RunCommand]
+
+	for _ in 0 upto ArmWritePasses 'eachPass'
+		commands.push("{PrintCommand} {ArmWriteLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachPass'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+	let trueValues = StringArray.create(0)
+
+	for seed in [10, 5] 'eachSeed'
+		trueValues.push("{seed * ArmWriteFactor + ArmWriteTerm}")
+	end 'eachSeed'
+
+	Expect.equal(answers.count(), expected: ArmWritePasses, message: "`{ArmWriteFunctionName}` reaches the join once through each arm, and each stop's `{PrintCommand} {ArmWriteLocalName}` answers one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(answers, trueValues: trueValues)), message: "`{PrintCommand} {ArmWriteLocalName}` at the join answered {listedLines(answersNeitherTrueNorUnavailable(answers, trueValues: trueValues))}, none of which is unavailable or `{ArmWriteLocalName}`'s value ({listedLines(trueValues)}). One arm writes registers before the join, so on that path the register no longer holds `{ArmWriteLocalName}`: a row that reaches the join because the definition dominates it shows another value's bytes under this name. A write cuts the row on every path, not only below the writer. {said}")
+
+	Expect.isEmpty(listedLines(rowsCoveringAny(rows, offsets: joinOffsets)), message: "a row of `{ArmWriteLocalName}` covers the join, so the `write` arm no longer writes its register and this case no longer asks about a write on one path. Reshape the fixture so the arm writes it; do not weaken the claim. Its rows were: {listedLines(rows)}")
+
+	discardStagedDir(staged)
+end 'a register written in one arm of a branch leaves its local unavailable at the join, never a wrong number'

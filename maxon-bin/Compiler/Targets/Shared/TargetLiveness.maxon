@@ -1962,9 +1962,6 @@ function opControlRole(op TargetOp) returns OpControlRole
 	end 'check'
 end 'opControlRole'
 
-// The one roster for "where does this block's terminator send control?" — the successor walk, the
-// frame passes (`terminatorReturns`) and `BranchCleanup` all ask it, and none may restate the arm
-// list: a second enumeration of `TargetOp` goes stale at the next op the dialect adds.
 export union TerminatorExit
 	none
 	blockId(id BlockId)
@@ -1980,16 +1977,36 @@ export function terminatorExitOf(module TargetModule, block IrBlock) returns Ter
 
 	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("terminatorExitOf: terminator not in module.ops")
 
-	match op 'termCtrl'
-		jmp(target) then return TerminatorExit.blockId(target)
-		arm64Branch(target) then return TerminatorExit.blockId(target)
+	match terminatorKindOf(op, block: block) 'kind'
+		branch then return TerminatorExit.blockId(unconditionalTargetOf(op, block: block))
+		returns then return TerminatorExit.returns
+		tailJumps then return TerminatorExit.tailJumps
+		table then return jumpTableExitOf(op, block: block)
+	end 'kind'
+end 'terminatorExitOf'
+
+enum TerminatorKind
+	branch
+	returns
+	tailJumps
+	table
+end 'TerminatorKind'
+
+// The one roster of terminator ops: `terminatorExitOf` and the debug harvest both ask it, and none
+// may restate the arm list, since a second enumeration goes stale at the next op the dialect adds.
+function terminatorKindOf(op TargetOp, block IrBlock) returns TerminatorKind
+	return match op 'termCtrl'
+		jmp or
+		arm64Branch gives TerminatorKind.branch
 		ret or
-		arm64Ret then return TerminatorExit.returns
+		arm64Ret gives TerminatorKind.returns
 		tailJmp or
-		arm64TailBranch then return TerminatorExit.tailJumps
+		arm64TailBranch gives TerminatorKind.tailJumps
+		x64JumpTable or
+		arm64JumpTable gives TerminatorKind.table
 		prologue or
-		epilogue then panic("terminatorExitOf: block '{String.from(block.label)}' terminator is a frame op, not a branch/return")
-		jcc then panic("terminatorExitOf: block '{String.from(block.label)}' has a `jcc` as its terminator — it must be a body op paired with a `jmp` terminator")
+		epilogue panic("terminatorKindOf: block '{String.from(block.label)}' terminator is a frame op, not a branch/return")
+		jcc panic("terminatorKindOf: block '{String.from(block.label)}' has a `jcc` as its terminator — it must be a body op paired with a `jmp` terminator")
 		movRegImm or
 		movRegImm32 or
 		movRegReg or
@@ -2048,11 +2065,11 @@ export function terminatorExitOf(module TargetModule, block IrBlock) returns Ter
 		negF64RegReg or
 		leaRegFunc or
 		callReg or
-		x64Syscall then panic("terminatorExitOf: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+		x64Syscall panic("terminatorKindOf: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 		pushReg or
-		popReg then panic("terminatorExitOf: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
+		popReg panic("terminatorKindOf: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 		storeSlotReg or
-		loadRegSlot then panic("terminatorExitOf: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
+		loadRegSlot panic("terminatorKindOf: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 		arm64CondBranch or
 		arm64Cbz or
 		arm64Cbnz or
@@ -2106,15 +2123,15 @@ export function terminatorExitOf(module TargetModule, block IrBlock) returns Ter
 		arm64FpLoadRdata or
 		arm64ImportCall or
 		arm64Syscall or
-		arm64Fcsel then panic("terminatorExitOf: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
-		callMem then panic("terminatorExitOf: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
+		arm64Fcsel panic("terminatorKindOf: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
+		callMem panic("terminatorKindOf: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
 		arm64StoreOutgoingArg or
-		arm64LoadIncomingArg then panic("terminatorExitOf: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
+		arm64LoadIncomingArg panic("terminatorKindOf: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
 		arm64FmovGprFp or
-		arm64FmovFpGpr then panic("terminatorExitOf: block '{String.from(block.label)}' has an arm64 general↔vector `fmov` (a bit reinterpretation) body op as its terminator")
-		leaRegSlot then panic("terminatorExitOf: block '{String.from(block.label)}' has a `leaRegSlot` (a frame address) body op as its terminator")
+		arm64FmovFpGpr panic("terminatorKindOf: block '{String.from(block.label)}' has an arm64 general↔vector `fmov` (a bit reinterpretation) body op as its terminator")
+		leaRegSlot panic("terminatorKindOf: block '{String.from(block.label)}' has a `leaRegSlot` (a frame address) body op as its terminator")
 		x64MemFill or
-		arm64MemFill then panic("terminatorExitOf: block '{String.from(block.label)}' has a fill ladder body op as its terminator")
+		arm64MemFill panic("terminatorKindOf: block '{String.from(block.label)}' has a fill ladder body op as its terminator")
 		x64LockCmpxchg or
 		x64LockXadd or
 		x64LockAdd or
@@ -2122,25 +2139,38 @@ export function terminatorExitOf(module TargetModule, block IrBlock) returns Ter
 		x64GsLoadRegBase or
 		arm64AtomicCas or
 		arm64AtomicRmw or
-		arm64ThreadPointer then panic("terminatorExitOf: block '{String.from(block.label)}' has an atomic or a thread-token read as its terminator")
+		arm64ThreadPointer panic("terminatorKindOf: block '{String.from(block.label)}' has an atomic or a thread-token read as its terminator")
 
-		// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
-		x64JumpTable(_, defaultTarget, caseTargets, _) then return TerminatorExit.table(defaultTarget, caseTargets: caseTargets)
-		arm64JumpTable(_, defaultTarget, caseTargets, _) then return TerminatorExit.table(defaultTarget, caseTargets: caseTargets)
 		leaRegBaseIndexScale or
 		loadRegBaseIndexScale or
 		storeBaseIndexScaleReg or
-		arm64AddLsl then panic("terminatorExitOf: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
+		arm64AddLsl panic("terminatorKindOf: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
 		mulHighReg or
-		arm64Mulh then panic("terminatorExitOf: block '{String.from(block.label)}' has a high multiply body op as its terminator")
-		arm64Fneg then panic("terminatorExitOf: block '{String.from(block.label)}' has a float negate body op as its terminator")
+		arm64Mulh panic("terminatorKindOf: block '{String.from(block.label)}' has a high multiply body op as its terminator")
+		arm64Fneg panic("terminatorKindOf: block '{String.from(block.label)}' has a float negate body op as its terminator")
 		arm64LoadAcquire or
-		arm64StoreRelease then panic("terminatorExitOf: block '{String.from(block.label)}' has an ordered load/store body op as its terminator")
-		covInc then panic("terminatorExitOf: block '{String.from(block.label)}' has a coverage counter body op as its terminator")
+		arm64StoreRelease panic("terminatorKindOf: block '{String.from(block.label)}' has an ordered load/store body op as its terminator")
+		covInc panic("terminatorKindOf: block '{String.from(block.label)}' has a coverage counter body op as its terminator")
 		x64AluBaseDispReg or
-		x64AluBaseDispImm32 then panic("terminatorExitOf: block '{String.from(block.label)}' has a read-modify-write of memory body op as its terminator")
+		x64AluBaseDispImm32 panic("terminatorKindOf: block '{String.from(block.label)}' has a read-modify-write of memory body op as its terminator")
 	end 'termCtrl'
-end 'terminatorExitOf'
+end 'terminatorKindOf'
+
+function unconditionalTargetOf(op TargetOp, block IrBlock) returns BlockId
+	match op 'target'
+		jmp(target) then return target
+		arm64Branch(target) then return target
+		default panic("unconditionalTargetOf: block '{String.from(block.label)}' ends in an op terminatorKindOf did not classify as an unconditional branch")
+	end 'target'
+end 'unconditionalTargetOf'
+
+function jumpTableExitOf(op TargetOp, block IrBlock) returns TerminatorExit
+	match op 'table'
+		x64JumpTable(_, defaultTarget, caseTargets, _) then return TerminatorExit.table(defaultTarget, caseTargets: caseTargets)
+		arm64JumpTable(_, defaultTarget, caseTargets, _) then return TerminatorExit.table(defaultTarget, caseTargets: caseTargets)
+		default panic("jumpTableExitOf: block '{String.from(block.label)}' ends in an op terminatorKindOf did not classify as a jump table")
+	end 'table'
+end 'jumpTableExitOf'
 
 // True iff the block's terminator is the ISA's UNCONDITIONAL branch — `jmp` for x64, `arm64Branch`
 // for arm64. This is the else-edge carrier that must accompany a conditional branch (whose op names

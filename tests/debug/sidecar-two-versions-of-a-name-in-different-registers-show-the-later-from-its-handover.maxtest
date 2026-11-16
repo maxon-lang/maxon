@@ -1,0 +1,81 @@
+let HandoverCaseLabel = "sidecar-two-versions-of-a-name-in-different-registers-show-the-later-from-its-handover"
+
+let HandoverFunctionName = "shift"
+let HandoverLocalName = "level"
+let HandoverSeed = 5
+let HandoverPasses = 2
+let EarlierFactor = 31
+let EarlierTerm = 8
+let KeepFactor = 41
+let KeepTerm = 1
+let LaterFactor = 5
+
+test 'two versions of one var in different registers show the earlier up to the handover and only the later from it'
+	let staged = builtFixture(HandoverCaseLabel, fixture: HandoverFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let rebindAt = anchorLine(program, anchor: "rebind")
+	let afterAt = anchorLine(program, anchor: "after")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: HandoverFunctionName)
+	let rows = rowsNamed(locals, name: HandoverLocalName)
+	let registers = StringArray.create(0)
+
+	for row in rows 'eachRow'
+		if isRegisterRow(row) and not registers.contains(placeOfRow(row)) 'aNewRegister'
+			registers.push(placeOfRow(row))
+		end 'aNewRegister'
+	end 'eachRow'
+
+	Expect.isEmpty(listedLines(rowsNotInRegisters(rows)), message: "`{HandoverLocalName}` is no longer held only in registers, so this case no longer asks about a REGISTER handover. These rows are not in a register: {listedLines(rowsNotInRegisters(rows))}")
+	Expect.atLeast(registers.count(), than: 2, message: "`{HandoverLocalName}`'s two versions no longer sit in different registers, so the later one overwrites the earlier's register and this case asks about no handover between places. Its rows were: {listedLines(rows)}")
+
+	let lingering = StringArray.create(0)
+
+	for (leftAt, left) in rows.withIterator() 'eachRow'
+		for rightAt in leftAt.index() + 1 upto rows.count() 'eachLaterRow'
+			let right = try rows.get(rightAt) otherwise panic("debug tests: rows.get OOB at {rightAt}")
+			let (leftStart, leftLimit) = requiredCodeRange(left, what: "a local row")
+			let (rightStart, rightLimit) = requiredCodeRange(right, what: "a local row")
+			let earlierRunsOn = leftStart < rightStart and leftLimit > rightStart + MostBytesOfOneInstruction
+			let laterRunsOn = rightStart < leftStart and rightLimit > leftStart + MostBytesOfOneInstruction
+
+			if placeOfRow(left) != placeOfRow(right) and (earlierRunsOn or laterRunsOn) 'runsPastTheHandover'
+				lingering.push("{left}   ///   {right}")
+			end 'runsPastTheHandover'
+		end 'eachLaterRow'
+	end 'eachRow'
+
+	Expect.isEmpty(listedLines(lingering), message: "a row of `{HandoverLocalName}` runs on past the point where a row of it in another register opens. The later version is the name's value from its handover, so the earlier register's row ends there, intact or not: past it the earlier bytes are a previous value wearing the current name. These pairs run past their handover: {listedLines(lingering)}")
+
+	let commands = ["{BreakCommand} {lineTarget(rebindAt)}", "{BreakCommand} {lineTarget(afterAt)}", RunCommand]
+
+	for _ in 0 upto HandoverPasses * 2 'eachStop'
+		commands.push("{PrintCommand} {HandoverLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachStop'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+	let earlier = "{HandoverSeed * EarlierFactor + EarlierTerm}"
+	let later = "{(HandoverSeed * KeepFactor + KeepTerm) * LaterFactor + HandoverSeed}"
+
+	Expect.equal(answers.count(), expected: HandoverPasses * 2, message: "`{HandoverFunctionName}` runs twice, stopping at the `rebind` line and then the `after` line, and each stop's `{PrintCommand} {HandoverLocalName}` answers one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let beforeHandover = StringArray.create(0)
+	let fromHandover = StringArray.create(0)
+
+	for (iter, answer) in answers.withIterator() 'eachAnswer'
+		if iter.index() mod 2 == 0 'atTheRebind'
+			beforeHandover.push(answer)
+		end 'atTheRebind' else 'afterTheRebind'
+			fromHandover.push(answer)
+		end 'afterTheRebind'
+	end 'eachAnswer'
+
+	Expect.equal(joined(beforeHandover, separator: ", "), expected: joined(repeatedCommand(earlier, times: HandoverPasses), separator: ", "), message: "at the first instruction of the `rebind` line the later version is not computed yet, so `{HandoverLocalName}` is still its earlier version {earlier}, and nothing on the way here wrote the register that holds it: the row runs to the handover, not to the earlier version's last use. {said}")
+	Expect.equal(joined(fromHandover, separator: ", "), expected: joined(repeatedCommand(later, times: HandoverPasses), separator: ", "), message: "on the `after` line `{HandoverLocalName}` has been rebound to {later}; the earlier version {earlier} still sits intact in its own register, and a row of it that outlives the handover shows that previous value under the current name. {said}")
+
+	discardStagedDir(staged)
+end 'two versions of one var in different registers show the earlier up to the handover and only the later from it'

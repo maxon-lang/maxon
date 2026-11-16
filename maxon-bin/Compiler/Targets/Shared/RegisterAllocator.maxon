@@ -253,9 +253,12 @@ type ColdCallBracketPlan
 	var regs as RegNumColumn
 	var kinds as BracketEntryKindArray
 	var payloads as BracketPayloadArray
+	var runOps as OpIndexArray
+	var runOpEnds as ColumnLengthColumn
 
 	// The ISA of the function's ops, which picks the encoding `openImmediateOpAt` builds.
 	var isArm64 as bool
+	var recordsRunOps as bool
 
 	// The save slot each register was given this pass, indexed by `RegNum` and meaningful only where
 	// `regHasSlot` holds; both are empty until the pass's first mint.
@@ -266,8 +269,8 @@ type ColdCallBracketPlan
 	// The rewrite's position in `saveSeqs`: the bracket at `cursor - 1` is the one last taken.
 	var cursor as ElementIndex
 
-	static function create(isArm64 bool) returns ColdCallBracketPlan
-		return Self{saveSeqs: OpSeqArray.create(0), reloadSeqs: OpSeqArray.create(0), ends: ColumnLengthColumn.create(0), regs: RegNumColumn.create(0), kinds: BracketEntryKindArray.create(0), payloads: BracketPayloadArray.create(0), isArm64: isArm64, slotOfReg: SpillSlotArray.create(0), regHasSlot: BoolArray.create(0), nextSlot: 0, cursor: 0}
+	static function create(isArm64 bool, recordsRunOps bool) returns ColdCallBracketPlan
+		return Self{saveSeqs: OpSeqArray.create(0), reloadSeqs: OpSeqArray.create(0), ends: ColumnLengthColumn.create(0), regs: RegNumColumn.create(0), kinds: BracketEntryKindArray.create(0), payloads: BracketPayloadArray.create(0), runOps: OpIndexArray.create(0), runOpEnds: ColumnLengthColumn.create(0), isArm64: isArm64, recordsRunOps: recordsRunOps, slotOfReg: SpillSlotArray.create(0), regHasSlot: BoolArray.create(0), nextSlot: 0, cursor: 0}
 	end 'create'
 
 	// Forget every bracket and every slot — a pass that ended with a stuck value is discarded whole — and
@@ -280,6 +283,8 @@ type ColdCallBracketPlan
 		self.regs.clear()
 		self.kinds.clear()
 		self.payloads.clear()
+		self.runOps.clear()
+		self.runOpEnds.clear()
 		self.regHasSlot.clear()
 		self.slotOfReg.clear()
 		self.nextSlot = frameSlotCount
@@ -292,7 +297,7 @@ type ColdCallBracketPlan
 	//
 	// This is the only writer of `regs`, `kinds` and `payloads`; it appends one entry to each per
 	// register, in ascending register order, so the three share the one CSR `ends`.
-	function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask, module TargetModule, alloc Allocation, liveness LivenessResult)
+	function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask, ordered OpIndexArray, runFirst ElementIndex, module TargetModule, alloc Allocation, liveness LivenessResult)
 		if self.saveSeqs.count() > 0 and saveSeq <= (try self.reloadSeqs.get(self.reloadSeqs.count() - 1) otherwise panic("ColdCallBracketPlan.record: reloadSeqs.get OOB on the entry just counted")) 'outOfOrder'
 			panic("ColdCallBracketPlan.record: a run starting at sequence {saveSeq} inside or before the run last recorded — the colorer records runs in layout order and they never overlap")
 		end 'outOfOrder'
@@ -322,6 +327,16 @@ type ColdCallBracketPlan
 		end 'eachHeldRegister'
 
 		self.ends.push(self.regs.count())
+
+		if not self.recordsRunOps 'noBindingIsNamed'
+			return
+		end 'noBindingIsNamed'
+
+		for pos in runFirst upto runFirst + ((reloadSeq - saveSeq) as ElementIndex) + 1 'eachRunOp'
+			self.runOps.push(try ordered.get(pos) otherwise panic("ColdCallBracketPlan.record: the run's op at position {pos} is past the {ordered.count()} ops of its block"))
+		end 'eachRunOp'
+
+		self.runOpEnds.push(self.runOps.count())
 	end 'record'
 
 	// The rebuild is made by `openImmediateOpAt` in the plan's ISA, so the def's immediate must come
@@ -391,13 +406,54 @@ type ColdCallBracketPlan
 	end 'openReloadSeq'
 
 	export function openEntryCount() returns ElementIndex
-		let index = self.openIndex()
-		return self.entryEnd(index) - self.entryStart(index)
+		return self.entryCountOf(self.openIndex())
 	end 'openEntryCount'
 
 	export function openRegAt(entry ElementIndex) returns RegNum
-		return try self.regs.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openRegAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
+		return self.entryRegOf(self.openIndex(), entry: entry)
 	end 'openRegAt'
+
+	function bracketCount() returns ElementIndex
+		return self.saveSeqs.count()
+	end 'bracketCount'
+
+	function entryCountOf(index ElementIndex) returns ElementIndex
+		return self.entryEnd(index) - self.entryStart(index)
+	end 'entryCountOf'
+
+	function entryRegOf(index ElementIndex, entry ElementIndex) returns RegNum
+		if entry >= self.entryCountOf(index) 'pastTheEntries'
+			panic("ColdCallBracketPlan.entryRegOf: entry {entry} is past the {self.entryCountOf(index)} bracket {index} holds")
+		end 'pastTheEntries'
+
+		return try self.regs.get(self.entryStart(index) + entry) otherwise panic("ColdCallBracketPlan.entryRegOf: regs.get OOB at entry {entry} of bracket {index}")
+	end 'entryRegOf'
+
+	function restoredRegsOf(index ElementIndex) returns RegMask
+		var restored = 0 as RegMask
+
+		for entry in 0 upto self.entryCountOf(index) 'eachEntry'
+			restored = regMaskAdd(restored, regNum: self.entryRegOf(index, entry: entry))
+		end 'eachEntry'
+
+		return restored
+	end 'restoredRegsOf'
+
+	function runOpCountOf(index ElementIndex) returns ElementIndex
+		return self.runOpEndOf(index) - self.runOpStartOf(index)
+	end 'runOpCountOf'
+
+	function runOpOf(index ElementIndex, k ElementIndex) returns ElementIndex
+		return try self.runOps.get(self.runOpStartOf(index) + k) otherwise panic("ColdCallBracketPlan.runOpOf: op {k} of bracket {index}'s run is past the run ops held")
+	end 'runOpOf'
+
+	function runOpStartOf(index ElementIndex) returns ElementIndex
+		return 0 if index == 0 else self.runOpEndOf(index - 1)
+	end 'runOpStartOf'
+
+	function runOpEndOf(index ElementIndex) returns ElementIndex
+		return try self.runOpEnds.get(index) otherwise panic("ColdCallBracketPlan.runOpEndOf: no bracket {index} of {self.saveSeqs.count()}")
+	end 'runOpEndOf'
 
 	function openKindAt(entry ElementIndex) returns BracketEntryKind
 		return try self.kinds.get(self.entryStart(self.openIndex()) + entry) otherwise panic("ColdCallBracketPlan.openKindAt: entry {entry} is past the {self.openEntryCount()} the open bracket holds")
@@ -1340,7 +1396,7 @@ function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bo
 
 	// The save/reload brackets around calls in cold blocks — planned by the colorer, spliced by the
 	// rewrite, sized into the frame below.
-	let brackets = ColdCallBracketPlan.create(isArm64RegisterFile(file))
+	let brackets = ColdCallBracketPlan.create(isArm64RegisterFile(file), recordsRunOps: debugValues.valueIds.count() > 0)
 
 	let alloc = colorRepairingConfinements(module, driver: driver, func: func, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, brackets: brackets, costs: costs)
 
@@ -1377,7 +1433,7 @@ function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bo
 
 	// After the rewrite, which drops self-moves without renumbering: a run harvested before it would
 	// span ops that never reach the encoder, and every window would name code that is not there.
-	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, locations: debugLocations, opFacts: opFacts, into: debugRanges, spans: debugSpans)
+	harvestDebugValueRanges(module, func: func, liveness: liveness, roster: debugValues, locations: debugLocations, opFacts: opFacts, plans: plans, brackets: brackets, into: debugRanges, spans: debugSpans)
 	costs.record(RegAllocPhase.rewrite.ordinal, probe: rewriteProbe)
 end 'allocateFunctionCore'
 
@@ -1433,21 +1489,26 @@ type DebugBlockPlaces
 	export var blockFirst as DebugAnchorColumn
 	export var blockLast as DebugAnchorColumn
 	export var storedSlotAt as DebugSlotColumn
+	export var opOfAnchor as OpIndexArray
+	export var coveredLast as DebugAnchorColumn
+	export var branchAt as DebugAnchorColumn
+	export var capturedAt as DebugAnchorColumn
 	export var anchorCount as DebugOpAnchor
 
-	static function over(module TargetModule, func IrFunction, topo FuncTopology, opFacts OpVariantFacts, noteStores bool) returns DebugBlockPlaces
-		let places = Self{ordinalOfOp: DebugAnchorColumn.absent(module.ops.count()), placeOfLocal: DebugPlaceColumn.absent(topo.numBlocks), localOfPlace: CfgIndexArray.create(0), blockIdOfPlace: BlockIdColumn.create(0), siteKeyOfPlace: DebugSiteKeyColumn.create(0), blockFirst: DebugAnchorColumn.create(), blockLast: DebugAnchorColumn.create(), storedSlotAt: DebugSlotColumn.create(), anchorCount: 0}
+	static function over(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, opFacts OpVariantFacts) returns DebugBlockPlaces
+		let topo = liveness.cfg.topo
+		let places = Self{ordinalOfOp: DebugAnchorColumn.absent(module.ops.count()), placeOfLocal: DebugPlaceColumn.absent(topo.numBlocks), localOfPlace: CfgIndexArray.create(0), blockIdOfPlace: BlockIdColumn.create(0), siteKeyOfPlace: DebugSiteKeyColumn.create(0), blockFirst: DebugAnchorColumn.create(), blockLast: DebugAnchorColumn.create(), storedSlotAt: DebugSlotColumn.create(), opOfAnchor: OpIndexArray.create(0), coveredLast: DebugAnchorColumn.create(), branchAt: DebugAnchorColumn.create(), capturedAt: DebugAnchorColumn.absent(liveness.valueCount), anchorCount: 0}
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("DebugBlockPlaces.over: blockRef from func.blockRefs not in module.blocks")
 			let opened = places.anchorCount
 
 			for opIdx in block.bodyOps() 'eachOp'
-				places.noteOp(module, opIdx: opIdx, opFacts: opFacts, noteStores: noteStores)
+				places.noteOp(module, opIdx: opIdx, opFacts: opFacts)
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'hasTerminator'
-				places.noteOp(module, opIdx: block.terminatorIndex(), opFacts: opFacts, noteStores: noteStores)
+				places.noteOp(module, opIdx: block.terminatorIndex(), opFacts: opFacts)
 			end 'hasTerminator'
 
 			places.placeOfLocal.set(localOfBlockId(topo, blockId: block.id), value: places.localOfPlace.count() as DebugPlace)
@@ -1458,23 +1519,123 @@ type DebugBlockPlaces
 			if places.anchorCount == opened 'emitsNothing'
 				places.blockFirst.pushAbsent()
 				places.blockLast.pushAbsent()
-			end 'emitsNothing' else 'emitsOps'
-				places.blockFirst.push(opened)
-				places.blockLast.push(places.anchorCount - 1)
-			end 'emitsOps'
+				places.coveredLast.pushAbsent()
+				places.branchAt.pushAbsent()
+				continue
+			end 'emitsNothing'
+
+			places.blockFirst.push(opened)
+			places.blockLast.push(places.anchorCount - 1)
+			places.noteCoveredEnd(module, block: block, first: opened, last: places.anchorCount - 1)
 		end 'eachBlock'
 
+		places.anchorDroppedCaptures(module, index: liveness.useIndex, roster: roster, opFacts: opFacts)
 		return places
 	end 'over'
 
-	function noteOp(module TargetModule, opIdx ElementIndex, opFacts OpVariantFacts, noteStores bool)
-		self.ordinalOfOp.set(opIdx, value: self.anchorCount)
-		self.anchorCount = self.anchorCount + 1
+	function definitionOf(index UseIndex, value ValueId) returns DebugOpAnchor throws AbsentError
+		if let anchor = try self.ordinalOfOp.get(index.requireDefOp(value)) 'anOpTheCodeHolds'
+			return anchor
+		end 'anOpTheCodeHolds'
 
-		if not noteStores 'storesNotAsked'
-			self.storedSlotAt.pushAbsent()
+		return try self.capturedAt.get(value)
+	end 'definitionOf'
+
+	function droppedCaptureRegister(module TargetModule, index UseIndex, value ValueId, buf OperandList, opFacts OpVariantFacts) returns (bool, RegNum)
+		if value >= index.valueCount or index.defKindOf(value) != ValueDefKind.opDef 'notDefinedByAnOp'
+			return (false, 0)
+		end 'notDefinedByAnOp'
+
+		let defOp = index.requireDefOp(value)
+
+		if self.ordinalOfOp.holds(defOp) 'emitted'
+			return (false, 0)
+		end 'emitted'
+
+		let op = try module.ops.get(defOp) otherwise panic("DebugBlockPlaces.droppedCaptureRegister: ops.get OOB at {defOp}")
+
+		if not isPhysicalSelfMove(op) 'notASelfMove'
+			return (false, 0)
+		end 'notASelfMove'
+
+		return (true, regMaskLowest(debugRegisterWritesOf(op, buf: buf, opFacts: opFacts)))
+	end 'droppedCaptureRegister'
+
+	function anchorDroppedCaptures(module TargetModule, index UseIndex, roster DebugValueRoster, opFacts OpVariantFacts)
+		let buf = OperandList.create(0)
+
+		for value in roster.valueIds 'eachNamedValue'
+			let (dropped, reg) = self.droppedCaptureRegister(module, index: index, value: value, buf: buf, opFacts: opFacts)
+
+			if not dropped 'emittedOrNotACopy'
+				continue
+			end 'emittedOrNotACopy'
+
+			let place = try self.placeOfLocal.get(index.defBlockOf(value)) otherwise continue
+			let first = try self.blockFirst.get(place) otherwise continue
+			let last = try self.blockLast.get(place) otherwise panic("DebugBlockPlaces.anchorDroppedCaptures: place {place} opens at anchor {first} and records no last anchor")
+			var at = index.requireDefOp(value)
+
+			while at > 0 'eachEarlierCaptureOfTheSameAnswer'
+				at = at - 1
+				let op = try module.ops.get(at) otherwise panic("DebugBlockPlaces.anchorDroppedCaptures: ops.get OOB at {at}")
+
+				if isPhysicalSelfMove(op) 'anotherDroppedCapture'
+					continue
+				end 'anotherDroppedCapture'
+
+				let anchor = try self.ordinalOfOp.get(at) otherwise break
+
+				if anchor >= first and anchor <= last and regMaskContains(opFacts.implicitDefsOf(op), regNum: reg) 'theOpThatAnswersInTheRegister'
+					self.capturedAt.set(value, value: anchor)
+				end 'theOpThatAnswersInTheRegister'
+
+				break
+			end 'eachEarlierCaptureOfTheSameAnswer'
+		end 'eachNamedValue'
+	end 'anchorDroppedCaptures'
+
+	function noteCoveredEnd(module TargetModule, block IrBlock, first DebugOpAnchor, last DebugOpAnchor)
+		if not block.hasTerminatorOp() 'noTerminator'
+			self.noteBranchlessEnd(last)
 			return
-		end 'storesNotAsked'
+		end 'noTerminator'
+
+		let terminator = try module.ops.get(block.terminatorIndex()) otherwise panic("DebugBlockPlaces.noteCoveredEnd: the terminator of block {block.id} is not in module.ops")
+
+		match terminatorKindOf(terminator, block: block) 'exit'
+			returns or
+			tailJumps then self.noteReturningEnd(first, last: last)
+			branch then self.noteBranchEnd(last)
+			table then self.noteBranchlessEnd(last)
+		end 'exit'
+	end 'noteCoveredEnd'
+
+	function noteReturningEnd(first DebugOpAnchor, last DebugOpAnchor)
+		self.branchAt.pushAbsent()
+
+		if last == first 'onlyTheReturn'
+			self.coveredLast.pushAbsent()
+			return
+		end 'onlyTheReturn'
+
+		self.coveredLast.push(last - 1)
+	end 'noteReturningEnd'
+
+	function noteBranchEnd(last DebugOpAnchor)
+		self.coveredLast.push(last)
+		self.branchAt.push(last)
+	end 'noteBranchEnd'
+
+	function noteBranchlessEnd(last DebugOpAnchor)
+		self.coveredLast.push(last)
+		self.branchAt.pushAbsent()
+	end 'noteBranchlessEnd'
+
+	function noteOp(module TargetModule, opIdx ElementIndex, opFacts OpVariantFacts)
+		self.ordinalOfOp.set(opIdx, value: self.anchorCount)
+		self.opOfAnchor.push(opIdx)
+		self.anchorCount = self.anchorCount + 1
 
 		let op = try module.ops.get(opIdx) otherwise panic("DebugBlockPlaces.noteOp: ops.get OOB at {opIdx}")
 
@@ -1484,32 +1645,997 @@ type DebugBlockPlaces
 			self.storedSlotAt.pushAbsent()
 		end 'anyOtherOp'
 	end 'noteOp'
+
+	function opAt(anchor DebugOpAnchor) returns ElementIndex
+		return try self.opOfAnchor.get(anchor) otherwise panic("DebugBlockPlaces.opAt: anchor {anchor} is past the {self.opOfAnchor.count()} ops placed")
+	end 'opAt'
+
+	function localAt(place ElementIndex) returns ElementIndex
+		return try self.localOfPlace.get(place) otherwise panic("DebugBlockPlaces.localAt: place {place} is past the {self.localOfPlace.count()} blocks placed")
+	end 'localAt'
+
+	function blockIdAt(place ElementIndex) returns BlockId
+		return try self.blockIdOfPlace.get(place) otherwise panic("DebugBlockPlaces.blockIdAt: place {place} is past the {self.blockIdOfPlace.count()} blocks placed")
+	end 'blockIdAt'
+
+	function openFromEntry(open DebugRowOpen, place ElementIndex) returns DebugRowOpen
+		let first = try self.blockFirst.get(place) otherwise return open
+		return DebugRowOpensAtBlockEntry if open == debugRowOpenAt(first) else open
+	end 'openFromEntry'
+
+	function pushRow(into DebugValueRangeArray, ordinal ElementIndex, place ElementIndex, open DebugRowOpen, last DebugOpAnchor)
+		let first = try self.blockFirst.get(place) otherwise return
+		let covered = try self.coveredLast.get(place) otherwise return
+		let closing = last if last < covered else covered
+		let opening = debugRowOpenAt(first) if open == DebugRowOpensAtBlockEntry and place == EntryBlockPlace else open
+
+		if closing < first or not debugRowOpenReaches(opening, last: closing) 'coversNothing'
+			return
+		end 'coversNothing'
+
+		if let branch = try self.branchAt.get(place) 'endsInABranch'
+			if closing == branch and branch > first and debugRowOpenReaches(opening, last: branch - 1) 'aBodyBeforeTheBranch'
+				into.push(debugRowOf(opening, ordinal: ordinal, blockId: self.blockIdAt(place), first: first, last: branch - 1))
+				into.push(debugRowOf(debugRowOpenAfter(branch - 1), ordinal: ordinal, blockId: self.blockIdAt(place), first: first, last: branch))
+				return
+			end 'aBodyBeforeTheBranch'
+		end 'endsInABranch'
+
+		into.push(debugRowOf(opening, ordinal: ordinal, blockId: self.blockIdAt(place), first: first, last: closing))
+	end 'pushRow'
 end 'DebugBlockPlaces'
 
-function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, opFacts OpVariantFacts, into DebugValueRangeArray, spans DebugSpanRows)
+let EntryBlockPlace = 0 as ElementIndex
+
+typealias DebugRowOpen = int(0 to u64.max)
+
+let DebugRowOpensAtBlockEntry = 0 as DebugRowOpen
+let DebugRowOpensPerAnchor = 2
+let DebugRowOpensAtItsOp = 1
+let DebugRowOpensAfterItsOp = 2
+
+function debugRowOpenAt(anchor DebugOpAnchor) returns DebugRowOpen
+	return anchor * DebugRowOpensPerAnchor + DebugRowOpensAtItsOp
+end 'debugRowOpenAt'
+
+function debugRowOpenAfter(anchor DebugOpAnchor) returns DebugRowOpen
+	return anchor * DebugRowOpensPerAnchor + DebugRowOpensAfterItsOp
+end 'debugRowOpenAfter'
+
+type DebugRawRuns
+	var ordinals as CfgIndexArray
+	var places as CfgIndexArray
+	var firsts as DebugAnchorArray
+	var lasts as DebugAnchorArray
+	var fromBlockEntries as BoolArray
+
+	static function create() returns DebugRawRuns
+		return Self{ordinals: CfgIndexArray.create(0), places: CfgIndexArray.create(0), firsts: DebugAnchorArray.create(0), lasts: DebugAnchorArray.create(0), fromBlockEntries: BoolArray.create(0)}
+	end 'create'
+
+	function push(ordinal ElementIndex, place ElementIndex, first DebugOpAnchor, last DebugOpAnchor, fromBlockEntry bool)
+		self.ordinals.push(ordinal)
+		self.places.push(place)
+		self.firsts.push(first)
+		self.lasts.push(last)
+		self.fromBlockEntries.push(fromBlockEntry)
+	end 'push'
+
+	function count() returns ElementIndex
+		return self.ordinals.count()
+	end 'count'
+
+	function ordinalAt(run ElementIndex) returns ElementIndex
+		return try self.ordinals.get(run) otherwise panic("DebugRawRuns.ordinalAt: run {run} is past the {self.ordinals.count()} harvested")
+	end 'ordinalAt'
+
+	function placeAt(run ElementIndex) returns ElementIndex
+		return try self.places.get(run) otherwise panic("DebugRawRuns.placeAt: run {run} is past the {self.places.count()} harvested")
+	end 'placeAt'
+
+	function lastAt(run ElementIndex) returns DebugOpAnchor
+		return try self.lasts.get(run) otherwise panic("DebugRawRuns.lastAt: run {run} is past the {self.lasts.count()} harvested")
+	end 'lastAt'
+
+	function openAt(run ElementIndex) returns DebugRowOpen
+		let fromBlockEntry = try self.fromBlockEntries.get(run) otherwise panic("DebugRawRuns.openAt: run {run} is past the {self.fromBlockEntries.count()} harvested")
+
+		if fromBlockEntry 'fromTheBlocksStart'
+			return DebugRowOpensAtBlockEntry
+		end 'fromTheBlocksStart'
+
+		return debugRowOpenAt(try self.firsts.get(run) otherwise panic("DebugRawRuns.openAt: run {run} is past the {self.firsts.count()} harvested"))
+	end 'openAt'
+end 'DebugRawRuns'
+
+function debugRowOpenReaches(open DebugRowOpen, last DebugOpAnchor) returns bool
+	return open <= debugRowOpenAt(last)
+end 'debugRowOpenReaches'
+
+function debugLaterRowOpen(open DebugRowOpen, other DebugRowOpen) returns DebugRowOpen
+	return other if other > open else open
+end 'debugLaterRowOpen'
+
+function debugRowOf(open DebugRowOpen, ordinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor) returns DebugValueRange
+	if open == DebugRowOpensAtBlockEntry 'fromTheBlocksStart'
+		return DebugValueRange.create(ordinal, blockId: blockId, first: first, last: last, fromBlockEntry: true)
+	end 'fromTheBlocksStart'
+
+	let anchor = ((open - DebugRowOpensAtItsOp) / DebugRowOpensPerAnchor) as DebugOpAnchor
+
+	if (open - DebugRowOpensAtItsOp) mod DebugRowOpensPerAnchor == 0 'atItsOp'
+		return DebugValueRange.create(ordinal, blockId: blockId, first: anchor, last: last, fromBlockEntry: false)
+	end 'atItsOp'
+
+	return DebugValueRange.createAfter(ordinal, blockId: blockId, after: anchor, last: last)
+end 'debugRowOf'
+
+function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, opFacts OpVariantFacts, plans EdgeMovePlanArray, brackets ColdCallBracketPlan, into DebugValueRangeArray, spans DebugSpanRows)
 	if roster.valueIds.count() == 0 'nothingNamed'
 		return
 	end 'nothingNamed'
 
 	let topo = liveness.cfg.topo
-	let names = DebugNameIndex.over(roster, valueCount: liveness.valueCount)
-	let refining = debugRunsNeedRefining(roster, liveness: liveness, locations: locations, paramCount: func.paramCount, topo: topo)
-	let places = DebugBlockPlaces.over(module, func: func, topo: topo, opFacts: opFacts, noteStores: refining)
-
-	if not refining 'runsStandAsHarvested'
-		collectDebugRuns(liveness, roster: roster, names: names, places: places, into: into)
-		return
-	end 'runsStandAsHarvested'
-
-	let raw = DebugValueRangeArray.create(0)
-	collectDebugRuns(liveness, roster: roster, names: names, places: places, into: raw)
-	refineDebugRuns(raw, into: into, spans: spans, liveness: liveness, roster: roster, locations: locations, names: names, places: places, paramCount: func.paramCount)
+	let places = DebugBlockPlaces.over(module, func: func, liveness: liveness, roster: roster, opFacts: opFacts)
+	let dom = DominatorTree.of(topo)
+	let holds = DebugRegisterHolds.over(module, liveness: liveness, roster: roster, locations: locations, places: places, opFacts: opFacts, plans: plans, brackets: brackets, dom: dom, paramCount: func.paramCount)
+	refineDebugRuns(into, spans: spans, liveness: liveness, roster: roster, locations: locations, places: places, holds: holds, dom: dom, paramCount: func.paramCount)
 end 'harvestDebugValueRanges'
 
-function collectDebugRuns(liveness LivenessResult, roster DebugValueRoster, names DebugNameIndex, places DebugBlockPlaces, into DebugValueRangeArray)
+typealias DebugRowOpenArray = Array with DebugRowOpen
+
+let DebugNoHolder = 0 as ElementIndex
+
+function debugNamesARegister(locations DebugValueLocationArray) returns bool
+	for location in locations 'eachLocation'
+		if location.kind == DebugValueInRegister 'inARegister'
+			return true
+		end 'inARegister'
+	end 'eachLocation'
+
+	return false
+end 'debugNamesARegister'
+
+type DebugRegisterHolds
+	var trackedOfOrdinal as OptionalElementIndexColumn
+	var runFirst as CfgIndexArray
+	var runPast as CfgIndexArray
+	var runsOf as CsrGraph
+	var stretchPlace as CfgIndexArray
+	var stretchOpen as DebugRowOpenArray
+	var stretchClose as DebugAnchorArray
+	var stretchesOf as CsrGraph
+	var stretchPreorder as CfgIndexArray
+	var stretchesByPreorder as CsrGraph
+
+	static function over(module TargetModule, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, places DebugBlockPlaces, opFacts OpVariantFacts, plans EdgeMovePlanArray, brackets ColdCallBracketPlan, dom DominatorTree, paramCount ParamCount) returns DebugRegisterHolds
+		if not debugNamesARegister(locations) 'noRegisterIsNamed'
+			let noRuns = buildCsr(CsrColumn.create(0), to: CsrColumn.create(0), nodeCount: 0)
+			return Self{trackedOfOrdinal: OptionalElementIndexColumn.absent(locations.count()), runFirst: CfgIndexArray.create(0), runPast: CfgIndexArray.create(0), runsOf: noRuns, stretchPlace: CfgIndexArray.create(0), stretchOpen: DebugRowOpenArray.create(0), stretchClose: DebugAnchorArray.create(0), stretchesOf: noRuns, stretchPreorder: CfgIndexArray.create(0), stretchesByPreorder: noRuns}
+		end 'noRegisterIsNamed'
+
+		let flow = DebugHoldFlow.over(roster, locations: locations, liveness: liveness)
+		flow.noteEvents(module, liveness: liveness, places: places, opFacts: opFacts, plans: plans, brackets: brackets, paramCount: paramCount)
+		flow.summarize(places)
+		flow.settle(liveness.cfg.topo, places: places, dom: dom)
+		return flow.holds(places, dom: dom)
+	end 'over'
+
+	static function of(trackedOfOrdinal OptionalElementIndexColumn, runFirst CfgIndexArray, runPast CfgIndexArray, runsOf CsrGraph, stretchPlace CfgIndexArray, stretchOpen DebugRowOpenArray, stretchClose DebugAnchorArray, stretchesOf CsrGraph, stretchPreorder CfgIndexArray, stretchesByPreorder CsrGraph) returns DebugRegisterHolds
+		return Self{trackedOfOrdinal: trackedOfOrdinal, runFirst: runFirst, runPast: runPast, runsOf: runsOf, stretchPlace: stretchPlace, stretchOpen: stretchOpen, stretchClose: stretchClose, stretchesOf: stretchesOf, stretchPreorder: stretchPreorder, stretchesByPreorder: stretchesByPreorder}
+	end 'of'
+
+	function tracks(ordinal ElementIndex) returns bool
+		return self.trackedOfOrdinal.holds(ordinal)
+	end 'tracks'
+
+	function trackedAt(ordinal ElementIndex) returns ElementIndex
+		return try self.trackedOfOrdinal.get(ordinal) otherwise panic("DebugRegisterHolds.trackedAt: ordinal {ordinal} names no value held in a register")
+	end 'trackedAt'
+
+	function runCount(tracked ElementIndex) returns ElementIndex
+		return self.runsOf.degree(tracked as CsrIndex) as ElementIndex
+	end 'runCount'
+
+	function runFirstAt(tracked ElementIndex, k ElementIndex) returns ElementIndex
+		return try self.runFirst.get(self.runsOf.neighbour(tracked as CsrIndex, k: k as CsrIndex)) otherwise panic("DebugRegisterHolds.runFirstAt: run {k} of {tracked} is past the runs held")
+	end 'runFirstAt'
+
+	function runPastAt(tracked ElementIndex, k ElementIndex) returns ElementIndex
+		return try self.runPast.get(self.runsOf.neighbour(tracked as CsrIndex, k: k as CsrIndex)) otherwise panic("DebugRegisterHolds.runPastAt: run {k} of {tracked} is past the runs held")
+	end 'runPastAt'
+
+	function firstRunEndingAfter(tracked ElementIndex, preorder ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = self.runCount(tracked)
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if self.runPastAt(tracked, k: middle) <= preorder 'endsBefore'
+				low = middle + 1
+			end 'endsBefore' else 'endsAfter'
+				high = middle
+			end 'endsAfter'
+		end 'narrow'
+
+		return low
+	end 'firstRunEndingAfter'
+
+	function fullyHolds(tracked ElementIndex, preorder ElementIndex) returns bool
+		let k = self.firstRunEndingAfter(tracked, preorder: preorder)
+		return k < self.runCount(tracked) and self.runFirstAt(tracked, k: k) <= preorder
+	end 'fullyHolds'
+
+	function stretchCount(tracked ElementIndex) returns ElementIndex
+		return self.stretchesOf.degree(tracked as CsrIndex) as ElementIndex
+	end 'stretchCount'
+
+	function stretchAt(tracked ElementIndex, k ElementIndex) returns ElementIndex
+		return self.stretchesOf.neighbour(tracked as CsrIndex, k: k as CsrIndex) as ElementIndex
+	end 'stretchAt'
+
+	function placeOfStretch(stretch ElementIndex) returns ElementIndex
+		return try self.stretchPlace.get(stretch) otherwise panic("DebugRegisterHolds.placeOfStretch: stretch {stretch} is past the {self.stretchPlace.count()} held")
+	end 'placeOfStretch'
+
+	function openOfStretch(stretch ElementIndex) returns DebugRowOpen
+		return try self.stretchOpen.get(stretch) otherwise panic("DebugRegisterHolds.openOfStretch: stretch {stretch} is past the {self.stretchOpen.count()} held")
+	end 'openOfStretch'
+
+	function closeOfStretch(stretch ElementIndex) returns DebugOpAnchor
+		return try self.stretchClose.get(stretch) otherwise panic("DebugRegisterHolds.closeOfStretch: stretch {stretch} is past the {self.stretchClose.count()} held")
+	end 'closeOfStretch'
+
+	function firstStretchFrom(tracked ElementIndex, preorder ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = self.stretchesByPreorder.degree(tracked as CsrIndex) as ElementIndex
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if self.preorderOfStretch(self.stretchInPreorder(tracked, k: middle)) < preorder 'before'
+				low = middle + 1
+			end 'before' else 'atOrAfter'
+				high = middle
+			end 'atOrAfter'
+		end 'narrow'
+
+		return low
+	end 'firstStretchFrom'
+
+	function stretchInPreorder(tracked ElementIndex, k ElementIndex) returns ElementIndex
+		return self.stretchesByPreorder.neighbour(tracked as CsrIndex, k: k as CsrIndex) as ElementIndex
+	end 'stretchInPreorder'
+
+	function preorderOfStretch(stretch ElementIndex) returns ElementIndex
+		return try self.stretchPreorder.get(stretch) otherwise panic("DebugRegisterHolds.preorderOfStretch: stretch {stretch} is past the {self.stretchPreorder.count()} held")
+	end 'preorderOfStretch'
+
+	function firstStretchAt(tracked ElementIndex, place ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = self.stretchCount(tracked)
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if self.placeOfStretch(self.stretchAt(tracked, k: middle)) < place 'before'
+				low = middle + 1
+			end 'before' else 'atOrAfter'
+				high = middle
+			end 'atOrAfter'
+		end 'narrow'
+
+		return low
+	end 'firstStretchAt'
+
+	function pushHeldRow(into DebugValueRangeArray, ordinal ElementIndex, local ElementIndex, place ElementIndex, open DebugRowOpen, last DebugOpAnchor, startKnown bool, places DebugBlockPlaces, dom DominatorTree)
+		if not self.tracks(ordinal) 'noRegisterHoldIsTracked'
+			if startKnown 'storedWhereItIsBound'
+				places.pushRow(into, ordinal: ordinal, place: place, open: open, last: last)
+			end 'storedWhereItIsBound'
+
+			return
+		end 'noRegisterHoldIsTracked'
+
+		let tracked = self.trackedAt(ordinal)
+
+		if dom.isReached(local) and self.fullyHolds(tracked, preorder: dom.preorderOf(local)) 'heldThroughTheBlock'
+			places.pushRow(into, ordinal: ordinal, place: place, open: places.openFromEntry(open, place: place), last: last)
+			return
+		end 'heldThroughTheBlock'
+
+		var k = self.firstStretchAt(tracked, place: place)
+
+		while k < self.stretchCount(tracked) 'eachStretchOfTheBlock'
+			let stretch = self.stretchAt(tracked, k: k)
+
+			if self.placeOfStretch(stretch) != place 'pastTheBlock'
+				break
+			end 'pastTheBlock'
+
+			let close = self.closeOfStretch(stretch)
+			let heldFrom = self.openOfStretch(stretch)
+			let opening = places.openFromEntry(open, place: place) if heldFrom == DebugRowOpensAtBlockEntry else debugLaterRowOpen(open, other: heldFrom)
+			places.pushRow(into, ordinal: ordinal, place: place, open: opening, last: close if close < last else last)
+			k = k + 1
+		end 'eachStretchOfTheBlock'
+	end 'pushHeldRow'
+end 'DebugRegisterHolds'
+
+type DebugHoldFlow
+	var trackedOfValue as OptionalElementIndexColumn
+	var trackedOfOrdinal as OptionalElementIndexColumn
+	var valueOfTracked as ValueIdArray
+	var regOfTracked as RegNumColumn
+	var slotOfReg as FixedCfgIndexArray
+	var regOfSlot as RegNumColumn
+	var regs as RegMask
+	var width as ElementIndex
+	var blockCount as ElementIndex
+	var usesAt as CsrGraph
+	var defsAt as CsrGraph
+	var seedsAt as CsrGraph
+	var writesAt as RegMaskColumn
+	var holesAt as RegMaskColumn
+	var restoresAt as RegMaskColumn
+	var lastHeld as FixedCfgIndexArray
+	var entryHeld as FixedCfgIndexArray
+	var exitHeld as FixedCfgIndexArray
+	var settled as FixedBoolArray
+
+	static function over(roster DebugValueRoster, locations DebugValueLocationArray, liveness LivenessResult) returns DebugHoldFlow
+		let trackedOfValue = OptionalElementIndexColumn.absent(liveness.valueCount)
+		let trackedOfOrdinal = OptionalElementIndexColumn.absent(roster.valueIds.count())
+		let valueOfTracked = ValueIdArray.create(0)
+		let regOfTracked = RegNumColumn.create(0)
+		let slotOfReg = FixedCfgIndexArray.create(RegisterFileSize)
+		let regOfSlot = RegNumColumn.create(0)
+		var regs = 0 as RegMask
+
+		for (iter, location) in locations.withIterator() 'eachLocation'
+			if location.kind != DebugValueInRegister 'notInARegister'
+				continue
+			end 'notInARegister'
+
+			let value = debugValueAt(roster, ordinal: iter.index())
+			let reg = location.number as RegNum
+
+			if not trackedOfValue.holds(value) 'aNewValue'
+				trackedOfValue.set(value, value: valueOfTracked.count())
+				valueOfTracked.push(value)
+				regOfTracked.push(reg)
+			end 'aNewValue'
+
+			trackedOfOrdinal.set(iter.index(), value: try trackedOfValue.get(value) otherwise panic("DebugHoldFlow.over: value {value} was just tracked"))
+
+			if not regMaskContains(regs, regNum: reg) 'aNewRegister'
+				regs = regMaskAdd(regs, regNum: reg)
+				regOfSlot.push(reg)
+				slotOfReg.set(reg, value: regOfSlot.count())
+			end 'aNewRegister'
+		end 'eachLocation'
+
+		let blockCount = liveness.cfg.topo.numBlocks
+		let empty = buildCsr(CsrColumn.create(0), to: CsrColumn.create(0), nodeCount: 0)
+		return Self{trackedOfValue: trackedOfValue, trackedOfOrdinal: trackedOfOrdinal, valueOfTracked: valueOfTracked, regOfTracked: regOfTracked, slotOfReg: slotOfReg, regOfSlot: regOfSlot, regs: regs, width: regOfSlot.count(), blockCount: blockCount, usesAt: empty, defsAt: empty, seedsAt: empty, writesAt: RegMaskColumn.create(0), holesAt: RegMaskColumn.create(0), restoresAt: RegMaskColumn.create(0), lastHeld: FixedCfgIndexArray.create(blockCount * regOfSlot.count()), entryHeld: FixedCfgIndexArray.create(blockCount * regOfSlot.count()), exitHeld: FixedCfgIndexArray.create(blockCount * regOfSlot.count()), settled: FixedBoolArray.create(blockCount)}
+	end 'over'
+
+	function slotOf(reg RegNum) returns ElementIndex
+		let held = try self.slotOfReg.get(reg) otherwise panic("DebugHoldFlow.slotOf: slotOfReg.get OOB at {reg}")
+
+		if held == 0 'untracked'
+			panic("DebugHoldFlow.slotOf: register {reg} holds no named value")
+		end 'untracked'
+
+		return held - 1
+	end 'slotOf'
+
+	function regOf(tracked ElementIndex) returns RegNum
+		return try self.regOfTracked.get(tracked) otherwise panic("DebugHoldFlow.regOf: tracked value {tracked} is past the {self.regOfTracked.count()} tracked")
+	end 'regOf'
+
+	function cellOf(local ElementIndex, reg RegNum) returns ElementIndex
+		return local * self.width + self.slotOf(reg)
+	end 'cellOf'
+
+	function noteEvents(module TargetModule, liveness LivenessResult, places DebugBlockPlaces, opFacts OpVariantFacts, plans EdgeMovePlanArray, brackets ColdCallBracketPlan, paramCount ParamCount)
+		let index = liveness.useIndex
+		let topo = liveness.cfg.topo
+		let movesAt = FixedCfgIndexArray.create(self.blockCount)
+
+		for plan in plans 'eachEdgePlan'
+			if plan.placement == EdgePlacement.succStart 'movesOpenTheSuccessor'
+				let local = localOfBlockId(topo, blockId: plan.succBlockId)
+				try movesAt.set(local, value: (try movesAt.get(local) otherwise panic("DebugHoldFlow.noteEvents: movesAt.get OOB at {local}")) + plan.moveCount()) otherwise panic("DebugHoldFlow.noteEvents: movesAt.set OOB at {local}")
+			end 'movesOpenTheSuccessor'
+		end 'eachEdgePlan'
+
+		let useAnchors = CsrColumn.create(0)
+		let useTracked = CsrColumn.create(0)
+		let defAnchors = CsrColumn.create(0)
+		let defTracked = CsrColumn.create(0)
+		let seedLocals = CsrColumn.create(0)
+		let seedTracked = CsrColumn.create(0)
+		let lateSeedLocals = CsrColumn.create(0)
+		let lateSeedTracked = CsrColumn.create(0)
+
+		for (iter, value) in self.valueOfTracked.withIterator() 'eachTrackedValue'
+			let tracked = iter.index() as CsrIndex
+
+			match index.defKindOf(value) 'def'
+				opDef then self.noteOpDef(index, value: value, tracked: tracked, places: places, paramCount: paramCount, anchors: defAnchors, defined: defTracked, seedLocals: lateSeedLocals, seeded: lateSeedTracked)
+				phiDef then self.notePhiDef(index, value: value, tracked: tracked, places: places, movesAt: movesAt, anchors: defAnchors, defined: defTracked, seedLocals: lateSeedLocals, seeded: lateSeedTracked)
+				none then self.noteParameterSeed(value, tracked: tracked, paramCount: paramCount, seedLocals: lateSeedLocals, seeded: lateSeedTracked)
+			end 'def'
+
+			let useSites = index.useCount(value)
+
+			if useSites == 0 'neverRead'
+				continue
+			end 'neverRead'
+
+			var record = index.firstUseOf(value)
+
+			for _ in 0 upto useSites 'eachUse'
+				if index.useKindAt(record) == UseKind.op 'readByAnOp'
+					if let anchor = try places.ordinalOfOp.get(index.useOpAt(record)) 'anOpTheCodeHolds'
+						useAnchors.push(anchor as CsrIndex)
+						useTracked.push(tracked)
+					end 'anOpTheCodeHolds'
+				end 'readByAnOp'
+
+				record = index.nextUseOf(record)
+			end 'eachUse'
+		end 'eachTrackedValue'
+
+		let members = ValueIdArray.create(0)
+
+		for local in places.localOfPlace 'eachBlock'
+			liveness.live.liveInInto(local, out: members)
+
+			for value in members 'eachLiveIn'
+				if let tracked = try self.trackedOfValue.get(value) 'aTrackedValue'
+					seedLocals.push(local as CsrIndex)
+					seedTracked.push(tracked as CsrIndex)
+				end 'aTrackedValue'
+			end 'eachLiveIn'
+		end 'eachBlock'
+
+		for (iter, local) in lateSeedLocals.withIterator() 'eachLateSeed'
+			seedLocals.push(local)
+			seedTracked.push(try lateSeedTracked.get(iter.index()) otherwise panic("DebugHoldFlow.noteEvents: lateSeedTracked.get OOB at {iter.index()}"))
+		end 'eachLateSeed'
+
+		self.usesAt = buildCsr(useAnchors, to: useTracked, nodeCount: places.anchorCount as CsrIndex)
+		self.defsAt = buildCsr(defAnchors, to: defTracked, nodeCount: places.anchorCount as CsrIndex)
+		self.seedsAt = buildCsr(seedLocals, to: seedTracked, nodeCount: self.blockCount as CsrIndex)
+		self.noteWrites(module, places: places, opFacts: opFacts, brackets: brackets)
+	end 'noteEvents'
+
+	function noteOpDef(index UseIndex, value ValueId, tracked CsrIndex, places DebugBlockPlaces, paramCount ParamCount, anchors CsrColumn, defined CsrColumn, seedLocals CsrColumn, seeded CsrColumn)
+		if let anchor = try places.definitionOf(index, value: value) 'anOpTheCodeHolds'
+			anchors.push(anchor as CsrIndex)
+			defined.push(tracked)
+			return
+		end 'anOpTheCodeHolds'
+
+		self.noteParameterSeed(value, tracked: tracked, paramCount: paramCount, seedLocals: seedLocals, seeded: seeded)
+	end 'noteOpDef'
+
+	function noteParameterSeed(value ValueId, tracked CsrIndex, paramCount ParamCount, seedLocals CsrColumn, seeded CsrColumn)
+		if value < paramCount as ValueId 'anIncomingParameter'
+			seedLocals.push(EntryBlockLocal as CsrIndex)
+			seeded.push(tracked)
+		end 'anIncomingParameter'
+	end 'noteParameterSeed'
+
+	function notePhiDef(index UseIndex, value ValueId, tracked CsrIndex, places DebugBlockPlaces, movesAt FixedCfgIndexArray, anchors CsrColumn, defined CsrColumn, seedLocals CsrColumn, seeded CsrColumn)
+		let local = index.defBlockOf(value)
+		let moves = try movesAt.get(local) otherwise panic("DebugHoldFlow.notePhiDef: movesAt.get OOB at {local}")
+
+		if moves > 0 'copiedInOnEntry'
+			if let place = try places.placeOfLocal.get(local) 'aPlacedBlock'
+				if let first = try places.blockFirst.get(place) 'withCode'
+					anchors.push(((first as ElementIndex) + moves - 1) as CsrIndex)
+					defined.push(tracked)
+					return
+				end 'withCode'
+			end 'aPlacedBlock'
+		end 'copiedInOnEntry'
+
+		seedLocals.push(local as CsrIndex)
+		seeded.push(tracked)
+	end 'notePhiDef'
+
+	function noteWrites(module TargetModule, places DebugBlockPlaces, opFacts OpVariantFacts, brackets ColdCallBracketPlan)
+		let buf = OperandList.create(0)
+		let cursor = DebugBracketCursor.over(brackets, places: places)
+		self.writesAt = RegMaskColumn.create(places.anchorCount, zeroed: false)
+		self.holesAt = RegMaskColumn.create(places.anchorCount, zeroed: false)
+		self.restoresAt = RegMaskColumn.create(places.anchorCount, zeroed: false)
+
+		for anchor in 0 upto places.anchorCount 'eachOp'
+			var defined = 0 as RegMask
+
+			for k in 0 upto self.defsAt.degree(anchor as CsrIndex) 'eachDefinedHere'
+				defined = regMaskAdd(defined, regNum: self.regOf(self.defsAt.neighbour(anchor as CsrIndex, k: k) as ElementIndex))
+			end 'eachDefinedHere'
+
+			let op = try module.ops.get(places.opAt(anchor)) otherwise panic("DebugHoldFlow.noteWrites: ops.get OOB at the op of anchor {anchor}")
+			let writes = debugRegisterWritesOf(op, buf: buf, opFacts: opFacts)
+			let (holes, restores) = cursor.step(anchor, writes: writes, brackets: brackets, places: places)
+			self.writesAt.push(((writes and not (holes or restores)) and self.regs) or defined)
+			self.holesAt.push(holes and self.regs)
+			self.restoresAt.push(restores and self.regs)
+		end 'eachOp'
+	end 'noteWrites'
+
+	function writesAtAnchor(anchor DebugOpAnchor) returns RegMask
+		return try self.writesAt.get(anchor) otherwise panic("DebugHoldFlow.writesAtAnchor: writesAt.get OOB at {anchor}")
+	end 'writesAtAnchor'
+
+	function holesAtAnchor(anchor DebugOpAnchor) returns RegMask
+		return try self.holesAt.get(anchor) otherwise panic("DebugHoldFlow.holesAtAnchor: holesAt.get OOB at {anchor}")
+	end 'holesAtAnchor'
+
+	function restoresAtAnchor(anchor DebugOpAnchor) returns RegMask
+		return try self.restoresAt.get(anchor) otherwise panic("DebugHoldFlow.restoresAtAnchor: restoresAt.get OOB at {anchor}")
+	end 'restoresAtAnchor'
+
+	function passthrough() returns ElementIndex
+		return self.valueOfTracked.count() + 1
+	end 'passthrough'
+
+	function summarize(places DebugBlockPlaces)
+		let walk = DebugHoldWalk.create(self.width, records: false)
+
+		for (iter, local) in places.localOfPlace.withIterator() 'eachBlock'
+			for slot in 0 upto self.width 'eachRegister'
+				walk.enter(slot, holder: self.passthrough())
+			end 'eachRegister'
+
+			self.stepBlock(walk, place: iter.index(), places: places)
+
+			for slot in 0 upto self.width 'eachExit'
+				self.setCell(self.lastHeld, at: local * self.width + slot, value: walk.holderOf(slot))
+			end 'eachExit'
+		end 'eachBlock'
+	end 'summarize'
+
+	function settle(topo FuncTopology, places DebugBlockPlaces, dom DominatorTree)
+		let current = FixedBoolArray.create(self.blockCount)
+		var changed = true
+
+		while changed 'untilNothingMoves'
+			changed = false
+
+			for local in places.localOfPlace 'eachBlock'
+				if not dom.isReached(local) or (try current.get(local) otherwise panic("DebugHoldFlow.settle: current.get OOB at {local}")) 'nothingNewFlowsIn'
+					continue
+				end 'nothingNewFlowsIn'
+
+				try current.set(local, value: true) otherwise panic("DebugHoldFlow.settle: current.set OOB at {local}")
+
+				if self.settleBlock(local, topo: topo, dom: dom) 'itsExitMoved'
+					changed = true
+
+					for k in 0 upto topo.succ.degree(local as CsrIndex) 'eachSuccessor'
+						try current.set(topo.succ.neighbour(local as CsrIndex, k: k) as ElementIndex, value: false) otherwise panic("DebugHoldFlow.settle: current.set OOB at a successor of {local}")
+					end 'eachSuccessor'
+				end 'itsExitMoved'
+			end 'eachBlock'
+		end 'untilNothingMoves'
+	end 'settle'
+
+	function settleBlock(local ElementIndex, topo FuncTopology, dom DominatorTree) returns bool
+		var anyPred = false
+
+		for k in 0 upto topo.pred.degree(local as CsrIndex) 'eachPredecessor'
+			let pred = topo.pred.neighbour(local as CsrIndex, k: k) as ElementIndex
+
+			if dom.isReached(pred) and self.isSettled(pred) 'aSettledPredecessor'
+				anyPred = true
+			end 'aSettledPredecessor'
+		end 'eachPredecessor'
+
+		if not anyPred and local != EntryBlockLocal 'nothingFlowsInYet'
+			return false
+		end 'nothingFlowsInYet'
+
+		for slot in 0 upto self.width 'eachRegister'
+			self.setCell(self.entryHeld, at: local * self.width + slot, value: self.meetOf(local, slot: slot, topo: topo, dom: dom))
+		end 'eachRegister'
+
+		for k in 0 upto self.seedsAt.degree(local as CsrIndex) 'eachSeed'
+			let tracked = self.seedsAt.neighbour(local as CsrIndex, k: k) as ElementIndex
+			self.setCell(self.entryHeld, at: self.cellOf(local, reg: self.regOf(tracked)), value: tracked + 1)
+		end 'eachSeed'
+
+		var moved = not self.isSettled(local)
+
+		for slot in 0 upto self.width 'eachExit'
+			let at = local * self.width + slot
+			let last = self.cellAt(self.lastHeld, at: at)
+			let leaving = self.cellAt(self.entryHeld, at: at) if last == self.passthrough() else last
+
+			if leaving != self.cellAt(self.exitHeld, at: at) 'aNewExit'
+				self.setCell(self.exitHeld, at: at, value: leaving)
+				moved = true
+			end 'aNewExit'
+		end 'eachExit'
+
+		try self.settled.set(local, value: true) otherwise panic("DebugHoldFlow.settleBlock: settled.set OOB at {local}")
+		return moved
+	end 'settleBlock'
+
+	function meetOf(local ElementIndex, slot ElementIndex, topo FuncTopology, dom DominatorTree) returns ElementIndex
+		if local == EntryBlockLocal 'theFunctionEntryBringsNothing'
+			return DebugNoHolder
+		end 'theFunctionEntryBringsNothing'
+
+		var held = DebugNoHolder
+		var seen = false
+
+		for k in 0 upto topo.pred.degree(local as CsrIndex) 'eachPredecessor'
+			let pred = topo.pred.neighbour(local as CsrIndex, k: k) as ElementIndex
+
+			if not dom.isReached(pred) or not self.isSettled(pred) 'noFlowYet'
+				continue
+			end 'noFlowYet'
+
+			let theirs = self.cellAt(self.exitHeld, at: pred * self.width + slot)
+
+			if not seen 'theFirst'
+				held = theirs
+				seen = true
+			end 'theFirst' else if theirs != held 'theyDisagree'
+				return DebugNoHolder
+			end 'theyDisagree'
+		end 'eachPredecessor'
+
+		return held
+	end 'meetOf'
+
+	function isSettled(local ElementIndex) returns bool
+		return try self.settled.get(local) otherwise panic("DebugHoldFlow.isSettled: settled.get OOB at {local}")
+	end 'isSettled'
+
+	function cellAt(cells FixedCfgIndexArray, at ElementIndex) returns ElementIndex
+		return try cells.get(at) otherwise panic("DebugHoldFlow.cellAt: cell {at} is past the {cells.count()} held")
+	end 'cellAt'
+
+	function setCell(cells FixedCfgIndexArray, at ElementIndex, value ElementIndex)
+		try cells.set(at, value: value) otherwise panic("DebugHoldFlow.setCell: cell {at} is past the {cells.count()} held")
+	end 'setCell'
+
+	function holds(places DebugBlockPlaces, dom DominatorTree) returns DebugRegisterHolds
+		let walk = DebugHoldWalk.create(self.width, records: true)
+
+		for (iter, local) in places.localOfPlace.withIterator() 'eachBlock'
+			if dom.isReached(local) 'reached'
+				self.walkBlock(walk, local: local, place: iter.index(), places: places, dom: dom)
+			end 'reached'
+		end 'eachBlock'
+
+		return walk.holdsOf(self.trackedOfOrdinal, trackedCount: self.valueOfTracked.count(), blockCount: self.blockCount, places: places, dom: dom)
+	end 'holds'
+
+	function walkBlock(walk DebugHoldWalk, local ElementIndex, place ElementIndex, places DebugBlockPlaces, dom DominatorTree)
+		for slot in 0 upto self.width 'eachRegister'
+			walk.enter(slot, holder: self.cellAt(self.entryHeld, at: local * self.width + slot))
+		end 'eachRegister'
+
+		self.stepBlock(walk, place: place, places: places)
+		walk.leave(place, preorder: dom.preorderOf(local), places: places)
+	end 'walkBlock'
+
+	function stepBlock(walk DebugHoldWalk, place ElementIndex, places DebugBlockPlaces)
+		if let first = try places.blockFirst.get(place) 'withCode'
+			let last = try places.blockLast.get(place) otherwise panic("DebugHoldFlow.stepBlock: place {place} opens at anchor {first} and records no last anchor")
+
+			for anchor in first upto last + 1 'eachOp'
+				self.stepOp(walk, anchor: anchor, place: place, first: first)
+			end 'eachOp'
+		end 'withCode'
+	end 'stepBlock'
+
+	function stepOp(walk DebugHoldWalk, anchor DebugOpAnchor, place ElementIndex, first DebugOpAnchor)
+		for k in 0 upto self.usesAt.degree(anchor as CsrIndex) 'eachUseHere'
+			let tracked = self.usesAt.neighbour(anchor as CsrIndex, k: k) as ElementIndex
+			walk.seed(self.slotOf(self.regOf(tracked)), tracked: tracked, place: place, anchor: anchor, first: first)
+		end 'eachUseHere'
+
+		var holed = self.holesAtAnchor(anchor)
+		var written = self.writesAtAnchor(anchor)
+		var restored = self.restoresAtAnchor(anchor)
+
+		while holed != 0 'eachHoledRegister'
+			let reg = regMaskLowest(holed)
+			holed = regMaskRemove(holed, regNum: reg)
+			walk.hole(self.slotOf(reg), place: place, anchor: anchor)
+		end 'eachHoledRegister'
+
+		while written != 0 'eachWrittenRegister'
+			let reg = regMaskLowest(written)
+			written = regMaskRemove(written, regNum: reg)
+			walk.write(self.slotOf(reg), place: place, anchor: anchor)
+		end 'eachWrittenRegister'
+
+		while restored != 0 'eachRestoredRegister'
+			let reg = regMaskLowest(restored)
+			restored = regMaskRemove(restored, regNum: reg)
+			walk.restore(self.slotOf(reg), anchor: anchor)
+		end 'eachRestoredRegister'
+
+		for k in 0 upto self.defsAt.degree(anchor as CsrIndex) 'eachDefinedHere'
+			let tracked = self.defsAt.neighbour(anchor as CsrIndex, k: k) as ElementIndex
+			walk.define(self.slotOf(self.regOf(tracked)), tracked: tracked, anchor: anchor)
+		end 'eachDefinedHere'
+	end 'stepOp'
+end 'DebugHoldFlow'
+
+function debugRegisterWritesOf(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
+	return physicalRegsOfOp(op, buf: buf, census: OperandCensus.writtenByName) or opFacts.implicitDefsOf(op)
+end 'debugRegisterWritesOf'
+
+function debugOpOverwrites(op TargetOp, location DebugValueLocation, buf OperandList, opFacts OpVariantFacts) returns bool
+	if location.kind == DebugValueInRegister 'aRegister'
+		return regMaskContains(debugRegisterWritesOf(op, buf: buf, opFacts: opFacts), regNum: location.number as RegNum)
+	end 'aRegister'
+
+	if location.kind == DebugValueInSpillSlot 'aFrameSlot'
+		return deriveSlotRole(op) == OpSlotRole.spillStore and (slotOfSlotOp(op) as DebugValueNumber) == location.number
+	end 'aFrameSlot'
+
+	panic("debugOpOverwrites: a row names location kind {location.kind}, which holds nothing an op could overwrite")
+end 'debugOpOverwrites'
+
+type DebugBracketCursor
+	var next as ElementIndex
+	var located as bool
+	var runFirst as DebugOpAnchor
+	var runLast as DebugOpAnchor
+	var restored as RegMask
+
+	static function over(brackets ColdCallBracketPlan, places DebugBlockPlaces) returns DebugBracketCursor
+		let cursor = Self{next: 0, located: false, runFirst: 0, runLast: 0, restored: 0}
+		cursor.locate(brackets, places: places)
+		return cursor
+	end 'over'
+
+	function locate(brackets ColdCallBracketPlan, places DebugBlockPlaces)
+		while self.next < brackets.bracketCount() 'eachBracket'
+			var found = false
+
+			for k in 0 upto brackets.runOpCountOf(self.next) 'eachRunOp'
+				if let anchor = try places.ordinalOfOp.get(brackets.runOpOf(self.next, k: k)) 'emitted'
+					if not found 'theFirstEmitted'
+						self.runFirst = anchor
+						found = true
+					end 'theFirstEmitted'
+
+					self.runLast = anchor
+				end 'emitted'
+			end 'eachRunOp'
+
+			if found 'aRunInTheCode'
+				self.restored = brackets.restoredRegsOf(self.next)
+				self.located = true
+				return
+			end 'aRunInTheCode'
+
+			self.next = self.next + 1
+		end 'eachBracket'
+
+		self.located = false
+	end 'locate'
+
+	function step(anchor DebugOpAnchor, writes RegMask, brackets ColdCallBracketPlan, places DebugBlockPlaces) returns (RegMask, RegMask)
+		if not self.located or anchor < self.runFirst 'outsideABracket'
+			return (0, 0)
+		end 'outsideABracket'
+
+		if anchor <= self.runLast 'inTheRun'
+			return (writes and self.restored, 0)
+		end 'inTheRun'
+
+		let entry = (anchor - self.runLast - 1) as ElementIndex
+		let reg = brackets.entryRegOf(self.next, entry: entry)
+
+		if writes != regMaskAdd(0, regNum: reg) 'notItsRestore'
+			panic("DebugBracketCursor.step: the op at anchor {anchor}, entry {entry} after the run of cold bracket {self.next}, writes register mask {writes} where the bracket restores register {reg} alone — a bracket's restores directly follow its run's last emitted op")
+		end 'notItsRestore'
+
+		if entry + 1 == brackets.entryCountOf(self.next) 'theBracketsLastRestore'
+			self.next = self.next + 1
+			self.locate(brackets, places: places)
+		end 'theBracketsLastRestore'
+
+		return (0, writes)
+	end 'step'
+end 'DebugBracketCursor'
+
+type DebugHoldWalk
+	var held as FixedCfgIndexArray
+	var opened as DebugRowOpenArray
+	var fromEntry as FixedBoolArray
+	var parked as FixedCfgIndexArray
+	var isParked as FixedBoolArray
+	var heldOwners as CsrColumn
+	var heldPreorders as CsrColumn
+	var stretchOwner as CsrColumn
+	var stretchIndex as CsrColumn
+	var stretchPlace as CfgIndexArray
+	var stretchOpen as DebugRowOpenArray
+	var stretchClose as DebugAnchorArray
+	let records as bool
+
+	static function create(width ElementIndex, records bool) returns DebugHoldWalk
+		let opened = DebugRowOpenArray.create(width, zeroed: false)
+
+		for _ in 0 upto width 'eachRegister'
+			opened.push(DebugRowOpensAtBlockEntry)
+		end 'eachRegister'
+
+		return Self{held: FixedCfgIndexArray.create(width), opened: opened, fromEntry: FixedBoolArray.create(width), parked: FixedCfgIndexArray.create(width), isParked: FixedBoolArray.create(width), heldOwners: CsrColumn.create(0), heldPreorders: CsrColumn.create(0), stretchOwner: CsrColumn.create(0), stretchIndex: CsrColumn.create(0), stretchPlace: CfgIndexArray.create(0), stretchOpen: DebugRowOpenArray.create(0), stretchClose: DebugAnchorArray.create(0), records: records}
+	end 'create'
+
+	function holderOf(slot ElementIndex) returns ElementIndex
+		return try self.held.get(slot) otherwise panic("DebugHoldWalk.holderOf: held.get OOB at {slot}")
+	end 'holderOf'
+
+	function open(slot ElementIndex, holder ElementIndex, at DebugRowOpen, throughout bool)
+		try self.held.set(slot, value: holder) otherwise panic("DebugHoldWalk.open: held.set OOB at {slot}")
+		try self.opened.set(slot, value: at) otherwise panic("DebugHoldWalk.open: opened.set OOB at {slot}")
+		try self.fromEntry.set(slot, value: throughout) otherwise panic("DebugHoldWalk.open: fromEntry.set OOB at {slot}")
+	end 'open'
+
+	function enter(slot ElementIndex, holder ElementIndex)
+		try self.isParked.set(slot, value: false) otherwise panic("DebugHoldWalk.enter: isParked.set OOB at {slot}")
+		self.open(slot, holder: holder, at: DebugRowOpensAtBlockEntry, throughout: holder != DebugNoHolder)
+	end 'enter'
+
+	function seed(slot ElementIndex, tracked ElementIndex, place ElementIndex, anchor DebugOpAnchor, first DebugOpAnchor)
+		if self.holderOf(slot) == tracked + 1 'alreadyHeld'
+			return
+		end 'alreadyHeld'
+
+		self.closeBefore(slot, place: place, anchor: anchor, first: first)
+		self.open(slot, holder: tracked + 1, at: debugRowOpenAt(anchor), throughout: false)
+	end 'seed'
+
+	function write(slot ElementIndex, place ElementIndex, anchor DebugOpAnchor)
+		self.closeThrough(slot, place: place, last: anchor)
+		self.open(slot, holder: DebugNoHolder, at: DebugRowOpensAtBlockEntry, throughout: false)
+	end 'write'
+
+	function hole(slot ElementIndex, place ElementIndex, anchor DebugOpAnchor)
+		if not (try self.isParked.get(slot) otherwise panic("DebugHoldWalk.hole: isParked.get OOB at {slot}")) 'theBracketsFirstWrite'
+			try self.parked.set(slot, value: self.holderOf(slot)) otherwise panic("DebugHoldWalk.hole: parked.set OOB at {slot}")
+			try self.isParked.set(slot, value: true) otherwise panic("DebugHoldWalk.hole: isParked.set OOB at {slot}")
+		end 'theBracketsFirstWrite'
+
+		self.write(slot, place: place, anchor: anchor)
+	end 'hole'
+
+	function restore(slot ElementIndex, anchor DebugOpAnchor)
+		if not (try self.isParked.get(slot) otherwise panic("DebugHoldWalk.restore: isParked.get OOB at {slot}")) 'unwrittenInTheBracket'
+			return
+		end 'unwrittenInTheBracket'
+
+		try self.isParked.set(slot, value: false) otherwise panic("DebugHoldWalk.restore: isParked.set OOB at {slot}")
+		self.open(slot, holder: try self.parked.get(slot) otherwise panic("DebugHoldWalk.restore: parked.get OOB at {slot}"), at: debugRowOpenAfter(anchor), throughout: false)
+	end 'restore'
+
+	function define(slot ElementIndex, tracked ElementIndex, anchor DebugOpAnchor)
+		self.open(slot, holder: tracked + 1, at: debugRowOpenAfter(anchor), throughout: false)
+	end 'define'
+
+	function closeBefore(slot ElementIndex, place ElementIndex, anchor DebugOpAnchor, first DebugOpAnchor)
+		if anchor > first 'somethingBefore'
+			self.closeThrough(slot, place: place, last: anchor - 1)
+		end 'somethingBefore'
+	end 'closeBefore'
+
+	function closeThrough(slot ElementIndex, place ElementIndex, last DebugOpAnchor)
+		let holder = self.holderOf(slot)
+
+		if holder == DebugNoHolder 'nothingHeld'
+			return
+		end 'nothingHeld'
+
+		self.record(holder - 1, place: place, open: try self.opened.get(slot) otherwise panic("DebugHoldWalk.closeThrough: opened.get OOB at {slot}"), last: last)
+	end 'closeThrough'
+
+	function record(tracked ElementIndex, place ElementIndex, open DebugRowOpen, last DebugOpAnchor)
+		if not self.records or not debugRowOpenReaches(open, last: last) 'coversNothing'
+			return
+		end 'coversNothing'
+
+		self.stretchOwner.push(tracked as CsrIndex)
+		self.stretchIndex.push(self.stretchPlace.count() as CsrIndex)
+		self.stretchPlace.push(place)
+		self.stretchOpen.push(open)
+		self.stretchClose.push(last)
+	end 'record'
+
+	function leave(place ElementIndex, preorder ElementIndex, places DebugBlockPlaces)
+		for slot in 0 upto self.held.count() 'eachRegister'
+			let holder = self.holderOf(slot)
+
+			if holder == DebugNoHolder 'nothingHeld'
+				continue
+			end 'nothingHeld'
+
+			let throughout = try self.fromEntry.get(slot) otherwise panic("DebugHoldWalk.leave: fromEntry.get OOB at {slot}")
+
+			if throughout 'heldThroughTheBlock'
+				self.heldOwners.push((holder - 1) as CsrIndex)
+				self.heldPreorders.push(preorder as CsrIndex)
+				continue
+			end 'heldThroughTheBlock'
+
+			if let covered = try places.coveredLast.get(place) 'withCoveredCode'
+				self.record(holder - 1, place: place, open: try self.opened.get(slot) otherwise panic("DebugHoldWalk.leave: opened.get OOB at {slot}"), last: covered)
+			end 'withCoveredCode'
+		end 'eachRegister'
+	end 'leave'
+
+	function holdsOf(trackedOfOrdinal OptionalElementIndexColumn, trackedCount ElementIndex, blockCount ElementIndex, places DebugBlockPlaces, dom DominatorTree) returns DebugRegisterHolds
+		let byPreorder = buildCsr(self.heldPreorders, to: self.heldOwners, nodeCount: blockCount as CsrIndex)
+		let openRun = OptionalElementIndexColumn.absent(trackedCount)
+		let runOwner = CsrColumn.create(0)
+		let runIndex = CsrColumn.create(0)
+		let runFirst = CfgIndexArray.create(0)
+		let runPast = CfgIndexArray.create(0)
+
+		for preorder in 0 upto byPreorder.nodeCount() 'eachPreorderPosition'
+			for k in 0 upto byPreorder.degree(preorder) 'eachHolderThere'
+				let tracked = byPreorder.neighbour(preorder, k: k)
+
+				if let run = try openRun.get(tracked as ElementIndex) 'aRunOfItsOwn'
+					if (try runPast.get(run) otherwise panic("DebugHoldWalk.holdsOf: runPast.get OOB at {run}")) == preorder as ElementIndex 'continuesTheRun'
+						try runPast.set(run, value: (preorder as ElementIndex) + 1) otherwise panic("DebugHoldWalk.holdsOf: runPast.set OOB at {run}")
+						continue
+					end 'continuesTheRun'
+				end 'aRunOfItsOwn'
+
+				openRun.set(tracked as ElementIndex, value: runFirst.count())
+				runOwner.push(tracked)
+				runIndex.push(runFirst.count() as CsrIndex)
+				runFirst.push(preorder as ElementIndex)
+				runPast.push((preorder as ElementIndex) + 1)
+			end 'eachHolderThere'
+		end 'eachPreorderPosition'
+
+		let keyed = CfgIndexArray.create(self.stretchPlace.count(), zeroed: false)
+		let stretchPreorder = CfgIndexArray.create(self.stretchPlace.count(), zeroed: false)
+
+		for (iter, place) in self.stretchPlace.withIterator() 'eachStretch'
+			let preorder = dom.preorderOf(places.localAt(place))
+			stretchPreorder.push(preorder)
+			keyed.push(preorder * DebugOrdinalSpan + iter.index())
+		end 'eachStretch'
+
+		keyed.sort()
+		let preorderOwner = CsrColumn.create(keyed.count(), zeroed: false)
+		let preorderIndex = CsrColumn.create(keyed.count(), zeroed: false)
+
+		for key in keyed 'eachStretchInPreorder'
+			let stretch = key mod DebugOrdinalSpan
+			preorderOwner.push(try self.stretchOwner.get(stretch) otherwise panic("DebugHoldWalk.holdsOf: stretchOwner.get OOB at {stretch}"))
+			preorderIndex.push(stretch as CsrIndex)
+		end 'eachStretchInPreorder'
+
+		return DebugRegisterHolds.of(trackedOfOrdinal, runFirst: runFirst, runPast: runPast, runsOf: buildCsr(runOwner, to: runIndex, nodeCount: trackedCount as CsrIndex), stretchPlace: self.stretchPlace, stretchOpen: self.stretchOpen, stretchClose: self.stretchClose, stretchesOf: buildCsr(self.stretchOwner, to: self.stretchIndex, nodeCount: trackedCount as CsrIndex), stretchPreorder: stretchPreorder, stretchesByPreorder: buildCsr(preorderOwner, to: preorderIndex, nodeCount: trackedCount as CsrIndex))
+	end 'holdsOf'
+end 'DebugHoldWalk'
+
+function collectDebugRuns(liveness LivenessResult, roster DebugValueRoster, names DebugNameIndex, places DebugBlockPlaces, into DebugRawRuns)
 	let scratch = DebugNamedSlotColumn.create(0)
 	let touches = DebugTouches.create()
-	collectDebugTouches(touches, liveness: liveness, names: names, ordinalOfOp: places.ordinalOfOp, placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst, siteKeyOfPlace: places.siteKeyOfPlace, scratch: scratch)
+	collectDebugTouches(touches, liveness: liveness, names: names, places: places, scratch: scratch)
 	let byAnchor = touches.byAnchor(places.anchorCount)
 
 	let startOrd = DebugAnchorColumn.absent(roster.valueIds.count())
@@ -1544,14 +2670,12 @@ function collectDebugRuns(liveness LivenessResult, roster DebugValueRoster, name
 			openNamedRuns(active, startOrd: startOrd, endOrd: endOrd, names: names, value: value, siteKey: siteKey, at: last, scratch: scratch)
 		end 'eachLiveOut'
 
-		let blockId = try places.blockIdOfPlace.get(place.index()) otherwise panic("collectDebugRuns: blockIdOfPlace.get OOB at {place.index()} of {places.blockIdOfPlace.count()}")
-
 		var opening = 0 as ElementIndex
 
 		for slot in active 'eachRun'
 			let opened = try startOrd.get(slot) otherwise panic("collectDebugRuns: slot {slot} is active with no opening anchor — `openDebugRun` sets both ends before it activates a slot")
 			let closed = try endOrd.get(slot) otherwise panic("collectDebugRuns: slot {slot} is active with no closing anchor — `openDebugRun` sets both ends before it activates a slot")
-			into.push(DebugValueRange.create(slot, blockId: blockId, first: opened, last: closed, fromBlockEntry: opening < liveOnEntry))
+			into.push(slot, place: place.index(), first: opened, last: closed, fromBlockEntry: opening < liveOnEntry)
 			opening = opening + 1
 			startOrd.clear(slot)
 			endOrd.clear(slot)
@@ -1566,12 +2690,12 @@ type DebugNameIndex
 	var siteKeys as DebugSiteKeyColumn
 	var siteParents as DebugSiteKeyColumn
 
-	static function over(roster DebugValueRoster, valueCount ValueId) returns DebugNameIndex
+	static function over(roster DebugValueRoster, valueCount ValueId, keep FixedBoolArray) returns DebugNameIndex
 		let sites = CsrColumn.create(0)
 		let names = CsrColumn.create(0)
 
 		for (iter, value) in roster.valueIds.withIterator() 'eachName'
-			if value < valueCount 'inThisFunction'
+			if value < valueCount and (try keep.get(iter.index()) otherwise panic("DebugNameIndex.over: keep.get OOB at {iter.index()}")) 'inThisFunction'
 				sites.push(debugSiteKeyAt(roster.siteKeys, at: iter.index()) as CsrIndex)
 				names.push(iter.index() as CsrIndex)
 			end 'inThisFunction'
@@ -1637,14 +2761,6 @@ type DebugNameIndex
 	function siteKeyOf(name CsrIndex) returns DebugSiteKey
 		return debugSiteKeyAt(self.siteKeys, at: name)
 	end 'siteKeyOf'
-
-	function siteCount() returns ElementIndex
-		return self.siteParents.count()
-	end 'siteCount'
-
-	function parentOfSite(site ElementIndex) returns DebugSiteKey
-		return debugSiteKeyAt(self.siteParents, at: site)
-	end 'parentOfSite'
 
 	function appliesAt(slot DebugNamedSlot, siteKey DebugSiteKey) returns bool
 		let own = self.siteKeyOf(slot as CsrIndex)
@@ -1718,16 +2834,16 @@ type DebugDefSite
 	end 'somewhereIn'
 end 'DebugDefSite'
 
-function debugDefSiteOf(index UseIndex, value ValueId, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn) returns DebugDefSite
+function debugDefSiteOf(index UseIndex, value ValueId, places DebugBlockPlaces) returns DebugDefSite
 	return match index.defKindOf(value) 'def'
-		none gives debugDefSiteAtBlockStart(EntryBlockLocal, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
-		opDef gives debugDefSiteOfOp(index, value: value, ordinalOfOp: ordinalOfOp)
-		phiDef gives debugDefSiteAtBlockStart(index.defBlockOf(value), placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+		none gives debugDefSiteAtBlockStart(EntryBlockLocal, placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst)
+		opDef gives debugDefSiteOfOp(index, value: value, places: places)
+		phiDef gives debugDefSiteAtBlockStart(index.defBlockOf(value), placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst)
 	end 'def'
 end 'debugDefSiteOf'
 
-function debugDefSiteOfOp(index UseIndex, value ValueId, ordinalOfOp DebugAnchorColumn) returns DebugDefSite
-	let anchor = try ordinalOfOp.get(index.requireDefOp(value)) otherwise return DebugDefSite.somewhereIn(index.defBlockOf(value))
+function debugDefSiteOfOp(index UseIndex, value ValueId, places DebugBlockPlaces) returns DebugDefSite
+	let anchor = try places.definitionOf(index, value: value) otherwise return DebugDefSite.somewhereIn(index.defBlockOf(value))
 	return DebugDefSite.at(index.defBlockOf(value), anchor: anchor)
 end 'debugDefSiteOfOp'
 
@@ -1745,72 +2861,42 @@ end 'DebugRunRefinement'
 
 typealias DebugRunRefinementColumn = Array with DebugRunRefinement
 
-enum DebugRivalry
-	placed
-	vetoed
-end 'DebugRivalry'
-
-function debugCodeDefLocal(index UseIndex, value ValueId) returns ElementIndex
-	return match index.defKindOf(value) 'def'
-		none gives EntryBlockLocal
-		opDef or
-		phiDef gives index.defBlockOf(value)
-	end 'def'
-end 'debugCodeDefLocal'
-
 function debugValueIsDefinedByTheCode(index UseIndex, value ValueId, valueCount ValueId, paramCount ParamCount) returns bool
 	return value < valueCount and (index.defKindOf(value) != ValueDefKind.none or value < paramCount as ValueId)
 end 'debugValueIsDefinedByTheCode'
-
-function debugVersionMayBeBorrowed(roster DebugValueRoster, ordinal ElementIndex, value ValueId, index UseIndex, valueCount ValueId, paramCount ParamCount, topo FuncTopology) returns bool
-	if not debugValueIsDefinedByTheCode(index, value: value, valueCount: valueCount, paramCount: paramCount) 'notDefinedByTheCode'
-		return false
-	end 'notDefinedByTheCode'
-
-	let kind = try roster.versionKinds.get(ordinal) otherwise panic("debugVersionMayBeBorrowed: roster.versionKinds.get OOB at {ordinal}")
-
-	return match kind 'kind'
-		merged or
-		definedSomewhere gives false
-		definedAfter gives (try roster.versionAnchors.get(ordinal) otherwise panic("debugVersionMayBeBorrowed: roster.versionAnchors.get OOB at {ordinal}")) != value
-		definedIn gives debugRecordedBlockDiffersFromTheDefinition(roster, ordinal: ordinal, value: value, index: index, topo: topo)
-	end 'kind'
-end 'debugVersionMayBeBorrowed'
-
-function debugRecordedBlockDiffersFromTheDefinition(roster DebugValueRoster, ordinal ElementIndex, value ValueId, index UseIndex, topo FuncTopology) returns bool
-	let (placed, recordedLocal) = debugRecordedBlockLocal(try roster.versionBlocks.get(ordinal) otherwise panic("debugRecordedBlockDiffersFromTheDefinition: roster.versionBlocks.get OOB at {ordinal}"), topo: topo)
-	return placed and recordedLocal != debugCodeDefLocal(index, value: value)
-end 'debugRecordedBlockDiffersFromTheDefinition'
-
-function debugRunsNeedRefining(roster DebugValueRoster, liveness LivenessResult, locations DebugValueLocationArray, paramCount ParamCount, topo FuncTopology) returns bool
-	for (iter, location) in locations.withIterator() 'eachLocation'
-		if location.kind == DebugValueInSpillSlot 'spilled'
-			return true
-		end 'spilled'
-
-		let value = try roster.valueIds.get(iter.index()) otherwise panic("debugRunsNeedRefining: roster.valueIds.get OOB at {iter.index()}")
-
-		if debugVersionMayBeBorrowed(roster, ordinal: iter.index(), value: value, index: liveness.useIndex, valueCount: liveness.valueCount, paramCount: paramCount, topo: topo) 'borrowed'
-			return true
-		end 'borrowed'
-	end 'eachLocation'
-
-	var groupCount = 0 as ElementIndex
-
-	for group in roster.groups 'eachGroup'
-		if (group as ElementIndex) + 1 > groupCount 'moreGroups'
-			groupCount = (group as ElementIndex) + 1
-		end 'moreGroups'
-	end 'eachGroup'
-
-	return roster.valueIds.count() > groupCount
-end 'debugRunsNeedRefining'
 
 let DebugAnchorWalkLimit = 256
 
 let DebugOrdinalSpan = 4294967296
 
-typealias DebugVersionOrigins = Map with ElementIndex, ElementIndex
+function debugVersionRepeats(roster DebugValueRoster, locations DebugValueLocationArray, earlier ElementIndex, later ElementIndex) returns bool
+	let earlierLocation = try locations.get(earlier) otherwise panic("debugVersionRepeats: locations.get OOB at {earlier}")
+	return earlierLocation.kind != DebugValueNowhere and debugSameRepeatChain(roster, left: earlier, right: later)
+end 'debugVersionRepeats'
+
+function debugDeclAt(roster DebugValueRoster, ordinal ElementIndex) returns ElementIndex
+	return try roster.decls.get(ordinal) otherwise panic("debugDeclAt: roster.decls.get OOB at {ordinal}")
+end 'debugDeclAt'
+
+function debugSameRepeatChain(roster DebugValueRoster, left ElementIndex, right ElementIndex) returns bool
+	return debugDeclAt(roster, ordinal: left) == debugDeclAt(roster, ordinal: right) and debugValueAt(roster, ordinal: left) == debugValueAt(roster, ordinal: right)
+end 'debugSameRepeatChain'
+
+function debugCompareRepeatChains(roster DebugValueRoster, rankOf FixedCfgIndexArray, left ElementIndex, right ElementIndex) returns Ordering
+	let byDecl = debugDeclAt(roster, ordinal: left).compare(debugDeclAt(roster, ordinal: right))
+
+	if byDecl != Ordering.equalTo 'differentDeclarations'
+		return byDecl
+	end 'differentDeclarations'
+
+	let byValue = debugValueAt(roster, ordinal: left).compare(debugValueAt(roster, ordinal: right))
+
+	if byValue != Ordering.equalTo 'differentValues'
+		return byValue
+	end 'differentValues'
+
+	return (try rankOf.get(left) otherwise panic("debugCompareRepeatChains: rankOf.get OOB at {left}")).compare(try rankOf.get(right) otherwise panic("debugCompareRepeatChains: rankOf.get OOB at {right}"))
+end 'debugCompareRepeatChains'
 
 function debugBindingOrderKey(handoverAt DebugAnchorColumn, ordinal ElementIndex) returns ElementIndex
 	return ((try handoverAt.get(ordinal) otherwise 0) as ElementIndex) * DebugOrdinalSpan + ordinal
@@ -1822,7 +2908,7 @@ function debugSiteAfterAnchor(index UseIndex, anchor ValueId, recordedLocal Elem
 	for _ in 0 upto DebugAnchorWalkLimit 'eachEarlierValue'
 		if candidate < valueCount and index.defKindOf(candidate) != ValueDefKind.none and dom.dominates(recordedLocal, y: index.defBlockOf(candidate)) 'definedBelowTheRecordedBlock'
 			if index.defKindOf(candidate) == ValueDefKind.opDef 'byAnOp'
-				if let ordinal = try places.ordinalOfOp.get(index.requireDefOp(candidate)) 'anOpTheCodeStillHolds'
+				if let ordinal = try places.definitionOf(index, value: candidate) 'anOpTheCodeStillHolds'
 					return (true, candidate, DebugDefSite.after(index.defBlockOf(candidate), op: ordinal))
 				end 'anOpTheCodeStillHolds'
 			end 'byAnOp' else 'byABlockArg'
@@ -1907,20 +2993,16 @@ function debugSpilledStartAnchor(site DebugDefSite, defKind ValueDefKind, places
 	return storeAt + 1
 end 'debugSpilledStartAnchor'
 
-function debugRefinementOf(kind DebugValueLocationKind, borrowed bool, groupUnplaceable bool, groupShared bool) returns DebugRunRefinement
+function debugRefinementOf(kind DebugValueLocationKind, borrowed bool, groupUnplaceable bool) returns DebugRunRefinement
 	if kind == DebugValueNowhere 'nothingToRefine'
 		return DebugRunRefinement.none
 	end 'nothingToRefine'
 
-	if kind == DebugValueInSpillSlot and not groupUnplaceable 'aSlotInAGroupItCanBePlacedIn'
+	if not groupUnplaceable 'aGroupItCanBePlacedIn'
 		return DebugRunRefinement.placesInTheFlow
-	end 'aSlotInAGroupItCanBePlacedIn'
+	end 'aGroupItCanBePlacedIn'
 
-	if kind == DebugValueInSpillSlot and not borrowed 'aSlotAtItsOwnDefinition'
-		return DebugRunRefinement.clipsTheStart
-	end 'aSlotAtItsOwnDefinition'
-
-	return DebugRunRefinement.placesInTheFlow if (borrowed or groupShared) and kind == DebugValueInRegister else DebugRunRefinement.none
+	return DebugRunRefinement.none if borrowed else DebugRunRefinement.clipsTheStart
 end 'debugRefinementOf'
 
 function debugSiteOfParsePlacedAnchor(roster DebugValueRoster, ordinal ElementIndex, recordedLocal ElementIndex, index UseIndex, valueCount ValueId, places DebugBlockPlaces, dom DominatorTree) returns DebugDefSite
@@ -1946,9 +3028,14 @@ type DebugBindingSites
 	export var spanEnd as CfgIndexArray
 	export var looseGroup as FixedBoolArray
 	export var orderKey as FixedCfgIndexArray
-	export var repeatsEarlier as FixedBoolArray
+	export var coveredBy as OptionalElementIndexColumn
+	export var aheadOfAnEarlier as FixedBoolArray
+	var groupStarts as CfgIndexArray
+	var nextPositioned as CfgIndexArray
+	var nextOtherValue as CfgIndexArray
+	var laterUnpositionedAbove as FixedBoolArray
 
-	static function over(roster DebugValueRoster, liveness LivenessResult, locations DebugValueLocationArray, places DebugBlockPlaces, topo FuncTopology, dom DominatorTree, paramCount ParamCount) returns DebugBindingSites
+	static function over(roster DebugValueRoster, liveness LivenessResult, locations DebugValueLocationArray, places DebugBlockPlaces, topo FuncTopology, dom DominatorTree, frontier CsrGraph, paramCount ParamCount) returns DebugBindingSites
 		let index = liveness.useIndex
 		let count = roster.valueIds.count()
 		let defLocal = CfgIndexArray.create(count, zeroed: false)
@@ -1965,7 +3052,7 @@ type DebugBindingSites
 		for (iter, value) in roster.valueIds.withIterator() 'eachNamedValue'
 			let ordinal = iter.index()
 			defLocal.push(EntryBlockLocal)
-			let group = (try roster.groups.get(ordinal) otherwise panic("DebugBindingSites.over: roster.groups.get OOB at {ordinal}")) as CsrIndex
+			let group = debugGroupAt(roster, ordinal: ordinal)
 
 			if group + 1 > groupCount 'moreGroups'
 				groupCount = group + 1
@@ -1974,7 +3061,7 @@ type DebugBindingSites
 			var site = DebugDefSite.somewhereIn(EntryBlockLocal)
 
 			if debugValueIsDefinedByTheCode(index, value: value, valueCount: liveness.valueCount, paramCount: paramCount) 'placedByTheCode'
-				site = debugDefSiteOf(index, value: value, ordinalOfOp: places.ordinalOfOp, placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst)
+				site = debugDefSiteOf(index, value: value, places: places)
 				let (moved, bound) = debugBorrowedSite(roster, ordinal: ordinal, value: value, own: site, index: index, valueCount: liveness.valueCount, places: places, topo: topo, dom: dom)
 
 				if moved 'borrowedFromElsewhere'
@@ -2040,6 +3127,203 @@ type DebugBindingSites
 		end 'eachUnplaceableGroup'
 
 		let byGroup = buildCsr(groupOfOrdinal, to: ordinals, nodeCount: groupCount)
+		var flow = DebugFlowOrder.over(roster, defLocal: defLocal, handoverAt: handoverAt, ordinals: ordinals, groupCount: groupCount, topo: topo, dom: dom)
+		let looseGroup = FixedBoolArray.create(groupCount as ElementIndex)
+
+		for (iter, parsed) in parsePlaced.withIterator() 'eachParsePlaced'
+			if parsed and not handoverAt.holds(iter.index()) 'withoutAPosition'
+				try looseGroup.set(debugGroupAt(roster, ordinal: iter.index()) as ElementIndex, value: true) otherwise panic("DebugBindingSites.over: looseGroup.set OOB at {iter.index()}")
+			end 'withoutAPosition'
+		end 'eachParsePlaced'
+
+		let chains = DebugRepeatChains.over(roster, flow: flow, defLocal: defLocal, dom: dom)
+		let movedVersions = CfgIndexArray.create(0)
+		let movedJoins = CfgIndexArray.create(0)
+		let movedAnchors = DebugAnchorArray.create(0)
+
+		let joinOf = chains.joinsOfAheadVersions(roster, flow: flow, defLocal: defLocal, frontier: frontier, topo: topo, dom: dom)
+
+		for (iter, ahead) in chains.aheadOfAnEarlier.withIterator() 'eachVersionAheadOfItsBinding'
+			if not ahead 'positionedInItsFlow'
+				continue
+			end 'positionedInItsFlow'
+
+			let join = try joinOf.get(iter.index()) otherwise continue
+
+			let site = debugDefSiteAtBlockStart(join, placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst)
+
+			if site.anchorKnown 'aJoinWithCode'
+				movedVersions.push(iter.index())
+				movedJoins.push(join)
+				movedAnchors.push(site.anchor)
+			end 'aJoinWithCode'
+		end 'eachVersionAheadOfItsBinding'
+
+		for (iter, version) in movedVersions.withIterator() 'eachVersionMovedToItsJoin'
+			let anchor = try movedAnchors.get(iter.index()) otherwise panic("DebugBindingSites.over: movedAnchors.get OOB at {iter.index()}")
+			try defLocal.set(version, value: try movedJoins.get(iter.index()) otherwise panic("DebugBindingSites.over: movedJoins.get OOB at {iter.index()}")) otherwise panic("DebugBindingSites.over: defLocal.set OOB at {version}")
+			startAt.set(version, value: anchor)
+			try startAfterPrevious.set(version, value: false) otherwise panic("DebugBindingSites.over: startAfterPrevious.set OOB at {version}")
+			handoverAt.set(version, value: anchor)
+			try chains.aheadOfAnEarlier.set(version, value: false) otherwise panic("DebugBindingSites.over: aheadOfAnEarlier.set OOB at {version}")
+		end 'eachVersionMovedToItsJoin'
+
+		if movedVersions.count() > 0 'theFlowChanged'
+			flow = DebugFlowOrder.over(roster, defLocal: defLocal, handoverAt: handoverAt, ordinals: ordinals, groupCount: groupCount, topo: topo, dom: dom)
+		end 'theFlowChanged'
+
+		let coveredBy = debugVersionsCoveredByAnEarlier(roster, locations: locations, flow: flow, defLocal: defLocal, startAt: startAt, groupCount: groupCount, dom: dom)
+
+		let refinement = DebugRunRefinementColumn.create(count, zeroed: false)
+
+		for (iter, location) in locations.withIterator() 'eachLocation'
+			let ordinal = iter.index()
+			let group = debugGroupAt(roster, ordinal: ordinal)
+			refinement.push(debugRefinementOf(location.kind, borrowed: try borrowed.get(ordinal) otherwise panic("DebugBindingSites.over: borrowed.get OOB at {ordinal}"), groupUnplaceable: try unplaceable.get(group) otherwise panic("DebugBindingSites.over: unplaceable.get OOB at {group}")))
+		end 'eachLocation'
+
+		let sites = Self{defLocal: defLocal, startAt: startAt, startAfterPrevious: startAfterPrevious, handoverAt: handoverAt, parsePlaced: parsePlaced, refinement: refinement, byGroup: byGroup, byGroupInFlow: flow.byGroupInFlow, preOf: flow.preOf, spanEnd: flow.spanEnd, looseGroup: looseGroup, orderKey: flow.orderKey, coveredBy: coveredBy, aheadOfAnEarlier: chains.aheadOfAnEarlier, groupStarts: CfgIndexArray.create(0), nextPositioned: CfgIndexArray.create(0), nextOtherValue: CfgIndexArray.create(0), laterUnpositionedAbove: FixedBoolArray.create(count)}
+		sites.indexGroupsInFlow(roster)
+		sites.findLaterUnpositionedAbove(roster, dom: dom)
+		return sites
+	end 'over'
+
+	function refinementOf(ordinal ElementIndex) returns DebugRunRefinement
+		return try self.refinement.get(ordinal) otherwise panic("DebugBindingSites.refinementOf: refinement.get OOB at {ordinal}")
+	end 'refinementOf'
+
+	function indexGroupsInFlow(roster DebugValueRoster)
+		let groups = self.byGroupInFlow.nodeCount() as ElementIndex
+		var total = 0 as ElementIndex
+
+		for group in 0 upto groups 'eachGroupStart'
+			self.groupStarts.push(total)
+			total = total + (self.byGroupInFlow.degree(group as CsrIndex) as ElementIndex)
+		end 'eachGroupStart'
+
+		self.groupStarts.push(total)
+		self.nextPositioned.refill(total, value: 0)
+		self.nextOtherValue.refill(total, value: 0)
+
+		for group in 0 upto groups 'eachGroup'
+			let first = self.groupStartOf(group)
+			let size = self.groupStartOf(group + 1) - first
+			var positioned = size
+			var other = size
+			var k = size
+
+			while k > 0 'eachEntryInReverse'
+				k = k - 1
+				let entry = self.byGroupInFlow.neighbour(group as CsrIndex, k: k as CsrIndex) as ElementIndex
+
+				if k + 1 < size and debugValueAt(roster, ordinal: self.byGroupInFlow.neighbour(group as CsrIndex, k: (k + 1) as CsrIndex) as ElementIndex) != debugValueAt(roster, ordinal: entry) 'theNextDiffers'
+					other = k + 1
+				end 'theNextDiffers'
+
+				if self.handoverAt.holds(entry) 'positioned'
+					positioned = k
+				end 'positioned'
+
+				try self.nextPositioned.set(first + k, value: positioned) otherwise panic("DebugBindingSites.indexGroupsInFlow: nextPositioned.set OOB at {first + k}")
+				try self.nextOtherValue.set(first + k, value: other) otherwise panic("DebugBindingSites.indexGroupsInFlow: nextOtherValue.set OOB at {first + k}")
+			end 'eachEntryInReverse'
+		end 'eachGroup'
+	end 'indexGroupsInFlow'
+
+	function groupStartOf(group ElementIndex) returns ElementIndex
+		return try self.groupStarts.get(group) otherwise panic("DebugBindingSites.groupStartOf: groupStarts.get OOB at {group}")
+	end 'groupStartOf'
+
+	function firstPositionedFrom(group CsrIndex, from CsrIndex) returns CsrIndex
+		return (try self.nextPositioned.get(self.groupStartOf(group as ElementIndex) + (from as ElementIndex)) otherwise panic("DebugBindingSites.firstPositionedFrom: nextPositioned.get OOB at {from} of group {group}")) as CsrIndex
+	end 'firstPositionedFrom'
+
+	function holdsOnlyValue(group CsrIndex, from CsrIndex, past CsrIndex, value ValueId, roster DebugValueRoster) returns bool
+		if from >= past 'empty'
+			return true
+		end 'empty'
+
+		let other = try self.nextOtherValue.get(self.groupStartOf(group as ElementIndex) + (from as ElementIndex)) otherwise panic("DebugBindingSites.holdsOnlyValue: nextOtherValue.get OOB at {from} of group {group}")
+		return debugValueAt(roster, ordinal: self.byGroupInFlow.neighbour(group, k: from) as ElementIndex) == value and other >= (past as ElementIndex)
+	end 'holdsOnlyValue'
+
+	function findLaterUnpositionedAbove(roster DebugValueRoster, dom DominatorTree)
+		let rivals = CfgIndexArray.create(0)
+		let queries = CfgIndexArray.create(0)
+		let stackEnds = CfgIndexArray.create(0)
+		let stackMax = ValueIdArray.create(0)
+
+		for group in 0 upto self.byGroup.nodeCount() as ElementIndex 'eachGroup'
+			if not (try self.looseGroup.get(group) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: looseGroup.get OOB at {group}")) 'positionedThroughout'
+				continue
+			end 'positionedThroughout'
+
+			rivals.clear()
+			queries.clear()
+
+			for k in 0 upto self.byGroup.degree(group as CsrIndex) 'eachVersion'
+				let ordinal = self.byGroup.neighbour(group as CsrIndex, k: k) as ElementIndex
+				let local = debugLocalAt(self, ordinal: ordinal)
+
+				if not dom.isReached(local) 'unreachedCode'
+					continue
+				end 'unreachedCode'
+
+				let key = dom.preorderOf(local) * DebugOrdinalSpan + ordinal
+				queries.push(key)
+
+				if (try self.parsePlaced.get(ordinal) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: parsePlaced.get OOB at {ordinal}")) and not self.handoverAt.holds(ordinal) 'unpositioned'
+					rivals.push(key)
+				end 'unpositioned'
+			end 'eachVersion'
+
+			rivals.sort()
+			queries.sort()
+			stackEnds.clear()
+			stackMax.clear()
+			var next = 0 as ElementIndex
+
+			for query in queries 'eachQueryInPreorder'
+				let at = query / DebugOrdinalSpan
+
+				while next < rivals.count() and (try rivals.get(next) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: rivals.get OOB at {next}")) / DebugOrdinalSpan <= at 'eachRivalStartingAbove'
+					let rival = (try rivals.get(next) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: rivals.get OOB at {next}")) mod DebugOrdinalSpan
+					let rivalLocal = debugLocalAt(self, ordinal: rival)
+					let rivalFirst = dom.preorderOf(rivalLocal)
+					debugPopEnded(stackEnds, maxes: stackMax, at: rivalFirst)
+					var highest = debugValueAt(roster, ordinal: rival)
+
+					if stackMax.count() > 0 'insideAnotherRival'
+						let enclosing = try stackMax.get(stackMax.count() - 1) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: stackMax.get OOB below the count just read")
+						highest = enclosing if enclosing > highest else highest
+					end 'insideAnotherRival'
+
+					stackEnds.push(rivalFirst + dom.dominatedCount(rivalLocal))
+					stackMax.push(highest)
+					next = next + 1
+				end 'eachRivalStartingAbove'
+
+				debugPopEnded(stackEnds, maxes: stackMax, at: at)
+				let ordinal = query mod DebugOrdinalSpan
+
+				if stackMax.count() > 0 'aRivalAbove'
+					let highest = try stackMax.get(stackMax.count() - 1) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: stackMax.get OOB below the count just read")
+					try self.laterUnpositionedAbove.set(ordinal, value: highest > debugValueAt(roster, ordinal: ordinal)) otherwise panic("DebugBindingSites.findLaterUnpositionedAbove: laterUnpositionedAbove.set OOB at {ordinal}")
+				end 'aRivalAbove'
+			end 'eachQueryInPreorder'
+		end 'eachGroup'
+	end 'findLaterUnpositionedAbove'
+end 'DebugBindingSites'
+
+type DebugFlowOrder
+	export var preOf as CfgIndexArray
+	export var spanEnd as CfgIndexArray
+	export var orderKey as FixedCfgIndexArray
+	export var flowOrdinals as CsrColumn
+	export var byGroupInFlow as CsrGraph
+
+	static function over(roster DebugValueRoster, defLocal CfgIndexArray, handoverAt DebugAnchorColumn, ordinals CsrColumn, groupCount CsrIndex, topo FuncTopology, dom DominatorTree) returns DebugFlowOrder
+		let count = defLocal.count()
 		let preOf = CfgIndexArray.create(count, zeroed: false)
 		let spanEnd = CfgIndexArray.create(count, zeroed: false)
 
@@ -2053,7 +3337,7 @@ type DebugBindingSites
 
 		for grouped in ordinals 'eachGroupedOrdinal'
 			let key = debugBindingOrderKey(handoverAt, ordinal: grouped as ElementIndex)
-			try orderKey.set(grouped as ElementIndex, value: key) otherwise panic("DebugBindingSites.over: orderKey.set OOB at {grouped}")
+			try orderKey.set(grouped as ElementIndex, value: key) otherwise panic("DebugFlowOrder.over: orderKey.set OOB at {grouped}")
 			keyed.push(key)
 		end 'eachGroupedOrdinal'
 
@@ -2064,7 +3348,7 @@ type DebugBindingSites
 		for key in keyed 'eachKeyInOrder'
 			let grouped = key mod DebugOrdinalSpan
 			inBindingOrder.push(grouped as CsrIndex)
-			preKeys.push((try preOf.get(grouped) otherwise panic("DebugBindingSites.over: preOf.get OOB at {grouped}")) as CsrIndex)
+			preKeys.push((try preOf.get(grouped) otherwise panic("DebugFlowOrder.over: preOf.get OOB at {grouped}")) as CsrIndex)
 		end 'eachKeyInOrder'
 
 		let byPre = buildCsr(preKeys, to: inBindingOrder, nodeCount: topo.numBlocks as CsrIndex)
@@ -2075,52 +3359,658 @@ type DebugBindingSites
 			for k in 0 upto byPre.degree(position) 'eachOrdinalThere'
 				let grouped = byPre.neighbour(position, k: k)
 				flowOrdinals.push(grouped)
-				flowGroups.push((try roster.groups.get(grouped as ElementIndex) otherwise panic("DebugBindingSites.over: roster.groups.get OOB at {grouped}")) as CsrIndex)
+				flowGroups.push(debugGroupAt(roster, ordinal: grouped as ElementIndex))
 			end 'eachOrdinalThere'
 		end 'eachPreorderPosition'
 
-		let byGroupInFlow = buildCsr(flowGroups, to: flowOrdinals, nodeCount: groupCount)
-		let looseGroup = FixedBoolArray.create(groupCount as ElementIndex)
-
-		for (iter, parsed) in parsePlaced.withIterator() 'eachParsePlaced'
-			if parsed and not handoverAt.holds(iter.index()) 'withoutAPosition'
-				try looseGroup.set(try roster.groups.get(iter.index()) otherwise panic("DebugBindingSites.over: roster.groups.get OOB at {iter.index()}"), value: true) otherwise panic("DebugBindingSites.over: looseGroup.set OOB at {iter.index()}")
-			end 'withoutAPosition'
-		end 'eachParsePlaced'
-
-		let repeatsEarlier = FixedBoolArray.create(count)
-		let firstOfVersion = DebugVersionOrigins.create()
-
-		for (iter, location) in locations.withIterator() 'eachSpilledVersion'
-			if location.kind != DebugValueInSpillSlot 'notInASlot'
-				continue
-			end 'notInASlot'
-
-			let spilled = iter.index()
-			let versionKey = (try roster.groups.get(spilled) otherwise panic("DebugBindingSites.over: roster.groups.get OOB at {spilled}")) * DebugOrdinalSpan + (try roster.valueIds.get(spilled) otherwise panic("DebugBindingSites.over: roster.valueIds.get OOB at {spilled}"))
-
-			if firstOfVersion.contains(versionKey) 'anEarlierOrdinalOfIt'
-				try repeatsEarlier.set(spilled, value: true) otherwise panic("DebugBindingSites.over: repeatsEarlier.set OOB at {spilled}")
-			end 'anEarlierOrdinalOfIt' else 'theFirstOrdinalOfIt'
-				firstOfVersion.upsert(versionKey, value: spilled)
-			end 'theFirstOrdinalOfIt'
-		end 'eachSpilledVersion'
-
-		let refinement = DebugRunRefinementColumn.create(count, zeroed: false)
-
-		for (iter, location) in locations.withIterator() 'eachLocation'
-			let ordinal = iter.index()
-			let group = (try roster.groups.get(ordinal) otherwise panic("DebugBindingSites.over: roster.groups.get OOB at {ordinal}")) as CsrIndex
-			refinement.push(debugRefinementOf(location.kind, borrowed: try borrowed.get(ordinal) otherwise panic("DebugBindingSites.over: borrowed.get OOB at {ordinal}"), groupUnplaceable: try unplaceable.get(group) otherwise panic("DebugBindingSites.over: unplaceable.get OOB at {group}"), groupShared: byGroup.degree(group) > 1))
-		end 'eachLocation'
-
-		return Self{defLocal: defLocal, startAt: startAt, startAfterPrevious: startAfterPrevious, handoverAt: handoverAt, parsePlaced: parsePlaced, refinement: refinement, byGroup: byGroup, byGroupInFlow: byGroupInFlow, preOf: preOf, spanEnd: spanEnd, looseGroup: looseGroup, orderKey: orderKey, repeatsEarlier: repeatsEarlier}
+		return Self{preOf: preOf, spanEnd: spanEnd, orderKey: orderKey, flowOrdinals: flowOrdinals, byGroupInFlow: buildCsr(flowGroups, to: flowOrdinals, nodeCount: groupCount)}
 	end 'over'
 
-	function refinementOf(ordinal ElementIndex) returns DebugRunRefinement
-		return try self.refinement.get(ordinal) otherwise panic("DebugBindingSites.refinementOf: refinement.get OOB at {ordinal}")
-	end 'refinementOf'
-end 'DebugBindingSites'
+	function preorderAt(ordinal ElementIndex) returns ElementIndex
+		return try self.preOf.get(ordinal) otherwise panic("DebugFlowOrder.preorderAt: preOf.get OOB at {ordinal}")
+	end 'preorderAt'
+
+	function subtreeEndAt(ordinal ElementIndex) returns ElementIndex
+		return try self.spanEnd.get(ordinal) otherwise panic("DebugFlowOrder.subtreeEndAt: spanEnd.get OOB at {ordinal}")
+	end 'subtreeEndAt'
+end 'DebugFlowOrder'
+
+function debugVersionsCoveredByAnEarlier(roster DebugValueRoster, locations DebugValueLocationArray, flow DebugFlowOrder, defLocal CfgIndexArray, startAt DebugAnchorColumn, groupCount CsrIndex, dom DominatorTree) returns OptionalElementIndexColumn
+	let coveredBy = OptionalElementIndexColumn.absent(defLocal.count())
+	let enclosing = CfgIndexArray.create(0)
+
+	for group in 0 upto groupCount 'eachGroup'
+		enclosing.clear()
+
+		for k in 0 upto flow.byGroupInFlow.degree(group) 'eachVersionInFlow'
+			let grouped = flow.byGroupInFlow.neighbour(group, k: k) as ElementIndex
+
+			if not dom.isReached(try defLocal.get(grouped) otherwise panic("debugVersionsCoveredByAnEarlier: defLocal.get OOB at {grouped}")) 'unreachedCode'
+				continue
+			end 'unreachedCode'
+
+			let preorder = flow.preorderAt(grouped)
+
+			while enclosing.count() > 0 'leavesTheSubtreesItIsNotIn'
+				let innermost = try enclosing.get(enclosing.count() - 1) otherwise panic("debugVersionsCoveredByAnEarlier: enclosing.get OOB below the count just read")
+
+				if flow.subtreeEndAt(innermost) > preorder 'dominatesIt'
+					let itsRowsReachTheLater = flow.preorderAt(innermost) < preorder or startAt.holds(innermost)
+
+					if itsRowsReachTheLater and debugVersionRepeats(roster, locations: locations, earlier: innermost, later: grouped) 'theSameValueHeldOn'
+						coveredBy.set(grouped, value: innermost)
+					end 'theSameValueHeldOn'
+
+					break
+				end 'dominatesIt'
+
+				enclosing.truncate(enclosing.count() - 1)
+			end 'leavesTheSubtreesItIsNotIn'
+
+			enclosing.push(grouped)
+		end 'eachVersionInFlow'
+	end 'eachGroup'
+
+	return coveredBy
+end 'debugVersionsCoveredByAnEarlier'
+
+type DebugRepeatChains
+	export var chained as CfgIndexArray
+	export var aheadOfAnEarlier as FixedBoolArray
+
+	static function over(roster DebugValueRoster, flow DebugFlowOrder, defLocal CfgIndexArray, dom DominatorTree) returns DebugRepeatChains
+		let count = defLocal.count()
+		let rankOf = FixedCfgIndexArray.create(count)
+		let chained = CfgIndexArray.create(flow.flowOrdinals.count(), zeroed: false)
+
+		for (iter, grouped) in flow.flowOrdinals.withIterator() 'eachInFlow'
+			try rankOf.set(grouped as ElementIndex, value: iter.index()) otherwise panic("DebugRepeatChains.over: rankOf.set OOB at {grouped}")
+			chained.push(grouped as ElementIndex)
+		end 'eachInFlow'
+
+		chained.sortBy(function(left ElementIndex, right ElementIndex) gives debugCompareRepeatChains(roster, rankOf: rankOf, left: left, right: right))
+		let aheadOfAnEarlier = FixedBoolArray.create(count)
+		let laterFirsts = CfgIndexArray.create(0)
+		let laterLeast = CfgIndexArray.create(0)
+		var at = chained.count()
+
+		while at > 0 'eachInReverseFlow'
+			at = at - 1
+			let version = try chained.get(at) otherwise panic("DebugRepeatChains.over: chained.get OOB at {at}")
+			let next = try chained.get(at + 1) otherwise version
+
+			if not debugSameRepeatChain(roster, left: version, right: next) 'aNewChain'
+				laterFirsts.clear()
+				laterLeast.clear()
+			end 'aNewChain'
+
+			if not dom.isReached(try defLocal.get(version) otherwise panic("DebugRepeatChains.over: defLocal.get OOB at {version}")) 'unreachedCode'
+				continue
+			end 'unreachedCode'
+
+			let past = flow.subtreeEndAt(version)
+			var least = version
+
+			while laterFirsts.count() > 0 and (try laterFirsts.get(laterFirsts.count() - 1) otherwise panic("DebugRepeatChains.over: laterFirsts.get OOB")) < past 'eachLaterInsideItsSubtree'
+				let inside = try laterLeast.get(laterLeast.count() - 1) otherwise panic("DebugRepeatChains.over: laterLeast.get OOB")
+				least = inside if inside < least else least
+				laterFirsts.truncate(laterFirsts.count() - 1)
+				laterLeast.truncate(laterLeast.count() - 1)
+			end 'eachLaterInsideItsSubtree'
+
+			if least < version 'anEarlierRecordedVersionBelowIt'
+				try aheadOfAnEarlier.set(version, value: true) otherwise panic("DebugRepeatChains.over: aheadOfAnEarlier.set OOB at {version}")
+			end 'anEarlierRecordedVersionBelowIt'
+
+			laterFirsts.push(flow.preorderAt(version))
+			laterLeast.push(least)
+		end 'eachInReverseFlow'
+
+		return Self{chained: chained, aheadOfAnEarlier: aheadOfAnEarlier}
+	end 'over'
+
+	function joinsOfAheadVersions(roster DebugValueRoster, flow DebugFlowOrder, defLocal CfgIndexArray, frontier CsrGraph, topo FuncTopology, dom DominatorTree) returns OptionalElementIndexColumn
+		let joinOf = OptionalElementIndexColumn.absent(defLocal.count())
+
+		if not dom.reducible 'noFrontierToSearch'
+			return joinOf
+		end 'noFrontierToSearch'
+
+		let search = DebugJoinSearch.create(topo.numBlocks)
+		var chainFirst = 0 as ElementIndex
+
+		while chainFirst < self.chained.count() 'eachChain'
+			let first = self.versionAt(chainFirst)
+			var chainPast = chainFirst + 1
+
+			while chainPast < self.chained.count() and debugSameRepeatChain(roster, left: first, right: self.versionAt(chainPast)) 'sameChain'
+				chainPast = chainPast + 1
+			end 'sameChain'
+
+			search.searchChain(self, first: chainFirst, past: chainPast, flow: flow, defLocal: defLocal, frontier: frontier, topo: topo, dom: dom, joinOf: joinOf)
+			chainFirst = chainPast
+		end 'eachChain'
+
+		return joinOf
+	end 'joinsOfAheadVersions'
+
+	function versionAt(at ElementIndex) returns ElementIndex
+		return try self.chained.get(at) otherwise panic("DebugRepeatChains.versionAt: chained.get OOB at {at}")
+	end 'versionAt'
+
+	function isAhead(version ElementIndex) returns bool
+		return try self.aheadOfAnEarlier.get(version) otherwise panic("DebugRepeatChains.isAhead: aheadOfAnEarlier.get OOB at {version}")
+	end 'isAhead'
+end 'DebugRepeatChains'
+
+let DebugJoinUnbounded = 1099511627776
+
+function debugLesser(left ElementIndex, right ElementIndex) returns ElementIndex
+	return left if left < right else right
+end 'debugLesser'
+
+type DebugJoinSearch
+	var members as CfgIndexArray
+	var lows as CfgIndexArray
+	var highs as CfgIndexArray
+	var parents as CfgIndexArray
+	var climbs as CfgIndexArray
+	var climbMins as CfgIndexArray
+	var levels as ElementIndex
+	var sameBlockMin as CfgIndexArray
+	var stack as CfgIndexArray
+	var stamps as FixedCfgIndexArray
+	var stamp as ElementIndex
+	var joins as CfgIndexArray
+	var needs as CfgIndexArray
+	var positions as CfgIndexArray
+	var joinAtPosition as CfgIndexArray
+	var keyed as CfgIndexArray
+	var aheads as CfgIndexArray
+	var found as CfgIndexArray
+	var tree as DebugCoverTree
+
+	static function create(blockCount ElementIndex) returns DebugJoinSearch
+		return Self{members: CfgIndexArray.create(0), lows: CfgIndexArray.create(0), highs: CfgIndexArray.create(0), parents: CfgIndexArray.create(0), climbs: CfgIndexArray.create(0), climbMins: CfgIndexArray.create(0), levels: 0, sameBlockMin: CfgIndexArray.create(0), stack: CfgIndexArray.create(0), stamps: FixedCfgIndexArray.create(blockCount), stamp: 0, joins: CfgIndexArray.create(0), needs: CfgIndexArray.create(0), positions: CfgIndexArray.create(0), joinAtPosition: CfgIndexArray.create(0), keyed: CfgIndexArray.create(0), aheads: CfgIndexArray.create(0), found: CfgIndexArray.create(0), tree: DebugCoverTree.create()}
+	end 'create'
+
+	function searchChain(chains DebugRepeatChains, first ElementIndex, past ElementIndex, flow DebugFlowOrder, defLocal CfgIndexArray, frontier CsrGraph, topo FuncTopology, dom DominatorTree, joinOf OptionalElementIndexColumn)
+		self.collectMembers(chains, first: first, past: past, flow: flow, defLocal: defLocal, dom: dom)
+
+		if self.aheads.count() == 0 'nothingToPlace'
+			return
+		end 'nothingToPlace'
+
+		self.linkMembers()
+		self.collectJoins(defLocal, frontier: frontier, topo: topo, dom: dom)
+
+		if self.joins.count() == 0 'noJoinCanBeCovered'
+			return
+		end 'noJoinCanBeCovered'
+
+		self.placePositions(dom)
+		self.sweep(joinOf, dom: dom)
+	end 'searchChain'
+
+	function collectMembers(chains DebugRepeatChains, first ElementIndex, past ElementIndex, flow DebugFlowOrder, defLocal CfgIndexArray, dom DominatorTree)
+		self.members.clear()
+		self.lows.clear()
+		self.highs.clear()
+		self.aheads.clear()
+
+		for at in first upto past 'eachVersionOfTheChain'
+			let version = chains.versionAt(at)
+
+			if not dom.isReached(self.listed(defLocal, at: version)) 'unreachedCode'
+				continue
+			end 'unreachedCode'
+
+			if chains.isAhead(version) 'aheadOfAnEarlier'
+				self.aheads.push(self.members.count())
+			end 'aheadOfAnEarlier'
+
+			self.members.push(version)
+			self.lows.push(flow.preorderAt(version))
+			self.highs.push(flow.subtreeEndAt(version))
+		end 'eachVersionOfTheChain'
+	end 'collectMembers'
+
+	function linkMembers()
+		let count = self.members.count()
+		self.lows.push(0)
+		self.highs.push(DebugJoinUnbounded)
+		self.parents.clear()
+		self.stack.clear()
+
+		for member in 0 upto count 'eachMember'
+			while self.stack.count() > 0 and self.listed(self.highs, at: self.top()) <= self.listed(self.lows, at: member) 'leavesTheEnclosing'
+				self.stack.truncate(self.stack.count() - 1)
+			end 'leavesTheEnclosing'
+
+			if self.stack.count() > 0 'enclosed'
+				self.parents.push(self.top())
+			end 'enclosed' else 'outermost'
+				self.parents.push(count)
+			end 'outermost'
+
+			self.stack.push(member)
+		end 'eachMember'
+
+		self.parents.push(count)
+		self.levels = 1
+		var reach = 1 as ElementIndex
+
+		while reach <= count 'eachLevelNeeded'
+			self.levels = self.levels + 1
+			reach = reach * 2
+		end 'eachLevelNeeded'
+
+		self.climbs.clear()
+		self.climbMins.clear()
+
+		for member in 0 upto count + 1 'eachFirstStep'
+			self.climbs.push(self.listed(self.parents, at: member))
+			self.climbMins.push(self.versionOf(member))
+		end 'eachFirstStep'
+
+		for level in 1 upto self.levels 'eachLevel'
+			for member in 0 upto count + 1 'eachMember'
+				let halfway = self.climbOf(level - 1, member: member)
+				self.climbs.push(self.climbOf(level - 1, member: halfway))
+				self.climbMins.push(debugLesser(self.climbMinOf(level - 1, member: member), right: self.climbMinOf(level - 1, member: halfway)))
+			end 'eachMember'
+		end 'eachLevel'
+
+		self.sameBlockMin.refill(count, value: DebugJoinUnbounded)
+		var at = count
+
+		while at > 0 'eachMemberInReverse'
+			at = at - 1
+			let below = self.listed(self.sameBlockMin, at: at + 1) if at + 1 < count and self.listed(self.lows, at: at + 1) == self.listed(self.lows, at: at) else DebugJoinUnbounded
+			try self.sameBlockMin.set(at, value: debugLesser(self.versionOf(at), right: below)) otherwise panic("DebugJoinSearch.linkMembers: sameBlockMin.set OOB at {at}")
+		end 'eachMemberInReverse'
+	end 'linkMembers'
+
+	function collectJoins(defLocal CfgIndexArray, frontier CsrGraph, topo FuncTopology, dom DominatorTree)
+		self.stamp = self.stamp + 1
+		self.joins.clear()
+		self.needs.clear()
+
+		for (iter, member) in self.members.withIterator() 'eachMember'
+			let home = self.listed(defLocal, at: member)
+
+			if iter.index() > 0 and self.listed(defLocal, at: self.listed(self.members, at: iter.index() - 1)) == home 'itsBlocksFrontierIsWalked'
+				continue
+			end 'itsBlocksFrontierIsWalked'
+
+			for k in 0 upto frontier.degree(home as CsrIndex) 'eachFrontierBlock'
+				let join = frontier.neighbour(home as CsrIndex, k: k) as ElementIndex
+
+				if not dom.isReached(join) or (try self.stamps.get(join) otherwise panic("DebugJoinSearch.collectJoins: stamps.get OOB at {join}")) == self.stamp 'unreachedOrSeen'
+					continue
+				end 'unreachedOrSeen'
+
+				try self.stamps.set(join, value: self.stamp) otherwise panic("DebugJoinSearch.collectJoins: stamps.set OOB at {join}")
+				let need = self.coverNeededAt(join, topo: topo, dom: dom)
+
+				if need < DebugJoinUnbounded 'everyWayInCanBeCovered'
+					self.joins.push(join)
+					self.needs.push(need)
+				end 'everyWayInCanBeCovered'
+			end 'eachFrontierBlock'
+		end 'eachMember'
+	end 'collectJoins'
+
+	function coverNeededAt(join ElementIndex, topo FuncTopology, dom DominatorTree) returns ElementIndex
+		let own = dom.preorderOf(join)
+		let ownPast = own + dom.dominatedCount(join)
+		let above = dom.preorderOf(self.listed(dom.idom, at: join))
+		var need = 0 as ElementIndex
+
+		for k in 0 upto topo.pred.degree(join as CsrIndex) 'eachPredecessor'
+			let pred = topo.pred.neighbour(join as CsrIndex, k: k) as ElementIndex
+
+			if not dom.isReached(pred) 'deadCode'
+				continue
+			end 'deadCode'
+
+			let at = dom.preorderOf(pred)
+
+			if at >= own and at < ownPast 'insideItsOwnRegion'
+				continue
+			end 'insideItsOwnRegion'
+
+			let earliest = self.earliestCoveringBelow(at, above: above)
+			need = earliest if earliest > need else need
+		end 'eachPredecessor'
+
+		return need
+	end 'coverNeededAt'
+
+	function earliestCoveringBelow(position ElementIndex, above ElementIndex) returns ElementIndex
+		var member = self.deepestContaining(position)
+
+		if self.contains(member, position: above) 'everyCoverAlsoCoversTheJoin'
+			return DebugJoinUnbounded
+		end 'everyCoverAlsoCoversTheJoin'
+
+		var earliest = DebugJoinUnbounded as ElementIndex
+		var level = self.levels
+
+		while level > 0 'eachLevelDown'
+			level = level - 1
+			let next = self.climbOf(level, member: member)
+
+			if not self.contains(next, position: above) 'stillBelowTheJoin'
+				earliest = debugLesser(earliest, right: self.climbMinOf(level, member: member))
+				member = next
+			end 'stillBelowTheJoin'
+		end 'eachLevelDown'
+
+		return debugLesser(earliest, right: self.versionOf(member))
+	end 'earliestCoveringBelow'
+
+	function deepestContaining(position ElementIndex) returns ElementIndex
+		let count = self.members.count() as ElementIndex
+		var low = 0 as ElementIndex
+		var high = count
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if self.listed(self.lows, at: middle) <= position 'atOrBefore'
+				low = middle + 1
+			end 'atOrBefore' else 'after'
+				high = middle
+			end 'after'
+		end 'narrow'
+
+		if low == 0 'noMemberStartsBefore'
+			return count
+		end 'noMemberStartsBefore'
+
+		var member = low - 1
+
+		if self.contains(member, position: position) 'itContainsIt'
+			return member
+		end 'itContainsIt'
+
+		var level = self.levels
+
+		while level > 0 'eachLevelDown'
+			level = level - 1
+			let next = self.climbOf(level, member: member)
+
+			if not self.contains(next, position: position) 'stillOutside'
+				member = next
+			end 'stillOutside'
+		end 'eachLevelDown'
+
+		return self.climbOf(0, member: member)
+	end 'deepestContaining'
+
+	function placePositions(dom DominatorTree)
+		self.keyed.clear()
+
+		for join in self.joins 'eachJoin'
+			self.keyed.push(dom.preorderOf(join))
+		end 'eachJoin'
+
+		for ahead in self.aheads 'eachAhead'
+			self.keyed.push(self.listed(self.lows, at: ahead))
+		end 'eachAhead'
+
+		self.keyed.sort()
+		self.positions.clear()
+
+		for preorder in self.keyed 'eachPreorder'
+			if self.positions.count() == 0 or self.listed(self.positions, at: self.positions.count() - 1) != preorder 'aNewPosition'
+				self.positions.push(preorder)
+			end 'aNewPosition'
+		end 'eachPreorder'
+
+		self.joinAtPosition.refill(self.positions.count(), value: DebugJoinUnbounded)
+
+		for join in self.joins 'eachJoinPlaced'
+			try self.joinAtPosition.set(self.positionOf(dom.preorderOf(join)), value: join) otherwise panic("DebugJoinSearch.placePositions: joinAtPosition.set OOB for block {join}")
+		end 'eachJoinPlaced'
+	end 'placePositions'
+
+	function sweep(joinOf OptionalElementIndexColumn, dom DominatorTree)
+		let byOrdinal = self.indicesSortedBy(self.members, count: self.members.count())
+		let byNeed = self.indicesSortedBy(self.needs, count: self.joins.count())
+		self.keyed.clear()
+
+		for ahead in self.aheads 'eachAheadKeyed'
+			self.keyed.push(self.versionOf(ahead) * DebugOrdinalSpan + ahead)
+		end 'eachAheadKeyed'
+
+		self.keyed.sort()
+		self.tree.open(self.positions.count(), value: DebugJoinUnbounded as DebugCoverCount)
+		var activated = 0 as ElementIndex
+		var eligible = 0 as ElementIndex
+
+		for key in self.keyed 'eachAheadInOrdinalOrder'
+			let ahead = key mod DebugOrdinalSpan
+			let threshold = self.versionOf(ahead)
+
+			while activated < byOrdinal.count() and self.versionOf(self.listed(byOrdinal, at: activated)) < threshold 'eachEarlierMember'
+				let member = self.listed(byOrdinal, at: activated)
+				self.tree.add(self.positionOf(self.listed(self.lows, at: member)), past: self.positionOf(self.listed(self.highs, at: member)), delta: 1)
+				activated = activated + 1
+			end 'eachEarlierMember'
+
+			while eligible < byNeed.count() and self.listed(self.needs, at: self.listed(byNeed, at: eligible)) < threshold 'eachJoinNowCovered'
+				let at = self.positionOf(dom.preorderOf(self.listed(self.joins, at: self.listed(byNeed, at: eligible))))
+				self.tree.add(at, past: at + 1, delta: -(DebugJoinUnbounded as DebugCoverCount))
+				eligible = eligible + 1
+			end 'eachJoinNowCovered'
+
+			self.placeOne(ahead, threshold: threshold, joinOf: joinOf)
+		end 'eachAheadInOrdinalOrder'
+	end 'sweep'
+
+	function placeOne(ahead ElementIndex, threshold ElementIndex, joinOf OptionalElementIndexColumn)
+		let low = self.listed(self.lows, at: ahead)
+
+		if ahead + 1 < self.members.count() and self.listed(self.lows, at: ahead + 1) == low and self.listed(self.sameBlockMin, at: ahead + 1) < threshold 'anEarlierVersionHoldsItsWholeRegion'
+			return
+		end 'anEarlierVersionHoldsItsWholeRegion'
+
+		let own = self.positionOf(low)
+		let past = self.positionOf(self.listed(self.highs, at: ahead))
+
+		if own + 1 >= past 'noJoinBelowIt'
+			return
+		end 'noJoinBelowIt'
+
+		var base = self.tree.valueAt(own)
+		base = base - (DebugJoinUnbounded as DebugCoverCount) if base >= (DebugJoinUnbounded as DebugCoverCount) else base
+		self.found.clear()
+		self.tree.collectEqual(own + 1, past: past, target: base, into: self.found)
+
+		if self.found.count() == 1 'exactlyOneJoin'
+			joinOf.set(self.listed(self.members, at: ahead), value: self.listed(self.joinAtPosition, at: self.listed(self.found, at: 0)))
+		end 'exactlyOneJoin'
+	end 'placeOne'
+
+	function indicesSortedBy(column CfgIndexArray, count ElementIndex) returns CfgIndexArray
+		let byKey = CfgIndexArray.create(count, zeroed: false)
+
+		for at in 0 upto count 'eachEntry'
+			byKey.push(self.listed(column, at: at) * DebugOrdinalSpan + at)
+		end 'eachEntry'
+
+		byKey.sort()
+		let sorted = CfgIndexArray.create(count, zeroed: false)
+
+		for key in byKey 'eachInOrder'
+			sorted.push(key mod DebugOrdinalSpan)
+		end 'eachInOrder'
+
+		return sorted
+	end 'indicesSortedBy'
+
+	function positionOf(preorder ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = self.positions.count() as ElementIndex
+
+		while low < high 'narrow'
+			let middle = low + (high - low) / 2
+
+			if self.listed(self.positions, at: middle) < preorder 'below'
+				low = middle + 1
+			end 'below' else 'atOrAbove'
+				high = middle
+			end 'atOrAbove'
+		end 'narrow'
+
+		return low
+	end 'positionOf'
+
+	function contains(member ElementIndex, position ElementIndex) returns bool
+		return self.listed(self.lows, at: member) <= position and position < self.listed(self.highs, at: member)
+	end 'contains'
+
+	function climbOf(level ElementIndex, member ElementIndex) returns ElementIndex
+		return self.listed(self.climbs, at: level * (self.members.count() + 1) + member)
+	end 'climbOf'
+
+	function climbMinOf(level ElementIndex, member ElementIndex) returns ElementIndex
+		return self.listed(self.climbMins, at: level * (self.members.count() + 1) + member)
+	end 'climbMinOf'
+
+	function versionOf(member ElementIndex) returns ElementIndex
+		if member == self.members.count() 'theOutermostBound'
+			return DebugJoinUnbounded
+		end 'theOutermostBound'
+
+		return self.listed(self.members, at: member)
+	end 'versionOf'
+
+	function top() returns ElementIndex
+		return self.listed(self.stack, at: self.stack.count() - 1)
+	end 'top'
+
+	function listed(column CfgIndexArray, at ElementIndex) returns ElementIndex
+		return try column.get(at) otherwise panic("DebugJoinSearch.listed: entry {at} is past the {column.count()} held")
+	end 'listed'
+end 'DebugJoinSearch'
+
+typealias DebugCoverCount = int(i64.min to i64.max)
+typealias DebugCoverCountArray = Array with DebugCoverCount
+
+let DebugCoverRoot = 1 as ElementIndex
+let DebugCoverNodesPerLeaf = 4
+let DebugJoinsSought = 2
+
+type DebugCoverTree
+	var size as ElementIndex
+	var mins as DebugCoverCountArray
+	var pending as DebugCoverCountArray
+
+	static function create() returns DebugCoverTree
+		return Self{size: 0, mins: DebugCoverCountArray.create(0), pending: DebugCoverCountArray.create(0)}
+	end 'create'
+
+	function open(leaves ElementIndex, value DebugCoverCount)
+		self.size = leaves
+		self.mins.refill(leaves * DebugCoverNodesPerLeaf, value: value)
+		self.pending.refill(leaves * DebugCoverNodesPerLeaf, value: 0)
+	end 'open'
+
+	function add(first ElementIndex, past ElementIndex, delta DebugCoverCount)
+		if first < past 'aRange'
+			self.addOver(DebugCoverRoot, low: 0, high: self.size, first: first, past: past, delta: delta)
+		end 'aRange'
+	end 'add'
+
+	function addOver(node ElementIndex, low ElementIndex, high ElementIndex, first ElementIndex, past ElementIndex, delta DebugCoverCount)
+		if past <= low or high <= first 'disjoint'
+			return
+		end 'disjoint'
+
+		if first <= low and high <= past 'inside'
+			self.shift(node, delta: delta)
+			return
+		end 'inside'
+
+		self.pushDown(node)
+		let middle = low + (high - low) / 2
+		self.addOver(node * 2, low: low, high: middle, first: first, past: past, delta: delta)
+		self.addOver(node * 2 + 1, low: middle, high: high, first: first, past: past, delta: delta)
+		let left = self.minAt(node * 2)
+		let right = self.minAt(node * 2 + 1)
+		try self.mins.set(node, value: left if left < right else right) otherwise panic("DebugCoverTree.addOver: mins.set OOB at {node}")
+	end 'addOver'
+
+	function valueAt(position ElementIndex) returns DebugCoverCount
+		var node = DebugCoverRoot
+		var low = 0 as ElementIndex
+		var high = self.size
+
+		while high - low > 1 'descend'
+			self.pushDown(node)
+			let middle = low + (high - low) / 2
+
+			if position < middle 'left'
+				node = node * 2
+				high = middle
+			end 'left' else 'right'
+				node = node * 2 + 1
+				low = middle
+			end 'right'
+		end 'descend'
+
+		return self.minAt(node)
+	end 'valueAt'
+
+	function collectEqual(first ElementIndex, past ElementIndex, target DebugCoverCount, into CfgIndexArray)
+		self.collectOver(DebugCoverRoot, low: 0, high: self.size, first: first, past: past, target: target, into: into)
+	end 'collectEqual'
+
+	function collectOver(node ElementIndex, low ElementIndex, high ElementIndex, first ElementIndex, past ElementIndex, target DebugCoverCount, into CfgIndexArray)
+		if into.count() >= DebugJoinsSought or past <= low or high <= first or self.minAt(node) > target 'nothingHere'
+			return
+		end 'nothingHere'
+
+		if high - low == 1 'aLeaf'
+			if self.minAt(node) == target 'theTarget'
+				into.push(low)
+			end 'theTarget'
+
+			return
+		end 'aLeaf'
+
+		self.pushDown(node)
+		let middle = low + (high - low) / 2
+		self.collectOver(node * 2, low: low, high: middle, first: first, past: past, target: target, into: into)
+		self.collectOver(node * 2 + 1, low: middle, high: high, first: first, past: past, target: target, into: into)
+	end 'collectOver'
+
+	function shift(node ElementIndex, delta DebugCoverCount)
+		try self.mins.set(node, value: self.minAt(node) + delta) otherwise panic("DebugCoverTree.shift: mins.set OOB at {node}")
+		try self.pending.set(node, value: self.pendingAt(node) + delta) otherwise panic("DebugCoverTree.shift: pending.set OOB at {node}")
+	end 'shift'
+
+	function pushDown(node ElementIndex)
+		let delta = self.pendingAt(node)
+
+		if delta != 0 'somethingPending'
+			self.shift(node * 2, delta: delta)
+			self.shift(node * 2 + 1, delta: delta)
+			try self.pending.set(node, value: 0) otherwise panic("DebugCoverTree.pushDown: pending.set OOB at {node}")
+		end 'somethingPending'
+	end 'pushDown'
+
+	function minAt(node ElementIndex) returns DebugCoverCount
+		return try self.mins.get(node) otherwise panic("DebugCoverTree.minAt: mins.get OOB at {node}")
+	end 'minAt'
+
+	function pendingAt(node ElementIndex) returns DebugCoverCount
+		return try self.pending.get(node) otherwise panic("DebugCoverTree.pendingAt: pending.get OOB at {node}")
+	end 'pendingAt'
+end 'DebugCoverTree'
 
 typealias FixedDebugAnchorArray = FixedArray with DebugOpAnchor
 typealias DebugAnchorArray = Array with DebugOpAnchor
@@ -2139,14 +4029,8 @@ type DebugRunRefiner
 	var stopStamp as FixedCfgIndexArray
 	var pending as CfgIndexArray
 	var rivals as CfgIndexArray
-	var positionless as bool
 	var resumeAfter as CfgIndexArray
 	var scopeLocals as CfgIndexArray
-	var rivalLocals as CfgIndexArray
-	var rivalFirst as CfgIndexArray
-	var rivalPast as CfgIndexArray
-	var rivalCuts as DebugAnchorArray
-	var rivalCutKnown as BoolArray
 	var stopLocals as CfgIndexArray
 	var holeStarts as CfgIndexArray
 	var holeEnds as CfgIndexArray
@@ -2158,21 +4042,22 @@ type DebugRunRefiner
 	var siteWalk as CfgIndexArray
 	var viewOfSite as FixedCfgIndexArray
 	var viewPreorders as CfgIndexArray
+	var rowedInTheFlow as FixedBoolArray
 
-	static function over(topo FuncTopology, dom DominatorTree, places DebugBlockPlaces, names DebugNameIndex) returns DebugRunRefiner
+	static function over(topo FuncTopology, frontier CsrGraph, places DebugBlockPlaces, siteParents DebugSiteKeyColumn, ordinalCount ElementIndex) returns DebugRunRefiner
 		let blockCount = topo.numBlocks
 		let visited = FixedCfgIndexArray.create(blockCount)
 		let revived = FixedCfgIndexArray.create(blockCount)
 		let cutStamp = FixedCfgIndexArray.create(blockCount)
 		let cutBefore = FixedDebugAnchorArray.create(blockCount)
 		let stopStamp = FixedCfgIndexArray.create(blockCount)
-		let siteCount = names.siteCount()
+		let siteCount = siteParents.count()
 		let viewOfSite = FixedCfgIndexArray.create(siteCount)
 		let childOf = CsrColumn.create(siteCount - 1, zeroed: false)
 		let children = CsrColumn.create(siteCount - 1, zeroed: false)
 
 		for site in 1 upto siteCount 'eachInlineSite'
-			childOf.push(names.parentOfSite(site) as CsrIndex)
+			childOf.push(debugSiteKeyAt(siteParents, at: site) as CsrIndex)
 			children.push(site as CsrIndex)
 		end 'eachInlineSite'
 
@@ -2184,7 +4069,7 @@ type DebugRunRefiner
 			localsOf.push(local as CsrIndex)
 		end 'eachPlace'
 
-		return Self{visited: visited, revived: revived, cutStamp: cutStamp, cutBefore: cutBefore, stopStamp: stopStamp, pending: CfgIndexArray.create(0), rivals: CfgIndexArray.create(0), positionless: false, resumeAfter: CfgIndexArray.create(0), scopeLocals: CfgIndexArray.create(0), rivalLocals: CfgIndexArray.create(0), rivalFirst: CfgIndexArray.create(0), rivalPast: CfgIndexArray.create(0), rivalCuts: DebugAnchorArray.create(0), rivalCutKnown: BoolArray.create(0), stopLocals: CfgIndexArray.create(0), holeStarts: CfgIndexArray.create(0), holeEnds: CfgIndexArray.create(0), candidates: CfgIndexArray.create(0), points: CfgIndexArray.create(0), frontier: debugDominanceFrontiers(topo, dom: dom), siteChildren: buildCsr(childOf, to: children, nodeCount: siteCount as CsrIndex), siteLocals: buildCsr(siteOf, to: localsOf, nodeCount: siteCount as CsrIndex), siteWalk: CfgIndexArray.create(0), viewOfSite: viewOfSite, viewPreorders: CfgIndexArray.create(0)}
+		return Self{visited: visited, revived: revived, cutStamp: cutStamp, cutBefore: cutBefore, stopStamp: stopStamp, pending: CfgIndexArray.create(0), rivals: CfgIndexArray.create(0), resumeAfter: CfgIndexArray.create(0), scopeLocals: CfgIndexArray.create(0), stopLocals: CfgIndexArray.create(0), holeStarts: CfgIndexArray.create(0), holeEnds: CfgIndexArray.create(0), candidates: CfgIndexArray.create(0), points: CfgIndexArray.create(0), frontier: frontier, siteChildren: buildCsr(childOf, to: children, nodeCount: siteCount as CsrIndex), siteLocals: buildCsr(siteOf, to: localsOf, nodeCount: siteCount as CsrIndex), siteWalk: CfgIndexArray.create(0), viewOfSite: viewOfSite, viewPreorders: CfgIndexArray.create(0), rowedInTheFlow: FixedBoolArray.create(ordinalCount)}
 	end 'over'
 
 	function cutBlockBefore(local ElementIndex, anchor DebugOpAnchor, stamp ElementIndex)
@@ -2248,10 +4133,19 @@ type DebugRunRefiner
 		return state
 	end 'scopeStateOf'
 
-	function settle(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites, topo FuncTopology, dom DominatorTree) returns DebugRivalry
+	function vetoes(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites) returns bool
+		let (positionless, _, _) = self.rivalsWithoutAPosition(ordinal, roster: roster, sites: sites)
+
+		if positionless 'aRivalWithoutAPosition'
+			return true
+		end 'aRivalWithoutAPosition'
+
+		return try sites.laterUnpositionedAbove.get(ordinal) otherwise panic("DebugRunRefiner.vetoes: laterUnpositionedAbove.get OOB at {ordinal}")
+	end 'vetoes'
+
+	function prepareCuts(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites, topo FuncTopology)
 		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
 		let stamp = ordinal + 1
-		let group = debugGroupAt(roster, ordinal: ordinal)
 		self.resumeAfter.clear()
 		self.stopLocals.clear()
 
@@ -2265,25 +4159,18 @@ type DebugRunRefiner
 			self.stopAt(ownLocal, stamp: stamp)
 		end 'itsEndIsNotKnown'
 
-		self.collectMaximalRivals(ordinal, rowsOnly: false, roster: roster, sites: sites)
-		var vetoed = self.positionless
+		self.collectMaximalRivals(ordinal, roster: roster, sites: sites)
 
 		for k in 0 upto self.rivals.count() 'eachMaximalRival'
-			let rival = try self.rivals.get(k) otherwise panic("DebugRunRefiner.settle: rivals.get OOB at {k}")
+			let rival = try self.rivals.get(k) otherwise panic("DebugRunRefiner.prepareCuts: rivals.get OOB at {k}")
 			let rivalLocal = debugLocalAt(sites, ordinal: rival)
 			self.cutBlockBefore(rivalLocal, anchor: self.cutOf(rival, sites: sites), stamp: stamp)
 
-			if rivalLocal != ownLocal and (try roster.decls.get(rival) otherwise panic("DebugRunRefiner.settle: roster.decls.get OOB at {rival}")) != (try roster.decls.get(ordinal) otherwise panic("DebugRunRefiner.settle: roster.decls.get OOB at {ordinal}")) 'aShadowingDeclaration'
+			if rivalLocal != ownLocal and (try roster.decls.get(rival) otherwise panic("DebugRunRefiner.prepareCuts: roster.decls.get OOB at {rival}")) != (try roster.decls.get(ordinal) otherwise panic("DebugRunRefiner.prepareCuts: roster.decls.get OOB at {ordinal}")) 'aShadowingDeclaration'
 				self.resumeWhereTheScopeOfEnds(rival, roster: roster, topo: topo)
 			end 'aShadowingDeclaration'
 		end 'eachMaximalRival'
-
-		if (try sites.looseGroup.get(group) otherwise panic("DebugRunRefiner.settle: looseGroup.get OOB at {group}")) and self.aLaterVersionMayLieBeyondTheSplit(ordinal, roster: roster, sites: sites, dom: dom) 'aLaterVersionMaybeBeyondTheSplit'
-			vetoed = true
-		end 'aLaterVersionMaybeBeyondTheSplit'
-
-		return DebugRivalry.vetoed if vetoed else DebugRivalry.placed
-	end 'settle'
+	end 'prepareCuts'
 
 	function resumeWhereTheScopeOfEnds(rival ElementIndex, roster DebugValueRoster, topo FuncTopology)
 		if self.scopeStateOf(rival, roster: roster, topo: topo) != DebugScopeState.ended 'noKnownEnd'
@@ -2303,28 +4190,24 @@ type DebugRunRefiner
 		return 0
 	end 'cutOf'
 
-	function collectLaterRivals(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites, dom DominatorTree)
-		self.rivalLocals.clear()
-		self.rivalFirst.clear()
-		self.rivalPast.clear()
-		self.rivalCuts.clear()
-		self.rivalCutKnown.clear()
-		self.collectMaximalRivals(ordinal, rowsOnly: true, roster: roster, sites: sites)
+	function rivalsWithoutAPosition(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites) returns (bool, CsrIndex, CsrIndex)
+		let own = debugValueAt(roster, ordinal: ordinal)
+		let group = debugGroupAt(roster, ordinal: ordinal)
+		let ownFirst = debugPreorderOf(sites, ordinal: ordinal)
+		let blockStart = self.firstNotBefore(sites, group: group, from: 0, preorder: ownFirst, key: 0)
+		let blockEnd = self.firstNotBefore(sites, group: group, from: blockStart, preorder: ownFirst + 1, key: 0)
+		var stop = blockEnd
 
-		for k in 0 upto self.rivals.count() 'eachMaximalRival'
-			let rival = try self.rivals.get(k) otherwise panic("DebugRunRefiner.collectLaterRivals: rivals.get OOB at {k}")
-			let rivalLocal = debugLocalAt(sites, ordinal: rival)
-			self.rivalLocals.push(rivalLocal)
-			self.rivalFirst.push(dom.preorderOf(rivalLocal))
-			self.rivalPast.push(dom.preorderOf(rivalLocal) + dom.dominatedCount(rivalLocal))
-			self.rivalCutKnown.push(sites.handoverAt.holds(rival))
-			self.rivalCuts.push(self.cutOf(rival, sites: sites))
-		end 'eachMaximalRival'
-	end 'collectLaterRivals'
+		if sites.handoverAt.holds(ordinal) and blockStart < blockEnd 'stopsAtThePositioned'
+			let positioned = sites.firstPositionedFrom(group, from: blockStart)
+			stop = positioned if positioned < blockEnd else blockEnd
+		end 'stopsAtThePositioned'
 
-	function collectMaximalRivals(ordinal ElementIndex, rowsOnly bool, roster DebugValueRoster, sites DebugBindingSites)
+		return (not sites.holdsOnlyValue(group, from: blockStart, past: stop, value: own, roster: roster), stop, blockEnd)
+	end 'rivalsWithoutAPosition'
+
+	function collectMaximalRivals(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites)
 		self.rivals.clear()
-		self.positionless = false
 
 		let own = debugValueAt(roster, ordinal: ordinal)
 		let group = debugGroupAt(roster, ordinal: ordinal)
@@ -2332,17 +4215,8 @@ type DebugRunRefiner
 		let ownPast = debugSpanEndOf(sites, ordinal: ordinal)
 		let ownKey = debugOrderKeyOf(sites, ordinal: ordinal)
 		let size = sites.byGroupInFlow.degree(group)
-		let blockStart = self.firstNotBefore(sites, group: group, from: 0, preorder: ownFirst, key: 0)
-		let blockEnd = self.firstNotBefore(sites, group: group, from: blockStart, preorder: ownFirst + 1, key: 0)
-		var at = blockStart
-
-		while at < blockEnd and not (sites.handoverAt.holds(ordinal) and (sites.handoverAt.holds(sites.byGroupInFlow.neighbour(group, k: at) as ElementIndex))) 'eachRivalWithoutAPosition'
-			if self.isARivalWorthCutting(sites.byGroupInFlow.neighbour(group, k: at) as ElementIndex, own: own, rowsOnly: rowsOnly, roster: roster, sites: sites) 'aPositionlessRival'
-				self.positionless = true
-			end 'aPositionlessRival'
-
-			at = at + 1
-		end 'eachRivalWithoutAPosition'
+		let (_, unpositionedEnd, blockEnd) = self.rivalsWithoutAPosition(ordinal, roster: roster, sites: sites)
+		var at = unpositionedEnd
 
 		if sites.handoverAt.holds(ordinal) 'positionedInItsBlock'
 			var later = self.firstNotBefore(sites, group: group, from: at, preorder: ownFirst, key: ownKey + 1)
@@ -2350,7 +4224,7 @@ type DebugRunRefiner
 			while later < blockEnd 'eachLaterInTheBlock'
 				let candidate = sites.byGroupInFlow.neighbour(group, k: later) as ElementIndex
 
-				if self.isARivalWorthCutting(candidate, own: own, rowsOnly: rowsOnly, roster: roster, sites: sites) 'theNearestLaterVersion'
+				if self.isARivalWorthCutting(candidate, own: own, roster: roster) 'theNearestLaterVersion'
 					self.rivals.push(candidate)
 					break
 				end 'theNearestLaterVersion'
@@ -2377,7 +4251,7 @@ type DebugRunRefiner
 			while scan < past and not found 'theEarliestInTheBlock'
 				let candidate = sites.byGroupInFlow.neighbour(group, k: scan) as ElementIndex
 
-				if self.isARivalWorthCutting(candidate, own: own, rowsOnly: rowsOnly, roster: roster, sites: sites) 'worthCutting'
+				if self.isARivalWorthCutting(candidate, own: own, roster: roster) 'worthCutting'
 					self.rivals.push(candidate)
 					chosen = candidate
 					found = true
@@ -2390,12 +4264,8 @@ type DebugRunRefiner
 		end 'eachCandidateBelow'
 	end 'collectMaximalRivals'
 
-	function isARivalWorthCutting(rival ElementIndex, own ValueId, rowsOnly bool, roster DebugValueRoster, sites DebugBindingSites) returns bool
-		if debugValueAt(roster, ordinal: rival) == own 'theSameVersion'
-			return false
-		end 'theSameVersion'
-
-		return not (rowsOnly and (try sites.parsePlaced.get(rival) otherwise panic("DebugRunRefiner.isARivalWorthCutting: parsePlaced.get OOB at {rival}")))
+	function isARivalWorthCutting(rival ElementIndex, own ValueId, roster DebugValueRoster) returns bool
+		return debugValueAt(roster, ordinal: rival) != own
 	end 'isARivalWorthCutting'
 
 	function firstNotBefore(sites DebugBindingSites, group CsrIndex, from CsrIndex, preorder ElementIndex, key ElementIndex) returns CsrIndex
@@ -2417,162 +4287,46 @@ type DebugRunRefiner
 		return low
 	end 'firstNotBefore'
 
-	function aLaterVersionMayLieBeyondTheSplit(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites, dom DominatorTree) returns bool
-		let own = debugValueAt(roster, ordinal: ordinal)
-		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
-		let group = debugGroupAt(roster, ordinal: ordinal)
+	function refine(ordinal ElementIndex, vetoed bool, runsOf CsrGraph, raw DebugRawRuns, into DebugValueRangeArray, spans DebugSpanRows, roster DebugValueRoster, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, topo FuncTopology, dom DominatorTree)
+		if sites.refinementOf(ordinal) == DebugRunRefinement.placesInTheFlow and not vetoed 'rowsOfTheFlow'
+			if (try sites.aheadOfAnEarlier.get(ordinal) otherwise panic("DebugRunRefiner.refine: aheadOfAnEarlier.get OOB at {ordinal}")) 'positionedAboveItsOwnEarlierVersion'
+				return
+			end 'positionedAboveItsOwnEarlierVersion'
 
-		for k in 0 upto sites.byGroup.degree(group) 'eachVersionOfTheName'
-			let rival = sites.byGroup.neighbour(group, k: k)
+			self.prepareCuts(ordinal, roster: roster, sites: sites, topo: topo)
 
-			if debugValueAt(roster, ordinal: rival) > own and (try sites.parsePlaced.get(rival) otherwise panic("DebugRunRefiner.aLaterVersionMayLieBeyondTheSplit: parsePlaced.get OOB at {rival}")) and not sites.handoverAt.holds(rival) and dom.dominates(debugLocalAt(sites, ordinal: rival), y: ownLocal) 'unplacedAndAbove'
-				return true
-			end 'unplacedAndAbove'
-		end 'eachVersionOfTheName'
+			try self.rowedInTheFlow.set(ordinal, value: true) otherwise panic("DebugRunRefiner.refine: rowedInTheFlow.set OOB at {ordinal}")
 
-		return false
-	end 'aLaterVersionMayLieBeyondTheSplit'
-
-	function laterRivalsAllow(local ElementIndex, last DebugOpAnchor, dom DominatorTree) returns (bool, DebugOpAnchor)
-		var allowed = last
-		let position = dom.preorderOf(local)
-
-		for k in 0 upto self.rivalLocals.count() 'eachLaterRival'
-			let rivalLocal = try self.rivalLocals.get(k) otherwise panic("DebugRunRefiner.laterRivalsAllow: rivalLocals.get OOB at {k}")
-
-			if rivalLocal != local 'inAnotherBlock'
-				if (try self.rivalFirst.get(k) otherwise panic("DebugRunRefiner.laterRivalsAllow: rivalFirst.get OOB at {k}")) <= position and position < (try self.rivalPast.get(k) otherwise panic("DebugRunRefiner.laterRivalsAllow: rivalPast.get OOB at {k}")) 'belowTheRival'
-					return (false, last)
-				end 'belowTheRival'
-
-				continue
-			end 'inAnotherBlock'
-
-			if not (try self.rivalCutKnown.get(k) otherwise panic("DebugRunRefiner.laterRivalsAllow: rivalCutKnown.get OOB at {k}")) 'cutUnknown'
-				return (false, last)
-			end 'cutUnknown'
-
-			let before = try self.rivalCuts.get(k) otherwise panic("DebugRunRefiner.laterRivalsAllow: rivalCuts.get OOB at {k}")
-
-			if before == 0 'nothingBefore'
-				return (false, last)
-			end 'nothingBefore'
-
-			allowed = allowed if allowed < before else before - 1
-		end 'eachLaterRival'
-
-		return (true, allowed)
-	end 'laterRivalsAllow'
-
-	function refine(ordinal ElementIndex, runsOf CsrGraph, raw DebugValueRangeArray, into DebugValueRangeArray, spans DebugSpanRows, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
-		let location = try locations.get(ordinal) otherwise panic("DebugRunRefiner.refine: locations.get OOB at {ordinal}")
-		var cutsByLaterVersions = false
-		var scopeBounded = false
-		var settled = false
-
-		if sites.refinementOf(ordinal) == DebugRunRefinement.placesInTheFlow and location.kind == DebugValueInRegister 'laterVersionsOfARegister'
-			cutsByLaterVersions = true
-			self.collectLaterRivals(ordinal, roster: roster, sites: sites, dom: dom)
-			scopeBounded = self.markScopeRegion(ordinal, roster: roster, sites: sites, topo: topo, dom: dom)
-		end 'laterVersionsOfARegister' else if sites.refinementOf(ordinal) == DebugRunRefinement.placesInTheFlow 'canBePlaced'
-			settled = self.settle(ordinal, roster: roster, sites: sites, topo: topo, dom: dom) == DebugRivalry.placed
-		end 'canBePlaced'
-
-		if settled 'rowsOfTheFlow'
-			if not (try sites.repeatsEarlier.get(ordinal) otherwise panic("DebugRunRefiner.refine: repeatsEarlier.get OOB at {ordinal}")) 'notRepeated'
-				self.extend(ordinal, into: into, spans: spans, names: names, places: places, sites: sites, topo: topo, dom: dom)
-			end 'notRepeated'
+			if not self.anEarlierVersionRowsItsRegion(ordinal, sites: sites) 'itsOwnRegion'
+				self.extend(ordinal, into: into, spans: spans, names: names, places: places, sites: sites, holds: holds, topo: topo, dom: dom)
+			end 'itsOwnRegion'
 
 			return
 		end 'rowsOfTheFlow'
 
 		for k in 0 upto runsOf.degree(ordinal as CsrIndex) 'eachRawRun'
-			let range = try raw.get(runsOf.neighbour(ordinal as CsrIndex, k: k) as ElementIndex) otherwise panic("DebugRunRefiner.refine: raw.get OOB for a run of {ordinal}")
-			self.keepRun(ordinal, range: range, cutsByLaterVersions: cutsByLaterVersions, scopeBounded: scopeBounded, into: into, sites: sites, topo: topo, dom: dom)
+			self.keepRun(ordinal, run: runsOf.neighbour(ordinal as CsrIndex, k: k) as ElementIndex, raw: raw, into: into, places: places, sites: sites, holds: holds, dom: dom)
 		end 'eachRawRun'
 	end 'refine'
 
-	function markScopeRegion(ordinal ElementIndex, roster DebugValueRoster, sites DebugBindingSites, topo FuncTopology, dom DominatorTree) returns bool
-		let scope = self.scopeStateOf(ordinal, roster: roster, topo: topo)
+	function anEarlierVersionRowsItsRegion(ordinal ElementIndex, sites DebugBindingSites) returns bool
+		let covering = try sites.coveredBy.get(ordinal) otherwise return false
+		return try self.rowedInTheFlow.get(covering) otherwise panic("DebugRunRefiner.anEarlierVersionRowsItsRegion: rowedInTheFlow.get OOB at {covering}")
+	end 'anEarlierVersionRowsItsRegion'
 
-		if scope == DebugScopeState.open 'scopeStillOpen'
-			return false
-		end 'scopeStillOpen'
+	function keepRun(ordinal ElementIndex, run ElementIndex, raw DebugRawRuns, into DebugValueRangeArray, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, dom DominatorTree)
+		let place = raw.placeAt(run)
+		let local = places.localAt(place)
+		var open = raw.openAt(run)
 
-		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
-		let dominatedFirst = debugPreorderOf(sites, ordinal: ordinal)
-		let dominatedPast = debugSpanEndOf(sites, ordinal: ordinal) if dom.isReached(ownLocal) else dominatedFirst
-		let stamp = ordinal + 1
-		self.pending.clear()
-		self.stopLocals.clear()
-		self.pending.push(ownLocal)
-		try self.visited.set(ownLocal, value: stamp) otherwise panic("DebugRunRefiner.markScopeRegion: visited.set OOB at {ownLocal}")
-
-		if scope == DebugScopeState.lostSomewhere 'nowhereToStop'
-			return true
-		end 'nowhereToStop'
-
-		for exitLocal in self.scopeLocals 'eachScopeExit'
-			self.stopAt(exitLocal, stamp: stamp)
-		end 'eachScopeExit'
-
-		while self.pending.count() > 0 'untilNothingIsPending'
-			let local = try self.pending.pop() otherwise panic("DebugRunRefiner.markScopeRegion: pending.pop on a non-empty list failed")
-
-			if (try self.stopStamp.get(local) otherwise panic("DebugRunRefiner.markScopeRegion: stopStamp.get OOB at {local}")) != stamp 'beforeTheScopeEnds'
-				self.visitSuccessors(local, ownLocal: ownLocal, stamp: stamp, dominatedFirst: dominatedFirst, dominatedPast: dominatedPast, topo: topo, dom: dom)
-			end 'beforeTheScopeEnds'
-		end 'untilNothingIsPending'
-
-		return true
-	end 'markScopeRegion'
-
-	function keepRun(ordinal ElementIndex, range DebugValueRange, cutsByLaterVersions bool, scopeBounded bool, into DebugValueRangeArray, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
-		let local = localOfBlockId(topo, blockId: range.blockId)
-		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
-
-		if cutsByLaterVersions and (not dom.dominates(ownLocal, y: local) or (scopeBounded and (try self.visited.get(local) otherwise panic("DebugRunRefiner.keepRun: visited.get OOB at {local}")) != ordinal + 1)) 'outsideWhereItIsBound'
-			return
-		end 'outsideWhereItIsBound'
-
-		var first = range.first
-		var last = range.last
-		var fromBlockEntry = range.fromBlockEntry
-		var behindAnOp = false
-
-		if local == ownLocal and sites.startAt.holds(ordinal) 'inTheBindingBlock'
-			let start = try sites.startAt.get(ordinal) otherwise panic("DebugRunRefiner.keepRun: startAt holds {ordinal} and yet does not give it")
-
-			if first < start 'beginsBeforeItIsBound'
-				first = start
-				fromBlockEntry = false
-				behindAnOp = try sites.startAfterPrevious.get(ordinal) otherwise panic("DebugRunRefiner.keepRun: startAfterPrevious.get OOB at {ordinal}")
-			end 'beginsBeforeItIsBound'
+		if local == debugLocalAt(sites, ordinal: ordinal) and sites.startAt.holds(ordinal) 'inTheBindingBlock'
+			open = debugLaterRowOpen(open, other: debugStartOpenOf(sites, ordinal: ordinal))
 		end 'inTheBindingBlock'
 
-		if cutsByLaterVersions 'cutByALaterVersion'
-			let (reaches, allowed) = self.laterRivalsAllow(local, last: last, dom: dom)
-
-			if not reaches 'nothingLeft'
-				return
-			end 'nothingLeft'
-
-			last = allowed
-		end 'cutByALaterVersion'
-
-		if first > last 'coversNothing'
-			return
-		end 'coversNothing'
-
-		if first == range.first and last == range.last 'unchanged'
-			into.push(range)
-			return
-		end 'unchanged'
-
-		into.push(debugRunRange(range.valueOrdinal, blockId: range.blockId, first: first, last: last, fromBlockEntry: fromBlockEntry, behindAnOp: behindAnOp))
+		holds.pushHeldRow(into, ordinal: ordinal, local: local, place: place, open: open, last: raw.lastAt(run), startKnown: true, places: places, dom: dom)
 	end 'keepRun'
 
-	function extendByFlood(ordinal ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+	function extendByFlood(ordinal ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, topo FuncTopology, dom DominatorTree)
 		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
 		let dominatedFirst = debugPreorderOf(sites, ordinal: ordinal)
 		let dominatedPast = debugSpanEndOf(sites, ordinal: ordinal) if dom.isReached(ownLocal) else dominatedFirst
@@ -2587,7 +4341,7 @@ type DebugRunRefiner
 
 		while self.pending.count() > 0 'untilNothingIsPending'
 			let local = try self.pending.pop() otherwise panic("DebugRunRefiner.extend: pending.pop on a non-empty list failed")
-			self.pushRowOfBlock(ordinal, local: local, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+			self.pushRowOfBlock(ordinal, local: local, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites, holds: holds, dom: dom)
 
 			if (try self.stopStamp.get(local) otherwise panic("DebugRunRefiner.extend: stopStamp.get OOB at {local}")) == stamp 'aVersionOrTheScopeEndsHere'
 				continue
@@ -2597,21 +4351,21 @@ type DebugRunRefiner
 		end 'untilNothingIsPending'
 	end 'extendByFlood'
 
-	function extend(ordinal ElementIndex, into DebugValueRangeArray, spans DebugSpanRows, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+	function extend(ordinal ElementIndex, into DebugValueRangeArray, spans DebugSpanRows, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, topo FuncTopology, dom DominatorTree)
 		if dom.reducible and dom.isReached(debugLocalAt(sites, ordinal: ordinal)) 'itsRegionHasAFrontier'
-			self.extendByIntervals(ordinal, into: into, spans: spans, names: names, places: places, sites: sites, topo: topo, dom: dom)
+			self.extendByIntervals(ordinal, into: into, spans: spans, names: names, places: places, sites: sites, holds: holds, topo: topo, dom: dom)
 			return
 		end 'itsRegionHasAFrontier'
 
-		self.extendByFlood(ordinal, into: into, names: names, places: places, sites: sites, topo: topo, dom: dom)
+		self.extendByFlood(ordinal, into: into, names: names, places: places, sites: sites, holds: holds, topo: topo, dom: dom)
 	end 'extend'
 
-	function extendByIntervals(ordinal ElementIndex, into DebugValueRangeArray, spans DebugSpanRows, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+	function extendByIntervals(ordinal ElementIndex, into DebugValueRangeArray, spans DebugSpanRows, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, topo FuncTopology, dom DominatorTree)
 		let ownLocal = debugLocalAt(sites, ordinal: ordinal)
 		let stamp = ordinal + 1
 		let regionFirst = debugPreorderOf(sites, ordinal: ordinal)
 		let regionPast = debugSpanEndOf(sites, ordinal: ordinal)
-		self.pushRowOfBlock(ordinal, local: ownLocal, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+		self.pushRowOfBlock(ordinal, local: ownLocal, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites, holds: holds, dom: dom)
 
 		if (try self.stopStamp.get(ownLocal) otherwise panic("DebugRunRefiner.extendByIntervals: stopStamp.get OOB at {ownLocal}")) == stamp 'theRegionIsTheDefinitionBlock'
 			self.holeStarts.clear()
@@ -2630,11 +4384,11 @@ type DebugRunRefiner
 				continue
 			end 'outsideTheRegion'
 
-			self.pushRowOfBlock(ordinal, local: stop, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+			self.pushRowOfBlock(ordinal, local: stop, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites, holds: holds, dom: dom)
 			self.points.push(dom.preorderOf(stop))
 		end 'eachStop'
 
-		self.reviveAfterShadowingScopes(ordinal, ownLocal: ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, into: into, names: names, places: places, sites: sites, topo: topo, dom: dom)
+		self.reviveAfterShadowingScopes(ordinal, ownLocal: ownLocal, stamp: stamp, regionFirst: regionFirst, regionPast: regionPast, into: into, names: names, places: places, sites: sites, holds: holds, topo: topo, dom: dom)
 		let view = self.viewOf(names.siteKeyOf(ordinal as CsrIndex), spans: spans, places: places, dom: dom)
 
 		for point in self.points 'eachPointRowedOnItsOwn'
@@ -2650,16 +4404,92 @@ type DebugRunRefiner
 			let holeEnd = try self.holeEnds.get(at) otherwise panic("DebugRunRefiner.extendByIntervals: holeEnds.get OOB at {at}")
 
 			if holeStart > cursor 'aStretchBeforeTheHole'
-				self.pushSpanOver(ordinal, view: view, first: cursor, past: holeStart, spans: spans)
+				self.pushHeldSpans(ordinal, view: view, first: cursor, past: holeStart, spans: spans, holds: holds)
 			end 'aStretchBeforeTheHole'
 
 			cursor = holeEnd if holeEnd > cursor else cursor
 		end 'eachHole'
 
 		if cursor < regionPast 'aStretchToTheRegionsEnd'
-			self.pushSpanOver(ordinal, view: view, first: cursor, past: regionPast, spans: spans)
+			self.pushHeldSpans(ordinal, view: view, first: cursor, past: regionPast, spans: spans, holds: holds)
 		end 'aStretchToTheRegionsEnd'
+
+		self.pushPartlyHeldRows(ordinal, regionFirst: regionFirst, regionPast: regionPast, into: into, names: names, places: places, holds: holds)
 	end 'extendByIntervals'
+
+	function pushHeldSpans(ordinal ElementIndex, view ElementIndex, first ElementIndex, past ElementIndex, spans DebugSpanRows, holds DebugRegisterHolds)
+		if not holds.tracks(ordinal) 'noRegisterHoldIsTracked'
+			self.pushSpanOver(ordinal, view: view, first: first, past: past, spans: spans)
+			return
+		end 'noRegisterHoldIsTracked'
+
+		let tracked = holds.trackedAt(ordinal)
+		let viewFirst = spans.viewFirst(view)
+		let viewPast = spans.viewPast(view)
+		var openFirst = viewFirst
+		var openPast = viewFirst
+		var k = holds.firstRunEndingAfter(tracked, preorder: first)
+
+		while k < holds.runCount(tracked) 'eachHeldRun'
+			let runFirst = holds.runFirstAt(tracked, k: k)
+
+			if runFirst >= past 'pastTheStretch'
+				break
+			end 'pastTheStretch'
+
+			let runPast = holds.runPastAt(tracked, k: k)
+			let rankFirst = self.firstPreorderAtLeast(runFirst if runFirst > first else first, from: openPast, past: viewPast)
+			let rankPast = self.firstPreorderAtLeast(runPast if runPast < past else past, from: rankFirst, past: viewPast)
+			k = k + 1
+
+			if rankFirst >= rankPast 'noBlockOfTheView'
+				continue
+			end 'noBlockOfTheView'
+
+			if rankFirst > openPast 'apartFromTheOpenSpan'
+				self.pushRanks(ordinal, view: view, first: openFirst, past: openPast, spans: spans)
+				openFirst = rankFirst
+			end 'apartFromTheOpenSpan'
+
+			openPast = rankPast
+		end 'eachHeldRun'
+
+		self.pushRanks(ordinal, view: view, first: openFirst, past: openPast, spans: spans)
+	end 'pushHeldSpans'
+
+	function pushRanks(ordinal ElementIndex, view ElementIndex, first ElementIndex, past ElementIndex, spans DebugSpanRows)
+		if first < past 'blocksInTheStretch'
+			let viewFirst = spans.viewFirst(view)
+			spans.spans.push(DebugValueSpan.create(ordinal, view: view, first: first - viewFirst, past: past - viewFirst))
+		end 'blocksInTheStretch'
+	end 'pushRanks'
+
+	function pushPartlyHeldRows(ordinal ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, holds DebugRegisterHolds)
+		if not holds.tracks(ordinal) 'noRegisterHoldIsTracked'
+			return
+		end 'noRegisterHoldIsTracked'
+
+		let tracked = holds.trackedAt(ordinal)
+		var k = holds.firstStretchFrom(tracked, preorder: regionFirst)
+
+		while k < holds.stretchesByPreorder.degree(tracked as CsrIndex) as ElementIndex 'eachStretchOfTheRegion'
+			let stretch = holds.stretchInPreorder(tracked, k: k)
+			let at = holds.preorderOfStretch(stretch)
+			k = k + 1
+
+			if at >= regionPast 'pastTheRegion'
+				break
+			end 'pastTheRegion'
+
+			let place = holds.placeOfStretch(stretch)
+
+			if self.insideHole(at) or not names.appliesAt(ordinal as DebugNamedSlot, siteKey: debugSiteKeyAt(places.siteKeyOfPlace, at: place)) 'outsideTheRegion'
+				continue
+			end 'outsideTheRegion'
+
+			places.pushRow(into, ordinal: ordinal, place: place, open: holds.openOfStretch(stretch), last: holds.closeOfStretch(stretch))
+		end 'eachStretchOfTheRegion'
+	end 'pushPartlyHeldRows'
 
 	function viewOf(siteKey DebugSiteKey, spans DebugSpanRows, places DebugBlockPlaces, dom DominatorTree) returns ElementIndex
 		let known = try self.viewOfSite.get(siteKey as ElementIndex) otherwise panic("DebugRunRefiner.viewOf: viewOfSite.get OOB at {siteKey}")
@@ -2678,7 +4508,7 @@ type DebugRunRefiner
 			for k in 0 upto self.siteLocals.degree(site) 'eachBlockOfTheSite'
 				let local = self.siteLocals.neighbour(site, k: k) as ElementIndex
 
-				if dom.isReached(local) and self.emitsOps(local, places: places) 'aBlockWithCode'
+				if dom.isReached(local) and self.coversCode(local, places: places) 'aBlockWithCode'
 					keyed.push(dom.preorderOf(local) * DebugOrdinalSpan + local)
 				end 'aBlockWithCode'
 			end 'eachBlockOfTheSite'
@@ -2693,9 +4523,17 @@ type DebugRunRefiner
 		for key in keyed 'eachBlockInPreorder'
 			let local = key mod DebugOrdinalSpan
 			let place = try places.placeOfLocal.get(local) otherwise panic("DebugRunRefiner.viewOf: block {local} has no place")
-			spans.blocks.push(try places.blockIdOfPlace.get(place) otherwise panic("DebugRunRefiner.viewOf: blockIdOfPlace.get OOB at {place}"))
-			spans.lastAnchors.push((try places.blockLast.get(place) otherwise panic("DebugRunRefiner.viewOf: block {local} emits no ops")) as ElementIndex)
-			self.viewPreorders.push(key / DebugOrdinalSpan)
+			let covered = try places.coveredLast.get(place) otherwise panic("DebugRunRefiner.viewOf: block {local} covers no code")
+			let first = try places.blockFirst.get(place) otherwise panic("DebugRunRefiner.viewOf: block {local} emits no ops")
+			let preorder = key / DebugOrdinalSpan
+
+			if places.branchAt.holds(place) 'endsInABranch'
+				if covered > first 'aBodyBeforeTheBranch'
+					self.pushViewPosition(spans, blockId: places.blockIdAt(place), last: covered - 1, preorder: preorder)
+				end 'aBodyBeforeTheBranch'
+			end 'endsInABranch'
+
+			self.pushViewPosition(spans, blockId: places.blockIdAt(place), last: covered, preorder: preorder)
 		end 'eachBlockInPreorder'
 
 		let view = spans.closeView()
@@ -2703,23 +4541,25 @@ type DebugRunRefiner
 		return view
 	end 'viewOf'
 
-	function emitsOps(local ElementIndex, places DebugBlockPlaces) returns bool
+	function pushViewPosition(spans DebugSpanRows, blockId BlockId, last DebugOpAnchor, preorder ElementIndex)
+		spans.blocks.push(blockId)
+		spans.lastAnchors.push(last as ElementIndex)
+		self.viewPreorders.push(preorder)
+	end 'pushViewPosition'
+
+	function coversCode(local ElementIndex, places DebugBlockPlaces) returns bool
 		if let place = try places.placeOfLocal.get(local) 'aPlace'
-			return places.blockLast.holds(place)
+			return places.coveredLast.holds(place)
 		end 'aPlace'
 
 		return false
-	end 'emitsOps'
+	end 'coversCode'
 
 	function pushSpanOver(ordinal ElementIndex, view ElementIndex, first ElementIndex, past ElementIndex, spans DebugSpanRows)
 		let viewFirst = spans.viewFirst(view)
 		let viewPast = spans.viewPast(view)
 		let rankFirst = self.firstPreorderAtLeast(first, from: viewFirst, past: viewPast)
-		let rankPast = self.firstPreorderAtLeast(past, from: rankFirst, past: viewPast)
-
-		if rankFirst < rankPast 'blocksInTheStretch'
-			spans.spans.push(DebugValueSpan.create(ordinal, view: view, first: rankFirst - viewFirst, past: rankPast - viewFirst))
-		end 'blocksInTheStretch'
+		self.pushRanks(ordinal, view: view, first: rankFirst, past: self.firstPreorderAtLeast(past, from: rankFirst, past: viewPast), spans: spans)
 	end 'pushSpanOver'
 
 	function firstPreorderAtLeast(preorder ElementIndex, from ElementIndex, past ElementIndex) returns ElementIndex
@@ -2739,7 +4579,7 @@ type DebugRunRefiner
 		return low
 	end 'firstPreorderAtLeast'
 
-	function reviveAfterShadowingScopes(ordinal ElementIndex, ownLocal ElementIndex, stamp ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, topo FuncTopology, dom DominatorTree)
+	function reviveAfterShadowingScopes(ordinal ElementIndex, ownLocal ElementIndex, stamp ElementIndex, regionFirst ElementIndex, regionPast ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, topo FuncTopology, dom DominatorTree)
 		self.pending.clear()
 
 		for resumed in self.resumeAfter 'eachScopeEnd'
@@ -2748,7 +4588,7 @@ type DebugRunRefiner
 
 		while self.pending.count() > 0 'untilNothingIsPending'
 			let local = try self.pending.pop() otherwise panic("DebugRunRefiner.reviveAfterShadowingScopes: pending.pop on a non-empty list failed")
-			self.pushRowOfBlock(ordinal, local: local, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites)
+			self.pushRowOfBlock(ordinal, local: local, ownLocal: ownLocal, into: into, names: names, places: places, sites: sites, holds: holds, dom: dom)
 
 			if (try self.stopStamp.get(local) otherwise panic("DebugRunRefiner.reviveAfterShadowingScopes: stopStamp.get OOB at {local}")) == stamp 'aVersionOrTheScopeEndsHere'
 				continue
@@ -2932,45 +4772,52 @@ type DebugRunRefiner
 		end 'eachSuccessor'
 	end 'visitSuccessors'
 
-	function pushRowOfBlock(ordinal ElementIndex, local ElementIndex, ownLocal ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites)
+	function pushRowOfBlock(ordinal ElementIndex, local ElementIndex, ownLocal ElementIndex, into DebugValueRangeArray, names DebugNameIndex, places DebugBlockPlaces, sites DebugBindingSites, holds DebugRegisterHolds, dom DominatorTree)
 		let place = try places.placeOfLocal.get(local) otherwise return
-		var opening = try places.blockFirst.get(place) otherwise return
-		let closing = try places.blockLast.get(place) otherwise return
+		let closing = try places.coveredLast.get(place) otherwise return
 
 		if not names.appliesAt(ordinal as DebugNamedSlot, siteKey: debugSiteKeyAt(places.siteKeyOfPlace, at: place)) 'notThisSite'
 			return
 		end 'notThisSite'
 
-		var fromBlockEntry = true
-		var behindAnOp = false
+		var open = DebugRowOpensAtBlockEntry
+		var startKnown = true
 
 		if local == ownLocal 'theDefinitionBlock'
-			if not sites.startAt.holds(ordinal) 'noKnownStart'
-				return
-			end 'noKnownStart'
+			startKnown = sites.startAt.holds(ordinal)
 
-			opening = try sites.startAt.get(ordinal) otherwise panic("DebugRunRefiner.pushRowOfBlock: startAt holds {ordinal} and yet does not give it")
-			fromBlockEntry = false
-			behindAnOp = try sites.startAfterPrevious.get(ordinal) otherwise panic("DebugRunRefiner.pushRowOfBlock: startAfterPrevious.get OOB at {ordinal}")
+			if startKnown 'aKnownStart'
+				open = debugStartOpenOf(sites, ordinal: ordinal)
+			end 'aKnownStart'
 		end 'theDefinitionBlock'
 
 		let (reaches, last) = self.lastAllowedIn(local, last: closing, stamp: ordinal + 1)
 
-		if not reaches or opening > last 'coversNothing'
+		if not reaches 'coversNothing'
 			return
 		end 'coversNothing'
 
-		into.push(debugRunRange(ordinal, blockId: try places.blockIdOfPlace.get(place) otherwise panic("DebugRunRefiner.pushRowOfBlock: blockIdOfPlace.get OOB at {place}"), first: opening, last: last, fromBlockEntry: fromBlockEntry, behindAnOp: behindAnOp))
+		holds.pushHeldRow(into, ordinal: ordinal, local: local, place: place, open: open, last: last, startKnown: startKnown, places: places, dom: dom)
 	end 'pushRowOfBlock'
 end 'DebugRunRefiner'
 
-function debugRunRange(ordinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor, fromBlockEntry bool, behindAnOp bool) returns DebugValueRange
+function debugPopEnded(ends CfgIndexArray, maxes ValueIdArray, at ElementIndex)
+	while ends.count() > 0 and (try ends.get(ends.count() - 1) otherwise panic("debugPopEnded: ends.get OOB below the count just read")) <= at 'leavesTheSubtree'
+		ends.truncate(ends.count() - 1)
+		maxes.truncate(maxes.count() - 1)
+	end 'leavesTheSubtree'
+end 'debugPopEnded'
+
+function debugStartOpenOf(sites DebugBindingSites, ordinal ElementIndex) returns DebugRowOpen
+	let start = try sites.startAt.get(ordinal) otherwise panic("debugStartOpenOf: ordinal {ordinal} has no known start")
+	let behindAnOp = try sites.startAfterPrevious.get(ordinal) otherwise panic("debugStartOpenOf: startAfterPrevious.get OOB at {ordinal}")
+
 	if behindAnOp 'opensWhereAnOpEnds'
-		return DebugValueRange.createAfter(ordinal, blockId: blockId, after: first - 1, last: last)
+		return debugRowOpenAfter(start - 1)
 	end 'opensWhereAnOpEnds'
 
-	return DebugValueRange.create(ordinal, blockId: blockId, first: first, last: last, fromBlockEntry: fromBlockEntry)
-end 'debugRunRange'
+	return debugRowOpenAt(start)
+end 'debugStartOpenOf'
 
 function debugValueAt(roster DebugValueRoster, ordinal ElementIndex) returns ValueId
 	return try roster.valueIds.get(ordinal) otherwise panic("debugValueAt: roster.valueIds.get OOB at {ordinal}")
@@ -3045,34 +4892,55 @@ function debugDominanceFrontiers(topo FuncTopology, dom DominatorTree) returns C
 	return buildCsr(owners, to: members, nodeCount: topo.numBlocks as CsrIndex)
 end 'debugDominanceFrontiers'
 
-function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, spans DebugSpanRows, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, names DebugNameIndex, places DebugBlockPlaces, paramCount ParamCount)
+function refineDebugRuns(into DebugValueRangeArray, spans DebugSpanRows, liveness LivenessResult, roster DebugValueRoster, locations DebugValueLocationArray, places DebugBlockPlaces, holds DebugRegisterHolds, dom DominatorTree, paramCount ParamCount)
 	let topo = liveness.cfg.topo
-	let dom = DominatorTree.of(topo)
-	let sites = DebugBindingSites.over(roster, liveness: liveness, locations: locations, places: places, topo: topo, dom: dom, paramCount: paramCount)
+	let count = roster.valueIds.count()
+	let frontier = debugDominanceFrontiers(topo, dom: dom)
+	let sites = DebugBindingSites.over(roster, liveness: liveness, locations: locations, places: places, topo: topo, dom: dom, frontier: frontier, paramCount: paramCount)
+	let refiner = DebugRunRefiner.over(topo, frontier: frontier, places: places, siteParents: siteParentsOf(roster), ordinalCount: count)
+	let vetoed = FixedBoolArray.create(count)
+	let readsLiveness = FixedBoolArray.create(count)
+
+	for ordinal in 0 upto count 'eachNamedValueToJudge'
+		var fromLiveness = true
+
+		if sites.refinementOf(ordinal) == DebugRunRefinement.placesInTheFlow 'placedInTheFlow'
+			fromLiveness = refiner.vetoes(ordinal, roster: roster, sites: sites)
+			try vetoed.set(ordinal, value: fromLiveness) otherwise panic("refineDebugRuns: vetoed.set OOB at {ordinal}")
+		end 'placedInTheFlow'
+
+		try readsLiveness.set(ordinal, value: fromLiveness) otherwise panic("refineDebugRuns: readsLiveness.set OOB at {ordinal}")
+	end 'eachNamedValueToJudge'
+
+	let names = DebugNameIndex.over(roster, valueCount: liveness.valueCount, keep: readsLiveness)
+	let raw = DebugRawRuns.create()
+	collectDebugRuns(liveness, roster: roster, names: names, places: places, into: raw)
 	let runOrdinals = CsrColumn.create(0)
 	let runIndices = CsrColumn.create(0)
 
-	for (iter, range) in raw.withIterator() 'eachRawRun'
-		if sites.refinementOf(range.valueOrdinal) == DebugRunRefinement.none 'untouched'
-			into.push(range)
+	for run in 0 upto raw.count() 'eachRawRun'
+		let ordinal = raw.ordinalAt(run)
+
+		if sites.refinementOf(ordinal) == DebugRunRefinement.none 'untouched'
+			let place = raw.placeAt(run)
+			holds.pushHeldRow(into, ordinal: ordinal, local: places.localAt(place), place: place, open: raw.openAt(run), last: raw.lastAt(run), startKnown: true, places: places, dom: dom)
 			continue
 		end 'untouched'
 
-		runOrdinals.push(range.valueOrdinal as CsrIndex)
-		runIndices.push(iter.index() as CsrIndex)
+		runOrdinals.push(ordinal as CsrIndex)
+		runIndices.push(run as CsrIndex)
 	end 'eachRawRun'
 
-	let runsOf = buildCsr(runOrdinals, to: runIndices, nodeCount: roster.valueIds.count() as CsrIndex)
-	let refiner = DebugRunRefiner.over(topo, dom: dom, places: places, names: names)
+	let runsOf = buildCsr(runOrdinals, to: runIndices, nodeCount: count as CsrIndex)
 
-	for ordinal in 0 upto roster.valueIds.count() 'eachNamedValue'
+	for ordinal in 0 upto count 'eachNamedValue'
 		if sites.refinementOf(ordinal) != DebugRunRefinement.none 'refined'
-			refiner.refine(ordinal, runsOf: runsOf, raw: raw, into: into, spans: spans, roster: roster, locations: locations, names: names, places: places, sites: sites, topo: topo, dom: dom)
+			refiner.refine(ordinal, vetoed: try vetoed.get(ordinal) otherwise panic("refineDebugRuns: vetoed.get OOB at {ordinal}"), runsOf: runsOf, raw: raw, into: into, spans: spans, roster: roster, names: names, places: places, sites: sites, holds: holds, topo: topo, dom: dom)
 		end 'refined'
 	end 'eachNamedValue'
 end 'refineDebugRuns'
 
-function collectDebugTouches(touches DebugTouches, liveness LivenessResult, names DebugNameIndex, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
+function collectDebugTouches(touches DebugTouches, liveness LivenessResult, names DebugNameIndex, places DebugBlockPlaces, scratch DebugNamedSlotColumn)
 	let index = liveness.useIndex
 
 	for value in 0 upto liveness.valueCount 'eachValue'
@@ -3082,8 +4950,8 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 
 		match index.defKindOf(value) 'def'
 			none then break
-			opDef then noteOpTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.defBlockOf(value), ordinalOfOp: ordinalOfOp, opIdx: index.requireDefOp(value), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
-			phiDef then notePhiDefTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.defBlockOf(value), blockFirst: blockFirst, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			opDef then noteOpDefTouches(touches, names: names, value: value, index: index, places: places, scratch: scratch)
+			phiDef then notePhiDefTouches(touches, names: names, value: value, local: index.defBlockOf(value), places: places, scratch: scratch)
 		end 'def'
 
 		let useSites = index.useCount(value)
@@ -3095,36 +4963,43 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 		var record = index.firstUseOf(value)
 
 		for _ in 0 upto useSites 'eachUse'
-			noteOpTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.useBlockAt(record), ordinalOfOp: ordinalOfOp, opIdx: index.useOpAt(record), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			noteOpTouches(touches, names: names, value: value, local: index.useBlockAt(record), opIdx: index.useOpAt(record), places: places, scratch: scratch)
 			record = index.nextUseOf(record)
 		end 'eachUse'
 	end 'eachValue'
 end 'collectDebugTouches'
 
-function noteOpTouches(touches DebugTouches, names DebugNameIndex, value ValueId, placeOfLocal DebugPlaceColumn, local ElementIndex, ordinalOfOp DebugAnchorColumn, opIdx ElementIndex, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
-	let place = try placeOfLocal.get(local) otherwise return
-	let ordinal = try ordinalOfOp.get(opIdx) otherwise return
-	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+function noteOpTouches(touches DebugTouches, names DebugNameIndex, value ValueId, local ElementIndex, opIdx ElementIndex, places DebugBlockPlaces, scratch DebugNamedSlotColumn)
+	let place = try places.placeOfLocal.get(local) otherwise return
+	let ordinal = try places.ordinalOfOp.get(opIdx) otherwise return
+	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, places: places, scratch: scratch)
 end 'noteOpTouches'
 
-function notePhiDefTouches(touches DebugTouches, names DebugNameIndex, value ValueId, placeOfLocal DebugPlaceColumn, local ElementIndex, blockFirst DebugAnchorColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
-	let place = try placeOfLocal.get(local) otherwise return
-	let ordinal = try blockFirst.get(place) otherwise return
-	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+function noteOpDefTouches(touches DebugTouches, names DebugNameIndex, value ValueId, index UseIndex, places DebugBlockPlaces, scratch DebugNamedSlotColumn)
+	let place = try places.placeOfLocal.get(index.defBlockOf(value)) otherwise return
+	let ordinal = try places.definitionOf(index, value: value) otherwise return
+	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, places: places, scratch: scratch)
+end 'noteOpDefTouches'
+
+function notePhiDefTouches(touches DebugTouches, names DebugNameIndex, value ValueId, local ElementIndex, places DebugBlockPlaces, scratch DebugNamedSlotColumn)
+	let place = try places.placeOfLocal.get(local) otherwise return
+	let ordinal = try places.blockFirst.get(place) otherwise return
+	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, places: places, scratch: scratch)
 end 'notePhiDefTouches'
 
-function noteDebugTouches(touches DebugTouches, names DebugNameIndex, value ValueId, place DebugPlace, ordinal DebugOpAnchor, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
-	names.collectApplicable(value, siteKey: debugSiteKeyAt(siteKeyOfPlace, at: place), into: scratch)
+function noteDebugTouches(touches DebugTouches, names DebugNameIndex, value ValueId, place DebugPlace, ordinal DebugOpAnchor, places DebugBlockPlaces, scratch DebugNamedSlotColumn)
+	names.collectApplicable(value, siteKey: debugSiteKeyAt(places.siteKeyOfPlace, at: place), into: scratch)
 
 	for slot in scratch 'eachApplicable'
 		touches.note(slot, anchor: ordinal)
 	end 'eachApplicable'
 end 'noteDebugTouches'
 
-// ⭐ **MEMORY BEFORE REGISTERS, AND `nowhere` RATHER THAN A GUESS.** A slot-resident value is one memory
-// holds whatever register it was also coloured into, so the slot is the location a reader can act on at
-// any PC in the function; a value this colouring never saw — folded away, or minted in a body the lowering
-// skipped — has no location at all, and saying so is the whole point of the third answer.
+// ⭐ **MEMORY BEFORE REGISTERS, AND `nowhere` RATHER THAN A GUESS.** A slot-resident value is one
+// memory holds whatever register it was also coloured into, so the slot is the location a reader
+// can act on until the slot is next written; a value this colouring never saw — folded away, or
+// minted in a body the lowering skipped — has no location at all, and saying so is the whole point
+// of the third answer.
 function debugValueLocationOf(alloc Allocation, liveness LivenessResult, value ValueId) returns DebugValueLocation
 	if value >= alloc.valueCount 'notInThisFunction'
 		return DebugValueLocation.create(DebugValueNowhere, number: 0)
@@ -3833,7 +5708,7 @@ function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, 
 		return
 	end 'nothingToPreserve'
 
-	brackets.record(blockBaseSeq + (pos as OpSeq), reloadSeq: blockBaseSeq + (last as OpSeq), held: held, module: module, alloc: alloc, liveness: liveness)
+	brackets.record(blockBaseSeq + (pos as OpSeq), reloadSeq: blockBaseSeq + (last as OpSeq), held: held, ordered: ordered, runFirst: pos, module: module, alloc: alloc, liveness: liveness)
 end 'recordColdRunBracketIfFirst'
 
 // The in-use mask at a block's entry: every non-phi live-in value occupies its

@@ -1,0 +1,38 @@
+typealias Amount = int(i64.min to i64.max)
+
+function tour(seed Amount) returns Amount
+	let early = seed * 7 + 3 // anchor: early
+	let late = seed * 11 + 5 // anchor: late
+
+	if early > late 'never' // anchor: check
+		return 0
+	end 'never'
+
+	let middle = late * 2 // anchor: middle
+	var acc = middle // anchor: acc-init
+	var step = 0 as Amount // anchor: step-init
+
+	while step < 3 'spin' // anchor: header
+		acc = acc + step
+		step = step + 1
+	end 'spin'
+
+	print("tour {acc}\n") // anchor: call
+	let tail = acc * 3 // anchor: tail
+
+	return tail
+end 'tour'
+
+function main() returns ExitCode
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto 5 'fill'
+		bytes.push((65 + i mod 20) as Byte)
+	end 'fill'
+
+	let n = bytes.count() as Amount
+	let answer = tour(n) + tour(n)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

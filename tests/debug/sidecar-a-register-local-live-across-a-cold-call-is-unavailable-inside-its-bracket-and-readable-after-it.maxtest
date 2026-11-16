@@ -1,0 +1,128 @@
+let ColdBracketCaseLabel = "sidecar-a-register-local-live-across-a-cold-call-is-unavailable-inside-its-bracket-and-readable-after-it"
+
+let ColdBracketLocalName = "total"
+let ColdBracketFilled = 5
+let ColdBracketFactor = 7
+
+function coldBracketHole(rows StringArray, boundaries SidecarNumberArray) returns StringArray
+	for later in rows 'eachLater'
+		let (laterStart, _) = requiredCodeRange(later, what: "a local row")
+		var nearest = AbsentEventText
+		var nearestLimit = 0 as PrintedNumber
+
+		for earlier in rows 'eachEarlier'
+			let (_, earlierLimit) = requiredCodeRange(earlier, what: "a local row")
+
+			if isRegisterRow(earlier) and placeOfRow(earlier) == placeOfRow(later) and earlierLimit < laterStart and earlierLimit > nearestLimit 'nearerBefore'
+				nearest = earlier
+				nearestLimit = earlierLimit
+			end 'nearerBefore'
+		end 'eachEarlier'
+
+		if nearest == AbsentEventText 'nothingBefore'
+			continue
+		end 'nothingBefore'
+
+		var crossesALine = false
+
+		for boundary in boundaries 'eachBoundary'
+			crossesALine = crossesALine or (boundary >= nearestLimit and boundary < laterStart)
+		end 'eachBoundary'
+
+		if not crossesALine 'insideOneStatement'
+			return [nearest, later]
+		end 'insideOneStatement'
+	end 'eachLater'
+
+	return StringArray.create(0)
+end 'coldBracketHole'
+
+test 'a register local live across a cold call is unavailable inside the call bracket and readable from the restore on'
+	let staged = builtFixture(ColdBracketCaseLabel, fixture: ColdBracketFixtureName)
+	let executable = builtExecutable(staged)
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: MainFunctionName)
+	let rows = rowsNamed(locals, name: ColdBracketLocalName)
+	let boundaries = statementOffsetsOfTheProgram(executable, staged: staged, atMost: u32.max as EventTally)
+	let hole = coldBracketHole(rows, boundaries: boundaries)
+
+	Expect.equal(hole.count(), expected: 2, message: "no two rows of `{ColdBracketLocalName}` in one register leave a gap between them with no line boundary inside it. Either the fixture no longer brackets `{ColdBracketLocalName}`'s caller-saved register around the cold call of its out-of-range `get`, or no row resumes after the bracket's restore, or a row bridges the bracket: the call writes that register, so from one byte into the bracket's first write to the end of the restore the register holds no value of `{ColdBracketLocalName}`. Its rows were: {listedLines(rows)}")
+
+	if hole.count() != 2 'noBracket'
+		discardStagedDir(staged)
+		return
+	end 'noBracket'
+
+	let (_, holeStart) = requiredCodeRange(try hole.get(0) otherwise AbsentEventText, what: "the row before the hole")
+	let (resumeAt, _) = requiredCodeRange(try hole.get(1) otherwise AbsentEventText, what: "the row after the hole")
+	let writeAt = holeStart - 1
+	let holeOffsets = SidecarNumberArray.create(0)
+
+	for offset in holeStart upto resumeAt 'eachHoleByte'
+		holeOffsets.push(offset)
+	end 'eachHoleByte'
+
+	Expect.isEmpty(listedLines(rowsCoveringAny(rows, offsets: holeOffsets)), message: "a row of `{ColdBracketLocalName}` covers the bracket's hole, where the cold call has written its register and the restore has not yet put the value back. The covering rows: {listedLines(rowsCoveringAny(rows, offsets: holeOffsets))}")
+
+	let commands = ["{BreakCommand} {exactOffsetTarget(writeAt)}"]
+
+	for offset in holeOffsets 'eachHoleOffset'
+		commands.push("{BreakCommand} {exactOffsetTarget(offset)}")
+	end 'eachHoleOffset'
+
+	commands.push("{BreakCommand} {exactOffsetTarget(resumeAt)}")
+	commands.push(RunCommand)
+
+	for _ in 0 upto holeOffsets.count() + 2 'eachPossibleStop'
+		commands.push("{PrintCommand} {ColdBracketLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachPossibleStop'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let insideTheHole = StringArray.create(0)
+	let atTheWrite = StringArray.create(0)
+	let atTheResume = StringArray.create(0)
+	var stoppedAt = AbsentEventText
+
+	for event in events 'eachEvent'
+		if eventKind(event) == StopEventName 'aStop'
+			stoppedAt = textOf(event, node: event.root, key: OffsetKey)
+			continue
+		end 'aStop'
+
+		if eventKind(event) != ValueEventName or stoppedAt == AbsentEventText 'notAnAnswerAtAStop'
+			continue
+		end 'notAnAnswerAtAStop'
+
+		if hexValue(stoppedAt) == writeAt 'theWrite'
+			atTheWrite.push(printedAnswer(event))
+		end 'theWrite' else if hexValue(stoppedAt) == resumeAt 'theResume'
+			atTheResume.push(printedAnswer(event))
+		end 'theResume' else 'inTheHole'
+			insideTheHole.push("{stoppedAt} {printedAnswer(event)}")
+		end 'inTheHole'
+
+		stoppedAt = AbsentEventText
+	end 'eachEvent'
+
+	Expect.atLeast(insideTheHole.count(), than: 1, message: "the bracket's hole runs from one byte into the cold call to the restore, so it holds at least the instruction the call returns to, which begins an instruction and stops once. It stopped inside the hole at: {listedLines(insideTheHole)}. {said}")
+
+	let readInsideTheHole = StringArray.create(0)
+
+	for stop in insideTheHole 'eachHoleStop'
+		if not stop.contains(UnavailableAnswerPrefix) 'aNumber'
+			readInsideTheHole.push(stop)
+		end 'aNumber'
+	end 'eachHoleStop'
+
+	Expect.isEmpty(listedLines(readInsideTheHole), message: "inside the bracket's hole `{ColdBracketLocalName}` is unavailable: the call has written its register and only the restore at the hole's end brings the value back, so a number read there is whatever the callee left. These stops read a number: {listedLines(readInsideTheHole)}. {said}")
+
+	let trueValue = "{ColdBracketFilled * ColdBracketFactor}"
+
+	Expect.equal(joined(atTheWrite, separator: ", "), expected: trueValue, message: "the last address of the row before the hole is the bracket's first write to `{ColdBracketLocalName}`'s register, the cold call. A stop there is before the call runs, so the register still holds `{ColdBracketLocalName}` and it reads {trueValue}. {said}")
+
+	Expect.equal(joined(atTheResume, separator: ", "), expected: trueValue, message: "where the restore has put `{ColdBracketLocalName}`'s register back, it reads {trueValue} again: a hole in a register row ends at the restore, and the row resumes there rather than at the value's next use. {said}")
+
+	discardStagedDir(staged)
+end 'a register local live across a cold call is unavailable inside the call bracket and readable from the restore on'

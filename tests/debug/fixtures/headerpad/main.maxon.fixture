@@ -1,0 +1,41 @@
+typealias Word = int(0 to u32.max)
+
+function settle(x Word) returns Word
+	var y = x
+	var i = 0 as Word
+
+	while i < 3 'spin'
+		y = (y + 1) as Word
+
+		if y > 100 'big'
+			y = ((y - 100) and 0xFFFF) as Word
+		end 'big'
+
+		i = (i + 1) as Word
+	end 'spin'
+
+	return y
+end 'settle'
+
+function tally(seed Word) returns Word
+	var total = seed
+	var round = 0 as Word
+	let low = settle(seed + 10)
+	let mid = settle(seed + 20)
+	let high = settle(seed + 30)
+	let bias = settle(seed + 40)
+
+	while round < 4 'rounds' // anchor: header
+		total = settle((total + round + bias) and 0xFFFF)
+		round = round + 1
+	end 'rounds'
+
+	return (total + low + mid + high) and 0xFFFF
+end 'tally'
+
+function main() returns ExitCode
+	let answer = tally(5) + tally(9)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

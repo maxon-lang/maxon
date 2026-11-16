@@ -268,7 +268,7 @@ tests/
     every-function-entry-is-aligned-on-every-native-target.maxtest   every function the sidecar lists starts on its target's entry boundary (x64 32, arm64 16), and the image's `.text` begins on one
     a-dense-match-keeps-its-bounds-check-and-its-indirect-jump-inside-one-32-byte-window.maxtest      every dense match's jump-table sequence, found in the x64 images by its bytes, keeps its fused cmp/jae pair and its `jmp r10` each inside one 32-byte window
     sidecar-local-types.maxtest             every local of a two-file program is described under its own type
-    sidecar-local-live-range.maxtest        a local row is scoped to the code it is live over
+    sidecar-local-live-range.maxtest        a local row is scoped to the code over which its location holds the value
     sidecar-no-local-is-live-across-the-prologue.maxtest      a local of a parameterless function is placed from its first instruction on
     sidecar-array-element-type.maxtest      an Array local names its element type
     sidecar-generic-and-clone-lines.maxtest      a per-type generic body and a synthesized clone carry line rows
@@ -389,7 +389,7 @@ tests/
     values-function-render.maxtest          a function value renders as the function it calls, and a closure lists its captures as children
     a-breakpoint-on-line-zero-is-refused.maxtest      `break 0` and `break <file>:0` are each refused, saying lines are numbered from 1
     values-register-local.maxtest           a register local is read out of the stop's register file
-    values-optimized-out.maxtest            a local whose range does not cover the stop is unavailable, not a number
+    values-optimized-out.maxtest            a local whose register was overwritten before the stop is unavailable, not a number
     values-unknown-local-and-field.maxtest        a name and a field path nothing answers to are errors
     complete-command-words.maxtest          the first word completes to the command vocabulary
     complete-function-names.maxtest         a break target completes to the program's functions
@@ -436,6 +436,10 @@ tests/
     an-address-inside-a-handler-inlined-into-a-synthesized-behaviour-is-armed.maxtest   an address inside an authored handler inlined into a synthesized behaviour function is armed and stops as the handler
     clear-of-a-line-with-no-breakpoint-answers-no-offset.maxtest                     clearing a line no breakpoint was set on answers not-set and names no offset
     clear-of-a-line-with-no-breakpoint-claims-no-sites.maxtest                       the REPL answers a clear of a line no breakpoint was set on without claiming a site
+    sidecar-a-back-edge-copy-that-overwrites-a-locals-register-ends-its-row.maxtest   a back edge that copies loop-carried locals into each other's registers shows each its own value or unavailable at every copy, never another's
+    sidecar-a-call-that-clobbers-a-register-ends-its-row.maxtest                    a call that clobbers a local's register ends its row one byte into the call: the call's own address reads the value, the line after it never does
+    sidecar-a-dead-local-whose-register-is-intact-reads-its-value.maxtest           a local past its last use whose register nothing has written since reads its true value
+    sidecar-a-local-both-arms-assign-one-value-reads-it-after-the-join.maxtest   a var both arms of an if assign one value reads that value after the join, held in a frame slot and held in a register
     sidecar-a-local-both-arms-assign-one-value-shows-it-only-after-the-if.maxtest    a var both arms of an if assign one value to is not shown that value before the if, nor its older value after it
     sidecar-a-local-bound-to-an-identity-of-another-value-reads-that-value-or-unavailable.maxtest   a let bound to a cast, an `or 0` or a `* 1` of another value the optimizer folds away reads that value or is not shown, never another number
     sidecar-a-local-defined-early-stays-readable-to-the-end-of-the-function.maxtest   locals defined at the top of a function are still read at its last line, across every block between
@@ -445,11 +449,14 @@ tests/
     sidecar-a-local-reassigned-in-one-arm-from-a-value-computed-before-the-if-keeps-its-old-value-on-the-other-path.maxtest   a var one arm of an if assigns a value computed before the if is not shown that value on the line of the test, nor after the if on the path that skips the arm
     sidecar-a-local-rebound-after-an-inlined-call-opens-after-the-call.maxtest       a var rebound to another name right after an inlined call is not shown as the new value inside the call
     sidecar-a-local-zeroed-between-two-equal-sums-shows-the-sum-only-after-the-second.maxtest   a var zeroed between a sum and the same sum again, with no other value computed between them, is not shown the sum while it holds zero, in one block or past an if
+    sidecar-a-loop-carried-local-reads-its-value-at-the-loop-headers-first-address-on-every-entry.maxtest   a loop-carried var reads its value at the first address of a loop header entered by a jump, its alignment pad, on the first entry and on every entry by the back edge
     sidecar-a-loop-carried-local-reassigned-from-an-inlined-call-reads-its-value-while-the-calls-argument-is-set-up.maxtest   a loop-carried var reassigned from an inlined call reads its value on the line before and where the call begins, the register still holding it
+    sidecar-a-loop-carried-register-local-whose-header-argument-was-folded-reads-its-value-inside-the-loop.maxtest   a var held in a register whose loop-header argument was folded into its entry value reads that value inside the loop
     sidecar-a-loop-carried-slot-local-an-inner-if-leaves-alone-reads-its-folded-header-value-after-the-if.maxtest   a var held in a stack slot whose loop-header argument was folded reads its value inside the loop after an inner if that does not assign it
     sidecar-a-loop-carried-slot-local-whose-header-argument-was-folded-reads-its-value-inside-the-loop.maxtest   a var held in a stack slot whose loop-header argument was folded into its entry value reads that value inside the loop
     sidecar-a-match-arm-binding-a-shadowing-name-ends-with-the-arm.maxtest           a let in a match arm that shadows an outer let is the outer one again after the match
     sidecar-a-reassigned-slot-local-reads-its-new-value.maxtest                      a var the allocator keeps in a stack slot reads its new value after it is assigned again
+    sidecar-a-register-local-live-across-a-cold-call-is-unavailable-inside-its-bracket-and-readable-after-it.maxtest   a local whose caller-saved register a cold call saves and restores reads its value at the call, is unavailable from one byte into the call to the restore, and reads its value from the restore on
     sidecar-a-shadowing-local-after-a-block-split-keeps-its-own-value.maxtest        a let that shadows an outer let is its own value after an inlined call splits its block, and the outer one again past its block
     sidecar-a-shadowing-local-in-a-loop-with-a-break-ends-at-the-break.maxtest       a let that shadows an outer let inside a loop left by a break is the outer one again after the loop
     sidecar-a-shadowing-slot-local-is-not-shown-after-its-scope-ends.maxtest         a let that shadows an outer let in a nested block is not read after the block ends
@@ -462,11 +469,18 @@ tests/
     sidecar-a-slot-local-whose-dead-store-sits-beyond-a-split-block-is-not-shown-stale.maxtest   a var held in a stack slot whose dead store lies beyond a split block is not read as its older value
     sidecar-a-slot-local-whose-merge-phi-was-pruned-is-not-shown-stale-after-the-join.maxtest   a var held in a stack slot whose merge phi was pruned is not read as its older value after the join
     sidecar-a-slot-local-with-a-dead-trailing-store-is-not-shown-stale.maxtest       a var held in a stack slot whose last assignment was optimised away is not read as its older value
+    sidecar-a-write-in-a-loop-body-leaves-the-header-unavailable.maxtest            a register written in a loop body leaves its local unavailable at the header the back edge reaches
+    sidecar-a-write-in-one-arm-leaves-the-join-unavailable.maxtest                  a register written in one arm of a branch leaves its local unavailable at the join, never a wrong number
+    sidecar-an-op-that-overwrites-the-register-it-reads-ends-the-row-there.maxtest  an op that reads a local and overwrites its register ends that local's row one byte into the op: the op's address reads the old local, the next instruction the new
     sidecar-closure-capture-types.maxtest                                            every value a closure of a later file captures is described under the type its own file declared it with
+    sidecar-nested-inline-local-rows-are-bounded-by-the-bindings.maxtest            a function holding a deeply nested inline chain publishes at most two local rows per binding
+    sidecar-no-row-covers-the-epilogue.maxtest                                      no register or frame-slot row covers the return instruction of either exit
     sidecar-rows-of-one-name-do-not-shadow-each-other.maxtest                        two rows of one local in different places overlap by no more than the instruction that hands one over to the next
     sidecar-rows-of-one-name-in-registers-do-not-overlap-in-any-function.maxtest     no two rows of one name in different places overlap by more than one instruction, in any function of the program
     sidecar-two-rebinds-at-one-point-resolve-to-the-later-binding.maxtest            two rebinds of a var to existing values that open at one point show the later binding
+    sidecar-two-versions-of-a-name-in-different-registers-show-the-later-from-its-handover.maxtest   two versions of one var in different registers show the earlier up to the handover and only the later from it
     sidecar-versions-of-one-var-rebound-around-calls-do-not-shadow-each-other.maxtest   one var whose versions sit in different places is built and its rows overlap by no more than a handover
+    stepping-through-a-function-shows-each-local-as-its-value-or-unavailable.maxtest   a line-by-line walk over a branch, a loop and a call shows every local as its true value or unavailable
     fixtures/ownring/main.maxon.fixture     the ring-ownership program: it prints whether it is attached to the ring, runs itself as a child that prints the same - stored name only, see rule 1
     fixtures/<name>/main.maxon.fixture      stored names only - see rule 1
   dap/

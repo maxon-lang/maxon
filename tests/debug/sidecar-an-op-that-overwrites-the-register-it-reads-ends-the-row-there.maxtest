@@ -1,0 +1,122 @@
+let TwoAddressCaseLabel = "sidecar-an-op-that-overwrites-the-register-it-reads-ends-the-row-there"
+
+let TwoAddressFunctionName = "bump"
+let ReadLocalName = "base"
+let WrittenLocalName = "bumped"
+let TwoAddressSeed = 5
+let BaseFactor = 23
+let BaseTerm = 6
+let BumpTerm = 9
+let TwoAddressPasses = 2
+let StopsOfAPass = 2
+
+function lastEndingRow(rows StringArray) returns String
+	var chosen = try rows.get(0) otherwise panic("debug tests: lastEndingRow is asked only about a name with rows")
+
+	for row in rows 'eachRow'
+		let (_, limit) = requiredCodeRange(row, what: "a local row")
+		let (_, chosenLimit) = requiredCodeRange(chosen, what: "a local row")
+		chosen = row if limit > chosenLimit else chosen
+	end 'eachRow'
+
+	return chosen
+end 'lastEndingRow'
+
+function firstOpeningRow(rows StringArray) returns String
+	var chosen = try rows.get(0) otherwise panic("debug tests: firstOpeningRow is asked only about a name with rows")
+
+	for row in rows 'eachRow'
+		let (start, _) = requiredCodeRange(row, what: "a local row")
+		let (chosenStart, _) = requiredCodeRange(chosen, what: "a local row")
+		chosen = row if start < chosenStart else chosen
+	end 'eachRow'
+
+	return chosen
+end 'firstOpeningRow'
+
+test 'an op that reads a local and overwrites its register is the last address that local reads its value at, and the next instruction reads the new local'
+	let staged = builtFixture(TwoAddressCaseLabel, fixture: TwoAddressFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let overwriteAt = anchorLine(program, anchor: "overwrite")
+	let probeAt = anchorLine(program, anchor: "probe")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: TwoAddressFunctionName)
+	let readRows = rowsNamed(locals, name: ReadLocalName)
+	let writtenRows = rowsNamed(locals, name: WrittenLocalName)
+
+	Expect.notEqual(readRows.count(), expected: 0, message: "`{TwoAddressFunctionName}` describes no `{ReadLocalName}`. Its locals were: {listedLines(locals)}")
+	Expect.notEqual(writtenRows.count(), expected: 0, message: "`{TwoAddressFunctionName}` describes no `{WrittenLocalName}`. Its locals were: {listedLines(locals)}")
+
+	if readRows.count() == 0 or writtenRows.count() == 0 'nothingToAsk'
+		discardStagedDir(staged)
+		return
+	end 'nothingToAsk'
+
+	let read = lastEndingRow(readRows)
+	let written = firstOpeningRow(writtenRows)
+	let (_, readLimit) = requiredCodeRange(read, what: "`{ReadLocalName}`'s last row")
+	let (writtenStart, _) = requiredCodeRange(written, what: "`{WrittenLocalName}`'s first row")
+	let writerAt = readLimit - 1
+
+	Expect.isTrue(isRegisterRow(read) and placeOfRow(read) == placeOfRow(written), message: "`{ReadLocalName}` and `{WrittenLocalName}` no longer share one register, so the op on the `overwrite` line does not overwrite the register it reads and this case asks about nothing. `{ReadLocalName}` ends in {read} and `{WrittenLocalName}` opens in {written}")
+	Expect.greaterThan(writtenStart, than: writerAt, message: "`{WrittenLocalName}`'s first row opens at or before {hexSpelling(writerAt)}, the last byte of `{ReadLocalName}`'s last row. A row that reaches the op overwriting its register ends one byte past the op's first address, and the op's result is in the register only once the op has run, so `{WrittenLocalName}` opens after the op: {read} and {written}")
+
+	let overwriteOffsets = statementOffsetsOfLine(executable, staged: staged, line: overwriteAt)
+	let probeOffsets = statementOffsetsOfLine(executable, staged: staged, line: probeAt)
+
+	Expect.notEqual(overwriteOffsets.count(), expected: 0, message: "the `overwrite` line has no statement rows.")
+	Expect.notEqual(probeOffsets.count(), expected: 0, message: "the `probe` line has no statement rows.")
+
+	if writtenStart <= writerAt or writtenStart - writerAt > MostBytesOfOneInstruction or overwriteOffsets.count() == 0 or probeOffsets.count() == 0 'noWriter'
+		discardStagedDir(staged)
+		return
+	end 'noWriter'
+
+	Expect.greaterThan(lowestOffsetOf(probeOffsets), than: highestOffsetOf(overwriteOffsets), message: "the `probe` line's code no longer follows the op that overwrites `{ReadLocalName}`.")
+	Expect.isEmpty(listedLines(rowsCoveringAny(readRows, offsets: probeOffsets)), message: "the op on the `overwrite` line reads `{ReadLocalName}` and writes `{WrittenLocalName}` into the same register, so past it that register holds `{WrittenLocalName}`. A row of `{ReadLocalName}` that runs on past the op names `{WrittenLocalName}`'s bytes `{ReadLocalName}`. The covering rows: {listedLines(rowsCoveringAny(readRows, offsets: probeOffsets))}")
+
+	let insideTheWriter = SidecarNumberArray.create(0)
+
+	for offset in writerAt + 1 upto writtenStart 'eachWriterByte'
+		insideTheWriter.push(offset)
+	end 'eachWriterByte'
+
+	Expect.isEmpty(listedLines(rowsCoveringAny(readRows, offsets: insideTheWriter)), message: "a row of `{ReadLocalName}` covers an address inside the op that overwrites its register, after the op's first address. Only the op's first address is before the write. The covering rows: {listedLines(rowsCoveringAny(readRows, offsets: insideTheWriter))}")
+	Expect.isEmpty(listedLines(rowsCoveringAny(writtenRows, offsets: insideTheWriter)), message: "a row of `{WrittenLocalName}` covers an address inside the op that writes it, where the op has not finished. The covering rows: {listedLines(rowsCoveringAny(writtenRows, offsets: insideTheWriter))}")
+
+	let commands = ["{BreakCommand} {exactOffsetTarget(writerAt)}"]
+
+	for offset in insideTheWriter 'eachInsideByte'
+		commands.push("{BreakCommand} {exactOffsetTarget(offset)}")
+	end 'eachInsideByte'
+
+	commands.push("{BreakCommand} {exactOffsetTarget(writtenStart)}")
+	commands.push(RunCommand)
+
+	for _ in 0 upto TwoAddressPasses * StopsOfAPass 'eachStop'
+		commands.push("{PrintCommand} {ReadLocalName}")
+		commands.push("{PrintCommand} {WrittenLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachStop'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let readValue = "{TwoAddressSeed * BaseFactor + BaseTerm}"
+	let writtenValue = "{TwoAddressSeed * BaseFactor + BaseTerm + BumpTerm}"
+	let armed = spelledOffsets(armedOffsets(events))
+
+	Expect.equal(joined(armed, separator: ", "), expected: "{hexSpelling(writerAt)}, {hexSpelling(writtenStart)}", message: "of the addresses from the op's first to `{WrittenLocalName}`'s first row, exactly two begin an instruction: the op itself, the last address `{ReadLocalName}` reads at, and the very next instruction, one instruction step later, where `{WrittenLocalName}` opens. These were armed: {joined(armed, separator: ", ")}. {said}")
+
+	let readAtTheWriter = answersOfNameAtStopsAt(events, offset: writerAt, name: ReadLocalName)
+	let writtenAtTheWriter = answersOfNameAtStopsAt(events, offset: writerAt, name: WrittenLocalName)
+	let readOneStepLater = answersOfNameAtStopsAt(events, offset: writtenStart, name: ReadLocalName)
+	let writtenOneStepLater = answersOfNameAtStopsAt(events, offset: writtenStart, name: WrittenLocalName)
+
+	Expect.equal(joined(readAtTheWriter, separator: ", "), expected: "{readValue}, {readValue}", message: "a stop at the address of the op that overwrites `{ReadLocalName}`'s register is before the op runs, so the register still holds `{ReadLocalName}` and each of the {TwoAddressPasses} passes reads {readValue}. {said}")
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(writtenAtTheWriter, trueValues: [writtenValue])), message: "at the op's own address `{WrittenLocalName}` is not computed yet, so it is unavailable or {writtenValue}, never the register's {readValue}, which is `{ReadLocalName}`'s. It answered: {listedLines(writtenAtTheWriter)}. {said}")
+	Expect.equal(joined(writtenOneStepLater, separator: ", "), expected: "{writtenValue}, {writtenValue}", message: "one instruction after the op, the op has written `{WrittenLocalName}` into the register, so each pass reads {writtenValue}. {said}")
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(readOneStepLater, trueValues: [readValue])), message: "one instruction after the op, `{ReadLocalName}`'s register holds `{WrittenLocalName}`, so `{ReadLocalName}` is unavailable there, never {writtenValue}. It answered: {listedLines(readOneStepLater)}. {said}")
+
+	discardStagedDir(staged)
+end 'an op that reads a local and overwrites its register is the last address that local reads its value at, and the next instruction reads the new local'

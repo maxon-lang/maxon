@@ -1,0 +1,54 @@
+let IntactCaseLabel = "sidecar-a-dead-local-whose-register-is-intact-reads-its-value"
+
+let IntactFunctionName = "settle"
+let IntactLocalName = "early"
+let IntactSeed = 5
+let IntactFactor = 7
+let IntactTerm = 3
+let IntactPasses = 2
+
+test 'a local past its last use whose register nothing has written since reads its true value'
+	let staged = builtFixture(IntactCaseLabel, fixture: IntactFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let lastUseAt = anchorLine(program, anchor: "last-use")
+	let probeAt = anchorLine(program, anchor: "probe")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: IntactFunctionName)
+	let rows = rowsNamed(locals, name: IntactLocalName)
+
+	Expect.notEqual(rows.count(), expected: 0, message: "`{IntactFunctionName}` describes no `{IntactLocalName}`, so this case asks about nothing. Its locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(rowsNotInRegisters(rows)), message: "`{IntactLocalName}` is no longer held only in registers, so this case no longer asks about a REGISTER row: a frame slot's row already reaches the code its definition dominates. These rows are not in a register: {listedLines(rowsNotInRegisters(rows))}")
+
+	let lastUseOffsets = statementOffsetsOfLine(executable, staged: staged, line: lastUseAt)
+	let probeOffsets = statementOffsetsOfLine(executable, staged: staged, line: probeAt)
+
+	Expect.notEqual(lastUseOffsets.count(), expected: 0, message: "the `last-use` line has no statement rows, so nothing places `{IntactLocalName}`'s last use. {listedLines(locals)}")
+	Expect.notEqual(probeOffsets.count(), expected: 0, message: "the `probe` line has no statement rows, so there is nothing to stop at.")
+
+	if lastUseOffsets.count() == 0 or probeOffsets.count() == 0 'nothingToAsk'
+		discardStagedDir(staged)
+		return
+	end 'nothingToAsk'
+
+	Expect.greaterThan(lowestOffsetOf(probeOffsets), than: highestOffsetOf(lastUseOffsets), message: "the `probe` line's code no longer lies after `{IntactLocalName}`'s last use, so the stop does not ask about a value past its last use.")
+
+	let commands = ["{BreakCommand} {lineTarget(probeAt)}", RunCommand]
+
+	for _ in 0 upto IntactPasses 'eachPass'
+		commands.push("{PrintCommand} {IntactLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachPass'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+	let expected = "{IntactSeed * IntactFactor + IntactTerm}"
+
+	Expect.equal(eventsOfKind(events, kind: StopEventName).count(), expected: IntactPasses, message: "`{IntactFunctionName}` runs twice, so the `probe` breakpoint stops twice. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: IntactPasses, message: "each stop's `{PrintCommand} {IntactLocalName}` answers one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	Expect.equal(joined(answers, separator: ", "), expected: joined(repeatedCommand(expected, times: IntactPasses), separator: ", "), message: "`{IntactLocalName}` was last read by the comparison on the `last-use` line, and between that comparison and this stop the code only branches: no instruction writes its register and no call clobbers it. So the register still holds {expected}, and a row is the code over which its location holds the value, not the code over which the value is still needed. Ending the row at the last use makes a readable value unreadable. {said}")
+
+	discardStagedDir(staged)
+end 'a local past its last use whose register nothing has written since reads its true value'

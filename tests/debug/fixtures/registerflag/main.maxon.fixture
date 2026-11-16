@@ -1,0 +1,40 @@
+typealias Word = int(0 to u32.max)
+
+function main() returns ExitCode
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto 5 'fill'
+		bytes.push((65 + i mod 20) as Byte)
+	end 'fill'
+
+	let n = bytes.count()
+	let stride = n as Word
+	let limit = (n mod 3) as Word
+	var found = false
+	var chunk = 0 as Word
+	var run = 0 as Word
+
+	while chunk < 64 'scan'
+		if (chunk + stride) mod 3 == 0 'used'
+			chunk = chunk + 1
+			run = 0
+			continue
+		end 'used'
+
+		run = run + 1 // anchor: inside
+		chunk = chunk + 1
+
+		if run >= limit 'enough'
+			found = true
+			break
+		end 'enough'
+	end 'scan'
+
+	if found 'hit'
+		print("hit {chunk}\n") // anchor: hit
+	end 'hit'
+
+	print("done {run}\n")
+
+	return 0
+end 'main'

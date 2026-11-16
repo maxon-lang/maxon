@@ -1,0 +1,179 @@
+let TourCaseLabel = "stepping-through-a-function-shows-each-local-as-its-value-or-unavailable"
+
+let TourFunctionName = "tour"
+let TourSeed = 5
+let TourRounds = 3
+let TourNexts = 24
+let AlwaysDefined = ""
+let EarlyFactor = 7
+let EarlyTerm = 3
+let LateFactor = 11
+let LateTerm = 5
+let MiddleFactor = 2
+let TailFactor = 3
+let IntactLocal = "early"
+
+type TourLocal
+	let name as String
+	let definedAt as String
+	let values as StringArray
+
+	static function create(name String, definedAt String, values StringArray) returns TourLocal
+		return Self{name: name, definedAt: definedAt, values: values}
+	end 'create'
+end 'TourLocal'
+
+typealias TourLocalArray = Array with TourLocal
+
+type TourStop
+	let line as EventNumber
+	let owner as String
+	let answers as StringArray
+
+	static function create(line EventNumber, owner String) returns TourStop
+		return Self{line: line, owner: owner, answers: StringArray.create(0)}
+	end 'create'
+end 'TourStop'
+
+typealias TourStopArray = Array with TourStop
+
+function single(value PrintedNumber) returns StringArray
+	let values = StringArray.create(0)
+	values.push("{value}")
+
+	return values
+end 'single'
+
+function tourRoster() returns TourLocalArray
+	let early = TourSeed * EarlyFactor + EarlyTerm
+	let late = TourSeed * LateFactor + LateTerm
+	let middle = late * MiddleFactor
+	let accValues = StringArray.create(0)
+	let stepValues = StringArray.create(0)
+	var acc = middle as PrintedNumber
+
+	accValues.push("{acc}")
+
+	for round in 0 upto TourRounds 'eachRound'
+		stepValues.push("{round}")
+		acc = acc + round
+
+		if not accValues.contains("{acc}") 'aNewValue'
+			accValues.push("{acc}")
+		end 'aNewValue'
+	end 'eachRound'
+
+	stepValues.push("{TourRounds}")
+
+	let roster = TourLocalArray.create(0)
+	roster.push(TourLocal.create("seed", definedAt: AlwaysDefined, values: single(TourSeed)))
+	roster.push(TourLocal.create("early", definedAt: "early", values: single(early)))
+	roster.push(TourLocal.create("late", definedAt: "late", values: single(late)))
+	roster.push(TourLocal.create("middle", definedAt: "middle", values: single(middle)))
+	roster.push(TourLocal.create("acc", definedAt: "acc-init", values: accValues))
+	roster.push(TourLocal.create("step", definedAt: "step-init", values: stepValues))
+	roster.push(TourLocal.create("tail", definedAt: "tail", values: single(acc * TailFactor)))
+
+	return roster
+end 'tourRoster'
+
+function stopsWithAnswers(events JsonDocArray) returns TourStopArray
+	let stops = TourStopArray.create(0)
+
+	for event in events 'eachEvent'
+		let kind = eventKind(event)
+
+		if kind == StopEventName 'aStop'
+			stops.push(TourStop.create(numberOf(event, node: event.root, key: LineKey), owner: textOf(event, node: event.root, key: FunctionKey)))
+		end 'aStop'
+
+		if kind == ValueEventName and stops.count() > 0 'anAnswer'
+			let current = try stops.get(stops.count() - 1) otherwise panic("debug tests: a stop was just counted")
+			current.answers.push(printedAnswer(event))
+		end 'anAnswer'
+	end 'eachEvent'
+
+	return stops
+end 'stopsWithAnswers'
+
+test 'a line-by-line walk shows every local at every stop as its true value or as unavailable, never another number'
+	let staged = builtFixture(TourCaseLabel, fixture: TourFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let roster = tourRoster()
+	let commands = ["{BreakCommand} {lineTarget(anchorLine(program, anchor: "early"))}", RunCommand]
+
+	for pass in 0 upto TourNexts 'eachStop'
+		if pass > 0 'pastTheBreakpoint'
+			commands.push(NextCommand)
+		end 'pastTheBreakpoint'
+
+		for local in roster 'eachLocal'
+			commands.push("{PrintCommand} {local.name}")
+		end 'eachLocal'
+	end 'eachStop'
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let middleAt = anchorLine(program, anchor: "middle") as EventNumber
+	let wrong = StringArray.create(0)
+	let walked = StringArray.create(0)
+	var tourStops = 0 as Count
+	var checkStops = 0 as Count
+	var headerStops = 0 as Count
+	var callStops = 0 as Count
+	var middleStops = 0 as Count
+	let earlyAtMiddle = StringArray.create(0)
+
+	for stop in stopsWithAnswers(events) 'eachStop'
+		walked.push("{stop.owner}:{stop.line}")
+
+		if stop.owner != TourFunctionName 'notInTour'
+			continue
+		end 'notInTour'
+
+		tourStops = tourStops + 1
+		checkStops = checkStops + 1 if stop.line == anchorLine(program, anchor: "check") as EventNumber else checkStops
+		headerStops = headerStops + 1 if stop.line == anchorLine(program, anchor: "header") as EventNumber else headerStops
+		callStops = callStops + 1 if stop.line == anchorLine(program, anchor: "call") as EventNumber else callStops
+		middleStops = middleStops + 1 if stop.line == middleAt else middleStops
+
+		if stop.answers.count() != roster.count() 'unanswered'
+			wrong.push("line {stop.line}: {stop.answers.count()} answers to {roster.count()} `{PrintCommand}` commands")
+			continue
+		end 'unanswered'
+
+		for (iter, local) in roster.withIterator() 'eachLocal'
+			let answer = try stop.answers.get(iter.index()) otherwise panic("debug tests: the answers were counted")
+			let defined = local.definedAt == AlwaysDefined or stop.line > (anchorLine(program, anchor: local.definedAt) as EventNumber)
+
+			if stop.line == middleAt and local.name == IntactLocal 'theIntactLocal'
+				earlyAtMiddle.push(answer)
+			end 'theIntactLocal'
+
+			if isUnavailableAnswer(answer) 'unreadable'
+				continue
+			end 'unreadable'
+
+			if not defined 'beforeItsDefinition'
+				wrong.push("line {stop.line}: `{local.name}` answered '{answer}' before the line that defines it has run")
+				continue
+			end 'beforeItsDefinition'
+
+			if not local.values.contains(answer) 'notItsValue'
+				wrong.push("line {stop.line}: `{local.name}` answered '{answer}', and its values are {joined(local.values, separator: ", ")}")
+			end 'notItsValue'
+		end 'eachLocal'
+	end 'eachStop'
+
+	Expect.atLeast(tourStops, than: roster.count(), message: "the walk stopped in `{TourFunctionName}` only {tourStops} times, so it did not walk the function. It stopped at: {listedLines(walked)}. {said}")
+	Expect.notEqual(checkStops, expected: 0, message: "the walk never stopped on the branch at `check`, so it no longer walks a branch. It stopped at: {listedLines(walked)}")
+	Expect.atLeast(headerStops, than: TourRounds + 1, message: "the walk stopped at the loop `header` {headerStops} times, fewer than the condition is evaluated in one call, so it no longer walks round the loop. It stopped at: {listedLines(walked)}")
+	Expect.notEqual(callStops, expected: 0, message: "the walk never stopped on the `call` line, so it no longer walks over a call. It stopped at: {listedLines(walked)}")
+	Expect.isEmpty(listedLines(wrong), message: "every answer of a walk is the local's true value at that point of the source or `unavailable`. These answers are another number wearing a local's name: a row that opens before its defining instruction has run, runs past a write to its register, or reaches into the epilogue. {listedLines(wrong)} {said}")
+	Expect.notEqual(middleStops, expected: 0, message: "the walk never stopped on the `middle` line. It stopped at: {listedLines(walked)}")
+
+	Expect.equal(joined(earlyAtMiddle, separator: ", "), expected: joined(repeatedCommand("{TourSeed * EarlyFactor + EarlyTerm}", times: middleStops as EventTally), separator: ", "), message: "at the `middle` line `early` is past its last use, the comparison on the `check` line, and only a branch lies between: nothing writes its register, so it reads its true value rather than `unavailable`. {said}")
+
+	discardStagedDir(staged)
+end 'a line-by-line walk shows every local at every stop as its true value or as unavailable, never another number'

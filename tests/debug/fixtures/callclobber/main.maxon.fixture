@@ -1,0 +1,35 @@
+typealias Amount = int(i64.min to i64.max)
+
+function chime(seed Amount)
+	print("chime {seed}\n")
+end 'chime'
+
+function relay(seed Amount) returns Amount
+	let late = seed * 3 + 2
+	let kept = seed * 19 + 4
+
+	if kept < late 'never' // anchor: last-use
+		return 0
+	end 'never'
+
+	chime(late) // anchor: call
+	let total = late * 2 // anchor: probe
+	print("relay {total}\n")
+
+	return total
+end 'relay'
+
+function main() returns ExitCode
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto 5 'fill'
+		bytes.push((65 + i mod 20) as Byte)
+	end 'fill'
+
+	let n = bytes.count() as Amount
+	chime(n)
+	let answer = relay(n) + relay(n)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

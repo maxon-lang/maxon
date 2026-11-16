@@ -266,6 +266,21 @@ let NextRoundFixtureName = "nextround"
 let CarriageReturnFixtureName = "carriagereturn"
 let TickedTotalFixtureName = "tickedtotal"
 let IdentityFoldFixtureName = "identityfold"
+let IntactFixtureName = "intact"
+let ArmWriteFixtureName = "armwrite"
+let LoopWriteFixtureName = "loopwrite"
+let CallClobberFixtureName = "callclobber"
+let TwoAddressFixtureName = "twoaddress"
+let EpilogueFixtureName = "epilogue"
+let HandoverFixtureName = "handover"
+let TourFixtureName = "tour"
+let OnceChainFixtureName = "oncechain"
+let OverwrittenFixtureName = "overwritten"
+let JoinedArmsFixtureName = "joinedarms"
+let RegisterFlagFixtureName = "registerflag"
+let ColdBracketFixtureName = "coldbracket"
+let RotationFixtureName = "rotation"
+let HeaderPadFixtureName = "headerpad"
 
 let DebugBatchOption = "--batch"
 let DebugCommandsOptionPrefix = "--commands="
@@ -730,6 +745,100 @@ let BreakpointStopReason = "breakpoint"
 let StepStopReason = "step"
 
 let OptimizedOutReason = "optimized-out"
+let NotLiveHereReason = "not-live-here"
+let UnavailableAnswerPrefix = "unavailable: "
+let RegisterPlacePrefix = "reg"
+
+function printedAnswer(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	if value.count() == 0 'noValue'
+		return AbsentEventText
+	end 'noValue'
+
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'unreadable'
+		return "{UnavailableAnswerPrefix}{stringAt(answered, node: nodeAt(unavailable, index: 0))}"
+	end 'unreadable'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'printedAnswer'
+
+function printedAnswers(events JsonDocArray) returns StringArray
+	let answers = StringArray.create(0)
+
+	for answered in eventsOfKind(events, kind: ValueEventName) 'eachAnswer'
+		answers.push(printedAnswer(answered))
+	end 'eachAnswer'
+
+	return answers
+end 'printedAnswers'
+
+function isUnavailableAnswer(answer String) returns bool
+	return answer.startsWith(UnavailableAnswerPrefix)
+end 'isUnavailableAnswer'
+
+function answersNeitherTrueNorUnavailable(answers StringArray, trueValues StringArray) returns StringArray
+	let wrong = StringArray.create(0)
+
+	for answer in answers 'eachAnswer'
+		if not isUnavailableAnswer(answer) and not trueValues.contains(answer) 'anotherNumber'
+			wrong.push(answer)
+		end 'anotherNumber'
+	end 'eachAnswer'
+
+	return wrong
+end 'answersNeitherTrueNorUnavailable'
+
+function rowsNamed(rows StringArray, name String) returns StringArray
+	let named = StringArray.create(0)
+
+	for row in rows 'eachRow'
+		if firstToken(row) == name 'thisName'
+			named.push(row)
+		end 'thisName'
+	end 'eachRow'
+
+	return named
+end 'rowsNamed'
+
+function isRegisterRow(row String) returns bool
+	return placeOfRow(row).startsWith(RegisterPlacePrefix)
+end 'isRegisterRow'
+
+function rowsNotInRegisters(rows StringArray) returns StringArray
+	let elsewhere = StringArray.create(0)
+
+	for row in rows 'eachRow'
+		if not isRegisterRow(row) 'notARegister'
+			elsewhere.push(row)
+		end 'notARegister'
+	end 'eachRow'
+
+	return elsewhere
+end 'rowsNotInRegisters'
+
+function rowCovers(row String, offset PrintedNumber) returns bool
+	return match codeRangeIn(row) 'theRange'
+		none gives false
+		range(start, limit) gives offset >= start and offset < limit
+	end 'theRange'
+end 'rowCovers'
+
+function rowsCoveringAny(rows StringArray, offsets SidecarNumberArray) returns StringArray
+	let covering = StringArray.create(0)
+
+	for row in rows 'eachRow'
+		for offset in offsets 'eachOffset'
+			if rowCovers(row, offset: offset) 'coversIt'
+				covering.push("{row}   covers 0x{offset:x}")
+			end 'coversIt'
+		end 'eachOffset'
+	end 'eachRow'
+
+	return covering
+end 'rowsCoveringAny'
 
 function lineTarget(line SourceLine, file String = StagedProgramFileName) returns String
 	return "{file}:{line}"
@@ -942,14 +1051,18 @@ function functionPrologueStart(executable FilePath, staged FilePath, name String
 end 'functionPrologueStart'
 
 function dumpedFunctionRow(executable FilePath, staged FilePath, name String) returns String
+	return functionRowOf(dumpedFunctionsSection(executable, staged: staged), name: name)
+end 'dumpedFunctionRow'
+
+function dumpedFunctionsSection(executable FilePath, staged FilePath) returns StringArray
 	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
 
 	if dump.exitCode() != 0 'noSidecarPrinted'
 		panic("debug tests: the gate could not run — `{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 	end 'noSidecarPrinted'
 
-	return functionRowOf(dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading), name: name)
-end 'dumpedFunctionRow'
+	return dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+end 'dumpedFunctionsSection'
 
 let PrologueColumn = "prologue=+"
 
@@ -1004,6 +1117,16 @@ function lowestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
 
 	return lowest
 end 'lowestOffsetOf'
+
+function highestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
+	var highest = try offsets.get(0) otherwise panic("debug tests: a line of code has at least one statement row")
+
+	for offset in offsets 'eachOffset'
+		highest = offset if offset > highest else highest
+	end 'eachOffset'
+
+	return highest
+end 'highestOffsetOf'
 
 function armedAndClearedAtEvery(offsets SidecarNumberArray) returns StringArray
 	let commands = StringArray.create(0)
@@ -1099,6 +1222,48 @@ end 'exactOffsetTarget'
 function hexSpelling(offset PrintedNumber) returns String
 	return "{HexPrefix}{offset:x}"
 end 'hexSpelling'
+
+function spelledOffsets(offsets SidecarNumberArray) returns StringArray
+	let spelled = StringArray.create(0)
+
+	for offset in offsets 'eachOffset'
+		spelled.push(hexSpelling(offset))
+	end 'eachOffset'
+
+	return spelled
+end 'spelledOffsets'
+
+function armedOffsets(events JsonDocArray) returns SidecarNumberArray
+	let armed = SidecarNumberArray.create(0)
+
+	for answer in eventsOfKind(events, kind: BreakpointEventName) 'eachAnswer'
+		if textOf(answer, node: answer.root, key: ActionKey) == SetAction 'armedThere'
+			armed.push(hexValue(textOf(answer, node: answer.root, key: OffsetKey)))
+		end 'armedThere'
+	end 'eachAnswer'
+
+	return armed
+end 'armedOffsets'
+
+function answersOfNameAtStopsAt(events JsonDocArray, offset PrintedNumber, name String) returns StringArray
+	let answers = StringArray.create(0)
+	var stoppedThere = false
+
+	for event in events 'eachEvent'
+		if eventKind(event) == StopEventName 'aStop'
+			stoppedThere = hexValue(textOf(event, node: event.root, key: OffsetKey)) == offset
+			continue
+		end 'aStop'
+
+		let value = memberOf(event, node: event.root, key: ValueKey)
+
+		if stoppedThere and eventKind(event) == ValueEventName and value.count() == 1 and textOf(event, node: nodeAt(value, index: 0), key: NameKey) == name 'thatName'
+			answers.push(printedAnswer(event))
+		end 'thatName'
+	end 'eachEvent'
+
+	return answers
+end 'answersOfNameAtStopsAt'
 
 let ConditionFixtureName = "condition"
 let WideConditionFixtureName = "conditionwide"

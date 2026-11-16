@@ -1,0 +1,31 @@
+typealias Amount = int(i64.min to i64.max)
+
+function churn(seed Amount) returns Amount
+	var round = 0 as Amount
+	let kept = seed * 17 + 2
+
+	if kept < seed 'never' // anchor: last-use
+		return 0
+	end 'never'
+
+	while round < 3 'spin' // anchor: header
+		print("spin {round}\n") // anchor: write
+		round = round + 1
+	end 'spin'
+
+	return seed + round
+end 'churn'
+
+function main() returns ExitCode
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto 5 'fill'
+		bytes.push((65 + i mod 20) as Byte)
+	end 'fill'
+
+	let n = bytes.count() as Amount
+	let answer = churn(n) + churn(n)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

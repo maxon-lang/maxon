@@ -2915,7 +2915,6 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 	let captureSpans = module.spans.armed
 	let lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
 	let runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
-	let blockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// Where this chunk's coverage counters land — the x64 backend's channel, filled the same way.
 	let covOffsets = CovPointOffsetArray.create(0)
@@ -2932,6 +2931,7 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 		let blockStart = code.count()
 		blockOffsets.place(block.id, value: blockStart as CodeOffset)
 		lineRows.openBlock(block.id, site: block.inlineSite)
+		runOffsets.openBlock(block.id)
 
 		// The green-thread stack guard, before the prologue, so a thread whose stack would overflow grows
 		// and relocates it first. The exemption is `skipsGreenThreadStackGuard`, asked of the function's
@@ -2967,7 +2967,7 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 			runOffsets.note(block.terminatorIndex(), codeStart: termStart as CodeOffset, codeEnd: codeHere(code))
 		end 'hasTerm'
 
-		blockEnds.place(block.id, value: codeHere(code))
+		runOffsets.closeBlock(block.id, codeEnd: codeHere(code), fallsThrough: not block.hasTerminatorOp())
 		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
 
 		if stoppable 'mayBeStopped'
@@ -2998,7 +2998,7 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
-		chunk.localRanges = runOffsets.resolve(func, blockStarts: blockOffsets, blockEnds: blockEnds)
+		chunk.localRanges = runOffsets.resolve(func, module: module, blockStarts: blockOffsets)
 		chunk.frameSize = frameBytes
 		chunk.paramCount = func.paramCount
 	end 'debugInfo'

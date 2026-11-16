@@ -1,6 +1,6 @@
 let LiveRangeCaseLabel = "sidecar-local-live-range"
 
-test 'a local row is scoped to the code it is live over, not to the whole function'
+test 'a local row is scoped to the code over which its location holds the value, not to the whole function'
 	let staged = builtFixture(LiveRangeCaseLabel, fixture: ValuesFixtureName)
 	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 
@@ -24,8 +24,8 @@ test 'a local row is scoped to the code it is live over, not to the whole functi
 		end 'localRange'
 	end 'eachLocal'
 
-	Expect.isEmpty(listedLines(unscoped), message: "every local record carries one row PER LIVE RANGE, so every row published is scoped to the code that range covers. A row with no range is a name the debugger will read at any offset inside the function — including the offsets where its register belongs to something else. `{RenderFunctionName}`'s locals were: {listedLines(locals)}")
-	Expect.notEqual(narrower, expected: 0, message: "not one of `{RenderFunctionName}`'s locals is scoped NARROWER than [0x{functionStart:x}, 0x{functionLimit:x}), the whole function. This fixture holds a local dead long before the end and a hot one born long after the start, so a sidecar claiming whole-function scope for all of them is the scope that was never computed. `{RenderFunctionName}`'s locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(unscoped), message: "every local record carries one row per stretch of code over which its location holds the value, so every row published is scoped to that stretch. A row with no range is a name the debugger will read at any offset inside the function — including the offsets where its register has been written with something else. `{RenderFunctionName}`'s locals were: {listedLines(locals)}")
+	Expect.notEqual(narrower, expected: 0, message: "not one of `{RenderFunctionName}`'s locals is scoped NARROWER than [0x{functionStart:x}, 0x{functionLimit:x}), the whole function. This fixture holds a local whose register is rewritten long before the end and a hot one born long after the start, so a sidecar claiming whole-function scope for all of them is the scope that was never computed. `{RenderFunctionName}`'s locals were: {listedLines(locals)}")
 
 	discardStagedDir(staged)
-end 'a local row is scoped to the code it is live over, not to the whole function'
+end 'a local row is scoped to the code over which its location holds the value, not to the whole function'

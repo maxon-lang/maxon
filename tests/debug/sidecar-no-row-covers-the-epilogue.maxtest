@@ -1,0 +1,101 @@
+let EpilogueCaseLabel = "sidecar-no-row-covers-the-epilogue"
+
+let EpilogueFunctionName = "wrap"
+let CalleeSavedLocalName = "ratio"
+let SeedLocalName = "seed"
+let EpiloguePasses = 2
+
+#if arch(arm64)
+	let ReturnInstructionBytes = 4 as PrintedNumber
+#endif
+
+#if not arch(arm64)
+	let ReturnInstructionBytes = 1 as PrintedNumber
+#endif
+
+function returnOffsetOf(executable FilePath, staged FilePath, anchor String) returns PrintedNumber
+	let offsets = statementOffsetsOfLine(executable, staged: staged, line: anchorLine(staged.join(StagedProgramFileName), anchor: anchor))
+
+	if offsets.count() == 0 'noCode'
+		panic("debug tests: the gate could not run — the `{anchor}` line has no statement rows, so no return instruction is placed.")
+	end 'noCode'
+
+	return highestOffsetOf(offsets)
+end 'returnOffsetOf'
+
+test 'no row of a local covers the return of either exit, where the frame and the callee-saved registers belong to the caller again'
+	let staged = builtFixture(EpilogueCaseLabel, fixture: EpilogueFixtureName)
+	let executable = builtExecutable(staged)
+	let functionRows = dumpedFunctionsSection(executable, staged: staged)
+	let owner = functionRowOf(functionRows, name: EpilogueFunctionName)
+
+	Expect.notEqual(owner, expected: AbsentEventText, message: "the sidecar holds no function row for `{EpilogueFunctionName}`, so it was spliced away and this case asks about no epilogue. The functions section held: {listedLines(declaredFunctionRows(functionRows))}")
+
+	if owner == AbsentEventText 'nothingToAsk'
+		discardStagedDir(staged)
+		return
+	end 'nothingToAsk'
+
+	let (_, functionLimit) = requiredCodeRange(owner, what: "`{EpilogueFunctionName}`'s function row")
+	let locals = localRowsOf(functionRows, name: EpilogueFunctionName)
+	let earlyReturn = returnOffsetOf(executable, staged: staged, anchor: "early-return")
+	let finalReturn = returnOffsetOf(executable, staged: staged, anchor: "final-return")
+	let exits = SidecarNumberArray.create(0)
+	exits.push(earlyReturn)
+	exits.push(finalReturn)
+
+	Expect.equal(finalReturn, expected: functionLimit - ReturnInstructionBytes, message: "the `final-return` line's last statement row is no longer the function's last instruction, so the line table no longer places a row on the return instruction and this case's proxy for the epilogue is gone. `{EpilogueFunctionName}` is {owner}")
+	Expect.notEqual(earlyReturn, expected: finalReturn, message: "the two `return`s share one return instruction, so this case no longer asks about a duplicated return tail.")
+
+	let registerRows = StringArray.create(0)
+	let slotRows = StringArray.create(0)
+
+	for row in locals 'eachLocal'
+		if isRegisterRow(row) 'inARegister'
+			registerRows.push(row)
+		end 'inARegister'
+
+		if placeOfRow(row).startsWith(StackSlotMark) 'inASlot'
+			slotRows.push(row)
+		end 'inASlot'
+	end 'eachLocal'
+
+	Expect.notEqual(rowsNamed(registerRows, name: CalleeSavedLocalName).count(), expected: 0, message: "`{CalleeSavedLocalName}` has no register row, so this case no longer asks about a value whose register the epilogue restores. `{EpilogueFunctionName}`'s locals were: {listedLines(locals)}")
+	Expect.notEqual(rowsNamed(slotRows, name: SeedLocalName).count(), expected: 0, message: "`{SeedLocalName}` has no frame-slot row, so this case no longer asks about a value whose slot the epilogue's frame-pointer pop takes away, and its slot half reads no row of it. Reshape the fixture so `{SeedLocalName}` is held in a slot on this target; do not drop the claim. `{EpilogueFunctionName}`'s locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(rowsCoveringAny(registerRows, offsets: exits)), message: "a register row covers a return instruction. By then the epilogue has restored every callee-saved register to the caller's value, so a row that reaches it shows the caller's bytes under this function's name. No row may run into the epilogue, of either exit. The covering rows: {listedLines(rowsCoveringAny(registerRows, offsets: exits))}")
+	Expect.isEmpty(listedLines(rowsCoveringAny(slotRows, offsets: exits)), message: "a frame-slot row covers a return instruction. By then the epilogue has popped the frame pointer the slot is addressed from, so the slot names the caller's frame and a row that reaches it shows the caller's bytes. The covering rows: {listedLines(rowsCoveringAny(slotRows, offsets: exits))}")
+
+	let commands = ["{BreakCommand} {exactOffsetTarget(earlyReturn)}", "{BreakCommand} {exactOffsetTarget(finalReturn)}", RunCommand]
+
+	for _ in 0 upto EpiloguePasses 'eachPass'
+		commands.push("{PrintCommand} {CalleeSavedLocalName}")
+		commands.push("{PrintCommand} {SeedLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachPass'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+	let trueRatios = ["12.5", "25"]
+	let trueSeeds = ["5", "10"]
+
+	Expect.equal(breakpointAnswersWithAction(events, action: SetAction), expected: 2, message: "both return instructions are armed as exact offsets; a refusal means the offset is not an instruction start and the line table's last row of a `return` line is not the return. {said}")
+	Expect.equal(answers.count(), expected: EpiloguePasses * 2, message: "`{EpilogueFunctionName}` leaves once through each `return`, and each stop answers its two `{PrintCommand}` commands. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let ratioAnswers = StringArray.create(0)
+	let seedAnswers = StringArray.create(0)
+
+	for (iter, answer) in answers.withIterator() 'eachAnswer'
+		if iter.index() mod 2 == 0 'aRatio'
+			ratioAnswers.push(answer)
+		end 'aRatio' else 'aSeed'
+			seedAnswers.push(answer)
+		end 'aSeed'
+	end 'eachAnswer'
+
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(ratioAnswers, trueValues: trueRatios)), message: "`{PrintCommand} {CalleeSavedLocalName}` at a return instruction answered {listedLines(answersNeitherTrueNorUnavailable(ratioAnswers, trueValues: trueRatios))}, none of which is unavailable or one of its values {listedLines(trueRatios)}. The epilogue has restored the callee-saved registers to the caller's values, so whatever a register row reads there is the caller's. {said}")
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(seedAnswers, trueValues: trueSeeds)), message: "`{PrintCommand} {SeedLocalName}` at a return instruction answered {listedLines(answersNeitherTrueNorUnavailable(seedAnswers, trueValues: trueSeeds))}, none of which is unavailable or one of its values {listedLines(trueSeeds)}. The epilogue has popped the frame pointer its slot is addressed from, so whatever a slot row reads there is the caller's frame. {said}")
+
+	discardStagedDir(staged)
+end 'no row of a local covers the return of either exit, where the frame and the callee-saved registers belong to the caller again'

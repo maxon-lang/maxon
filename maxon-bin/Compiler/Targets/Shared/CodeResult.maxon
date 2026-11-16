@@ -458,11 +458,17 @@ end 'DebugLocalCodeRange'
 export typealias DebugLocalCodeRangeArray = Array with DebugLocalCodeRange
 typealias CodeOffsetColumn = OptionalIndexColumn with CodeOffset
 
+let DebugWriterAddressSpan = 1 as CodeOffset
+
 export type DebugRunOffsets
 	let base as ElementIndex
 	var starts as CodeOffsetColumn
 	var ends as CodeOffsetColumn
 	var armed as bool
+	var firstInstructions as BlockOffsetTable
+	var fallThroughEnds as BlockOffsetTable
+	var entered as BlockId
+	var awaitsItsFirstInstruction as bool
 
 	export static function forFunction(func IrFunction, armed bool) returns DebugRunOffsets
 		let window = DebugAnchorWindow.empty()
@@ -481,14 +487,30 @@ export type DebugRunOffsets
 		end 'eachBlockOfASpan'
 
 		if not armed or not window.hasAnchors() 'nothingToResolve'
-			return Self{base: 0, starts: CodeOffsetColumn.create(), ends: CodeOffsetColumn.create(), armed: false}
+			return Self{base: 0, starts: CodeOffsetColumn.create(), ends: CodeOffsetColumn.create(), armed: false, firstInstructions: BlockOffsetTable.forBlockCount(0), fallThroughEnds: BlockOffsetTable.forBlockCount(0), entered: 0, awaitsItsFirstInstruction: false}
 		end 'nothingToResolve'
 
 		let size = window.extent()
-		return Self{base: window.opening(), starts: CodeOffsetColumn.absent(size), ends: CodeOffsetColumn.absent(size), armed: true}
+		return Self{base: window.opening(), starts: CodeOffsetColumn.absent(size), ends: CodeOffsetColumn.absent(size), armed: true, firstInstructions: BlockOffsetTable.forBlockCount(func.nextBlockId), fallThroughEnds: BlockOffsetTable.forBlockCount(func.nextBlockId), entered: 0, awaitsItsFirstInstruction: false}
 	end 'forFunction'
 
+	export function openBlock(blockId BlockId)
+		self.entered = blockId
+		self.awaitsItsFirstInstruction = self.armed
+	end 'openBlock'
+
+	export function closeBlock(blockId BlockId, codeEnd CodeOffset, fallsThrough bool)
+		if self.armed and fallsThrough 'intoTheNextBlock'
+			self.fallThroughEnds.place(blockId, value: codeEnd)
+		end 'intoTheNextBlock'
+	end 'closeBlock'
+
 	export function note(opIdx ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
+		if self.awaitsItsFirstInstruction 'theBlocksFirstInstruction'
+			self.firstInstructions.place(self.entered, value: codeStart)
+			self.awaitsItsFirstInstruction = false
+		end 'theBlocksFirstInstruction'
+
 		if not self.armed or opIdx < self.base 'outsideTheWindow'
 			return
 		end 'outsideTheWindow'
@@ -503,18 +525,45 @@ export type DebugRunOffsets
 		self.ends.set(slot, value: codeEnd)
 	end 'note'
 
-	export function resolve(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugLocalCodeRangeArray
+	export function resolve(func IrFunction, module TargetModule, blockStarts BlockOffsetTable) returns DebugLocalCodeRangeArray
 		let ranges = DebugLocalCodeRangeArray.create(0)
 
 		if not self.armed 'nothingToResolve'
 			return ranges
 		end 'nothingToResolve'
 
+		let buf = OperandList.create(0)
+		let opFacts = OpVariantFacts.create()
+
 		for range in func.debugLocalRanges 'eachRun'
 			let blockStart = try blockStarts.get(range.blockId) otherwise continue
-			let blockEnd = try blockEnds.get(range.blockId) otherwise continue
-			let codeStart = self.runStart(range, blockStart: blockStart, blockEnd: blockEnd)
-			let codeEnd = self.endOf(range.last, orElse: blockEnd)
+			let codeStart = try self.runStart(range, blockStart: blockStart) otherwise continue
+			let location = try func.debugLocalLocations.get(range.valueOrdinal) otherwise panic("DebugRunOffsets.resolve: a run names value ordinal {range.valueOrdinal} past the {func.debugLocalLocations.count()} locations the allocator answered")
+
+			if location.kind == DebugValueNowhere 'heldNowhere'
+				continue
+			end 'heldNowhere'
+
+			let last = try module.ops.get(range.last) otherwise panic("DebugRunOffsets.resolve: a run ends at op {range.last}, past the {module.ops.count()} ops of the module")
+			var codeEnd = 0 as CodeOffset
+
+			if debugOpOverwrites(last, location: location, buf: buf, opFacts: opFacts) 'reachesItsWriter'
+				let writerStart = try self.offsetOf(self.starts, opIdx: range.last) otherwise continue
+
+				if range.first == range.last and not range.opensAfterFirst and writerStart == (try self.firstInstructions.get(range.blockId) otherwise panic("DebugRunOffsets.resolve: block {range.blockId} holds a run and recorded no first instruction")) 'theWriterOpensTheBlock'
+					continue
+				end 'theWriterOpensTheBlock'
+
+				codeEnd = writerStart + DebugWriterAddressSpan
+			end 'reachesItsWriter' else 'heldThroughItsLastOp'
+				let (reached, heldEnd) = self.heldEndOf(range.blockId, lastOp: range.last)
+
+				if not reached 'endsInCodeNoLongerThere'
+					continue
+				end 'endsInCodeNoLongerThere'
+
+				codeEnd = heldEnd
+			end 'heldThroughItsLastOp'
 
 			if codeEnd <= codeStart 'coversNoCode'
 				continue
@@ -523,12 +572,31 @@ export type DebugRunOffsets
 			ranges.push(DebugLocalCodeRange.create(range.valueOrdinal, codeStart: codeStart, codeEnd: codeEnd))
 		end 'eachRun'
 
-		self.resolveSpans(func, blockStarts: blockStarts, blockEnds: blockEnds, into: ranges)
+		self.resolveSpans(func, blockStarts: blockStarts, into: ranges)
 		return ranges
 	end 'resolve'
 
-	function resolveSpans(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable, into DebugLocalCodeRangeArray)
+	// A last op without code is a block's branch, elided into a fall-through or replaced by a
+	// copied return tail: code the allocator never analysed, which no row may cover.
+	function heldEndOf(blockId BlockId, lastOp ElementIndex) returns (bool, CodeOffset)
+		if let codeEnd = try self.offsetOf(self.ends, opIdx: lastOp) 'emitted'
+			return (true, codeEnd)
+		end 'emitted'
+
+		if let fallThroughEnd = try self.fallThroughEnds.get(blockId) 'itsBranchBecameAFallThrough'
+			return (true, fallThroughEnd)
+		end 'itsBranchBecameAFallThrough'
+
+		return (false, 0)
+	end 'heldEndOf'
+
+	function resolveSpans(func IrFunction, blockStarts BlockOffsetTable, into DebugLocalCodeRangeArray)
 		let rows = func.debugLocalSpans
+
+		if rows.spans.count() == 0 'noSpans'
+			return
+		end 'noSpans'
+
 		let viewOfSpan = CsrColumn.create(rows.spans.count(), zeroed: false)
 		let spanIndices = CsrColumn.create(rows.spans.count(), zeroed: false)
 
@@ -538,13 +606,24 @@ export type DebugRunOffsets
 		end 'eachSpan'
 
 		let spansOfView = buildCsr(viewOfSpan, to: spanIndices, nodeCount: rows.viewCount() as CsrIndex)
+		var widestView = 0 as ElementIndex
+
+		for view in 0 upto rows.viewCount() 'eachViewToSize'
+			let width = rows.viewPast(view) - rows.viewFirst(view)
+
+			if spansOfView.degree(view as CsrIndex) > 0 and width > widestView 'widerAndRead'
+				widestView = width
+			end 'widerAndRead'
+		end 'eachViewToSize'
+
+		let resolver = DebugSpanResolver.create(widestView)
 
 		for view in 0 upto rows.viewCount() 'eachView'
 			if spansOfView.degree(view as CsrIndex) == 0 'noSpanReadsIt'
 				continue
 			end 'noSpanReadsIt'
 
-			let resolver = self.spanResolver(rows, view: view, blockStarts: blockStarts, blockEnds: blockEnds)
+			self.openResolver(resolver, rows: rows, view: view, blockStarts: blockStarts)
 
 			for k in 0 upto spansOfView.degree(view as CsrIndex) 'eachSpanOfTheView'
 				let span = try rows.spans.get(spansOfView.neighbour(view as CsrIndex, k: k)) otherwise panic("DebugRunOffsets.resolveSpans: spans.get OOB at {spansOfView.neighbour(view as CsrIndex, k: k)}")
@@ -553,48 +632,48 @@ export type DebugRunOffsets
 		end 'eachView'
 	end 'resolveSpans'
 
-	function spanResolver(rows DebugSpanRows, view ElementIndex, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugSpanResolver
+	function openResolver(resolver DebugSpanResolver, rows DebugSpanRows, view ElementIndex, blockStarts BlockOffsetTable)
 		let viewFirst = rows.viewFirst(view)
 		let viewPast = rows.viewPast(view)
-		let resolver = DebugSpanResolver.create(viewPast - viewFirst)
+		resolver.open(viewPast - viewFirst)
 
 		for at in viewFirst upto viewPast 'eachBlockOfTheView'
-			let blockId = try rows.blocks.get(at) otherwise panic("DebugRunOffsets.spanResolver: blocks.get OOB at {at}")
+			let blockId = try rows.blocks.get(at) otherwise panic("DebugRunOffsets.openResolver: blocks.get OOB at {at}")
 			let blockStart = try blockStarts.get(blockId) otherwise continue
-			let blockEnd = try blockEnds.get(blockId) otherwise continue
-			let lastOp = try rows.lastAnchors.get(at) otherwise panic("DebugRunOffsets.spanResolver: lastAnchors.get OOB at {at}")
-			let codeEnd = self.endOf(lastOp, orElse: blockEnd)
+			let lastOp = try rows.lastAnchors.get(at) otherwise panic("DebugRunOffsets.openResolver: lastAnchors.get OOB at {at}")
+			let codeStart = self.pieceStart(rows, at: at, viewFirst: viewFirst, blockId: blockId, blockStart: blockStart)
+			let (reached, codeEnd) = self.heldEndOf(blockId, lastOp: lastOp)
 
-			if codeEnd <= blockStart 'coversNoCode'
+			if not reached or codeEnd <= codeStart 'coversNoCode'
 				continue
 			end 'coversNoCode'
 
-			resolver.place(at - viewFirst, codeStart: blockStart, codeEnd: codeEnd)
+			resolver.place(at - viewFirst, codeStart: codeStart, codeEnd: codeEnd)
 		end 'eachBlockOfTheView'
 
 		resolver.seal()
-		return resolver
-	end 'spanResolver'
+	end 'openResolver'
 
-	function runStart(range DebugValueRange, blockStart CodeOffset, blockEnd CodeOffset) returns CodeOffset
+	function pieceStart(rows DebugSpanRows, at ElementIndex, viewFirst ElementIndex, blockId BlockId, blockStart CodeOffset) returns CodeOffset
+		if at > viewFirst and (try rows.blocks.get(at - 1) otherwise panic("DebugRunOffsets.pieceStart: blocks.get OOB at {at - 1}")) == blockId 'theBlocksBranch'
+			let bodyLast = try rows.lastAnchors.get(at - 1) otherwise panic("DebugRunOffsets.pieceStart: lastAnchors.get OOB at {at - 1}")
+			return try self.offsetOf(self.ends, opIdx: bodyLast) otherwise panic("DebugRunOffsets.pieceStart: op {bodyLast}, the last body op of block {blockId}, emitted no code although the block was laid down; branch cleanup and the frame pass remove no body op")
+		end 'theBlocksBranch'
+
+		return blockStart
+	end 'pieceStart'
+
+	function runStart(range DebugValueRange, blockStart CodeOffset) returns CodeOffset throws AbsentError
 		if range.fromBlockEntry 'fromTheBlocksFirstByte'
 			return blockStart
 		end 'fromTheBlocksFirstByte'
 
 		if range.opensAfterFirst 'behindAnOp'
-			return self.endOf(range.first, orElse: blockEnd)
+			return try self.offsetOf(self.ends, opIdx: range.first)
 		end 'behindAnOp'
 
-		return self.startOf(range.first, orElse: blockStart)
+		return try self.offsetOf(self.starts, opIdx: range.first)
 	end 'runStart'
-
-	function startOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
-		return try self.offsetOf(self.starts, opIdx: opIdx) otherwise orElse
-	end 'startOf'
-
-	function endOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
-		return try self.offsetOf(self.ends, opIdx: opIdx) otherwise orElse
-	end 'endOf'
 
 	function offsetOf(column CodeOffsetColumn, opIdx ElementIndex) returns CodeOffset throws AbsentError
 		if opIdx < self.base 'beforeTheWindow'
@@ -667,7 +746,7 @@ export type DebugFunctionRange
 
 	export var frameLinkBytes as StackSize
 
-	// Chunk-local, unlike `codeStart`: `MxdbgEmit.mergedLiveRanges` adds `codeStart` to every run.
+	// Chunk-local, unlike `codeStart`: `collectPlacedRows` adds `codeStart` to every run.
 	export var localRanges as DebugLocalCodeRangeArray
 
 	export let inlineSiteBase as ElementIndex

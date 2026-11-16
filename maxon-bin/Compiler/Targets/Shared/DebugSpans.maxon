@@ -1,4 +1,5 @@
 let DebugPositionSpan = 4294967296
+let PendingEntriesPerRange = 2
 
 export type DebugValueSpan
 	export let valueOrdinal as ElementIndex
@@ -113,16 +114,24 @@ export type DebugSpanRows
 end 'DebugSpanRows'
 
 type ExtremeTree
-	let count as ElementIndex
+	var count as ElementIndex
 	let wantsMax as bool
 	var keys as FixedCfgIndexArray
 	var nodes as FixedCfgIndexArray
 
-	static function create(count ElementIndex, wantsMax bool) returns ExtremeTree
-		let keys = FixedCfgIndexArray.create(count)
-		let nodes = FixedCfgIndexArray.create(count * 2)
-		return Self{count: count, wantsMax: wantsMax, keys: keys, nodes: nodes}
+	static function create(capacity ElementIndex, wantsMax bool) returns ExtremeTree
+		let keys = FixedCfgIndexArray.create(capacity)
+		let nodes = FixedCfgIndexArray.create(capacity * 2)
+		return Self{count: capacity, wantsMax: wantsMax, keys: keys, nodes: nodes}
 	end 'create'
+
+	function open(leafCount ElementIndex)
+		if leafCount > self.keys.count() 'pastTheCapacity'
+			panic("ExtremeTree.open: {leafCount} leaves is past the {self.keys.count()} the tree was sized to")
+		end 'pastTheCapacity'
+
+		self.count = leafCount
+	end 'open'
 
 	function setKey(position ElementIndex, key ElementIndex)
 		try self.keys.set(position, value: key) otherwise panic("ExtremeTree.setKey: position {position} is past the {self.count} leaves")
@@ -192,42 +201,70 @@ type ExtremeTree
 end 'ExtremeTree'
 
 type DebugSpanResolver
-	let positionCount as ElementIndex
+	let capacity as ElementIndex
+	var positionCount as ElementIndex
 	var starts as FixedCodeOffsetArray
 	var ends as FixedCodeOffsetArray
 	var order as CfgIndexArray
 	var finalIndex as FixedCfgIndexArray
+	var sortKeys as CfgIndexArray
+	var openedRuns as CfgIndexArray
+	var closedRuns as CfgIndexArray
+	var searchStack as CfgIndexArray
 	var startsLow as ExtremeTree
 	var startsHigh as ExtremeTree
 	var endsLow as ExtremeTree
 	var endsHigh as ExtremeTree
 
-	static function create(positionCount ElementIndex) returns DebugSpanResolver
-		let starts = FixedCodeOffsetArray.create(positionCount)
-		let ends = FixedCodeOffsetArray.create(positionCount)
-		let finalIndex = FixedCfgIndexArray.create(positionCount)
-		return Self{positionCount: positionCount, starts: starts, ends: ends, order: CfgIndexArray.create(0), finalIndex: finalIndex, startsLow: ExtremeTree.create(positionCount, wantsMax: false), startsHigh: ExtremeTree.create(positionCount, wantsMax: true), endsLow: ExtremeTree.create(positionCount, wantsMax: false), endsHigh: ExtremeTree.create(positionCount, wantsMax: true)}
+	static function create(capacity ElementIndex) returns DebugSpanResolver
+		let starts = FixedCodeOffsetArray.create(capacity)
+		let ends = FixedCodeOffsetArray.create(capacity)
+		let finalIndex = FixedCfgIndexArray.create(capacity)
+		let order = CfgIndexArray.create(capacity, zeroed: false)
+		let keyed = CfgIndexArray.create(capacity, zeroed: false)
+		let runStarts = CfgIndexArray.create(capacity, zeroed: false)
+		let runEnds = CfgIndexArray.create(capacity, zeroed: false)
+		let pending = CfgIndexArray.create((capacity + 1) * PendingEntriesPerRange, zeroed: false)
+		return Self{capacity: capacity, positionCount: capacity, starts: starts, ends: ends, order: order, finalIndex: finalIndex, sortKeys: keyed, openedRuns: runStarts, closedRuns: runEnds, searchStack: pending, startsLow: ExtremeTree.create(capacity, wantsMax: false), startsHigh: ExtremeTree.create(capacity, wantsMax: true), endsLow: ExtremeTree.create(capacity, wantsMax: false), endsHigh: ExtremeTree.create(capacity, wantsMax: true)}
 	end 'create'
 
+	export function open(viewWidth ElementIndex)
+		if viewWidth > self.capacity 'pastTheCapacity'
+			panic("DebugSpanResolver.open: {viewWidth} positions is past the {self.capacity} the resolver was sized to")
+		end 'pastTheCapacity'
+
+		self.positionCount = viewWidth
+		self.order.clear()
+		self.startsLow.open(viewWidth)
+		self.startsHigh.open(viewWidth)
+		self.endsLow.open(viewWidth)
+		self.endsHigh.open(viewWidth)
+	end 'open'
+
 	export function place(position ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
-		try self.starts.set(position, value: codeStart) otherwise panic("DebugSpanResolver.place: position {position} is past the {self.positionCount} the resolver was sized to")
-		try self.ends.set(position, value: codeEnd) otherwise panic("DebugSpanResolver.place: position {position} is past the {self.positionCount} the resolver was sized to")
+		if position >= self.positionCount 'pastTheView'
+			panic("DebugSpanResolver.place: position {position} is past the {self.positionCount} the resolver was opened over")
+		end 'pastTheView'
+
+		try self.starts.set(position, value: codeStart) otherwise panic("DebugSpanResolver.place: position {position} is past the {self.capacity} the resolver was sized to")
+		try self.ends.set(position, value: codeEnd) otherwise panic("DebugSpanResolver.place: position {position} is past the {self.capacity} the resolver was sized to")
 		self.order.push(position)
 	end 'place'
 
 	export function seal()
-		let keyed = CfgIndexArray.create(self.order.count(), zeroed: false)
+		let keyed = self.sortKeys
+		keyed.clear()
 
 		for position in self.order 'eachPlaced'
 			keyed.push((self.startOf(position) as ElementIndex) * DebugPositionSpan + position)
 		end 'eachPlaced'
 
-		keyed.sort()
+		keyed.sortUnstable()
 		self.order.clear()
 
 		for key in keyed 'eachInFinalOrder'
 			let position = key mod DebugPositionSpan
-			try self.finalIndex.set(position, value: self.order.count()) otherwise panic("DebugSpanResolver.seal: position {position} is past the {self.positionCount} the resolver was sized to")
+			try self.finalIndex.set(position, value: self.order.count()) otherwise panic("DebugSpanResolver.seal: position {position} is past the {self.capacity} the resolver was sized to")
 			self.order.push(position)
 		end 'eachInFinalOrder'
 
@@ -235,7 +272,9 @@ type DebugSpanResolver
 
 		for position in 0 upto self.positionCount 'eachPosition'
 			self.startsLow.setKey(position, key: absent)
+			self.startsHigh.setKey(position, key: 0)
 			self.endsLow.setKey(position, key: absent)
+			self.endsHigh.setKey(position, key: 0)
 		end 'eachPosition'
 
 		for at in 0 upto self.order.count() 'eachInOrder'
@@ -269,16 +308,18 @@ type DebugSpanResolver
 	end 'seal'
 
 	function startOf(position ElementIndex) returns CodeOffset
-		return try self.starts.get(position) otherwise panic("DebugSpanResolver.startOf: position {position} is past the {self.positionCount} the resolver was sized to")
+		return try self.starts.get(position) otherwise panic("DebugSpanResolver.startOf: position {position} is past the {self.capacity} the resolver was sized to")
 	end 'startOf'
 
 	function endOf(position ElementIndex) returns CodeOffset
-		return try self.ends.get(position) otherwise panic("DebugSpanResolver.endOf: position {position} is past the {self.positionCount} the resolver was sized to")
+		return try self.ends.get(position) otherwise panic("DebugSpanResolver.endOf: position {position} is past the {self.capacity} the resolver was sized to")
 	end 'endOf'
 
 	export function pieces(first ElementIndex, past ElementIndex, into DebugLocalCodeRangeArray, valueOrdinal ElementIndex)
-		let runStarts = CfgIndexArray.create(0)
-		let runEnds = CfgIndexArray.create(0)
+		let runStarts = self.openedRuns
+		let runEnds = self.closedRuns
+		runStarts.clear()
+		runEnds.clear()
 		self.collectRunBoundaries(self.startsLow, wantsMax: false, first: first, past: past, into: runStarts)
 		self.collectRunBoundaries(self.startsHigh, wantsMax: true, first: first, past: past, into: runStarts)
 		self.collectRunBoundaries(self.endsLow, wantsMax: false, first: first, past: past, into: runEnds)
@@ -299,7 +340,8 @@ type DebugSpanResolver
 	end 'pieces'
 
 	function collectRunBoundaries(tree ExtremeTree, wantsMax bool, first ElementIndex, past ElementIndex, into CfgIndexArray)
-		let pending = CfgIndexArray.create(0)
+		let pending = self.searchStack
+		pending.clear()
 		pending.push(first)
 		pending.push(past)
 
@@ -329,13 +371,14 @@ type DebugSpanResolver
 	end 'collectRunBoundaries'
 
 	function sortInFinalOrder(positions CfgIndexArray)
-		let keyed = CfgIndexArray.create(positions.count(), zeroed: false)
+		let keyed = self.sortKeys
+		keyed.clear()
 
 		for position in positions 'eachPosition'
-			keyed.push((try self.finalIndex.get(position) otherwise panic("DebugSpanResolver.sortInFinalOrder: position {position} is past the {self.positionCount} the resolver was sized to")) * DebugPositionSpan + position)
+			keyed.push((try self.finalIndex.get(position) otherwise panic("DebugSpanResolver.sortInFinalOrder: position {position} is past the {self.capacity} the resolver was sized to")) * DebugPositionSpan + position)
 		end 'eachPosition'
 
-		keyed.sort()
+		keyed.sortUnstable()
 		positions.clear()
 
 		for key in keyed 'eachInFinalOrder'

@@ -1,0 +1,60 @@
+let RegisterFlagCaseLabel = "sidecar-a-loop-carried-register-local-whose-header-argument-was-folded-reads-its-value-inside-the-loop"
+
+let RegisterFlagLocalName = "found"
+let RegisterFlagInsideStops = 3
+let RegisterFlagLoopValue = "false"
+let RegisterFlagBreakValue = "true"
+
+test 'a loop-carried register local whose header argument was folded reads its value inside the loop'
+	let staged = builtFixture(RegisterFlagCaseLabel, fixture: RegisterFlagFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let insideAt = anchorLine(program, anchor: "inside")
+	let hitAt = anchorLine(program, anchor: "hit")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: MainFunctionName)
+	let insideOffsets = statementOffsetsOfLine(executable, staged: staged, line: insideAt)
+	let covering = StringArray.create(0)
+
+	for row in rowsNamed(locals, name: RegisterFlagLocalName) 'eachRow'
+		for offset in insideOffsets 'eachOffset'
+			if rowCovers(row, offset: offset) and not covering.contains(row) 'coversTheLine'
+				covering.push(row)
+			end 'coversTheLine'
+		end 'eachOffset'
+	end 'eachRow'
+
+	Expect.notEqual(covering.count(), expected: 0, message: "no row of `{RegisterFlagLocalName}` covers the `inside` line, so this case asks about nothing a row could show. `{MainFunctionName}`'s locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(rowsNotInRegisters(covering)), message: "`{RegisterFlagLocalName}` is no longer held in a register on the `inside` line, so this case no longer asks about a REGISTER-held loop-carried local: a frame slot's row is what `{FoldedHeaderFixtureName}` already measures. These rows covering the line are not in a register: {listedLines(rowsNotInRegisters(covering))}")
+
+	let commands = ["{BreakCommand} {lineTarget(insideAt)}", "{BreakCommand} {lineTarget(hitAt)}", RunCommand]
+
+	for _ in 0 upto RegisterFlagInsideStops + 1 'eachStop'
+		commands.push("{PrintCommand} {RegisterFlagLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachStop'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+
+	Expect.equal(stopsAtLine(events, line: insideAt), expected: RegisterFlagInsideStops, message: "the loop runs its `inside` line {RegisterFlagInsideStops} times before the `break`. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: hitAt), expected: 1, message: "the loop is left by its `break`, so the `hit` arm runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: RegisterFlagInsideStops + 1, message: "each stop printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for (iter, shown) in answers.withIterator() 'eachAnswer'
+		if iter.index() < RegisterFlagInsideStops and shown != RegisterFlagLoopValue 'aWrongValue'
+			wrong.push("stop {iter.index() + 1} on the `inside` line read `{RegisterFlagLocalName}` as `{shown}`")
+		end 'aWrongValue'
+	end 'eachAnswer'
+
+	Expect.isEmpty(listedLines(wrong), message: "`{RegisterFlagLocalName}` holds {RegisterFlagLoopValue} on every pass through the loop: the loop header's argument for it was folded into the value it enters with, and the register holding that value is not written on the way to the `inside` line, so the row runs on into the loop. {listedLines(wrong)}. {said}")
+
+	let shownAfter = try answers.get(RegisterFlagInsideStops) otherwise AbsentEventText
+
+	Expect.isTrue(shownAfter == RegisterFlagBreakValue or isUnavailableAnswer(shownAfter), message: "after the `break` that set it, `{RegisterFlagLocalName}` is {RegisterFlagBreakValue}, or not shown at all; it read `{shownAfter}`, the value it held inside the loop. {said}")
+
+	discardStagedDir(staged)
+end 'a loop-carried register local whose header argument was folded reads its value inside the loop'

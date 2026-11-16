@@ -1,0 +1,98 @@
+let CallClobberCaseLabel = "sidecar-a-call-that-clobbers-a-register-ends-its-row"
+
+let CallClobberFunctionName = "relay"
+let CallClobberLocalName = "kept"
+let CallClobberSeed = 5
+let CallClobberFactor = 19
+let CallClobberTerm = 4
+let CallClobberPasses = 2
+
+test 'a call that clobbers the register a local is in ends that local row, so the line after the call never reads it'
+	let staged = builtFixture(CallClobberCaseLabel, fixture: CallClobberFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let lastUseAt = anchorLine(program, anchor: "last-use")
+	let callAt = anchorLine(program, anchor: "call")
+	let probeAt = anchorLine(program, anchor: "probe")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: CallClobberFunctionName)
+	let rows = rowsNamed(locals, name: CallClobberLocalName)
+
+	Expect.notEqual(rows.count(), expected: 0, message: "`{CallClobberFunctionName}` describes no `{CallClobberLocalName}`, so this case asks about nothing. Its locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(rowsNotInRegisters(rows)), message: "`{CallClobberLocalName}` is no longer held only in registers, so this case no longer asks about a REGISTER a call clobbers. These rows are not in a register: {listedLines(rowsNotInRegisters(rows))}")
+
+	let lastUseOffsets = statementOffsetsOfLine(executable, staged: staged, line: lastUseAt)
+	let callOffsets = statementOffsetsOfLine(executable, staged: staged, line: callAt)
+	let probeOffsets = statementOffsetsOfLine(executable, staged: staged, line: probeAt)
+
+	Expect.notEqual(lastUseOffsets.count(), expected: 0, message: "the `last-use` line has no statement rows.")
+	Expect.notEqual(callOffsets.count(), expected: 0, message: "the `call` line has no statement rows, so no call stands between the last use and the probe.")
+	Expect.notEqual(probeOffsets.count(), expected: 0, message: "the `probe` line has no statement rows, so there is nothing to stop at.")
+
+	if lastUseOffsets.count() == 0 or callOffsets.count() == 0 or probeOffsets.count() == 0 'nothingToAsk'
+		discardStagedDir(staged)
+		return
+	end 'nothingToAsk'
+
+	Expect.greaterThan(lowestOffsetOf(callOffsets), than: highestOffsetOf(lastUseOffsets), message: "the `call` line's code no longer follows `{CallClobberLocalName}`'s last use.")
+	Expect.greaterThan(lowestOffsetOf(probeOffsets), than: highestOffsetOf(callOffsets), message: "the `probe` line's code no longer follows the `call` line's, so the stop is not past the call.")
+
+	let commands = ["{BreakCommand} {lineTarget(probeAt)}", RunCommand]
+
+	for _ in 0 upto CallClobberPasses 'eachPass'
+		commands.push("{PrintCommand} {CallClobberLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachPass'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+	let trueValue = "{CallClobberSeed * CallClobberFactor + CallClobberTerm}"
+
+	Expect.equal(answers.count(), expected: CallClobberPasses, message: "`{CallClobberFunctionName}` runs twice, and each stop's `{PrintCommand} {CallClobberLocalName}` answers one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(answers, trueValues: [trueValue])), message: "`{PrintCommand} {CallClobberLocalName}` after the call answered {listedLines(answersNeitherTrueNorUnavailable(answers, trueValues: [trueValue]))}, none of which is unavailable or `{CallClobberLocalName}`'s value {trueValue}. A call writes every register in its clobber set, so a row that runs across it in a caller-saved register shows whatever the callee left there. {said}")
+
+	Expect.isEmpty(listedLines(rowsCoveringAny(rows, offsets: probeOffsets)), message: "a row of `{CallClobberLocalName}` covers the line after the call, so its register is one the call does not clobber and this case no longer asks about a clobber. Reshape the fixture so the local sits in a caller-saved register; do not weaken the claim. The covering rows: {listedLines(rowsCoveringAny(rows, offsets: probeOffsets))}")
+
+	var lastLimit = 0 as PrintedNumber
+
+	for row in rows 'eachRow'
+		let (_, limit) = requiredCodeRange(row, what: "a row of `{CallClobberLocalName}`")
+		lastLimit = limit if limit > lastLimit else lastLimit
+	end 'eachRow'
+
+	let callInstructionAt = lastLimit - 1
+	let probeStart = lowestOffsetOf(probeOffsets)
+
+	Expect.isTrue(callInstructionAt >= lowestOffsetOf(callOffsets) and callInstructionAt < probeStart, message: "`{CallClobberLocalName}`'s last row no longer ends one byte into the `call` line's code, so the call is not what ends it. Its last address is {hexSpelling(callInstructionAt)}, the `call` line's code begins at {hexSpelling(lowestOffsetOf(callOffsets))} and the `probe` line's at {hexSpelling(probeStart)}.")
+
+	if callInstructionAt < lowestOffsetOf(callOffsets) or callInstructionAt >= probeStart 'notTheCall'
+		discardStagedDir(staged)
+		return
+	end 'notTheCall'
+
+	let atTheCall = ["{BreakCommand} {exactOffsetTarget(callInstructionAt)}"]
+
+	for offset in callInstructionAt + 1 upto probeStart 'eachLaterByte'
+		atTheCall.push("{BreakCommand} {exactOffsetTarget(offset)}")
+	end 'eachLaterByte'
+
+	atTheCall.push(RunCommand)
+
+	for _ in 0 upto CallClobberPasses 'eachCallPass'
+		atTheCall.push("{PrintCommand} {CallClobberLocalName}")
+		atTheCall.push(ContinueCommand)
+	end 'eachCallPass'
+
+	let callSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(atTheCall), extraOptions: StringArray.create(0))
+	let callEvents = batchEvents(callSession.stdout)
+	let callSaid = renderedEvents(callSession.stdout, stderr: callSession.stderr)
+	let armed = armedOffsets(callEvents)
+
+	Expect.isTrue(armed.count() == 1 and armed.contains(callInstructionAt), message: "the last address `{CallClobberLocalName}` reads at, {hexSpelling(callInstructionAt)}, is the last instruction of the `call` line, the call itself, so it begins an instruction and no later byte before the `probe` line does. These were armed: {joined(spelledOffsets(armed), separator: ", ")}. {callSaid}")
+
+	Expect.equal(joined(answersOfNameAtStopsAt(callEvents, offset: callInstructionAt, name: CallClobberLocalName), separator: ", "), expected: "{trueValue}, {trueValue}", message: "a stop at the call instruction is before the call runs, so the caller-saved register still holds `{CallClobberLocalName}` and each of the {CallClobberPasses} passes reads {trueValue}. {callSaid}")
+
+	discardStagedDir(staged)
+end 'a call that clobbers the register a local is in ends that local row, so the line after the call never reads it'

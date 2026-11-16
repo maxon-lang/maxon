@@ -1,0 +1,47 @@
+let LoopWriteCaseLabel = "sidecar-a-write-in-a-loop-body-leaves-the-header-unavailable"
+
+let LoopWriteFunctionName = "churn"
+let LoopWriteLocalName = "kept"
+let LoopWriteSeed = 5
+let LoopWriteFactor = 17
+let LoopWriteTerm = 2
+let LoopWriteHeaderStops = 8
+
+test 'a register written in a loop body leaves its local unavailable at the header, which the back edge reaches'
+	let staged = builtFixture(LoopWriteCaseLabel, fixture: LoopWriteFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let writeAt = anchorLine(program, anchor: "write")
+	let headerAt = anchorLine(program, anchor: "header")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: LoopWriteFunctionName)
+	let rows = rowsNamed(locals, name: LoopWriteLocalName)
+
+	Expect.notEqual(rows.count(), expected: 0, message: "`{LoopWriteFunctionName}` describes no `{LoopWriteLocalName}`, so this case asks about nothing. Its locals were: {listedLines(locals)}")
+	Expect.isEmpty(listedLines(rowsNotInRegisters(rows)), message: "`{LoopWriteLocalName}` is no longer held only in registers, so this case no longer asks about a REGISTER row. These rows are not in a register: {listedLines(rowsNotInRegisters(rows))}")
+	Expect.notEqual(statementOffsetsOfLine(executable, staged: staged, line: writeAt).count(), expected: 0, message: "the loop body's `write` line has no code, so the back edge writes nothing.")
+
+	let headerOffsets = statementOffsetsOfLine(executable, staged: staged, line: headerAt)
+
+	Expect.notEqual(headerOffsets.count(), expected: 0, message: "the loop `header` line has no statement rows, so there is nothing to stop at.")
+
+	let commands = ["{BreakCommand} {lineTarget(headerAt)}", RunCommand]
+
+	for _ in 0 upto LoopWriteHeaderStops 'eachPass'
+		commands.push("{PrintCommand} {LoopWriteLocalName}")
+		commands.push(ContinueCommand)
+	end 'eachPass'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = printedAnswers(events)
+	let trueValue = "{LoopWriteSeed * LoopWriteFactor + LoopWriteTerm}"
+
+	Expect.equal(answers.count(), expected: LoopWriteHeaderStops, message: "`{LoopWriteFunctionName}` runs twice and evaluates its loop condition four times a run, once from the entry and three times from the back edge, and each stop's `{PrintCommand} {LoopWriteLocalName}` answers one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(answers, trueValues: [trueValue])), message: "`{PrintCommand} {LoopWriteLocalName}` at the loop header answered {listedLines(answersNeitherTrueNorUnavailable(answers, trueValues: [trueValue]))}, none of which is unavailable or `{LoopWriteLocalName}`'s value {trueValue}. The loop body writes registers and returns to the header along the back edge, so on that path the register no longer holds `{LoopWriteLocalName}`: a row that covers the header because the entry path reaches it intact shows another value's bytes on every later pass. {said}")
+
+	Expect.isEmpty(listedLines(rowsCoveringAny(rows, offsets: headerOffsets)), message: "a row of `{LoopWriteLocalName}` covers the loop header, so the loop body no longer writes its register and this case no longer asks about a write on the back edge. Reshape the fixture so the body writes it; do not weaken the claim. Its rows were: {listedLines(rows)}")
+
+	discardStagedDir(staged)
+end 'a register written in a loop body leaves its local unavailable at the header, which the back edge reaches'

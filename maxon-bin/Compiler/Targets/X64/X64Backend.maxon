@@ -3123,7 +3123,6 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 	let captureSpans = module.spans.armed
 	let lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
 	let runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
-	let chunkBlockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// Where this chunk's coverage counters land. Filled by the encoder itself, which is the only thing that
 	// knows where an instruction begins; empty for every build that emits none.
@@ -3148,6 +3147,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 		chunkLabelOffsets.place(block.id, value: blockStart as CodeOffset)
 
 		lineRows.openBlock(block.id, site: block.inlineSite)
+		runOffsets.openBlock(block.id)
 
 		if isFirstBlock and emitGuard 'guard'
 			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frame.frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.runtimeEntry if encoding.pinsItsThread else GtGuardSite.functionEntry, target: target)
@@ -3187,7 +3187,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 			emitUnit(module, first: termIdx, last: termIdx, role: branchWindowRoleOf(opAt(module, opIdx: termIdx)), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 		end 'hasTerm'
 
-		chunkBlockEnds.place(block.id, value: codeHere(code))
+		runOffsets.closeBlock(block.id, codeEnd: codeHere(code), fallsThrough: not block.hasTerminatorOp())
 		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
 
 		if stoppable 'mayBeStopped'
@@ -3217,7 +3217,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
-		chunk.localRanges = runOffsets.resolve(func, blockStarts: chunkLabelOffsets, blockEnds: chunkBlockEnds)
+		chunk.localRanges = runOffsets.resolve(func, module: module, blockStarts: chunkLabelOffsets)
 		chunk.frameSize = frame.frameBytes
 		chunk.paramCount = func.paramCount
 		chunk.spillSlotBase = spillBaseDisp

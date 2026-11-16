@@ -1,0 +1,46 @@
+let OnceChainCaseLabel = "sidecar-nested-inline-local-rows-are-bounded-by-the-bindings"
+
+let RowsPerBinding = 2
+let FewestNestedSites = 2
+
+test 'a function holding many nested inline bodies publishes a bounded number of rows per binding, not one per binding per level'
+	let staged = builtFixture(OnceChainCaseLabel, fixture: OnceChainFixtureName)
+	let functionRows = dumpedFunctionsSection(builtExecutable(staged), staged: staged)
+	var chosen = ""
+	var chosenRows = StringArray.create(0)
+
+	for row in declaredFunctionRows(functionRows) 'eachFunction'
+		if originIn(row) != AuthoredOrigin 'notAuthored'
+			continue
+		end 'notAuthored'
+
+		let rows = localRowsOf(functionRows, name: firstToken(row))
+
+		if rows.count() > chosenRows.count() 'more'
+			chosen = firstToken(row)
+			chosenRows = rows
+		end 'more'
+	end 'eachFunction'
+
+	let bindings = StringArray.create(0)
+	let sites = StringArray.create(0)
+
+	for row in chosenRows 'eachRow'
+		let site = inlineSiteOfRow(row)
+		let binding = "{firstToken(row)} in {site}"
+
+		if not bindings.contains(binding) 'aNewBinding'
+			bindings.push(binding)
+		end 'aNewBinding'
+
+		if not site.isEmpty() and not sites.contains(site) 'aNewSite'
+			sites.push(site)
+		end 'aNewSite'
+	end 'eachRow'
+
+	Expect.notEqual(chosen, expected: "", message: "no authored function of the chain describes a local, so this case asks about nothing. The functions section held: {listedLines(declaredFunctionRows(functionRows))}")
+	Expect.atLeast(sites.count(), than: FewestNestedSites, message: "`{chosen}`, the authored function with the most local rows, holds rows from {sites.count()} inline sites, so the inliner no longer nests the chain into it and this case no longer asks about nesting. Its rows were: {listedLines(chosenRows)}")
+	Expect.atMost(chosenRows.count(), than: bindings.count() * RowsPerBinding, message: "`{chosen}` publishes {chosenRows.count()} local rows for {bindings.count()} distinct bindings (a name at one inline site) across {sites.count()} nested inline sites. A row is the code over which a location holds a binding's value, so a binding whose register is only rewritten by the next level's handover has a row or two, not one per level its value passes through: a count that grows with the nesting depth times the bindings is the sidecar re-describing each value at every level it is inlined into.")
+
+	discardStagedDir(staged)
+end 'a function holding many nested inline bodies publishes a bounded number of rows per binding, not one per binding per level'

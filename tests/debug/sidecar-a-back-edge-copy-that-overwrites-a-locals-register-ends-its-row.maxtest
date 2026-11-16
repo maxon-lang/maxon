@@ -1,0 +1,157 @@
+let RotationCaseLabel = "sidecar-a-back-edge-copy-that-overwrites-a-locals-register-ends-its-row"
+
+let RotationFunctionName = "rotate"
+let RotationSeed = 5
+let RotationRounds = 4
+let RotationCalls = 2
+let FirstFactor = 3
+let FirstTerm = 1
+let SecondFactor = 5
+let SecondTerm = 2
+let ThirdFactor = 7
+let ThirdTerm = 3
+let NextSecondFactor = 2
+
+function rotatingNames() returns StringArray
+	return ["first", "second", "third"]
+end 'rotatingNames'
+
+function valuesAfterRound(round PrintedNumber) returns StringArray
+	var first = (RotationSeed * FirstFactor + FirstTerm) as PrintedNumber
+	var second = (RotationSeed * SecondFactor + SecondTerm) as PrintedNumber
+	var third = (RotationSeed * ThirdFactor + ThirdTerm) as PrintedNumber
+
+	for _ in 0 upto round 'eachRound'
+		let next = first + second * NextSecondFactor
+		first = second
+		second = third
+		third = next
+	end 'eachRound'
+
+	return ["{first}", "{second}", "{third}"]
+end 'valuesAfterRound'
+
+function placeCovering(rows StringArray, offset PrintedNumber) returns String
+	for row in rows 'eachRow'
+		if rowCovers(row, offset: offset) 'coversIt'
+			return placeOfRow(row)
+		end 'coversIt'
+	end 'eachRow'
+
+	return AbsentEventText
+end 'placeCovering'
+
+test 'a back edge that copies loop-carried locals into each other registers shows each local its own value or unavailable at every copy, never another local value'
+	let staged = builtFixture(RotationCaseLabel, fixture: RotationFixtureName)
+	let program = staged.join(StagedProgramFileName)
+	let executable = builtExecutable(staged)
+	let headerAt = anchorLine(program, anchor: "header")
+	let lastAt = anchorLine(program, anchor: "last")
+	let locals = localRowsOf(dumpedFunctionsSection(executable, staged: staged), name: RotationFunctionName)
+	let headerOffsets = statementOffsetsOfLine(executable, staged: staged, line: headerAt)
+	let lastOffsets = statementOffsetsOfLine(executable, staged: staged, line: lastAt)
+
+	Expect.notEqual(headerOffsets.count(), expected: 0, message: "the loop `header` line has no statement rows.")
+	Expect.notEqual(lastOffsets.count(), expected: 0, message: "the loop body's `last` line has no statement rows.")
+
+	if headerOffsets.count() == 0 or lastOffsets.count() == 0 'noLoop'
+		discardStagedDir(staged)
+		return
+	end 'noLoop'
+
+	let edgeStart = highestOffsetOf(lastOffsets)
+	let headerStart = lowestOffsetOf(headerOffsets)
+	let headerTest = highestOffsetOf(headerOffsets)
+
+	Expect.greaterThan(headerStart, than: edgeStart, message: "the loop header's code no longer follows the body's `last` line, so the back edge's copies do not lie between the two and this case cannot find them.")
+
+	if headerStart <= edgeStart 'noBackEdge'
+		discardStagedDir(staged)
+		return
+	end 'noBackEdge'
+
+	let moved = StringArray.create(0)
+
+	for name in rotatingNames() 'eachName'
+		let rows = rowsNamed(locals, name: name)
+		let before = placeCovering(rows, offset: edgeStart)
+		let after = placeCovering(rows, offset: headerTest)
+
+		if before.startsWith(RegisterPlacePrefix) and after.startsWith(RegisterPlacePrefix) and before != after 'aRotation'
+			moved.push("{name}: {before} -> {after}")
+		end 'aRotation'
+	end 'eachName'
+
+	Expect.notEqual(moved.count(), expected: 0, message: "no rotating local is in one register at the body's `last` line and in another at the loop test, so the back edge copies no register into another and this case asks about nothing. Its locals were: {listedLines(locals)}")
+
+	let commands = StringArray.create(0)
+
+	for offset in edgeStart upto headerStart 'eachEdgeByte'
+		commands.push("{BreakCommand} {exactOffsetTarget(offset)}")
+	end 'eachEdgeByte'
+
+	commands.push(RunCommand)
+
+	for _ in 0 upto (headerStart - edgeStart) * RotationRounds * RotationCalls + 1 'eachPossibleStop'
+		for name in rotatingNames() 'eachPrint'
+			commands.push("{PrintCommand} {name}")
+		end 'eachPrint'
+
+		commands.push(ContinueCommand)
+	end 'eachPossibleStop'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let armed = armedOffsets(events)
+
+	Expect.atLeast(armed.count(), than: 2, message: "between the body's `last` line and the loop header only {armed.count()} address begins an instruction, so the back edge holds no copy to stop at. Armed: {joined(spelledOffsets(armed), separator: ", ")}. {said}")
+
+	var visits = 0 as PrintedNumber
+	var stoppedAt = 0 as PrintedNumber
+	var stopped = false
+	var expected = valuesAfterRound(0)
+	let wrong = StringArray.create(0)
+	let read = StringArray.create(0)
+
+	for event in events 'eachEvent'
+		if eventKind(event) == StopEventName 'aStop'
+			stoppedAt = hexValue(textOf(event, node: event.root, key: OffsetKey))
+			stopped = true
+
+			if stoppedAt == edgeStart 'aNewRound'
+				visits = visits + 1
+				expected = valuesAfterRound((visits - 1) mod RotationRounds + 1)
+			end 'aNewRound'
+
+			continue
+		end 'aStop'
+
+		let value = memberOf(event, node: event.root, key: ValueKey)
+
+		if not stopped or visits == 0 or eventKind(event) != ValueEventName or value.count() != 1 'notAnAnswer'
+			continue
+		end 'notAnAnswer'
+
+		let name = textOf(event, node: nodeAt(value, index: 0), key: NameKey)
+		let answer = printedAnswer(event)
+
+		for (iter, rotating) in rotatingNames().withIterator() 'eachRotating'
+			if rotating != name 'anotherName'
+				continue
+			end 'anotherName'
+
+			let trueValue = try expected.get(iter.index()) otherwise panic("debug tests: valuesAfterRound gives one value per rotating name")
+			read.push("{hexSpelling(stoppedAt)} {name}={answer}")
+
+			if not isUnavailableAnswer(answer) and answer != trueValue 'notItsOwn'
+				wrong.push("at {hexSpelling(stoppedAt)} in round {(visits - 1) mod RotationRounds + 1}, `{name}` read {answer} where its value is {trueValue} (the round's values are {joined(expected, separator: ", ")})")
+			end 'notItsOwn'
+		end 'eachRotating'
+	end 'eachEvent'
+
+	Expect.equal(visits, expected: (RotationRounds * RotationCalls) as PrintedNumber, message: "`{RotationFunctionName}` runs twice and takes its back edge {RotationRounds} times a run, so the body's `last` line is stopped at {RotationRounds * RotationCalls} times. {said}")
+	Expect.isEmpty(listedLines(wrong), message: "at the back edge each assignment of the body has run, so each rotating local holds the value the round gave it, or reads unavailable. The edge then copies the locals into each other's registers to hand them to the header, and a row kept in a register after a copy wrote another local's value into it shows that value under the wrong name: a row ends one byte into the instruction that overwrites its register. Every reading: {listedLines(read)}. {said}")
+
+	discardStagedDir(staged)
+end 'a back edge that copies loop-carried locals into each other registers shows each local its own value or unavailable at every copy, never another local value'

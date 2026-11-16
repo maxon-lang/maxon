@@ -1,0 +1,29 @@
+typealias Amount = int(i64.min to i64.max)
+
+function settle(seed Amount) returns Amount
+	let early = seed * 7 + 3
+	let late = seed * 11 + 5
+
+	if early > late 'never' // anchor: last-use
+		return 0
+	end 'never'
+
+	let total = late * 2 // anchor: probe
+	print("settled {total}\n")
+
+	return total
+end 'settle'
+
+function main() returns ExitCode
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto 5 'fill'
+		bytes.push((65 + i mod 20) as Byte)
+	end 'fill'
+
+	let n = bytes.count() as Amount
+	let answer = settle(n) + settle(n)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

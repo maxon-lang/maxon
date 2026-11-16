@@ -752,6 +752,8 @@ function mxdbgRowHasALocation(locKind MxdbgIndex) returns bool
 end 'mxdbgRowHasALocation'
 
 function collectPlacedRows(rows MxdbgLocalRowArray, project Project, func IrFunction, range DebugFunctionRange, runs DebugRunsByOrdinal, first ElementIndex, past ElementIndex)
+	let pieces = MxdbgLocalRowArray.create(0)
+
 	for ordinal in first upto past 'eachValue'
 		let location = mxdbgLocationAt(func, at: ordinal)
 
@@ -761,10 +763,21 @@ function collectPlacedRows(rows MxdbgLocalRowArray, project Project, func IrFunc
 
 		let placement = mxdbgPlacementOf(project, location: location, range: range)
 
-		for span in mergedLiveRanges(range, runs: runs, ordinal: ordinal) 'eachSpan'
-			rows.push(MxdbgLocalRow.create(placement, codeStart: span.codeStart, codeEnd: span.codeEnd))
-		end 'eachSpan'
+		for k in 0 upto runs.count(ordinal) 'eachRange'
+			let span = runs.at(ordinal, k: k)
+			let codeStart = range.codeStart + span.codeStart
+			let spanEnd = range.codeStart + span.codeEnd
+			let codeEnd = spanEnd if spanEnd < range.codeEnd else range.codeEnd
+
+			if codeEnd <= codeStart 'outsideTheFunction'
+				continue
+			end 'outsideTheFunction'
+
+			pieces.push(MxdbgLocalRow.create(placement, codeStart: codeStart, codeEnd: codeEnd))
+		end 'eachRange'
 	end 'eachValue'
+
+	joinRowsOfEachPlace(pieces, into: rows)
 end 'collectPlacedRows'
 
 function unplacedRow(local DebugLocalDecl, writer MxdbgWriter, types MxdbgTypeTable, typeName ByteArray, range DebugFunctionRange) returns MxdbgLocalRow
@@ -870,53 +883,38 @@ end 'runOrdinalOf'
 // Runs are joined here over code offsets, not in the block order the allocator walked:
 // `BranchCleanup` reorders blocks, so two runs that abut in the emitted code need not abut in that
 // order, and merging by it would leave a hole a reader reports as "not live here".
-function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ordinal ElementIndex) returns DebugLocalCodeRangeArray
-	let mine = DebugLocalCodeRangeArray.create(0)
+function joinRowsOfEachPlace(pieces MxdbgLocalRowArray, into MxdbgLocalRowArray)
+	pieces.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives compareRowsByPlace(left, right: right))
 
-	for k in 0 upto runs.count(ordinal) 'eachRange'
-		let span = runs.at(ordinal, k: k)
-		let codeStart = range.codeStart + span.codeStart
-		let spanEnd = range.codeStart + span.codeEnd
-		let codeEnd = spanEnd if spanEnd < range.codeEnd else range.codeEnd
+	for piece in pieces 'eachSorted'
+		if into.count() > 0 'aRowIsOpen'
+			let open = try into.get(into.count() - 1) otherwise panic("joinRowsOfEachPlace: into.get OOB below the count just read")
 
-		if codeEnd <= codeStart 'outsideTheFunction'
-			continue
-		end 'outsideTheFunction'
+			if open.locKind == piece.locKind and open.locValue == piece.locValue and piece.codeStart <= open.codeEnd 'overlapsOrAbutsIt'
+				open.codeEnd = piece.codeEnd if piece.codeEnd > open.codeEnd else open.codeEnd
+				continue
+			end 'overlapsOrAbutsIt'
+		end 'aRowIsOpen'
 
-		mine.push(DebugLocalCodeRange.create(ordinal, codeStart: codeStart, codeEnd: codeEnd))
-	end 'eachRange'
-
-	mine.sortBy(function(left DebugLocalCodeRange, right DebugLocalCodeRange) gives left.codeStart.compare(right.codeStart))
-
-	let merged = DebugLocalCodeRangeArray.create(0)
-	var openStart = 0 as CodeOffset
-	var openEnd = 0 as CodeOffset
-	var open = false
-
-	for span in mine 'eachSorted'
-		if not open 'theFirst'
-			openStart = span.codeStart
-			openEnd = span.codeEnd
-			open = true
-			continue
-		end 'theFirst'
-
-		if span.codeStart > openEnd 'disjoint'
-			merged.push(DebugLocalCodeRange.create(ordinal, codeStart: openStart, codeEnd: openEnd))
-			openStart = span.codeStart
-			openEnd = span.codeEnd
-			continue
-		end 'disjoint'
-
-		openEnd = span.codeEnd if span.codeEnd > openEnd else openEnd
+		into.push(MxdbgLocalRow.create(MxdbgPlacement.create(piece.locKind, locValue: piece.locValue), codeStart: piece.codeStart, codeEnd: piece.codeEnd))
 	end 'eachSorted'
+end 'joinRowsOfEachPlace'
 
-	if open 'oneStillOpen'
-		merged.push(DebugLocalCodeRange.create(ordinal, codeStart: openStart, codeEnd: openEnd))
-	end 'oneStillOpen'
+function compareRowsByPlace(left MxdbgLocalRow, right MxdbgLocalRow) returns Ordering
+	let byKind = left.locKind.compare(right.locKind)
 
-	return merged
-end 'mergedLiveRanges'
+	if byKind != Ordering.equalTo 'differentKinds'
+		return byKind
+	end 'differentKinds'
+
+	let byValue = left.locValue.compare(right.locValue)
+
+	if byValue != Ordering.equalTo 'differentPlaces'
+		return byValue
+	end 'differentPlaces'
+
+	return left.codeStart.compare(right.codeStart)
+end 'compareRowsByPlace'
 
 type MxdbgLocalRow
 	export let locKind as MxdbgIndex
