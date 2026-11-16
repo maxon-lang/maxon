@@ -120,7 +120,16 @@ unknown work surfaces before you assign anything; start the `wait`.
 5. `node .claude/roadmap/unprioritized.mjs`: it lists every open Roadmap issue without a priority,
    including bugs the project added by itself and issues others filed. Give each one a priority now
    (`status.mjs <n> Ready <P>`). The fleet panel's Roadmap card shows the same count.
-6. Start the `wait` again.
+6. `fleet.mjs waiting`: it lists every task parked behind others. A task marked "ready to release"
+   has nothing open left to wait on: run `fleet.mjs release --task <the last one that closed>`, or tell
+   its owner yourself.
+7. Start the `wait` again.
+
+**A parked task records what it waits on.** When you hold a task behind other tasks (a landing order,
+an area another task holds, a ruling's dependency), put `Waits on: #<task>, #<task>` as the first line of
+its `task` issue. Closing a task releases its waiters: `fleet.mjs land` does it by itself, and a task
+closed any other way gets `fleet.mjs release --task <n>`. A parked worker whose heartbeat goes stale
+still gets the step-4 `PING`; idle is not the same as gone.
 
 | message | what you do |
 |---|---|

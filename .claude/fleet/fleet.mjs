@@ -447,6 +447,59 @@ function commandLand(options) {
   api('POST', `repos/${repo()}/issues/${task}/comments`, { body: `Landed as ${sha} (${branch} fast-forwarded to ${MAIN_BRANCH} and deleted).` });
   api('PATCH', `repos/${repo()}/issues/${task}`, { state: 'closed' });
   console.log(`landed ${sha}; ${branch} deleted; task ${task} closed`);
+  releaseWaiters(task);
+}
+
+const WAITS_ON_PATTERN = /^Waits on:\s*(.+)$/im;
+
+function waitsOn(issue) {
+  const match = WAITS_ON_PATTERN.exec(issue.body ?? '');
+  return match ? [...match[1].matchAll(/#(\d+)/g)].map(found => Number(found[1])) : [];
+}
+
+function ownerOf(issue) {
+  const colon = issue.title.indexOf(': ');
+  return colon > 0 && !issue.title.slice(0, colon).includes(' ') ? issue.title.slice(0, colon) : null;
+}
+
+function isOpen(number) {
+  return api('GET', `repos/${repo()}/issues/${number}`).state === 'open';
+}
+
+function releaseWaiters(closedTask) {
+  const closed = Number(closedTask);
+  for (const waiter of openIssues(LABELS.task).filter(issue => waitsOn(issue).includes(closed))) {
+    const pending = waitsOn(waiter).filter(number => number !== closed && isOpen(number));
+    const owner = ownerOf(waiter);
+    if (pending.length > 0) {
+      console.log(`task ${waiter.number} (${owner}) still waits on ${pending.map(n => `#${n}`).join(', ')}`);
+      continue;
+    }
+    const body = `GO ${waiter.number}\n\nEvery task it waited on is closed (the last was task ${closed}). Rebase onto origin/main and carry on.`;
+    if (owner) {
+      const box = ensureIssue(LABELS.mailbox, mailboxTitle(owner));
+      api('POST', `repos/${repo()}/issues/${box.number}/comments`, { body });
+    }
+    api('POST', `repos/${repo()}/issues/${waiter.number}/comments`, { body: `Released: task ${closed} closed, nothing left to wait on.` });
+    console.log(`task ${waiter.number}: GO sent to ${owner ?? '(no owner in title; tell it yourself)'}`);
+  }
+}
+
+function commandRelease(options) {
+  releaseWaiters(required(options, 'task'));
+}
+
+function commandWaiting() {
+  const parked = openIssues(LABELS.task).filter(issue => waitsOn(issue).length > 0);
+  if (parked.length === 0) {
+    console.log('no task is waiting on another');
+    return;
+  }
+  for (const issue of parked) {
+    const pending = waitsOn(issue).filter(isOpen);
+    const state = pending.length === 0 ? 'READY TO RELEASE (nothing open left): run release' : `waits on ${pending.map(n => `#${n}`).join(', ')}`;
+    console.log(`task ${issue.number} (${ownerOf(issue) ?? '?'}): ${state}`);
+  }
 }
 
 function commandRetire(options) {
@@ -475,6 +528,8 @@ function commandRetire(options) {
 
 const COMMANDS = {
   land: commandLand,
+  release: commandRelease,
+  waiting: commandWaiting,
   retire: commandRetire,
   init: commandInit,
   send: commandSend,
