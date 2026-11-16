@@ -6709,7 +6709,9 @@ Inside a block:
   call that passes it in an unmarked position (as argument or receiver), a read or write through it, and a
   nested `modify` of it are **E3199** (``'outer' cannot be opened: the value that holds it is read-only while
   'fill' is open``). It still goes where an `isolated` value goes: an `isolated` parameter or slot, a send,
-  `merge`. An `isolated` local the block creates is opened like any block local.
+  `merge`. An `isolated` local the block creates is opened like any block local. The state of an acquired
+  service is held by its `acquire` and is not such a local: inside a `modify` of one state another state is read
+  one statement at a time, and a write to it is **E3197** or **E3207**.
 - Waiting on another party and running a coroutine are refused: `await`, `awaitAny`, `acquire`, a runtime park
   such as `Scheduler.quiesce()`, and a call that may wait or may yield are **E3205**
   ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable

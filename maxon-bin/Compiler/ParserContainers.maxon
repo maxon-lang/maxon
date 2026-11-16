@@ -8836,17 +8836,21 @@ extension Parser
 	end 'requireNotAnIsolatedSlotRead'
 
 	function requireNotAnAcquiredState(value ValueId, verb String, anchor Token) throws SourceParseError
-		if not valueIsMarked(self.bodyState.acquiredStates, value: value) 'notAnAcquiredState'
+		if not self.valueIsAnAcquiredState(value) 'notAnAcquiredState'
 			return
 		end 'notAnAcquiredState'
 
 		throw self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "'{String.from(anchor.value)}' is the state of an acquired service and cannot be {verb}: the service keeps its state", line: anchor.line, column: anchor.column)
 	end 'requireNotAnAcquiredState'
 
+	function valueIsAnAcquiredState(value ValueId) returns bool
+		return valueIsMarked(self.bodyState.acquiredStates, value: value)
+	end 'valueIsAnAcquiredState'
+
 	function acquiredStateRootOf(value ValueId) returns ValueId throws AbsentError
 		let root = self.rootValueOf(value)
 
-		if not valueIsMarked(self.bodyState.acquiredStates, value: root) 'notRootedAtAState'
+		if not self.valueIsAnAcquiredState(root) 'notRootedAtAState'
 			throw AbsentError.absent
 		end 'notRootedAtAState'
 
@@ -9155,11 +9159,12 @@ extension Parser
 		end 'eachIsolatedHop'
 	end 'requireIsolatedSlotHolderWritable'
 
-	// A linear value is moved, not opened; the keeping-position checks judge it.
+	// A linear value is moved, not opened; the keeping-position checks judge it. An acquired state is
+	// held by its `acquire`, so the other-state window rules judge it, not the block it is outside.
 	function openedRootIsOutsideTheOpenBlock(opened ValueId) returns bool
 		let root = self.rootValueOf(opened)
 
-		if not self.valueIsAnOwnedIsolatedRegion(root) or self.valueIsLinear(root) 'notAnIsolatedRootToOpen'
+		if not self.valueIsAnOwnedIsolatedRegion(root) or self.valueIsLinear(root) or self.valueIsAnAcquiredState(root) 'notAnIsolatedRootToOpen'
 			return false
 		end 'notAnIsolatedRootToOpen'
 
