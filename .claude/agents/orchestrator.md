@@ -126,9 +126,19 @@ unknown work surfaces before you assign anything; start the `wait`.
 | `QUESTION` | the `planner` rules; record it in its `design` issue, reply `RULING` with the issue number |
 | `FOUND` | an unrelated defect. File it (`/land` §10, "Recording") unless an open issue already records it — then add the sighting as a comment — and reply with the issue number. Do not assign it to the finder mid-task |
 | `PROGRESS` | update the `task` issue only when its owner, area or state changed |
-| `DONE` | close the `task` naming the sha; the public issue it fixed is closed by the commit's `Fixes #<n>` — check, and close it yourself with the sha if not. Then treat it as `READY`, or, for a session being retired, reply `RETIRE` |
+| `DONE` | land it (below), close the `task` naming the sha; the public issue it fixed is closed by the commit's `Fixes #<n>` — check, and close it yourself with the sha if not. Then treat it as `READY`, or, for a session being retired, reply `RETIRE` |
 | `ARCHIVING` | the session archives itself: delete its heartbeat and close its mailbox. A retired session that does not send it gets a `fleet-finished` marker on the fleet issue, which the panel shows until the user presses its "Reap" button |
 | `BLOCKED` | a ruling → the `planner`; another task's area → broker it between the two owners; otherwise reassign, or ask the user |
+
+**Landing a worker's branch.** A cloud session pushes only to its own branch, so you land its commit:
+- the branch must hold exactly one commit that fast-forwards `origin/main`, never a merge commit. Otherwise the worker rebases it;
+- push it to main (`git push origin origin/<branch>:refs/heads/main`), then delete the branch: the user keeps GitHub tidy;
+- a cloud session cannot force-push, so when it must replace its branch with a rebased commit, delete the remote branch and have it push again under the same name;
+- every commit is correct on its own: two commits may be pushed back to back for a cost ladder, never for correctness.
+
+**A commit the pinned seed refuses** lands only through `scripts/pin-seed.sh`, run by a session that can publish releases and push main (a desktop session the user approves). While it runs, every other worker holds its pushes, and you push nothing to main, because each move under it costs a rebase and a re-proof. Send `GO` when its `DONE` arrives.
+
+**Retiring.** Do not reuse the long-running sessions the user has retired for new tasks. A retired session that cannot archive itself gets a `<!-- fleet-finished:<id> -->` marker on the fleet issue (JSON: id, account, task, place, at); delete its heartbeat and close its mailbox.
 
 ## Sizing the fleet to the plans
 
@@ -150,6 +160,10 @@ resets, with an `action`:
   waits at no cost until `RESUME`, never in the middle of its §8 gates or its push.
 - **`hold`** — change nothing. `hold (no usage sample)` means no live session on that account has
   reported usage yet; it is not a licence to start workers there.
+
+Only a desktop session signed in to an account can read its usage; cloud sessions report none. With no
+live sampler, `budget` paces on the account's last recorded sample and says how old it is. Ask the user
+to keep one desktop session on each account when its sample grows stale.
 
 A window at its target takes no new work on that account until it resets; the other account carries
 the work meanwhile. When the weekly window is the binding one, prefer Sonnet workers for contained work
@@ -182,11 +196,21 @@ Open a `task` issue in the fleet repository for each task (`gh issue create -R <
 4. every Roadmap ruling it touches, quoted with its issue number;
 5. what it must not touch, naming the tasks that own neighbouring areas.
 
-**Two open tasks never share an area.** When the only open work overlaps an active task, it waits. Prefer
-`ci-red` issues, then work that unblocks other tasks, then the next milestone's open issues, then the
-oldest unassigned known issue, then the rest of the Roadmap's `Ready` work. Nothing on the Backlog is
-assigned. **Claim the public issue before you send `ASSIGN`** — assign it to the maintainer
-and set it `In progress` (`node .claude/roadmap/status.mjs <n> "In progress"`), so the board shows what
+**Every open Roadmap issue has a priority**, the project's `Priority` field:
+- `P0` now: a red CI lane, a soundness hole, wrong output from compiled code, a compiler crash on valid input;
+- `P1` next: it blocks other planned work, it is the next step of an accepted design's queue, or it is a scaling regression;
+- `P2` normal: an ordinary bug, a wrong refusal, a misleading diagnostic, a settled enhancement;
+- `P3` later: cleanup, duplication, docs drift, tooling, or unmeasured performance work.
+
+An issue gets its priority when it goes on the Roadmap: `node .claude/roadmap/status.mjs <n> Ready <P>`. Take it from the definitions above, and send a borderline one to the `planner`.
+
+**Two open tasks never share an area.** When the only open work overlaps an active task, it waits. Take
+work by priority (`P0` first), and within one priority prefer work that unblocks other tasks, then the
+next milestone's open issues, then the oldest. Nothing on the Backlog is assigned. **Claim the public
+issue before you send `ASSIGN`**: assign it to the maintainer and set it `In progress`
+(`node .claude/roadmap/status.mjs <n> "In progress"`; that script also takes the issue off the
+Backlog). An accepted bug lands on the Roadmap by itself (the project's auto-add); other accepted issues
+land on the Backlog, and putting one on the Roadmap is the user's decision. The board then shows what
 is being implemented — and never assign one that someone else already holds. A task returned to open
 sets its issue back to `Ready` and unassigns it; the fix's `Fixes #<n>` closes it, and the board marks
 a closed issue `Done`. Planned work with no

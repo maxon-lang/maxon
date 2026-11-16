@@ -6,6 +6,7 @@ const REPO = 'maxon-lang/maxon';
 const PROJECT_NUMBER = '4';
 const BACKLOG_PROJECT_NUMBER = 3;
 const STATUS_FIELD = 'Status';
+const PRIORITY_FIELD = 'Priority';
 const ITEMS_PER_ISSUE = 20;
 
 function fail(message) {
@@ -17,19 +18,27 @@ function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 }
 
-const [issue, status] = process.argv.slice(2);
-if (!issue || !status) fail('usage: status.mjs <issue number> <status name, e.g. "In progress">');
+const [issue, status, priority] = process.argv.slice(2);
+if (!issue || !status) fail('usage: status.mjs <issue number> <status name, e.g. "In progress"> [priority, e.g. P1]');
 
 const project = JSON.parse(gh(['project', 'view', PROJECT_NUMBER, '--owner', OWNER, '--format', 'json']));
 const fields = JSON.parse(gh(['project', 'field-list', PROJECT_NUMBER, '--owner', OWNER, '--format', 'json'])).fields;
-const field = fields.find(candidate => candidate.name === STATUS_FIELD);
-if (!field) fail(`the project has no ${STATUS_FIELD} field`);
-const option = field.options.find(candidate => candidate.name === status);
-if (!option) fail(`no status "${status}"; the project's are: ${field.options.map(candidate => candidate.name).join(', ')}`);
+
+function optionOf(fieldName, value) {
+  const field = fields.find(candidate => candidate.name === fieldName);
+  if (!field) fail(`the project has no ${fieldName} field`);
+  const option = field.options.find(candidate => candidate.name === value);
+  if (!option) fail(`no ${fieldName} "${value}"; the project's are: ${field.options.map(candidate => candidate.name).join(', ')}`);
+  return { field, option };
+}
+
+const choices = [optionOf(STATUS_FIELD, status), ...(priority ? [optionOf(PRIORITY_FIELD, priority)] : [])];
 
 const url = `https://github.com/${REPO}/issues/${issue}`;
 const item = JSON.parse(gh(['project', 'item-add', PROJECT_NUMBER, '--owner', OWNER, '--url', url, '--format', 'json']));
-gh(['project', 'item-edit', '--project-id', project.id, '--id', item.id, '--field-id', field.id, '--single-select-option-id', option.id]);
+for (const { field, option } of choices) {
+  gh(['project', 'item-edit', '--project-id', project.id, '--id', item.id, '--field-id', field.id, '--single-select-option-id', option.id]);
+}
 
 const [repoOwner, repoName] = REPO.split('/');
 const query = `query($owner: String!, $name: String!, $number: Int!) {
@@ -44,4 +53,4 @@ for (const backlogItem of backlogItems) {
   gh(['project', 'item-delete', String(BACKLOG_PROJECT_NUMBER), '--owner', OWNER, '--id', backlogItem.id]);
 }
 
-console.log(`#${issue} is ${status}${backlogItems.length > 0 ? ', and off the Backlog' : ''}`);
+console.log(`#${issue} is ${status}${priority ? `, ${priority}` : ''}${backlogItems.length > 0 ? ', and off the Backlog' : ''}`);
