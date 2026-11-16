@@ -524,14 +524,32 @@ end 'cacheReadStoredSlotArgArray'
 
 // @generated library-cache end
 
+union MoveTarget
+	elsewhere
+	rebound(name immutable ByteArray)
+end 'MoveTarget'
+
+union MovedNames
+	every
+	only(names NameRoster)
+end 'MovedNames'
+
 type OpenKeptSite
 	let site as ElementIndex
 	let value as ValueId
 	let holder as ValueId
+	let movedNames as MovedNames
 
-	static function create(site ElementIndex, value ValueId, holder ValueId) returns OpenKeptSite
-		return Self{site: site, value: value, holder: holder}
+	static function create(site ElementIndex, value ValueId, holder ValueId, movedNames MovedNames) returns OpenKeptSite
+		return Self{site: site, value: value, holder: holder, movedNames: movedNames}
 	end 'create'
+
+	function namesTheMovedValue(binding VarInfo) returns bool
+		return match self.movedNames 'movedNames'
+			every gives true
+			only(names) gives names.contains(binding.name)
+		end 'movedNames'
+	end 'namesTheMovedValue'
 end 'OpenKeptSite'
 
 typealias OpenKeptSiteArray = Array with OpenKeptSite

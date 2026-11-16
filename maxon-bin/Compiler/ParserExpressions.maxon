@@ -1925,7 +1925,7 @@ extension Parser
 			self.fileReadsInArgument(notes, site: site, value: argValue, holder: holder, argStart: try argAnchors.get(later) otherwise panic("fileKeptArgumentSite: argAnchors.get OOB at {later} below its own count"))
 		end 'eachLaterArgument'
 
-		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: argValue, holder: holder))
+		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: argValue, holder: holder, movedNames: MovedNames.every))
 	end 'fileKeptArgumentSite'
 
 	function fileReadsInArgument(notes CapabilityNotes, site ElementIndex, value ValueId, holder ValueId, argStart ElementIndex)
@@ -1974,7 +1974,7 @@ extension Parser
 		end 'eachRoot'
 	end 'refuseMoveOfAMatchedUnique'
 
-	function noteLentUniqueMoved(value ValueId)
+	function noteLentUniqueMoved(value ValueId, target MoveTarget)
 		self.refuseMoveOfAMatchedUnique(value)
 
 		if self.bodyState.lentUniqueParams.isEmpty() 'noLentUniqueHere'
@@ -1991,13 +1991,13 @@ extension Parser
 				end 'anotherParameter'
 
 				let name = try self.bodyState.lentUniqueParamNames.get(index) otherwise panic("noteLentUniqueMoved: lentUniqueParamNames.get OOB at {index} — the columns are pushed together")
-				self.fileMovedLentUniqueSite(value, holder: holder, name: name)
+				self.fileMovedLentUniqueSite(value, holder: holder, name: name, movedNames: self.movedNamesOf(target, value: value, holder: holder))
 				return
 			end 'eachLentParameter'
 		end 'eachHolder'
 	end 'noteLentUniqueMoved'
 
-	function fileMovedLentUniqueSite(value ValueId, holder ValueId, name immutable ByteArray)
+	function fileMovedLentUniqueSite(value ValueId, holder ValueId, name immutable ByteArray, movedNames MovedNames)
 		let notes = self.notesForWrite(self.bodyFunction())
 		let anchorTok = self.tokenAt(self.pos - 1)
 		let site = notes.keptArgOps.count() as ElementIndex
@@ -2013,8 +2013,29 @@ extension Parser
 		notes.keptArgOrigins.push(UniqueOrigin.owned)
 		notes.keptNextLap.push(false)
 		notes.sparseForWrite().keptMovedSites.push(site)
-		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: value, holder: holder))
+		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: value, holder: holder, movedNames: movedNames))
 	end 'fileMovedLentUniqueSite'
+
+	// A rebind refuses reads of the names that hold the value when it is filed, never the new name or a
+	// later one: a later name is taken from the live name, so matching it would refuse the live name.
+	function movedNamesOf(target MoveTarget, value ValueId, holder ValueId) returns MovedNames
+		return match target 'target'
+			elsewhere gives MovedNames.every
+			rebound(newName) gives MovedNames.only(self.namesHoldingValueExcept(newName, value: value, holder: holder))
+		end 'target'
+	end 'movedNamesOf'
+
+	function namesHoldingValueExcept(except immutable ByteArray, value ValueId, holder ValueId) returns NameRoster
+		let names = NameRoster.create(0)
+
+		for (name, info) in self.bodyState.scope.allVars() 'eachBinding'
+			if name != except and self.bindingReadsValue(info, value: value, holder: holder) 'aNameHoldingIt'
+				names.push(name)
+			end 'aNameHoldingIt'
+		end 'eachBinding'
+
+		return names
+	end 'namesHoldingValueExcept'
 
 	function noteReadOfKeptArgument(binding VarInfo, nameTok Token)
 		if self.bodyState.openKeptSites.isEmpty() 'nothingKept'
@@ -2024,7 +2045,7 @@ extension Parser
 		let notes = self.notesForWrite(self.bodyFunction())
 
 		for open in self.bodyState.openKeptSites 'eachOpenSite'
-			if self.bindingReadsValue(binding, value: open.value, holder: open.holder) 'aReadOfTheKeptValue'
+			if self.bindingReadsValue(binding, value: open.value, holder: open.holder) and open.namesTheMovedValue(binding) 'aReadOfTheKeptValue'
 				self.fileKeptRead(notes, site: open.site, tok: nameTok)
 			end 'aReadOfTheKeptValue'
 		end 'eachOpenSite'

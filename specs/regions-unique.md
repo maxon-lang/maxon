@@ -330,6 +330,136 @@ end 'main'
 error E3102: <fragment>:14:15: use of moved value 'token': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: a-lent-unique-parameter-rebound-reads-through-the-new-name -->
+`let b = a` hands a lent unique parameter to `b`, so `b` is the live name and reading it is legal.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function rebind(a Tk)
+	let b = a
+	print("{b.n}\n")
+end 'rebind'
+
+function main() returns ExitCode
+	rebind(Tk.create(7))
+
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: a-lent-unique-parameter-rebound-is-pushed-through-the-new-name -->
+The new name of a rebound unique parameter can be handed on, which moves it once more.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias TkArray = Array with Tk
+
+function rebind(a Tk, shelf TkArray)
+	let b = a
+	shelf.push(b)
+end 'rebind'
+
+function main() returns ExitCode
+	let shelf = TkArray.create(0)
+	rebind(Tk.create(7), shelf: shelf)
+	print("{shelf.count()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+1
+```
+```exitcode
+0
+```
+
+<!-- test: a-lent-unique-parameter-read-after-its-rebind-is-refused -->
+The new name is live, and the parameter it was taken from is not.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function rebind(a Tk)
+	let b = a
+	print("{b.n} {a.n}\n")
+end 'rebind'
+
+function main() returns ExitCode
+	rebind(Tk.create(7))
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:16: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-lent-unique-parameter-rebound-twice-reads-through-the-last-name -->
+Each rebind hands the value on, so the last name is the live one.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function rebind(a Tk)
+	let b = a
+	let c = b
+	print("{c.n}\n")
+end 'rebind'
+
+function main() returns ExitCode
+	rebind(Tk.create(7))
+
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
 <!-- test: a-unique-parameter-handed-to-a-mutable-parameter-stays-readable -->
 Handing a unique parameter to a `mutable` parameter lends it for the call, so the parameter is read again afterwards, including in the handler of the `try` that made the call.
 
