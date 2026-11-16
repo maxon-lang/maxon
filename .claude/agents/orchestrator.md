@@ -117,28 +117,32 @@ unknown work surfaces before you assign anything; start the `wait`.
 3. `budget`, and resize the fleet ("Sizing", below).
 4. `status`: a `task` whose owner's heartbeat is over 60 minutes old gets a `PING`; still silent at the
    next wake, the task returns to open with a note of what the owner last reported.
-5. Start the `wait` again.
+5. `node .claude/roadmap/unprioritized.mjs`: it lists every open Roadmap issue without a priority,
+   including bugs the project added by itself and issues others filed. Give each one a priority now
+   (`status.mjs <n> Ready <P>`). The fleet panel's Roadmap card shows the same count.
+6. Start the `wait` again.
 
 | message | what you do |
 |---|---|
 | `READY` | the session is free. Assign it the next task if the budget allows one more worker on its account, else reply `PAUSE` |
 | `REQUEST` | the user started this worker on something directly. No overlap with an open `task` or a ruling → open a `task` for it and reply `ASSIGN`. Overlap → reply `STOP` naming the owner, and ask the user which goes ahead |
 | `QUESTION` | the `planner` rules; record it in its `design` issue, reply `RULING` with the issue number |
-| `FOUND` | an unrelated defect. File it (`/land` §10, "Recording") unless an open issue already records it — then add the sighting as a comment — and reply with the issue number. Do not assign it to the finder mid-task |
+| `FOUND` | an unrelated defect. File it with `node .claude/roadmap/file.mjs --title … --body-file … --label bug --label accepted --priority P<k>` (`/land` §10, "Recording"), unless an open issue already records it — then add the sighting as a comment — and reply with the issue number. Do not assign it to the finder mid-task |
 | `PROGRESS` | update the `task` issue only when its owner, area or state changed |
 | `DONE` | land it (below), close the `task` naming the sha; the public issue it fixed is closed by the commit's `Fixes #<n>` — check, and close it yourself with the sha if not. Then treat it as `READY`, or, for a session being retired, reply `RETIRE` |
-| `ARCHIVING` | the session archives itself: delete its heartbeat and close its mailbox. A retired session that does not send it gets a `fleet-finished` marker on the fleet issue, which the panel shows until the user presses its "Reap" button |
+| `ARCHIVING` | the session archives itself: `fleet.mjs retire --id <id> --archived yes`. A retired session that does not send it gets `fleet.mjs retire --id <id> --task <n>`, which posts the finished marker the panel shows until the user presses its "Reap" button |
 | `BLOCKED` | a ruling → the `planner`; another task's area → broker it between the two owners; otherwise reassign, or ask the user |
 
-**Landing a worker's branch.** A cloud session pushes only to its own branch, so you land its commit:
-- the branch must hold exactly one commit that fast-forwards `origin/main`, never a merge commit. Otherwise the worker rebases it;
-- push it to main (`git push origin origin/<branch>:refs/heads/main`), then delete the branch: the user keeps GitHub tidy;
+**Landing a worker's branch.** A cloud session pushes only to its own branch, so you land its commit
+with `node .claude/fleet/fleet.mjs land --task <n> --branch <branch>`:
+- it refuses a branch that is not exactly one commit fast-forwarding `origin/main`, or that holds a merge commit; the worker then rebases it;
+- it pushes the commit to main, deletes the branch (the user keeps GitHub tidy), and closes the `task`;
 - a cloud session cannot force-push, so when it must replace its branch with a rebased commit, delete the remote branch and have it push again under the same name;
 - every commit is correct on its own: two commits may be pushed back to back for a cost ladder, never for correctness.
 
 **A commit the pinned seed refuses** lands only through `scripts/pin-seed.sh`, run by a session that can publish releases and push main (a desktop session the user approves). While it runs, every other worker holds its pushes, and you push nothing to main, because each move under it costs a rebase and a re-proof. Send `GO` when its `DONE` arrives.
 
-**Retiring.** Do not reuse the long-running sessions the user has retired for new tasks. A retired session that cannot archive itself gets a `<!-- fleet-finished:<id> -->` marker on the fleet issue (JSON: id, account, task, place, at); delete its heartbeat and close its mailbox.
+**Retiring.** Do not reuse the long-running sessions the user has retired for new tasks. Retire a session with `fleet.mjs retire` (above): it deletes the heartbeat and closes the mailbox, and posts the finished marker unless the session archived itself.
 
 ## Sizing the fleet to the plans
 
@@ -202,7 +206,12 @@ Open a `task` issue in the fleet repository for each task (`gh issue create -R <
 - `P2` normal: an ordinary bug, a wrong refusal, a misleading diagnostic, a settled enhancement;
 - `P3` later: cleanup, duplication, docs drift, tooling, or unmeasured performance work.
 
-An issue gets its priority when it goes on the Roadmap: `node .claude/roadmap/status.mjs <n> Ready <P>`. Take it from the definitions above, and send a borderline one to the `planner`.
+An issue gets its priority when it goes on the Roadmap, and the tools refuse one without:
+- `file.mjs` refuses an accepted bug or design without `--priority`;
+- `status.mjs` refuses to set the status of a Roadmap issue that has none;
+- wake step 5 catches the rest.
+
+Take the priority from the definitions above, and send a borderline one to the `planner`.
 
 **Two open tasks never share an area.** When the only open work overlaps an active task, it waits. Take
 work by priority (`P0` first), and within one priority prefer work that unblocks other tasks, then the

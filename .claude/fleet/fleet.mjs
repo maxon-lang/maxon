@@ -419,7 +419,63 @@ function commandBudget() {
   console.log(JSON.stringify(plan, null, 2));
 }
 
+const MAIN_REMOTE = 'origin';
+const MAIN_BRANCH = 'main';
+const FINISHED_KIND = 'finished';
+
+function git(args) {
+  const result = spawnSync('git', args, { encoding: 'utf8' });
+  if (result.status !== 0) fail(`git ${args.join(' ')}: ${(result.stderr || result.stdout).trim().split('\n')[0]}`);
+  return result.stdout.trim();
+}
+
+function commandLand(options) {
+  const task = required(options, 'task');
+  const branch = required(options, 'branch');
+  const main = `${MAIN_REMOTE}/${MAIN_BRANCH}`;
+  const tip = `${MAIN_REMOTE}/${branch}`;
+  git(['fetch', '--quiet', MAIN_REMOTE, MAIN_BRANCH, branch]);
+
+  const ahead = Number(git(['rev-list', '--count', `${main}..${tip}`]));
+  if (ahead !== 1) fail(`${branch} holds ${ahead} commits on ${main}; the worker squashes it to one`);
+  if (spawnSync('git', ['merge-base', '--is-ancestor', main, tip]).status !== 0) fail(`${branch} does not fast-forward ${main}; the worker rebases it`);
+  if (git(['rev-list', '--merges', `${main}..${tip}`])) fail(`${branch} holds a merge commit; the worker rebases it`);
+
+  const sha = git(['rev-parse', '--short=9', tip]);
+  git(['push', '--quiet', MAIN_REMOTE, `${tip}:refs/heads/${MAIN_BRANCH}`]);
+  git(['push', '--quiet', MAIN_REMOTE, '--delete', branch]);
+  api('POST', `repos/${repo()}/issues/${task}/comments`, { body: `Landed as ${sha} (${branch} fast-forwarded to ${MAIN_BRANCH} and deleted).` });
+  api('PATCH', `repos/${repo()}/issues/${task}`, { state: 'closed' });
+  console.log(`landed ${sha}; ${branch} deleted; task ${task} closed`);
+}
+
+function commandRetire(options) {
+  const id = required(options, 'id');
+  const archived = options.archived === 'yes';
+  const { issue, heartbeats } = readFleet();
+  const beat = heartbeats.find(entry => entry.key === id);
+
+  if (!archived) {
+    const data = {
+      id,
+      account: beat?.data.account ?? options.account ?? null,
+      task: options.task ?? beat?.data.task ?? null,
+      place: beat?.data.machine ?? options.place ?? null,
+      at: Math.round(nowSeconds()),
+    };
+    api('POST', `repos/${repo()}/issues/${issue.number}/comments`, { body: jsonBody(FINISHED_KIND, id, data) });
+  }
+
+  if (beat) api('DELETE', `repos/${repo()}/issues/comments/${beat.comment.id}`);
+  for (const mailbox of matchingIssues(LABELS.mailbox, mailboxTitle(id))) {
+    api('PATCH', `repos/${repo()}/issues/${mailbox.number}`, { state: 'closed' });
+  }
+  console.log(`retired ${id}${archived ? ' (archived itself)' : '; finished marker posted for the panel'}`);
+}
+
 const COMMANDS = {
+  land: commandLand,
+  retire: commandRetire,
   init: commandInit,
   send: commandSend,
   inbox: commandInbox,

@@ -21,6 +21,28 @@ function gh(args) {
 const [issue, status, priority] = process.argv.slice(2);
 if (!issue || !status) fail('usage: status.mjs <issue number> <status name, e.g. "In progress"> [priority, e.g. P1]');
 
+const [repoOwner, repoName] = REPO.split('/');
+const query = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      projectItems(first: ${ITEMS_PER_ISSUE}) {
+        nodes {
+          id
+          project { number }
+          priority: fieldValueByName(name: "${PRIORITY_FIELD}") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+        }
+      }
+    }
+  }
+}`;
+const boards = JSON.parse(gh(['api', 'graphql', '-f', `query=${query}`, '-f', `owner=${repoOwner}`, '-f', `name=${repoName}`, '-F', `number=${issue}`]));
+const nodes = boards.data.repository.issue.projectItems.nodes;
+const roadmapItem = nodes.find(node => String(node.project.number) === PROJECT_NUMBER);
+const currentPriority = roadmapItem?.priority?.name ?? null;
+if (!priority && !currentPriority) {
+  fail(`#${issue} has no ${PRIORITY_FIELD} on the Roadmap; give one (P0-P3) as the third argument`);
+}
+
 const project = JSON.parse(gh(['project', 'view', PROJECT_NUMBER, '--owner', OWNER, '--format', 'json']));
 const fields = JSON.parse(gh(['project', 'field-list', PROJECT_NUMBER, '--owner', OWNER, '--format', 'json'])).fields;
 
@@ -40,17 +62,9 @@ for (const { field, option } of choices) {
   gh(['project', 'item-edit', '--project-id', project.id, '--id', item.id, '--field-id', field.id, '--single-select-option-id', option.id]);
 }
 
-const [repoOwner, repoName] = REPO.split('/');
-const query = `query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    issue(number: $number) { projectItems(first: ${ITEMS_PER_ISSUE}) { nodes { id project { number } } } }
-  }
-}`;
-const boards = JSON.parse(gh(['api', 'graphql', '-f', `query=${query}`, '-f', `owner=${repoOwner}`, '-f', `name=${repoName}`, '-F', `number=${issue}`]));
-const backlogItems = boards.data.repository.issue.projectItems.nodes.filter(node => node.project.number === BACKLOG_PROJECT_NUMBER);
-
+const backlogItems = nodes.filter(node => node.project.number === BACKLOG_PROJECT_NUMBER);
 for (const backlogItem of backlogItems) {
   gh(['project', 'item-delete', String(BACKLOG_PROJECT_NUMBER), '--owner', OWNER, '--id', backlogItem.id]);
 }
 
-console.log(`#${issue} is ${status}${priority ? `, ${priority}` : ''}${backlogItems.length > 0 ? ', and off the Backlog' : ''}`);
+console.log(`#${issue} is ${status}, ${priority ?? currentPriority}${backlogItems.length > 0 ? ', and off the Backlog' : ''}`);
