@@ -1,0 +1,60 @@
+let IdentityFoldCaseLabel = "sidecar-a-local-bound-to-an-identity-of-another-value-reads-that-value-or-unavailable"
+
+let IdentityFoldFilled = 5
+let IdentityFoldFactor = 977
+
+function identityFoldShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'identityFoldShown'
+
+function identityFoldIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'identityFoldIsUnavailable'
+
+test 'a local bound to an identity of another value reads that value or unavailable'
+	let staged = builtFixture(IdentityFoldCaseLabel, fixture: IdentityFoldFixtureName)
+	let executable = builtExecutable(staged)
+	let seed = "{IdentityFoldFilled * IdentityFoldFactor}"
+	let names = ["h", "k", "m"]
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let reads = StringArray.create(0)
+
+	for name in names 'eachName'
+		reads.push("{PrintCommand} {name}")
+	end 'eachName'
+
+	reads.push(ContinueCommand)
+
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(afterAt)}", RunCommand], rest: reads))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: afterAt), expected: 1, message: "the `after` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: names.count(), message: "each print printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for index in 0 upto names.count() 'eachName'
+		let answered = eventAt(answers, index: index as EventIndex)
+		let shown = identityFoldShown(answered)
+
+		if shown != seed and not identityFoldIsUnavailable(answered) 'aWrongValue'
+			wrong.push("`{try names.get(index) otherwise "?"}` read {shown}")
+		end 'aWrongValue'
+	end 'eachName'
+
+	Expect.isEmpty(listedLines(wrong), message: "a cast, an `or 0` and a `* 1` of `seed` each hold `seed`'s value ({seed}), or are not shown: the optimizer folds each into `seed` itself, and a name whose op was folded away names no other value. {listedLines(wrong)}. {said}")
+
+	discardStagedDir(staged)
+end 'a local bound to an identity of another value reads that value or unavailable'

@@ -5771,10 +5771,10 @@ end 'insertUseCalleeAndArgs'
 // rewritten to (and `v` itself where nothing changes). The mirror of `collectStdOpUses`: it
 // rewrites exactly the operands that one reports, so the two cannot drift. DEFS are left alone
 // (a def is not a use), and so are branch-edge args — those live on the predecessor's `IrBlock`,
-// not on the op, so rewriting them is `substituteValuesInFunc`'s job — and the reason no pass calls
+// not on the op, so rewriting them is `redirectReadsInFunc`'s job — and the reason no pass calls
 // this where `remappedValue` beside it is called: a pass that reached the op rewrite directly
-// could perform half the substitution, which is the failure that function's header names. Its two
-// callers are both in THIS file — `substituteValuesInFunc` below, and, arm for arm, `cloneStdOp`, which
+// could perform half the substitution, which is the failure that function's header names. Its
+// callers are in THIS file — `redirectReadsInOp` below, and, arm for arm, `cloneStdOp`, which
 // makes the same rewrite in one construction with the DEF and BLOCK-TARGET halves a clone additionally
 // needs. Exhaustive over StdOp
 // with no bare `default`, for the same reason its twin is: a new variant must be a COMPILE ERROR here
@@ -5994,9 +5994,10 @@ end 'remappedValue'
 // id with every NEW slot standing for ITSELF.
 //
 // ⭐ **THE COLUMN'S BUILDER, BESIDE ITS READER AND ITS APPLIER.** `remappedValue` reads one entry and
-// `substituteValuesInFunc` applies the whole column; this is how an entry gets in. `foldConstOperands`
-// and `eliminateCommonSubexpressions` both build one, and a second copy would be a dense column whose `push`-not-`resize` trap and identity seed
-// nothing keeps in step with this one.
+// the replace and redirect entries apply the whole column; this is how an entry gets in.
+// `foldConstOperands` and `eliminateCommonSubexpressions` both build one, and a second copy would
+// be a dense column whose `push`-not-`resize` trap and identity seed nothing keeps in step with
+// this one.
 //
 // ⚠ `resize` cannot build this column and the difference is a miscompile rather than a detail: it
 // zero-fills, and a zero in a substitution column means *"rewrite this read to value 0"*. The identity
@@ -6392,6 +6393,38 @@ function clonedBlocks(ids BlockIdArray, subst BlockIdArray) returns BlockIdArray
 	return out
 end 'clonedBlocks'
 
+// Forwards through the roster of the function it is handed, and a pool unit's copy holds none: a
+// pool pass calls `substituteValuesInFunc` with the unit's `ValueReplacements` instead.
+export function replaceValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray)
+	let replacements = valueReplacementsFollowing(func.holdsDebugVersions())
+	substituteValuesInFunc(module, func: func, subst: subst, replacements: replacements)
+	func.forwardDebugVersions(replacements)
+end 'replaceValuesInFunc'
+
+function substituteValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray, replacements ValueReplacements)
+	for blockRef in func.blockRefs 'eachBlock'
+		substituteValuesInBlock(module, block: module.getBlock(blockRef), subst: subst, replacements: replacements)
+	end 'eachBlock'
+end 'substituteValuesInFunc'
+
+// The per-block half of `substituteValuesInFunc` — the block's ops, its terminator and its outgoing
+// edge args — for a caller that rewrites a SUBSET of a function's blocks (`unswitchInvariantGuards`
+// rewrites a loop's own blocks to read the values it hoisted out of them).
+function substituteValuesInBlock(module StdModule, block IrBlock, subst ValueIdArray, replacements ValueReplacements)
+	match replacements 'slot'
+		untracked then break
+		tracked(record) then noteReplacedArgsIn(block, subst: subst, replacements: record)
+	end 'slot'
+
+	redirectReadsInBlock(module, block: block, subst: subst)
+end 'substituteValuesInBlock'
+
+function noteReplacedArgsIn(block IrBlock, subst ValueIdArray, replacements ValueReplacementRecord)
+	for arg in block.blockArgs 'eachArg'
+		replacements.noteReplacedArg(arg.valueId, survivor: remappedValue(arg.valueId, subst: subst), home: block.id)
+	end 'eachArg'
+end 'noteReplacedArgsIn'
+
 // Rewrite every READ in `func` that `subst` maps — in the ops, via `remapStdOpUses` above, and in the
 // BRANCH-EDGE args, which live on the predecessor's `IrBlock` rather than on any op and are therefore
 // the one half `remapStdOpUses` cannot reach.
@@ -6400,40 +6433,37 @@ end 'clonedBlocks'
 // own header says edges are "the caller's job", and for a while there was exactly one caller so that
 // read as a division of labour. It is not: a pass that rewrites the ops and forgets the edges leaves a
 // successor block reading a value the rewrite retired, which is a dangling reference the type checker
-// cannot see and the rendered Target IR shows as a wrong register. TWO passes fold values
-// (`elimTrivialBlockArgs`, `foldConstOperands`), so the pairing lives HERE, beside the three functions
-// it drives, and neither pass can perform half of it.
+// cannot see and the rendered Target IR shows as a wrong register. Every rewrite of a whole block's
+// reads goes through `redirectReadsInBlock`, so the pairing lives HERE, beside the functions it
+// drives, and no pass can perform half of it.
 //
 // ONE walk, applying ALL of the substitutions — never one walk per substitution. That is a performance
 // contract and `remapStdOpUses`' own header carries the measurement behind it (the pair form made
 // `elimTrivialBlockArgs` 54% of a large compile).
-export function substituteValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray)
+function redirectReadsInFunc(module StdModule, func IrFunction, subst ValueIdArray)
 	for blockRef in func.blockRefs 'eachBlock'
-		substituteValuesInBlock(module, block: module.getBlock(blockRef), subst: subst)
+		redirectReadsInBlock(module, block: module.getBlock(blockRef), subst: subst)
 	end 'eachBlock'
-end 'substituteValuesInFunc'
+end 'redirectReadsInFunc'
 
-// The per-block half of `substituteValuesInFunc` — the block's ops, its terminator and its outgoing
-// edge args — for a caller that rewrites a SUBSET of a function's blocks (`unswitchInvariantGuards`
-// rewrites the readers of an exit phi everywhere but inside the loop that defines the value).
-function substituteValuesInBlock(module StdModule, block IrBlock, subst ValueIdArray)
+function redirectReadsInBlock(module StdModule, block IrBlock, subst ValueIdArray)
 	for opIdx in block.bodyOps() 'eachOp'
-		substituteOpUses(module, opIdx: opIdx, subst: subst)
+		redirectReadsInOp(module, opIdx: opIdx, subst: subst)
 	end 'eachOp'
 
 	if block.hasTerminatorOp() 'hasTerm'
-		substituteOpUses(module, opIdx: block.terminatorIndex(), subst: subst)
+		redirectReadsInOp(module, opIdx: block.terminatorIndex(), subst: subst)
 	end 'hasTerm'
 
-	substituteEdgeArgsInBlock(block, subst: subst)
-end 'substituteValuesInBlock'
+	redirectEdgeArgsInBlock(block, subst: subst)
+end 'redirectReadsInBlock'
 
 // The op half, on its own for a caller that holds the READ SITES of the values it rewrites
 // (`unswitchInvariantGuards` indexes them) and so touches only the ops that read one.
-function substituteOpUses(module StdModule, opIdx ElementIndex, subst ValueIdArray)
+function redirectReadsInOp(module StdModule, opIdx ElementIndex, subst ValueIdArray)
 	let op = module.getOp(opIdx)
-	try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInBlock: ops.set({opIdx}) OOB")
-end 'substituteOpUses'
+	try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("redirectReadsInOp: ops.set({opIdx}) OOB")
+end 'redirectReadsInOp'
 
 // The edge half: the block's outgoing edge args.
 //
@@ -6443,7 +6473,7 @@ end 'substituteOpUses'
 // a function with dozens of edges, so almost every one of those rebuilds produced a column
 // identical to the one it replaced. The test below is the same walk over the same args and
 // allocates nothing, so asking first is strictly cheaper than rebuilding blind.
-function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
+function redirectEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 	if not anyEdgeArgIsRemapped(block, subst: subst) 'edgesUnchanged'
 		return
 	end 'edgesUnchanged'
@@ -6456,7 +6486,7 @@ function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 	end 'eachEdge'
 
 	rewritten.branchEdges = newEdges
-end 'substituteEdgeArgsInBlock'
+end 'redirectEdgeArgsInBlock'
 
 // Whether any branch-edge argument of `block` is a value `subst` rewrites — the question that decides
 // whether that block's edge column has to be rebuilt at all. It reads exactly the args the rebuild

@@ -1,0 +1,57 @@
+let TickedTotalCaseLabel = "sidecar-a-loop-carried-local-reassigned-from-an-inlined-call-reads-its-value-while-the-calls-argument-is-set-up"
+
+let TickedTotalLocalName = "total"
+let TickedTotalRounds = 3
+
+function tickedTotalShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'tickedTotalShown'
+
+test 'a loop-carried local reassigned from an inlined call reads its value while the argument of the call is set up'
+	let staged = builtFixture(TickedTotalCaseLabel, fixture: TickedTotalFixtureName)
+	let executable = builtExecutable(staged)
+	let beforeAt = anchorLine(staged.join(StagedProgramFileName), anchor: "before")
+	let callAt = anchorLine(staged.join(StagedProgramFileName), anchor: "call")
+	let reads = StringArray.create(0)
+
+	for _ in 0 upto TickedTotalRounds * 2 'eachStop'
+		reads.push("{PrintCommand} {TickedTotalLocalName}")
+		reads.push(ContinueCommand)
+	end 'eachStop'
+
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(beforeAt)}", "{BreakCommand} {lineTarget(callAt)}", RunCommand], rest: reads))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: beforeAt), expected: TickedTotalRounds, message: "the loop runs its `before` line {TickedTotalRounds} times. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: callAt), expected: TickedTotalRounds, message: "the loop enters its inlined `tick` call {TickedTotalRounds} times. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: TickedTotalRounds * 2, message: "each stop printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for round in 0 upto TickedTotalRounds 'eachRound'
+		let shownBefore = tickedTotalShown(eventAt(answers, index: (round * 2) as EventIndex))
+		let shownAtCall = tickedTotalShown(eventAt(answers, index: (round * 2 + 1) as EventIndex))
+
+		if shownBefore != "{round}" 'wrongBefore'
+			wrong.push("pass {round + 1} read `{TickedTotalLocalName}` as {shownBefore} on the `before` line")
+		end 'wrongBefore'
+
+		if shownAtCall != "{round}" 'wrongAtCall'
+			wrong.push("pass {round + 1} read `{TickedTotalLocalName}` as {shownAtCall} where the inlined `tick` call on the `call` line begins")
+		end 'wrongAtCall'
+	end 'eachRound'
+
+	Expect.isEmpty(listedLines(wrong), message: "`{TickedTotalLocalName}` holds the value it entered the pass with until `{TickedTotalLocalName} = tick({TickedTotalLocalName})` completes, and that value stays in its register across the call on the line before. The inlined call's result is folded into the continuation argument, and the version that follows it opens at that argument's block, so it must not end the older version where the call's argument is set up. {listedLines(wrong)}. {said}")
+
+	discardStagedDir(staged)
+end 'a loop-carried local reassigned from an inlined call reads its value while the argument of the call is set up'

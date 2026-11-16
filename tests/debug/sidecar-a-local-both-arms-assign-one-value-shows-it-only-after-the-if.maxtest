@@ -1,0 +1,61 @@
+let EqualArmsCaseLabel = "sidecar-a-local-both-arms-assign-one-value-shows-it-only-after-the-if"
+
+let EqualArmsLocalName = "x"
+let EqualArmsFilled = 5
+let EqualArmsFirstValue = "1"
+
+function equalArmsShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'equalArmsShown'
+
+function equalArmsIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'equalArmsIsUnavailable'
+
+test 'a local both arms of an if assign one value is shown that value only after the if'
+	let staged = builtFixture(EqualArmsCaseLabel, fixture: EqualArmsFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == EqualArmsLocalName and row.contains(StackSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{EqualArmsLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED local. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let assigned = "{EqualArmsFilled * 7 + 4}"
+	let beforeAt = anchorLine(staged.join(StagedProgramFileName), anchor: "before")
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(beforeAt)}", "{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {EqualArmsLocalName}", ContinueCommand, "{PrintCommand} {EqualArmsLocalName}", ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: beforeAt), expected: 1, message: "the `before` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: afterAt), expected: 1, message: "the `after` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: 2, message: "each of the two stops printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let atBefore = eventAt(answers, index: 0)
+	let shownBefore = equalArmsShown(atBefore)
+
+	Expect.isTrue(shownBefore == EqualArmsFirstValue or equalArmsIsUnavailable(atBefore), message: "before the `if`, `{EqualArmsLocalName}` is {EqualArmsFirstValue}, or not shown; it read {shownBefore}. Both arms assign {assigned}, so the join's argument folds into that value, and a version following the fold must open at the join, not where {assigned} was computed. {said}")
+
+	let atAfter = eventAt(answers, index: 1)
+	let shownAfter = equalArmsShown(atAfter)
+
+	Expect.isTrue(shownAfter == assigned or equalArmsIsUnavailable(atAfter), message: "after the `if`, `{EqualArmsLocalName}` is {assigned}, or not shown; it read {shownAfter}. {said}")
+
+	discardStagedDir(staged)
+end 'a local both arms of an if assign one value is shown that value only after the if'

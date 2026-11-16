@@ -41,14 +41,15 @@ export let UnitFunctionIndex = 0 as ElementIndex
 
 export typealias StdUnitBodySlot = Slot with StdUnitBody
 
-// EVERYTHING ONE FUNCTION CARRIES TO A WORKER AND BACK: the module, the derived-origin rows the passes
-// file for it.
+// EVERYTHING ONE FUNCTION CARRIES TO A WORKER AND BACK: the module, and the derived-origin rows and
+// value replacements the passes file for it.
 export type StdUnitBody
 	export var unitModule as StdModule
 	export var origins as DerivedOrigins
+	let replacements as ValueReplacements
 
-	static function blank() returns StdUnitBody
-		return Self{unitModule: StdModule.create(), origins: DerivedOrigins.create()}
+	static function blank(followsDebugVersions bool) returns StdUnitBody
+		return Self{unitModule: StdModule.create(), origins: DerivedOrigins.create(), replacements: valueReplacementsFollowing(followsDebugVersions)}
 	end 'blank'
 end 'StdUnitBody'
 
@@ -79,7 +80,7 @@ export type StdUnit
 		let unit = Self.empty(funcIndex) as isolated StdUnit
 
 		modify unit 'fill'
-			let body = StdUnitBody.blank()
+			let body = StdUnitBody.blank(func.holdsDebugVersions())
 			fillUnitModule(module, func: func, unitModule: body.unitModule)
 			unit.holder.fill(body)
 		end 'fill'

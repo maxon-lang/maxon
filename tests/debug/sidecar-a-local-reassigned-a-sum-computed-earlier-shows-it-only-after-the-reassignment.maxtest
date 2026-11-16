@@ -1,0 +1,51 @@
+let ResummedCaseLabel = "sidecar-a-local-reassigned-a-sum-computed-earlier-shows-it-only-after-the-reassignment"
+
+let ResummedLocalName = "x"
+let ResummedFilled = 5
+let ResummedZeroValue = "0"
+
+function resummedShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'resummedShown'
+
+function resummedIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'resummedIsUnavailable'
+
+test 'a local reassigned a sum the function computed earlier is shown the sum only after the reassignment'
+	let staged = builtFixture(ResummedCaseLabel, fixture: ResummedFixtureName)
+	let executable = builtExecutable(staged)
+	let sum = "{(ResummedFilled * 3 + 2) + (ResummedFilled * 4 + 1)}"
+	let zeroedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "zeroed")
+	let againAt = anchorLine(staged.join(StagedProgramFileName), anchor: "again")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(zeroedAt)}", "{BreakCommand} {lineTarget(againAt)}", RunCommand, "{PrintCommand} {ResummedLocalName}", ContinueCommand, "{PrintCommand} {ResummedLocalName}", ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: zeroedAt), expected: 1, message: "the `zeroed` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: againAt), expected: 1, message: "the `again` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: 2, message: "each of the two stops printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let atZeroed = eventAt(answers, index: 0)
+	let shownZeroed = resummedShown(atZeroed)
+
+	Expect.isTrue(shownZeroed == ResummedZeroValue or resummedIsUnavailable(atZeroed), message: "after `{ResummedLocalName} = {ResummedZeroValue}`, `{ResummedLocalName}` is {ResummedZeroValue}, or not shown; it read {shownZeroed}. The later `{ResummedLocalName} = a + b` is folded into the first sum, and a version following that fold must not open where the first sum was computed. {said}")
+
+	let atAgain = eventAt(answers, index: 1)
+	let shownAgain = resummedShown(atAgain)
+
+	Expect.isTrue(shownAgain == sum or resummedIsUnavailable(atAgain), message: "after `{ResummedLocalName} = a + b` again, `{ResummedLocalName}` is {sum}, or not shown; it read {shownAgain}. {said}")
+
+	discardStagedDir(staged)
+end 'a local reassigned a sum the function computed earlier is shown the sum only after the reassignment'

@@ -179,7 +179,7 @@ export type StdPassWorker implements Fenceable
 
 		for k in 0 upto workspaces.count() 'eachStep'
 			probe.reopenCounters()
-			answer = runFanOutStep(try workspaces.get(k) otherwise panic("StdPassWorker.runSteps: workspaces.get OOB at {k}"), module: body.unitModule, funcIndex: UnitFunctionIndex, tally: try tallies.get(k) otherwise panic("StdPassWorker.runSteps: tallies.get OOB at {k} — one tally per step, pushed together"), origins: body.origins, reducesDivision: self.reducesDivision, budget: self.budget, answer: answer)
+			answer = runFanOutStep(try workspaces.get(k) otherwise panic("StdPassWorker.runSteps: workspaces.get OOB at {k}"), module: body.unitModule, funcIndex: UnitFunctionIndex, tally: try tallies.get(k) otherwise panic("StdPassWorker.runSteps: tallies.get OOB at {k} — one tally per step, pushed together"), origins: body.origins, replacements: body.replacements, reducesDivision: self.reducesDivision, budget: self.budget, answer: answer)
 			costs.record(k, probe: probe)
 		end 'eachStep'
 
@@ -201,18 +201,18 @@ end 'StdPassWorker'
 // `refineVersionedRanges` visits exactly the functions `unswitchInvariantGuards` rewrote. A driver that
 // cannot carry the answer between two steps of one function hands `unasked` and earns the panic naming the
 // pairing, which is what keeps the band schedule from holding the pair.
-function runFanOutStep(workspace StepWorkspace, module StdModule, funcIndex ElementIndex, tally StdPassTally, origins DerivedOrigins, reducesDivision bool, budget HoistPressureBudget, answer VersioningAnswer) returns VersioningAnswer
+function runFanOutStep(workspace StepWorkspace, module StdModule, funcIndex ElementIndex, tally StdPassTally, origins DerivedOrigins, replacements ValueReplacements, reducesDivision bool, budget HoistPressureBudget, answer VersioningAnswer) returns VersioningAnswer
 	match workspace 'step'
 		blockArgPrune then tally.removedBlockArgs = tally.removedBlockArgs + (pruneDeadBlockArgsInFunc(module, func: module.getFunc(funcIndex)) as TallyCount)
-		blockArgFold then tally.removedBlockArgs = tally.removedBlockArgs + (elimTrivialBlockArgsInFunc(module, func: module.getFunc(funcIndex)) as TallyCount)
+		blockArgFold then tally.removedBlockArgs = tally.removedBlockArgs + (elimTrivialBlockArgsInFunc(module, func: module.getFunc(funcIndex), replacements: replacements) as TallyCount)
 		constants(branch) then foldConstantsInFunc(module, func: module.getFunc(funcIndex), branch: branch)
 		division(reduction, magic, def) then reduceDivisionsIfLowered(module, funcIndex: funcIndex, reduces: reducesDivision, reduction: reduction, magic: magic, def: def)
-		constOperands then foldConstOperandsInFunc(module, func: module.getFunc(funcIndex))
+		constOperands then foldConstOperandsInFunc(module, func: module.getFunc(funcIndex), replacements: replacements)
 		threading(scratch) then threadConstantBranchesInFunc(module, func: module.getFunc(funcIndex), origins: origins, scratch: scratch)
 		ranges(scratch) then refineValueRangesInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
-		subexpressions(scratch) then eliminateInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
+		subexpressions(scratch) then eliminateInFunc(module, func: module.getFunc(funcIndex), scratch: scratch, replacements: replacements)
 		invariants(scratch) then hoistInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
-		unswitching(scratch) then return versioningAnswerOf(unswitchInFunc(module, func: module.getFunc(funcIndex), origins: origins, budget: budget, scratch: scratch))
+		unswitching(scratch) then return versioningAnswerOf(unswitchInFunc(module, func: module.getFunc(funcIndex), origins: origins, replacements: replacements, budget: budget, scratch: scratch))
 		guards(scratch) then foldEstablishedGuardsInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
 		versionedRanges(scratch) then refineVersionedRangesInFunc(module, funcIndex: funcIndex, scratch: scratch, answer: answer)
 	end 'step'
@@ -329,6 +329,7 @@ export type StdPassRun
 		self.slots.record(job, slot: self.landedOrigins.count())
 		state.arrivedUnits.arrive(answer.body.unitModule)
 		self.landedOrigins.push(answer.body.origins)
+		self.std.getFunc(subjectOfJob(self.jobs, job: job)).forwardDebugVersions(answer.body.replacements)
 		foldUnitAnswer(self.project, answer: answer, members: self.members, tallies: self.tallies)
 
 		if state.dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
@@ -406,9 +407,11 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 
 		for funcIndex in firstFuncIndex upto funcCount 'eachFunc'
 			let origins = DerivedOrigins.create()
+			let replacements = valueReplacementsFollowing(module.getFunc(funcIndex).holdsDebugVersions())
 			var answer = VersioningAnswer.unasked
-			answer = runFanOutStep(workspace, module: module, funcIndex: funcIndex, tally: tally, origins: origins, reducesDivision: reducesDivision, budget: budget, answer: answer)
+			answer = runFanOutStep(workspace, module: module, funcIndex: funcIndex, tally: tally, origins: origins, replacements: replacements, reducesDivision: reducesDivision, budget: budget, answer: answer)
 			origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
+			module.getFunc(funcIndex).forwardDebugVersions(replacements)
 		end 'eachFunc'
 
 		summarizeStep(step, into: irLog, tally: tally, funcCount: funcCount, visitedCount: visitedCount)

@@ -1,0 +1,51 @@
+let RefoldedCaseLabel = "sidecar-a-local-merged-after-both-arms-assign-a-refolded-value-is-not-shown-it-before-the-if"
+
+let RefoldedLocalName = "x"
+let RefoldedFilled = 5
+let RefoldedFirstValue = "1"
+
+function refoldedShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'refoldedShown'
+
+function refoldedIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'refoldedIsUnavailable'
+
+test 'a local merged after both arms assign a value computed earlier is not shown that value before the if'
+	let staged = builtFixture(RefoldedCaseLabel, fixture: RefoldedFixtureName)
+	let executable = builtExecutable(staged)
+	let assigned = "{RefoldedFilled * 9 + 4}"
+	let beforeAt = anchorLine(staged.join(StagedProgramFileName), anchor: "before")
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(beforeAt)}", "{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {RefoldedLocalName}", ContinueCommand, "{PrintCommand} {RefoldedLocalName}", ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: beforeAt), expected: 1, message: "the `before` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: afterAt), expected: 1, message: "the `after` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: 2, message: "each of the two stops printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let atBefore = eventAt(answers, index: 0)
+	let shownBefore = refoldedShown(atBefore)
+
+	Expect.isTrue(shownBefore == RefoldedFirstValue or refoldedIsUnavailable(atBefore), message: "before the `if`, `{RefoldedLocalName}` is {RefoldedFirstValue}, or not shown; it read {shownBefore}. Both arms assign a value folded into one computed before `{RefoldedLocalName}` was declared, so a version of `{RefoldedLocalName}` naming that value must not open where {assigned} was first computed, before the arms. {said}")
+
+	let atAfter = eventAt(answers, index: 1)
+	let shownAfter = refoldedShown(atAfter)
+
+	Expect.isTrue(shownAfter == assigned or refoldedIsUnavailable(atAfter), message: "after both `if`s, `{RefoldedLocalName}` is {assigned}, or not shown; it read {shownAfter}. {said}")
+
+	discardStagedDir(staged)
+end 'a local merged after both arms assign a value computed earlier is not shown that value before the if'

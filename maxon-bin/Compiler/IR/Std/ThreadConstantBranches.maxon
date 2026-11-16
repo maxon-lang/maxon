@@ -552,7 +552,7 @@ function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandi
 	edges.push(BranchEdge.create(candidate.blockId, argIds: argsToJoin))
 
 	if droppedTakesArgs 'droppedTakesArgs'
-		edges.push(BranchEdge.create(candidate.droppedTarget, argIds: substituteJoinArgs(argsToDropped, incoming: argsToJoin, index: index, argOwner: argOwner, argSlot: argSlot)))
+		edges.push(BranchEdge.create(candidate.droppedTarget, argIds: redirectedJoinArgs(argsToDropped, incoming: argsToJoin, index: index, argOwner: argOwner, argSlot: argSlot)))
 	end 'droppedTakesArgs'
 
 	predBlock.branchEdges = edges
@@ -561,7 +561,7 @@ end 'duplicateTestInto'
 // C's edge args to the dropped target, as P must pass them: a block arg of C becomes the value P passes
 // to that slot; anything else — including another join's block arg — is defined in a block dominating
 // C, hence P, and passes through.
-function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray) returns ValueIdArray
+function redirectedJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray) returns ValueIdArray
 	let substituted = ValueIdArray.create(0)
 
 	for argId in argsToDropped 'eachArg'
@@ -575,7 +575,7 @@ function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, i
 	end 'eachArg'
 
 	return substituted
-end 'substituteJoinArgs'
+end 'redirectedJoinArgs'
 
 // Drop the tested slot of every rewritten join — the block arg and its slot in every incoming edge,
 // through the one dropper both block-arg passes share. The count it answers must be exactly the

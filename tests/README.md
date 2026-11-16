@@ -434,8 +434,18 @@ tests/
     an-address-inside-a-handler-inlined-into-a-synthesized-behaviour-is-armed.maxtest   an address inside an authored handler inlined into a synthesized behaviour function is armed and stops as the handler
     clear-of-a-line-with-no-breakpoint-answers-no-offset.maxtest                     clearing a line no breakpoint was set on answers not-set and names no offset
     clear-of-a-line-with-no-breakpoint-claims-no-sites.maxtest                       the REPL answers a clear of a line no breakpoint was set on without claiming a site
+    sidecar-a-local-both-arms-assign-one-value-shows-it-only-after-the-if.maxtest    a var both arms of an if assign one value to is not shown that value before the if, nor its older value after it
+    sidecar-a-local-bound-to-an-identity-of-another-value-reads-that-value-or-unavailable.maxtest   a let bound to a cast, an `or 0` or a `* 1` of another value the optimizer folds away reads that value or is not shown, never another number
     sidecar-a-local-defined-early-stays-readable-to-the-end-of-the-function.maxtest   locals defined at the top of a function are still read at its last line, across every block between
+    sidecar-a-local-incremented-by-a-sum-an-inlined-call-computed-is-not-shown-its-next-value-early.maxtest   a var incremented by the sum an inlined call already computed on an earlier line is not shown the incremented value on the line before the increment
+    sidecar-a-local-merged-after-both-arms-assign-a-refolded-value-is-not-shown-it-before-the-if.maxtest   a var both arms of an if assign a value folded into one computed before the var, then left alone by a later if, is not shown that value before the first if
+    sidecar-a-local-reassigned-a-sum-computed-earlier-shows-it-only-after-the-reassignment.maxtest   a var assigned again a sum the function already computed is not shown the sum before that assignment, nor its older value after it
+    sidecar-a-local-reassigned-in-one-arm-from-a-value-computed-before-the-if-keeps-its-old-value-on-the-other-path.maxtest   a var one arm of an if assigns a value computed before the if is not shown that value on the line of the test, nor after the if on the path that skips the arm
     sidecar-a-local-rebound-after-an-inlined-call-opens-after-the-call.maxtest       a var rebound to another name right after an inlined call is not shown as the new value inside the call
+    sidecar-a-local-zeroed-between-two-equal-sums-shows-the-sum-only-after-the-second.maxtest   a var zeroed between a sum and the same sum again, with no other value computed between them, is not shown the sum while it holds zero, in one block or past an if
+    sidecar-a-loop-carried-local-reassigned-from-an-inlined-call-reads-its-value-while-the-calls-argument-is-set-up.maxtest   a loop-carried var reassigned from an inlined call reads its value on the line before and where the call begins, the register still holding it
+    sidecar-a-loop-carried-slot-local-an-inner-if-leaves-alone-reads-its-folded-header-value-after-the-if.maxtest   a var held in a stack slot whose loop-header argument was folded reads its value inside the loop after an inner if that does not assign it
+    sidecar-a-loop-carried-slot-local-whose-header-argument-was-folded-reads-its-value-inside-the-loop.maxtest   a var held in a stack slot whose loop-header argument was folded into its entry value reads that value inside the loop
     sidecar-a-match-arm-binding-a-shadowing-name-ends-with-the-arm.maxtest           a let in a match arm that shadows an outer let is the outer one again after the match
     sidecar-a-reassigned-slot-local-reads-its-new-value.maxtest                      a var the allocator keeps in a stack slot reads its new value after it is assigned again
     sidecar-a-shadowing-local-after-a-block-split-keeps-its-own-value.maxtest        a let that shadows an outer let is its own value after an inlined call splits its block, and the outer one again past its block
@@ -446,6 +456,7 @@ tests/
     sidecar-a-slot-local-assigned-in-an-arm-is-not-shown-stale-after-the-join.maxtest   a var held in a stack slot that one arm assigns again is not read as its old value after the join
     sidecar-a-slot-local-before-a-dead-store-in-a-split-block-reads-its-value.maxtest   a var held in a stack slot reads its value on the lines before a dead store in a split block
     sidecar-a-slot-local-is-live-only-once-its-store-has-run.maxtest                 a var held in a stack slot reads its value from the first byte its row covers
+    sidecar-a-slot-local-whose-dead-store-of-another-value-was-removed-reads-unavailable-after-it.maxtest   a var held in a stack slot whose dead store of another value was deleted reads unavailable after it, never its older value
     sidecar-a-slot-local-whose-dead-store-sits-beyond-a-split-block-is-not-shown-stale.maxtest   a var held in a stack slot whose dead store lies beyond a split block is not read as its older value
     sidecar-a-slot-local-whose-merge-phi-was-pruned-is-not-shown-stale-after-the-join.maxtest   a var held in a stack slot whose merge phi was pruned is not read as its older value after the join
     sidecar-a-slot-local-with-a-dead-trailing-store-is-not-shown-stale.maxtest       a var held in a stack slot whose last assignment was optimised away is not read as its older value

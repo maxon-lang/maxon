@@ -1016,6 +1016,27 @@ export type DebugLocalVersion
 		end 'def'
 	end 'splicedDef'
 
+	function forwardedThrough(folds SettledValueReplacements) returns DebugLocalVersion
+		let note = try folds.firstNotes.get(self.value) otherwise return self
+		let survivor = try folds.survivors.get(note) otherwise panic("DebugLocalVersion.forwardedThrough: survivors.get OOB at note {note} of {folds.survivors.count()}")
+
+		if self.standsAtItsDefinition() 'tookTheArgumentAtItsBlockEntry'
+			let home = try folds.homes.get(note) otherwise panic("DebugLocalVersion.forwardedThrough: homes.get OOB at note {note} of {folds.homes.count()}")
+			return DebugLocalVersion.create(survivor, def: DebugVersionDef.definedIn(home))
+		end 'tookTheArgumentAtItsBlockEntry'
+
+		return DebugLocalVersion.create(survivor, def: self.def)
+	end 'forwardedThrough'
+
+	function standsAtItsDefinition() returns bool
+		return match self.def 'def'
+			merged gives true
+			definedAfter(_, anchor) gives anchor == self.value
+			definedIn or
+			definedSomewhere gives false
+		end 'def'
+	end 'standsAtItsDefinition'
+
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.unsigned(self.value as CacheUnsigned)
@@ -1150,6 +1171,38 @@ export type DebugLocalDecl
 		return false
 	end 'namesValue'
 
+	function followsAReplacementIn(folds SettledValueReplacements) returns bool
+		if self.foldedRecord.count() > 0 'locatedByItsFoldedRecord'
+			return false
+		end 'locatedByItsFoldedRecord'
+
+		for version in self.versions 'eachVersion'
+			if folds.firstNotes.contains(version.value) 'replaced'
+				return true
+			end 'replaced'
+		end 'eachVersion'
+
+		return false
+	end 'followsAReplacementIn'
+
+	function forwardedCopy(folds SettledValueReplacements) returns DebugLocalDecl
+		let forwarded = DebugLocalVersionArray.create(self.versions.count(), zeroed: false)
+
+		for version in self.versions 'eachVersion'
+			let next = version.forwardedThrough(folds)
+
+			if next.value != version.value and repeatsAVersionAtItsDefinition(forwarded, value: next.value) 'alreadyCurrentThere'
+				continue
+			end 'alreadyCurrentThere'
+
+			forwarded.push(next)
+		end 'eachVersion'
+
+		let copy = self.clone()
+		copy.versions = forwarded
+		return copy
+	end 'forwardedCopy'
+
 	export function renumberTypeIds(remap TypeIdRemap)
 		self.declaredType = remapMaxonType(self.declaredType, remap: remap)
 	end 'renumberTypeIds'
@@ -1212,6 +1265,114 @@ function cacheReadDebugLocalDeclArray(reader LibraryCacheReader) returns DebugLo
 end 'cacheReadDebugLocalDeclArray'
 
 // @generated library-cache end
+
+function repeatsAVersionAtItsDefinition(versions DebugLocalVersionArray, value ValueId) returns bool
+	if versions.count() == 0 'noEarlierVersion'
+		return false
+	end 'noEarlierVersion'
+
+	let previous = try versions.get(versions.count() - 1) otherwise panic("repeatsAVersionAtItsDefinition: versions.get OOB at {versions.count() - 1} below the count just read")
+	return previous.value == value and previous.standsAtItsDefinition()
+end 'repeatsAVersionAtItsDefinition'
+
+union ValueReplacements
+	untracked
+	tracked(replacements ValueReplacementRecord)
+end 'ValueReplacements'
+
+function valueReplacementsFollowing(debugVersions bool) returns ValueReplacements
+	if debugVersions 'versionsToFollow'
+		return ValueReplacements.tracked(ValueReplacementRecord.create())
+	end 'versionsToFollow'
+
+	return ValueReplacements.untracked
+end 'valueReplacementsFollowing'
+
+union ValueReplacementNotes
+	none
+	noted(entries ValueReplacementLog)
+end 'ValueReplacementNotes'
+
+type ValueReplacementRecord
+	var notes = ValueReplacementNotes.none
+
+	static function create() returns ValueReplacementRecord
+		return Self{}
+	end 'create'
+
+	function noteReplacedArg(value ValueId, survivor ValueId, home BlockId)
+		if survivor == value 'nothingToFollow'
+			return
+		end 'nothingToFollow'
+
+		self.entries().note(value, survivor: survivor, home: home)
+	end 'noteReplacedArg'
+
+	function entries() returns ValueReplacementLog
+		match self.notes 'notes'
+			none then break
+			noted(entries) then return entries
+		end 'notes'
+
+		let entries = ValueReplacementLog.create()
+		self.notes = ValueReplacementNotes.noted(entries)
+		return entries
+	end 'entries'
+
+	function notedEntries() returns ValueReplacementLog throws AbsentError
+		match self.notes 'notes'
+			none then throw AbsentError.absent
+			noted(entries) then return entries
+		end 'notes'
+	end 'notedEntries'
+end 'ValueReplacementRecord'
+
+type ValueReplacementLog
+	let replaced as ValueIdArray
+	let survivors as ValueIdArray
+	let homes as BlockIdArray
+
+	static function create() returns ValueReplacementLog
+		return Self{replaced: ValueIdArray.create(0), survivors: ValueIdArray.create(0), homes: BlockIdArray.create(0)}
+	end 'create'
+
+	function note(value ValueId, survivor ValueId, home BlockId)
+		self.replaced.push(value)
+		self.survivors.push(survivor)
+		self.homes.push(home)
+	end 'note'
+end 'ValueReplacementLog'
+
+typealias FirstReplacementNotes = Map with ValueId, ElementIndex
+
+type SettledValueReplacements
+	let firstNotes as FirstReplacementNotes
+	let survivors as ValueIdArray
+	let homes as BlockIdArray
+
+	static function of(log ValueReplacementLog) returns SettledValueReplacements
+		let firstNotes = FirstReplacementNotes.create()
+		let survivors = ValueIdArray.create(log.replaced.count())
+		var at = log.replaced.count()
+
+		// Last to first is the notes applied in the order made, which matters because a deleted
+		// value's id can be minted again and replaced anew.
+		while at > 0 'eachNoteLastFirst'
+			at = at - 1
+			let value = try log.replaced.get(at) otherwise panic("SettledValueReplacements.of: replaced.get OOB at {at} of {log.replaced.count()}")
+			var chainEnd = try log.survivors.get(at) otherwise panic("SettledValueReplacements.of: survivors.get OOB at {at} of a log of {log.replaced.count()}")
+
+			if let later = try firstNotes.get(chainEnd) 'aLaterNoteReplacedTheSurvivor'
+				chainEnd = try survivors.get(later) otherwise panic("SettledValueReplacements.of: survivors.get OOB at the later note {later} of {survivors.count()}")
+			end 'aLaterNoteReplacedTheSurvivor'
+
+			try survivors.set(at, value: chainEnd) otherwise panic("SettledValueReplacements.of: survivors.set OOB at {at} of {survivors.count()}")
+			firstNotes.upsert(value, value: at)
+		end 'eachNoteLastFirst'
+
+		return Self{firstNotes: firstNotes, survivors: survivors, homes: log.homes}
+	end 'of'
+end 'SettledValueReplacements'
 
 export type ClosureEnvField
 	export let name as immutable ByteArray
@@ -2472,9 +2633,10 @@ export type IrFunction
 
 	// The source bindings the debug-info sidecar describes (see `DebugLocalDecl`), empty unless the
 	// build writes one. ⚠ Their ValueIds are this function's own all the way to the register
-	// allocator: ids pass through Maxon → Std → Target verbatim, and a spliced callee's are renamed
-	// through the splice's value column (`DebugLocalDecl.splicedCopy`). A pass that renumbers values
-	// without them leaves a name on another value's location.
+	// allocator: ids pass through Maxon → Std → Target verbatim, a spliced callee's are renamed
+	// through the splice's value column (`DebugLocalDecl.splicedCopy`), and a version naming a
+	// folded block argument moves to its survivor (`forwardDebugVersions`). A pass that renumbers
+	// values without them leaves a name on another value's location.
 	export var debugLocals as DebugLocalDeclArray
 
 	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
@@ -2851,6 +3013,30 @@ export type IrFunction
 		self.makePrivate(SharedColumn.debugLocals)
 		try self.debugLocals.set(position, value: local) otherwise panic("IrFunction.replaceDebugLocal: debugLocals.set OOB at {position} of {self.debugLocals.count()} in '{String.from(self.name)}'")
 	end 'replaceDebugLocal'
+
+	function holdsDebugVersions() returns bool
+		return self.debugLocals.count() > 0
+	end 'holdsDebugVersions'
+
+	function forwardDebugVersions(slot ValueReplacements)
+		match slot 'slot'
+			untracked then return
+			tracked(replacements) then self.forwardDebugVersionsThrough(replacements)
+		end 'slot'
+	end 'forwardDebugVersions'
+
+	function forwardDebugVersionsThrough(replacements ValueReplacementRecord)
+		let entries = try replacements.notedEntries() otherwise return
+		let folds = SettledValueReplacements.of(entries)
+
+		for position in 0 upto self.debugLocals.count() 'eachDebugLocal'
+			let local = try self.debugLocals.get(position) otherwise panic("IrFunction.forwardDebugVersions: debugLocals.get OOB at {position} of {self.debugLocals.count()} in '{String.from(self.name)}'")
+
+			if local.followsAReplacementIn(folds) 'followsAReplacement'
+				self.replaceDebugLocal(position, local: local.forwardedCopy(folds))
+			end 'followsAReplacement'
+		end 'eachDebugLocal'
+	end 'forwardDebugVersionsThrough'
 
 	// Renumber every type id this function holds (`ParseStaging.rewriteTypeIds`): its signature, its
 	// per-value columns, the existential instances its values carry, and the declared types its debug

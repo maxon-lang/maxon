@@ -1,0 +1,72 @@
+let CarriageReturnCaseLabel = "sidecar-a-local-reassigned-in-one-arm-from-a-value-computed-before-the-if-keeps-its-old-value-on-the-other-path"
+
+let CarriageReturnLocalName = "textLength"
+let CarriageReturnFilled = 5
+let CarriageReturnCalls = 2
+
+function carriageReturnShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'carriageReturnShown'
+
+function carriageReturnIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'carriageReturnIsUnavailable'
+
+test 'a local reassigned in one arm from a value computed before the if keeps its old value on the other path'
+	let staged = builtFixture(CarriageReturnCaseLabel, fixture: CarriageReturnFixtureName)
+	let executable = builtExecutable(staged)
+	let length = "{CarriageReturnFilled + 1}"
+	let shortened = "{CarriageReturnFilled}"
+	let testAt = anchorLine(staged.join(StagedProgramFileName), anchor: "test")
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let reads = StringArray.create(0)
+
+	for _ in 0 upto CarriageReturnCalls * 2 'eachStop'
+		reads.push("{PrintCommand} {CarriageReturnLocalName}")
+		reads.push(ContinueCommand)
+	end 'eachStop'
+
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(testAt)}", "{BreakCommand} {lineTarget(afterAt)}", RunCommand], rest: reads))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: testAt), expected: CarriageReturnCalls, message: "the `test` line runs once per call. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: afterAt), expected: CarriageReturnCalls, message: "the `after` line runs once per call. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: CarriageReturnCalls * 2, message: "each stop printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for call in 0 upto CarriageReturnCalls 'eachCall'
+		let atTest = eventAt(answers, index: (call * 2) as EventIndex)
+		let shownAtTest = carriageReturnShown(atTest)
+
+		if shownAtTest != length and not carriageReturnIsUnavailable(atTest) 'wrongAtTest'
+			wrong.push("call {call + 1} read `{CarriageReturnLocalName}` as {shownAtTest} on the `test` line, where it is still {length}")
+		end 'wrongAtTest'
+	end 'eachCall'
+
+	Expect.isEmpty(listedLines(wrong), message: "on the line of the `if` test, `{CarriageReturnLocalName}` is still `length` ({length}), or not shown. The arm's `length - 1` is folded into the one computed before the `if`, and a version that follows that fold must not open where `length - 1` was first computed. {listedLines(wrong)}. {said}")
+
+	let afterPlain = eventAt(answers, index: 1)
+	let shownAfterPlain = carriageReturnShown(afterPlain)
+
+	Expect.isTrue(shownAfterPlain == length or carriageReturnIsUnavailable(afterPlain), message: "after an `if` whose arm did not run, `{CarriageReturnLocalName}` is still {length}, or not shown; it read {shownAfterPlain}, the value only the arm assigns. {said}")
+
+	let afterEnded = eventAt(answers, index: 3)
+	let shownAfterEnded = carriageReturnShown(afterEnded)
+
+	Expect.isTrue(shownAfterEnded == shortened or carriageReturnIsUnavailable(afterEnded), message: "after the arm assigned `length - 1`, `{CarriageReturnLocalName}` is {shortened}, or not shown; it read {shownAfterEnded}. {said}")
+
+	discardStagedDir(staged)
+end 'a local reassigned in one arm from a value computed before the if keeps its old value on the other path'

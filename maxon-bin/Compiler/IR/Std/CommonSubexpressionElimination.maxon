@@ -95,14 +95,15 @@ end 'commonSubexpressionEliminationHeadline'
 
 // ⭐ **ANALYSE FIRST, REWRITE ONCE.** The dominator walk records what each redundant value may read
 // instead; nothing is rewritten until the whole function has been read. That is not tidiness — the
-// rewrite is `substituteValuesInFunc`, whose header states that the (from, to) form of the same job
-// walks the function once per substitution and rebuilds every branch edge each time — 54% of a large
-// compile in one pass. The column form applies all of them in one walk.
+// rewrite is `substituteValuesInFunc`, and `redirectReadsInFunc`'s header states that the
+// (from, to) form of the same job walks the function once per substitution and rebuilds every
+// branch edge each time — 54% of a large compile in one pass. The column form applies all of them
+// in one walk.
 //
 // A function in which nothing was redundant — most functions — pays the analysis walk and NOTHING else:
 // no rewrite, no block rebuild and no prune. `recordValueSubstitution` always extends the column by at
 // least the slot it writes, so an empty column is an exact test for "found nothing".
-function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
+function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch, replacements ValueReplacements)
 	let subst = ValueIdArray.create(0)
 
 	// ⛔⛔ **THE FUNCTION BOUNDARY IS ITSELF A TABLE SCOPE, AND IT IS NOT BELT-AND-BRACES — IT IS WHAT
@@ -128,7 +129,7 @@ function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
 	end 'nothingWasRedundant'
 
 	removeOpsDefining(module, func: func, doomed: redundantDefs(module, func: func, subst: subst, operands: scratch.current))
-	substituteValuesInFunc(module, func: func, subst: subst)
+	substituteValuesInFunc(module, func: func, subst: subst, replacements: replacements)
 
 	// The `const`s this pass detached from their readers — the operands of every op it deleted. Shared
 	// with `foldConstOperands` rather than re-derived: it is the same narrow rule (retire a `const`

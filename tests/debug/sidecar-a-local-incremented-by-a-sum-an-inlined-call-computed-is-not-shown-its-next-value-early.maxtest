@@ -1,0 +1,57 @@
+let NextRoundCaseLabel = "sidecar-a-local-incremented-by-a-sum-an-inlined-call-computed-is-not-shown-its-next-value-early"
+
+let NextRoundLocalName = "round"
+let NextRoundRounds = 3
+
+function nextRoundShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'nextRoundShown'
+
+function nextRoundIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'nextRoundIsUnavailable'
+
+test 'a local incremented by a sum an inlined call computed is not shown its next value early'
+	let staged = builtFixture(NextRoundCaseLabel, fixture: NextRoundFixtureName)
+	let executable = builtExecutable(staged)
+	let beforeAt = anchorLine(staged.join(StagedProgramFileName), anchor: "before")
+	let reads = StringArray.create(0)
+
+	for _ in 0 upto NextRoundRounds 'eachStop'
+		reads.push("{PrintCommand} {NextRoundLocalName}")
+		reads.push(ContinueCommand)
+	end 'eachStop'
+
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(beforeAt)}", RunCommand], rest: reads))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: beforeAt), expected: NextRoundRounds, message: "the loop runs its `before` line {NextRoundRounds} times. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: NextRoundRounds, message: "each stop printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for index in 0 upto NextRoundRounds 'eachRound'
+		let answered = eventAt(answers, index: index as EventIndex)
+		let shown = nextRoundShown(answered)
+
+		if shown != "{index}" and not nextRoundIsUnavailable(answered) 'aWrongValue'
+			wrong.push("stop {index + 1} on the `before` line read `{NextRoundLocalName}` as {shown}, where it is {index} until the next line adds one")
+		end 'aWrongValue'
+	end 'eachRound'
+
+	Expect.isEmpty(listedLines(wrong), message: "on the line before `{NextRoundLocalName} = {NextRoundLocalName} + 1`, `{NextRoundLocalName}` holds the value it entered the pass with, or is not shown. The increment is folded into the `x + 1` the inlined call computed a line earlier, and a version that follows that fold must not show the incremented value before the increment. {listedLines(wrong)}. {said}")
+
+	discardStagedDir(staged)
+end 'a local incremented by a sum an inlined call computed is not shown its next value early'

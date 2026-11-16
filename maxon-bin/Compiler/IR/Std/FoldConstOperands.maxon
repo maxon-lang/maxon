@@ -367,7 +367,7 @@ end 'foldConstOperandsHeadline'
 // entry per live op into it, so a per-walk rebuild is a per-walk O(ops) allocation and copy. Five walks
 // meant five of them (six once the identity substitution fired), and the pass runs over every function
 // in the module.
-function foldConstOperandsInFunc(module StdModule, func IrFunction)
+function foldConstOperandsInFunc(module StdModule, func IrFunction, replacements ValueReplacements)
 	let opIndices = module.liveOpIndices(func)
 
 	// ONE classification record for all three walks below — refilled per op, never re-created. See
@@ -380,7 +380,7 @@ function foldConstOperandsInFunc(module StdModule, func IrFunction)
 	// AFTER the immediate rewrite, which is what MAKES the identity shape, and BEFORE the prune,
 	// which retires the consts and identity `binOpImm`s this pass detached; `fuseRotates` retires its
 	// own dead shifts itself.
-	substituteIdentityImmediates(module, func: func, opIndices: opIndices, def: def)
+	substituteIdentityImmediates(module, func: func, opIndices: opIndices, def: def, replacements: replacements)
 	fuseRotates(module, func: func, opIndices: opIndices, constMap: constMap)
 	dceRetiredDefs(module, func: func, opIndices: opIndices, def: def)
 end 'foldConstOperandsInFunc'
@@ -445,7 +445,7 @@ end 'rewriteBinAndCmpOps'
 //
 // (`elimTrivialBlockArgs` DOES carry a union-find for its chains. It has to: its chains are built by a
 // WORKLIST, in trigger order, so "record time" there has no order to lean on at all.)
-function substituteIdentityImmediates(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
+function substituteIdentityImmediates(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef, replacements ValueReplacements)
 	let subst = ValueIdArray.create(0)
 
 	for opIdx in opIndices 'eachOp'
@@ -464,7 +464,7 @@ function substituteIdentityImmediates(module StdModule, func IrFunction, opIndic
 		return
 	end 'nothingToRewrite'
 
-	substituteValuesInFunc(module, func: func, subst: subst)
+	substituteValuesInFunc(module, func: func, subst: subst, replacements: replacements)
 end 'substituteIdentityImmediates'
 
 // THE per-opcode identity rule — `x <opcode> imm == x` — and the one place it lives, exactly as

@@ -1,0 +1,93 @@
+let ZeroedSumCaseLabel = "sidecar-a-local-zeroed-between-two-equal-sums-shows-the-sum-only-after-the-second"
+
+let ZeroedSumStraightName = "x"
+let ZeroedSumWideName = "y"
+let ZeroedSumFilled = 5
+let ZeroedSumZeroValue = "0"
+
+function zeroedSumShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'zeroedSumShown'
+
+function zeroedSumIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'zeroedSumIsUnavailable'
+
+function zeroedSumSharedOffsets(left SidecarNumberArray, right SidecarNumberArray) returns StringArray
+	let shared = StringArray.create(0)
+
+	for offset in left 'eachLeft'
+		if right.contains(offset) 'onBoth'
+			shared.push(hexSpelling(offset))
+		end 'onBoth'
+	end 'eachLeft'
+
+	return shared
+end 'zeroedSumSharedOffsets'
+
+test 'a local zeroed between two equal sums is shown the sum only after the second'
+	let staged = builtFixture(ZeroedSumCaseLabel, fixture: ZeroedSumFixtureName)
+	let executable = builtExecutable(staged)
+	let a = ZeroedSumFilled * 3 + 2
+	let b = ZeroedSumFilled * 4 + 3
+	let sum = "{a + b}"
+	let product = "{a * b}"
+	let zeroedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "zeroed")
+	let againAt = anchorLine(staged.join(StagedProgramFileName), anchor: "again")
+	let wideZeroedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "widezeroed")
+	let wideAgainAt = anchorLine(staged.join(StagedProgramFileName), anchor: "wideagain")
+	let zeroedOffsets = statementOffsetsOfLine(executable, staged: staged, line: zeroedAt)
+	let againOffsets = statementOffsetsOfLine(executable, staged: staged, line: againAt)
+	let wideZeroedOffsets = statementOffsetsOfLine(executable, staged: staged, line: wideZeroedAt)
+	let wideAgainOffsets = statementOffsetsOfLine(executable, staged: staged, line: wideAgainAt)
+
+	Expect.atLeast(zeroedOffsets.count(), than: 1, message: "the `zeroed` line stores into a record and must carry a statement row of its own for a stop there to sit between `{ZeroedSumStraightName} = {ZeroedSumZeroValue}` and the second sum; the line table gives it none")
+	Expect.atLeast(againOffsets.count(), than: 1, message: "the `again` line must carry a statement row of its own; the line table gives it none")
+	Expect.isEmpty(listedLines(zeroedSumSharedOffsets(zeroedOffsets, right: againOffsets)), message: "the `zeroed` and `again` lines resolve to one statement offset, so a stop on one is a stop on the other and the two answers cannot differ")
+	Expect.atLeast(wideZeroedOffsets.count(), than: 1, message: "the `widezeroed` line stores into a record and must carry a statement row of its own for a stop there to sit between `{ZeroedSumWideName} = {ZeroedSumZeroValue}` and the second product; the line table gives it none")
+	Expect.atLeast(wideAgainOffsets.count(), than: 1, message: "the `wideagain` line must carry a statement row of its own; the line table gives it none")
+	Expect.isEmpty(listedLines(zeroedSumSharedOffsets(wideZeroedOffsets, right: wideAgainOffsets)), message: "the `widezeroed` and `wideagain` lines resolve to one statement offset, so a stop on one is a stop on the other and the two answers cannot differ")
+
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(zeroedAt)}", "{BreakCommand} {lineTarget(againAt)}", "{BreakCommand} {lineTarget(wideZeroedAt)}", "{BreakCommand} {lineTarget(wideAgainAt)}", RunCommand, "{PrintCommand} {ZeroedSumStraightName}", ContinueCommand, "{PrintCommand} {ZeroedSumStraightName}", ContinueCommand, "{PrintCommand} {ZeroedSumWideName}", ContinueCommand, "{PrintCommand} {ZeroedSumWideName}", ContinueCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: zeroedAt), expected: 1, message: "the `zeroed` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: againAt), expected: 1, message: "the `again` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: wideZeroedAt), expected: 1, message: "the `widezeroed` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: wideAgainAt), expected: 1, message: "the `wideagain` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: 4, message: "each of the four stops printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let atZeroed = eventAt(answers, index: 0)
+	let shownZeroed = zeroedSumShown(atZeroed)
+
+	Expect.isTrue(shownZeroed == ZeroedSumZeroValue or zeroedSumIsUnavailable(atZeroed), message: "after `{ZeroedSumStraightName} = {ZeroedSumZeroValue}`, `{ZeroedSumStraightName}` is {ZeroedSumZeroValue}, or not shown; it read {shownZeroed}. The later `{ZeroedSumStraightName} = a + b` is folded into the first sum with no other value computed between them, and a version following that fold must not open where the first sum was computed. {said}")
+
+	let atAgain = eventAt(answers, index: 1)
+	let shownAgain = zeroedSumShown(atAgain)
+
+	Expect.isTrue(shownAgain == sum or zeroedSumIsUnavailable(atAgain), message: "after `{ZeroedSumStraightName} = a + b` again, `{ZeroedSumStraightName}` is {sum}, or not shown; it read {shownAgain}. {said}")
+
+	let atWideZeroed = eventAt(answers, index: 2)
+	let shownWideZeroed = zeroedSumShown(atWideZeroed)
+
+	Expect.isTrue(shownWideZeroed == ZeroedSumZeroValue or zeroedSumIsUnavailable(atWideZeroed), message: "after `{ZeroedSumWideName} = {ZeroedSumZeroValue}`, past an `if` that follows the first product, `{ZeroedSumWideName}` is {ZeroedSumZeroValue}, or not shown; it read {shownWideZeroed}. The later `{ZeroedSumWideName} = a * b` is folded into the first product, and a version following that fold must not open where the first product was computed. {said}")
+
+	let atWideAgain = eventAt(answers, index: 3)
+	let shownWideAgain = zeroedSumShown(atWideAgain)
+
+	Expect.isTrue(shownWideAgain == product or zeroedSumIsUnavailable(atWideAgain), message: "after `{ZeroedSumWideName} = a * b` again, `{ZeroedSumWideName}` is {product}, or not shown; it read {shownWideAgain}. {said}")
+
+	discardStagedDir(staged)
+end 'a local zeroed between two equal sums is shown the sum only after the second'

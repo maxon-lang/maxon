@@ -1,0 +1,39 @@
+let CarriageReturnByte = 13
+
+type Tally
+	var count as Count
+
+	static function create(count Count) returns Tally
+		return Self{count: count}
+	end 'create'
+end 'Tally'
+
+function measured(ending Byte, holder Tally) returns Count
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto 5 'fill'
+		bytes.push((65 + i mod 20) as Byte)
+	end 'fill'
+
+	bytes.push(ending)
+	let length = bytes.count()
+	var textLength = length
+	let last = try bytes.get(length - 1) otherwise 0
+
+	if last == CarriageReturnByte 'carriageReturn' // anchor: test
+		textLength = length - 1
+	end 'carriageReturn'
+
+	holder.count = textLength // anchor: after
+
+	return textLength + last as Count
+end 'measured'
+
+function main() returns ExitCode
+	let holder = Tally.create(0)
+	let plain = measured(65, holder: holder)
+	let ended = measured(CarriageReturnByte, holder: holder)
+	print("measured {plain} {ended} {holder.count}\n")
+
+	return 0
+end 'main'

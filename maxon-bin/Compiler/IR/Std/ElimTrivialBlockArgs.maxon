@@ -248,7 +248,7 @@ end 'elimTrivialBlockArgsSummary'
 
 // Fold one function to its fixpoint in a SINGLE pass over the IR. Returns how many block-args it
 // folded away.
-function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction, replacements ValueReplacements) returns ValueId
 	let bound = blockArgIdBound(module, func: func)
 
 	if bound == 0 'noBlockArgs'
@@ -333,7 +333,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	// The compressed forest IS the substitution: after this, `parent[v]` is the value `v` ultimately
 	// became, and `v` itself where nothing changed. No second column, and no chains left in it.
 	compressAll(parent, bound: bound)
-	substituteValuesInFunc(module, func: func, subst: parent)
+	substituteValuesInFunc(module, func: func, subst: parent, replacements: replacements)
 
 	// `folded` is this pass's working column — a fold is an EVENT, and the settle loop asks "has this
 	// one already gone?". The shared dropper asks the OPPOSITE question, "does this one survive?", and

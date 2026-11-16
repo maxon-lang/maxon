@@ -382,25 +382,23 @@ function rewriteFunction(module StdModule, funcIndex ElementIndex, candidates Re
 		changed = true
 	end 'eachSiteFromTheLast'
 
-	let doomed = StdValueUseSet.create()
+	if changed 'theCallersReadTheirRetains'
+		redirectReadsInFunc(module, func: func, subst: subst)
+	end 'theCallersReadTheirRetains'
 
 	if let ownerIndex = try ownerOf.get(funcIndex) 'returnsAParameter'
 		let owner = try candidates.get(ownerIndex) otherwise panic("rewriteFunction: candidates.get OOB at {ownerIndex}")
+		let replaced = ValueIdArray.create(0)
+		let doomed = StdValueUseSet.create()
 
 		for leaf in owner.leaves 'eachLeaf'
-			try subst.set(leaf, value: valueIdAtParamPosition(owner.position)) otherwise panic("rewriteFunction: subst.set OOB at leaf {leaf}")
+			recordValueSubstitution(replaced, resultId: leaf, replacement: valueIdAtParamPosition(owner.position))
 			doomed.insert(leaf)
 		end 'eachLeaf'
 
-		changed = true
+		replaceValuesInFunc(module, func: func, subst: replaced)
+		removeOpsDefining(module, func: func, doomed: doomed)
 	end 'returnsAParameter'
-
-	if not changed 'nothingRewritten'
-		return
-	end 'nothingRewritten'
-
-	substituteValuesInFunc(module, func: func, subst: subst)
-	removeOpsDefining(module, func: func, doomed: doomed)
 end 'rewriteFunction'
 
 function insertRetainAfter(module StdModule, site ReturnedParameterSite, retainDoor OwnershipDoor, minter ValueMinter) returns ValueId

@@ -1,0 +1,46 @@
+let DeadOtherStoreCaseLabel = "sidecar-a-slot-local-whose-dead-store-of-another-value-was-removed-reads-unavailable-after-it"
+
+let DeadOtherStoreLocalName = "limit"
+let DeadOtherStoreOlderValue = "5"
+let DeadOtherStoreDeletedValue = "7"
+let DeadOtherStoreNotLiveHere = "not-live-here"
+
+test 'a slot local whose dead store of another value was removed reads unavailable after it'
+	let staged = builtFixture(DeadOtherStoreCaseLabel, fixture: DeadStoreFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == DeadOtherStoreLocalName and row.contains(StackSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{DeadOtherStoreLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let tailAt = anchorLine(staged.join(StagedProgramFileName), anchor: "tail")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(tailAt)}", RunCommand, "{PrintCommand} {DeadOtherStoreLocalName}"])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {DeadOtherStoreLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let shown = textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	Expect.notEqual(shown, expected: DeadOtherStoreOlderValue, message: "`{DeadOtherStoreLocalName} = {DeadOtherStoreDeletedValue}` was deleted as dead, not replaced by another value, so its version is located nowhere and still ends the version holding {DeadOtherStoreOlderValue}. {said}")
+	Expect.notEqual(shown, expected: DeadOtherStoreDeletedValue, message: "no instruction ever holds {DeadOtherStoreDeletedValue}: the store was deleted. {said}")
+	Expect.equal(unavailable.count(), expected: 1, message: "after a dead store's deletion the name reads unavailable, never a number. {said}")
+
+	if unavailable.count() == 1 'anUnavailability'
+		let reason = stringAt(answered, node: nodeAt(unavailable, index: 0))
+
+		Expect.isTrue(reason == DeadOtherStoreNotLiveHere or reason == OptimizedOutReason, message: "the answer is `{DeadOtherStoreNotLiveHere}` or `{OptimizedOutReason}`; it was `{reason}`. {said}")
+	end 'anUnavailability'
+
+	discardStagedDir(staged)
+end 'a slot local whose dead store of another value was removed reads unavailable after it'

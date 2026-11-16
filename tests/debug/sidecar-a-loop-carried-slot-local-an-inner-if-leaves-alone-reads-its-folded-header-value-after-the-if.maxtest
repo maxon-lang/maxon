@@ -1,0 +1,75 @@
+let MergedHeaderCaseLabel = "sidecar-a-loop-carried-slot-local-an-inner-if-leaves-alone-reads-its-folded-header-value-after-the-if"
+
+let MergedHeaderLocalName = "flag"
+let MergedHeaderFilled = 5
+let MergedHeaderLoopValue = "false"
+
+function mergedHeaderShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'mergedHeaderShown'
+
+function mergedHeaderIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'mergedHeaderIsUnavailable'
+
+test 'a loop-carried slot local an inner if leaves alone reads its folded header value after the if'
+	let staged = builtFixture(MergedHeaderCaseLabel, fixture: MergedHeaderFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == MergedHeaderLocalName and row.contains(StackSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{MergedHeaderLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED loop-carried local. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let insideStops = MergedHeaderFilled mod 3 + 2
+	let beforeAt = anchorLine(staged.join(StagedProgramFileName), anchor: "before")
+	let insideAt = anchorLine(staged.join(StagedProgramFileName), anchor: "inside")
+	let reads = StringArray.create(0)
+
+	for _ in 0 upto insideStops + 1 'eachStop'
+		reads.push("{PrintCommand} {MergedHeaderLocalName}")
+		reads.push(ContinueCommand)
+	end 'eachStop'
+
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(beforeAt)}", "{BreakCommand} {lineTarget(insideAt)}", RunCommand], rest: reads))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: beforeAt), expected: 1, message: "the `before` line runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: insideAt), expected: insideStops, message: "the loop runs its `inside` line {insideStops} times before the `break`. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: insideStops + 1, message: "each stop printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let atBefore = eventAt(answers, index: 0)
+	let shownBefore = mergedHeaderShown(atBefore)
+
+	Expect.isTrue(shownBefore == MergedHeaderLoopValue or mergedHeaderIsUnavailable(atBefore), message: "before the loop, `{MergedHeaderLocalName}` is {MergedHeaderLoopValue}, or not shown; it read {shownBefore}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for index in 1 upto insideStops + 1 'eachInside'
+		let shown = mergedHeaderShown(eventAt(answers, index: index as EventIndex))
+
+		if shown != MergedHeaderLoopValue 'aWrongValue'
+			wrong.push("stop {index} on the `inside` line read `{MergedHeaderLocalName}` as {shown}")
+		end 'aWrongValue'
+	end 'eachInside'
+
+	Expect.isEmpty(listedLines(wrong), message: "`{MergedHeaderLocalName}` holds {MergedHeaderLoopValue} on every pass through the loop: the loop header's argument for it was folded into the value it enters with, and the `if` inside the loop rejoins with that argument on both paths, so the version recorded at that rejoin must follow the fold to the value that replaced it and open at the loop header, where the name already held it. {listedLines(wrong)}. {said}")
+
+	discardStagedDir(staged)
+end 'a loop-carried slot local an inner if leaves alone reads its folded header value after the if'

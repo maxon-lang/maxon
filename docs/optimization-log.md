@@ -282,6 +282,7 @@ ragged.
 | 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 11,164,174 | 15,538,163 | 24,255,682 | 41,712,756 | 76,772,855 | 147,502,626 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The called-once rule is bounded by inline-site depth (MaxCalledOnceSiteDepth = 32): inlineLeaves keeps one depth column per function the rule asks about, and no corpus function nests past the bound, so code bytes are unchanged | 10,474,470 | 14,564,778 | 22,714,414 | 39,035,343 | 71,823,414 | 138,006,554 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | One roster predicate (RequiredFunctionRoster.names) answers whether a build requires a function, for the printer and the inliner. Against a compiler built from the parent commit at an equal-length path this costs a flat 9 allocations per compile at every rung, all in phase:load (the roster is built twice, once empty with the project and once from the request); inlineLeaves and inlineEmittedBand match the parent exactly. The rest of this row's difference from the row above is not this change: the parent's own compiler shows it too (+23,970 to +2,525,306 allocations), so it entered between that row's measurement and its commit. | 10,498,423 | 14,669,215 | 22,979,935 | 39,623,575 | 73,069,550 | 140,531,843 |
+| 2026-11-16 | /home/user/m42/maxon-bin/.maxon/maxon (corpus /home/user/m42/.scale-tmp) | A debug version follows a folded block argument: the replacement primitive notes folded arguments and one fold forwards the versions that named them; newly located versions add rows in regalloc, encode and writeDebugInfo, and code bytes are unchanged | 10,517,405 | 14,698,407 | 23,029,945 | 39,715,032 | 73,244,120 | 140,872,629 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -373,6 +374,7 @@ ragged.
 | 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 1,192,525,568 | 1,717,957,104 | 2,769,790,064 | 4,899,461,024 | 9,217,588,320 | 17,881,208,992 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The called-once rule is bounded by inline-site depth (MaxCalledOnceSiteDepth = 32): inlineLeaves keeps one depth column per function the rule asks about, and no corpus function nests past the bound, so code bytes are unchanged | 1,108,146,688 | 1,610,372,112 | 2,616,690,096 | 4,654,051,168 | 8,788,063,520 | 17,082,292,496 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | One roster predicate (RequiredFunctionRoster.names) answers whether a build requires a function, for the printer and the inliner. Against a compiler built from the parent commit at an equal-length path this costs a flat 9 allocations per compile at every rung, all in phase:load (the roster is built twice, once empty with the project and once from the request); inlineLeaves and inlineEmittedBand match the parent exactly. The rest of this row's difference from the row above is not this change: the parent's own compiler shows it too (+23,970 to +2,525,306 allocations), so it entered between that row's measurement and its commit. | 1,127,234,112 | 1,633,311,920 | 2,643,714,928 | 4,681,065,760 | 8,831,609,648 | 17,148,280,656 |
+| 2026-11-16 | /home/user/m42/maxon-bin/.maxon/maxon (corpus /home/user/m42/.scale-tmp) | A debug version follows a folded block argument: the replacement primitive notes folded arguments and one fold forwards the versions that named them; newly located versions add rows in regalloc, encode and writeDebugInfo, and code bytes are unchanged | 1,128,034,992 | 1,634,784,288 | 2,646,559,184 | 4,693,704,224 | 8,842,737,120 | 17,215,851,392 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -507,6 +509,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-11-15 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | maxon lint: build leaves out the discarded-result rule and the two unused-declaration audits, which each rung's lint: rows measure | 4,479,465,135 | 6,035,210,470 | 9,104,994,533 | 15,008,722,008 | 27,204,630,868 | 52,003,627,401 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | The called-once rule is bounded by inline-site depth (MaxCalledOnceSiteDepth = 32): inlineLeaves keeps one depth column per function the rule asks about, and no corpus function nests past the bound, so code bytes are unchanged | 1,738,098,828 | 2,323,158,834 | 3,592,485,855 | 5,950,906,787 | 12,145,758,983 | 21,650,004,570 |
 | 2026-11-16 | /home/user/maxon/maxon-bin/.maxon/maxon (corpus /home/user/maxon/.scale-tmp) | One roster predicate (RequiredFunctionRoster.names) answers whether a build requires a function, for the printer and the inliner. Against a compiler built from the parent commit at an equal-length path this costs a flat 9 allocations per compile at every rung, all in phase:load (the roster is built twice, once empty with the project and once from the request); inlineLeaves and inlineEmittedBand match the parent exactly. The rest of this row's difference from the row above is not this change: the parent's own compiler shows it too (+23,970 to +2,525,306 allocations), so it entered between that row's measurement and its commit. | 1,552,894,555 | 2,326,743,825 | 3,362,301,520 | 6,010,642,971 | 10,981,027,650 | 22,067,952,687 |
+| 2026-11-16 | /home/user/m42/maxon-bin/.maxon/maxon (corpus /home/user/m42/.scale-tmp) | A debug version follows a folded block argument: the replacement primitive notes folded arguments and one fold forwards the versions that named them; newly located versions add rows in regalloc, encode and writeDebugInfo, and code bytes are unchanged | 1,426,340,163 | 1,936,504,003 | 2,984,239,677 | 5,360,608,679 | 10,234,692,662 | 19,494,112,243 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -2790,3 +2793,25 @@ The `ring` ladder's small rungs are not a clean doubling in either direction: it
 `lowerMaxonToStd` and `synthesizeBodies` stay quadratic on the `ring` ladder (137,303 / 282,671 / 695,602 / 2,006,074 and 91,490 / 136,091 / 286,496 / 829,705 at N = 100…800). That is a different mechanism, a type-argument-kind walk that follows a declaration view around the ring once per parameter, and this change does not touch it.
 
 On `scale-test` the change costs `inlineLeaves` +1,524 / +2,702 / +5,054 / +9,759 / +19,153 / +37,923 allocations per rung against a compiler built without it (one depth column per function the rule asks about), 0.027% of the top rung, with code bytes identical on every rung. The row this change recorded reads +5,057 … +128,163 against the row before it; the difference is not this change's, since no other phase's count moves between the two compilers.
+
+### Result — 2026-11-16, a debug version follows a folded block argument, and the roster fold is linear
+
+A local's debug record holds versions, each naming one value, and nothing owned that map once the parser had written it. When `elimTrivialBlockArgs` folded a loop-header or join argument into the value every edge carried, the version naming the argument kept naming a value located nowhere and, as a later version, ended the earlier one: `var found = false`, set only on a `break` path, read unavailable throughout its loop.
+
+The replacement primitive now notes each block argument a replacement maps, with its block, and one fold rebuilds the versions that named it to name the survivor, placed at that block's entry. The notes cross the pass pool beside the derived-origin rows and are folded on the main thread. A version whose value an op-result replacement removed (common-subexpression elimination, an identity fold, a retain elision, a hold alias) is not forwarded: its position was the op.
+
+Emitted code is unchanged: the compiler's own executable is byte-identical to the one a compiler built from the parent commit produces (35,441,288 bytes), as are the 84 `tests/debug` fixtures and the scale corpus. Over those fixtures no (binding, PC) that was readable became unreadable, and 128 bindings gained 314,563 bytes of readable range.
+
+`scale-test`, allocations against a compiler built from the parent commit, on one tree:
+
+| | rung 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| whole compile | +31,458 | +29,214 | +37,643 | +91,869 | +180,204 | +342,758 |
+| `writeDebugInfo` | +6,133 | +10,065 | +18,103 | +34,067 | +66,140 | +130,287 |
+| `stdFanOut` | +6,824 | +10,109 | +16,731 | +29,964 | +56,410 | +109,291 |
+| `regalloc` | +5,666 | +8,724 | +15,012 | +27,522 | +52,636 | +102,864 |
+| `encode` | +1,457 | +2,388 | +4,300 | +8,109 | +15,748 | +31,028 |
+
+Every phase's delta approaches ×2 per rung (×1.94 to ×1.97 at the top), and the whole compile's is 0.24% of the top rung. `stdFanOut` is the record and the fold; the other three are the rows of the newly located versions. A build without debug info allocates no record: its `stdFanOut`, `regalloc` and `parse` counts are the parent's.
+
+A first form of this change forwarded a version through every replacement. It read +6,459,683 at the top rung and ×3.4 per doubling, because common-subexpression elimination merges many bindings onto one long-lived value and the debug-range harvest opens a run per (block, name); it also placed such versions wrongly, which is why it was dropped. The harvest's per-name cost for one value is still there for whatever names share a value.

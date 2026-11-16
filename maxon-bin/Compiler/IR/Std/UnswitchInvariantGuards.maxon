@@ -162,7 +162,7 @@ end 'unswitchInvariantGuardsSummary'
 // Rewrite every admissible loop of one function — versioned, or hoisted in place — counting the loops
 // into the tally. Answers whether it rewrote anything, which is what decides whether
 // `refineVersionedRanges` visits the function.
-function unswitchInFunc(module StdModule, func IrFunction, origins DerivedOrigins, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
+function unswitchInFunc(module StdModule, func IrFunction, origins DerivedOrigins, replacements ValueReplacements, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
 	let blockCount = func.blockRefs.count()
 
 	if blockCount < 2 or not holdsAManagedCallee(module, func: func, call: scratch.call) 'nothingToVersion'
@@ -202,7 +202,7 @@ function unswitchInFunc(module StdModule, func IrFunction, origins DerivedOrigin
 
 	// Seeded ONCE, past every id the function uses; every copy, chain value and exit phi mints from here.
 	let minter = ValueMinter.resuming(analysis.valueBound)
-	let columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId, origins: origins)
+	let columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId, origins: origins, replacements: replacements)
 
 	for index in 0 upto plans.count() 'eachExitPhi'
 		let plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
@@ -1301,7 +1301,9 @@ type RewriteColumns
 	// Where a freshly minted copy is filed as derived from its original (`mapCopy`).
 	var origins as DerivedOrigins
 
-	static function identity(valueBound ValueId, blockBound BlockId, origins DerivedOrigins) returns RewriteColumns
+	let replacements as ValueReplacements
+
+	static function identity(valueBound ValueId, blockBound BlockId, origins DerivedOrigins, replacements ValueReplacements) returns RewriteColumns
 		let valueSubst = ValueIdArray.create(valueBound, zeroed: false)
 
 		for valueId in 0 upto valueBound 'eachValue'
@@ -1314,7 +1316,7 @@ type RewriteColumns
 			blockSubst.push(blockId)
 		end 'eachBlock'
 
-		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(0), mappedBlocks: BlockIdArray.create(0), origins: origins}
+		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(0), mappedBlocks: BlockIdArray.create(0), origins: origins, replacements: replacements}
 	end 'identity'
 
 	function mapValue(original ValueId, fresh ValueId)
@@ -1416,7 +1418,7 @@ function readHoistedInPlace(module StdModule, func IrFunction, plan UnswitchPlan
 		end 'eachOp'
 
 		block.replaceBodyOps(kept)
-		substituteValuesInBlock(module, block: block, subst: columns.valueSubst)
+		substituteValuesInBlock(module, block: block, subst: columns.valueSubst, replacements: columns.replacements)
 	end 'eachMember'
 end 'readHoistedInPlace'
 
@@ -1845,7 +1847,7 @@ function substituteExitPhis(module StdModule, func IrFunction, analysis Unswitch
 				continue
 			end 'insideTheLoop'
 
-			substituteOpUses(module, opIdx: sites.opOfSite(site), subst: columns.valueSubst)
+			redirectReadsInOp(module, opIdx: sites.opOfSite(site), subst: columns.valueSubst)
 		end 'eachOpRead'
 
 		for k in 0 upto sites.edgeReaders.degree(valueId as CsrIndex) 'eachEdgeRead'
@@ -1855,7 +1857,7 @@ function substituteExitPhis(module StdModule, func IrFunction, analysis Unswitch
 				continue
 			end 'insideTheLoop'
 
-			substituteEdgeArgsInBlock(module.blockAtPosition(func, position: position), subst: columns.valueSubst)
+			redirectEdgeArgsInBlock(module.blockAtPosition(func, position: position), subst: columns.valueSubst)
 		end 'eachEdgeRead'
 	end 'eachValue'
 

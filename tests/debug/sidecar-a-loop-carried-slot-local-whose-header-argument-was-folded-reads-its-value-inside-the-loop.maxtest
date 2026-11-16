@@ -1,0 +1,75 @@
+let FoldedHeaderCaseLabel = "sidecar-a-loop-carried-slot-local-whose-header-argument-was-folded-reads-its-value-inside-the-loop"
+
+let FoldedHeaderLocalName = "reached"
+let FoldedHeaderInsideStops = 3
+let FoldedHeaderLoopValue = "false"
+let FoldedHeaderBreakValue = "true"
+
+function foldedHeaderShown(answered JsonDoc) returns String
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+
+	if unavailable.count() == 1 'notShown'
+		return "unavailable ({stringAt(answered, node: nodeAt(unavailable, index: 0))})"
+	end 'notShown'
+
+	return textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+end 'foldedHeaderShown'
+
+function foldedHeaderIsUnavailable(answered JsonDoc) returns bool
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	return memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() == 1
+end 'foldedHeaderIsUnavailable'
+
+test 'a loop-carried slot local whose header argument was folded reads its value inside the loop'
+	let staged = builtFixture(FoldedHeaderCaseLabel, fixture: FoldedHeaderFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotRows = 0 as Count
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		slotRows = slotRows + 1 if firstToken(row) == FoldedHeaderLocalName and row.contains(StackSlotMark) else slotRows
+	end 'eachLocal'
+
+	Expect.notEqual(slotRows, expected: 0, message: "`{FoldedHeaderLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED loop-carried local. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let insideAt = anchorLine(staged.join(StagedProgramFileName), anchor: "inside")
+	let hitAt = anchorLine(staged.join(StagedProgramFileName), anchor: "hit")
+	let reads = StringArray.create(0)
+
+	for _ in 0 upto FoldedHeaderInsideStops + 1 'eachStop'
+		reads.push("{PrintCommand} {FoldedHeaderLocalName}")
+		reads.push(ContinueCommand)
+	end 'eachStop'
+
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(insideAt)}", "{BreakCommand} {lineTarget(hitAt)}", RunCommand], rest: reads))
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(stopsAtLine(events, line: insideAt), expected: FoldedHeaderInsideStops, message: "the loop runs its `inside` line {FoldedHeaderInsideStops} times before the `break`. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(stopsAtLine(events, line: hitAt), expected: 1, message: "the loop is left by its `break`, so the `hit` arm runs once. It printed: {listedLines(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: FoldedHeaderInsideStops + 1, message: "each stop printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let wrong = StringArray.create(0)
+
+	for index in 0 upto FoldedHeaderInsideStops 'eachInside'
+		let shown = foldedHeaderShown(eventAt(answers, index: index as EventIndex))
+
+		if shown != FoldedHeaderLoopValue 'aWrongValue'
+			wrong.push("stop {index + 1} on the `inside` line read `{FoldedHeaderLocalName}` as {shown}")
+		end 'aWrongValue'
+	end 'eachInside'
+
+	Expect.isEmpty(listedLines(wrong), message: "`{FoldedHeaderLocalName}` holds {FoldedHeaderLoopValue} on every pass through the loop: the loop header's argument for it was folded into the value it enters with, and its slot still holds that value, so a version that names the folded argument must follow it to the value that replaced it rather than end the earlier one. {listedLines(wrong)}. {said}")
+
+	let afterBreak = eventAt(answers, index: FoldedHeaderInsideStops as EventIndex)
+	let shownAfter = foldedHeaderShown(afterBreak)
+
+	Expect.isTrue(shownAfter == FoldedHeaderBreakValue or foldedHeaderIsUnavailable(afterBreak), message: "after the `break` that set it, `{FoldedHeaderLocalName}` is {FoldedHeaderBreakValue}, or not shown at all; it read {shownAfter}, the value it held inside the loop. {said}")
+
+	discardStagedDir(staged)
+end 'a loop-carried slot local whose header argument was folded reads its value inside the loop'
