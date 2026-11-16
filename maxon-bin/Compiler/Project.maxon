@@ -8817,8 +8817,8 @@ end 'cacheReadEnumBackingFieldArrayArray'
 // A boxed union is `UnionTagBytes` (the i64 tag at offset 0) plus `FieldSlotBytes` per payload slot
 // of the WIDEST case. The tag is always i64 — an enum value is its i64 tag, boxed or not — so the
 // tag store/load width is fixed here rather than derived, the one place it lives.
-let UnionTagOffset = 0 as ByteOffset
-let UnionTagBytes = 8
+export let UnionTagOffset = 0 as ByteOffset
+export let UnionTagBytes = 8
 
 // A word union keeps `payload pointer | key` in one i64, the key in the low `UnboxedTagBits` bits of
 // an 8-aligned pointer. Key 0 is the empty word a zeroed slot holds, so `UnboxedMaxPayloadCases` is
@@ -11227,15 +11227,6 @@ let TestFunctionNamePrefix = b"__test_"
 // `adds two` and `adds-two` collide — the collision E3107 exists to refuse.
 let TestNameSanitizedByte = 95 as Byte
 
-// The symbol alphabet's three ASCII runs, named for `ConditionalCompilation.AsciiUpperA`'s reason: a bare
-// `b >= 97 and b <= 122` states a range and says nothing about which range.
-let SymbolDigitZero = 48
-let SymbolDigitNine = 57
-let AsciiCapitalA = 65
-let AsciiCapitalZ = 90
-let AsciiSmallA = 97
-let AsciiSmallZ = 122
-
 // ⭐ **THE MINT: the registration name a `test` named `prose` takes.** Every character outside
 // `[A-Za-z0-9_]` becomes `_`, which is `docs/LANGUAGE_REFERENCE.md`'s rule. THE one producer —
 // `Parser.readFunctionHead` mints with it and the declaration
@@ -11259,15 +11250,15 @@ end 'testFunctionRegistrationName'
 
 // `[A-Za-z0-9_]` — the alphabet a symbol may hold, asked one byte at a time.
 function byteIsTestNameSafe(b Byte) returns bool
-	if b >= SymbolDigitZero and b <= SymbolDigitNine 'aDigit'
+	if b >= AsciiZeroDigit and b <= AsciiNineDigit 'aDigit'
 		return true
 	end 'aDigit'
 
-	if b >= AsciiCapitalA and b <= AsciiCapitalZ 'aCapital'
+	if b >= AsciiUpperA and b <= AsciiUpperZ 'aCapital'
 		return true
 	end 'aCapital'
 
-	return (b >= AsciiSmallA and b <= AsciiSmallZ) or b == TestNameSanitizedByte
+	return (b >= AsciiLowerA and b <= AsciiLowerZ) or b == TestNameSanitizedByte
 end 'byteIsTestNameSafe'
 
 // ⭐ **IS THIS FUNCTION A TEST?** — read off the name, because the name is the only thing that survives

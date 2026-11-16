@@ -171,10 +171,6 @@ let DescendantsCommBytes = 1 shl DescendantsCommShift
 export let DescendantsCommMax = DescendantsCommBytes - 1
 export let DescendantsMapBytes = PosixTreeInitialBytes + PosixTreeInitialEntries * DescendantsCommBytes
 export let DescendantsEnumerationFailed = 1
-export let AsciiNewline = 10
-export let AsciiSpace = 32
-export let AsciiDigitZero = 0x30
-export let PosixDecimalBase = 10
 
 export let PosixTreeInitialEntries = 1024
 export let PosixTreeEntryShift = 2 as ShiftCount
@@ -569,14 +565,6 @@ export let PosixHandleKindUnit = 0x0001000000000000
 // `writtenSlot` with before their lookup so the not-found arm needs no branch of its own.
 export let PosixEnvUnset = 0
 
-export let PosixMillisPerSecond = 1000
-
-// The other direction of the same fact, and the unit each lane's `timespec` split (`posixNanosPerUnit`) turns a
-// millisecond remainder into. ⚠ `mrt_host_tick_ms` does NOT use it: that chunk derives its divisor from the
-// FREQUENCY `mrt_host_monotonic_clock` reports, so a lane that ever answered raw counter ticks would still be
-// right.
-let PosixNanosPerMilli = 1000000
-
 // ⭐ **THE TWO UNITS A RELATIVE TIME REACHES A POSIX CALL IN** — a wait's timeout in milliseconds, the
 // monitor's sleep in microseconds — and what each lane's `timespec` split divides and multiplies by.
 export enum PosixTimeUnit
@@ -584,20 +572,17 @@ export enum PosixTimeUnit
 	microseconds
 end 'PosixTimeUnit'
 
-let PosixMicrosPerSecond = 1000000
-let PosixNanosPerMicro = 1000
-
 export function posixUnitsPerSecond(unit PosixTimeUnit) returns MachineWord
 	return match unit 'u'
-		milliseconds gives PosixMillisPerSecond as MachineWord
-		microseconds gives PosixMicrosPerSecond as MachineWord
+		milliseconds gives MillisecondsPerSecond as MachineWord
+		microseconds gives MicrosPerSecond as MachineWord
 	end 'u'
 end 'posixUnitsPerSecond'
 
 export function posixNanosPerUnit(unit PosixTimeUnit) returns MachineWord
 	return match unit 'u'
-		milliseconds gives PosixNanosPerMilli as MachineWord
-		microseconds gives PosixNanosPerMicro as MachineWord
+		milliseconds gives NanosPerMilli as MachineWord
+		microseconds gives NanosPerMicro as MachineWord
 	end 'u'
 end 'posixNanosPerUnit'
 
@@ -724,10 +709,10 @@ export let PosixSigKill = 9
 
 let PosixSigIllegal = 4
 let PosixSigFpe = 8
-let PosixSigSegv = 11
+export let PosixSigSegv = 11
 
-let LinuxSigBus = 7
-let DarwinSigBus = 10
+export let LinuxSigBus = 7
+export let DarwinSigBus = 10
 
 let LinuxSigStop = 19
 let DarwinSigStop = 17

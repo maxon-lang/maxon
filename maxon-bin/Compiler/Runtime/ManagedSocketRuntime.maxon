@@ -1821,14 +1821,7 @@ let ResolveTextBytes = 8192
 // a stub resolver receives in practice, and a longer one is parsed as far as it arrived.
 let DnsMessageBytes = 4096
 
-// The bytes this file's scanners test. Named because a bare 0x2E in a compare says nothing.
-let ResolveDotByte = 0x2E
 let ResolveHashByte = 0x23
-let ResolveNewlineByte = 0x0A
-let ResolveSpaceByte = 0x20
-let ResolveTabByte = 0x09
-let ResolveDigitZeroByte = 0x30
-let ResolveDigitNineByte = 0x39
 
 // ⭐ **A DOTTED QUAD'S FOUR OCTETS, AND WHAT BOUNDS EACH.** The parser accepts exactly four octets of 0..255
 // separated by three dots and NOTHING else — no shorthand `a.b`, no octal, no leading `+`. `inet_addr`'s
@@ -1837,19 +1830,7 @@ let ResolveDigitNineByte = 0x39
 let Ipv4OctetCount = 4
 let Ipv4LastOctetIndex = Ipv4OctetCount - 1
 let Ipv4OctetMax = 255
-let Ipv4DecimalBase = 10
 
-// `256` as a MULTIPLIER, so each octet lands one byte higher than the last. The address is accumulated in
-// NETWORK order — the first octet is the LOW byte — because that is the order `sin_addr` holds it in and
-// therefore what `emitSockaddrInWord` places without swapping.
-let Ipv4OctetScale = 256
-
-let ResolveColonByte = 0x3A
-let ResolveUpperAByte = 0x41
-let ResolveUpperFByte = 0x46
-let ResolveLowerAByte = 0x61
-let ResolveLowerFByte = 0x66
-let HexLetterBase = 10
 let HexDigitBase = 16
 let Ipv6AddressBytes = 16
 let Ipv6LastGroupStart = Ipv6AddressBytes - 2
@@ -1860,7 +1841,6 @@ let Ipv6NoGap = -1
 let Ipv6ScratchBytes = 16
 let Ipv6ScratchLowOffset = 0
 let Ipv6ScratchHighOffset = 8
-let ByteBits = 8
 
 // The DNS facts this file writes and reads. Every one is RFC 1035's and none is a choice.
 let DnsPort = 53
@@ -1908,7 +1888,6 @@ let DnsQuestionStart = DnsTcpLengthPrefixBytes + DnsHeaderBytes
 // A byte's worth of shift, as a MULTIPLIER — a big-endian halfword is composed into its word
 // (`ByteTwoScale`'s argument, one field width down).
 let ByteOneScale = 256
-let ByteMask = 0xFF
 
 // ⭐ Install the whole resolver. Its shape is chosen once, at `installManagedSocketRuntime`.
 function installManagedSocketResolver(module StdModule, target Target)
@@ -1995,10 +1974,10 @@ function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks boo
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: limit, whenTrue: done, whenFalse: body, ids: ids)
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	let isSpace = emitCompareWithConstant(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveSpaceByte, ids: ids)
+	let isSpace = emitCompareWithConstant(module, block: body, value: current, pred: StdCmpPred.eq, against: SpaceByte, ids: ids)
 	module.setTerminator(body, op: StdOp.condBranch(isSpace, thenBlockId: onBlank, elseBlockId: tabTest.id))
 
-	let isTab = emitCompareWithConstant(module, block: tabTest, value: current, pred: StdCmpPred.eq, against: ResolveTabByte, ids: ids)
+	let isTab = emitCompareWithConstant(module, block: tabTest, value: current, pred: StdCmpPred.eq, against: TabByte, ids: ids)
 	module.setTerminator(tabTest, op: StdOp.condBranch(isTab, thenBlockId: onBlank, elseBlockId: offBlank))
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
@@ -2035,7 +2014,7 @@ function buildManagedSocketEol(module StdModule)
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: limit, whenTrue: done, whenFalse: body, ids: ids)
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveNewlineByte, whenTrue: done, whenFalse: step, ids: ids)
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: LineFeedByte, whenTrue: done, whenFalse: step, ids: ids)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -2111,15 +2090,15 @@ function buildManagedSocketIpv4(module StdModule)
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: len, whenTrue: finish, whenFalse: body, ids: ids)
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveDotByte, whenTrue: dot, whenFalse: digitLow, ids: ids)
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: DotByte, whenTrue: dot, whenFalse: digitLow, ids: ids)
 
-	emitBranchOnCompare(module, block: digitLow, value: current, pred: StdCmpPred.lt, against: ResolveDigitZeroByte, whenTrue: failed, whenFalse: digitHigh, ids: ids)
+	emitBranchOnCompare(module, block: digitLow, value: current, pred: StdCmpPred.lt, against: AsciiZeroDigit, whenTrue: failed, whenFalse: digitHigh, ids: ids)
 
-	emitBranchOnCompare(module, block: digitHigh, value: current, pred: StdCmpPred.gt, against: ResolveDigitNineByte, whenTrue: failed, whenFalse: digit, ids: ids)
+	emitBranchOnCompare(module, block: digitHigh, value: current, pred: StdCmpPred.gt, against: AsciiNineDigit, whenTrue: failed, whenFalse: digit, ids: ids)
 
-	let base = emitConst(module, block: digit, value: Ipv4DecimalBase, ids: ids)
+	let base = emitConst(module, block: digit, value: DecimalRadix, ids: ids)
 	let shifted = emitBin(module, block: digit, a: octet, b: base, opcode: StdBinOpcode.mul, ids: ids)
-	let digitZero = emitConst(module, block: digit, value: ResolveDigitZeroByte, ids: ids)
+	let digitZero = emitConst(module, block: digit, value: AsciiZeroDigit, ids: ids)
 	let digitValue = emitBin(module, block: digit, a: current, b: digitZero, opcode: StdBinOpcode.sub, ids: ids)
 	let grown = emitBin(module, block: digit, a: shifted, b: digitValue, opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompare(module, block: digit, value: grown, pred: StdCmpPred.gt, against: Ipv4OctetMax, whenTrue: failed, whenFalse: digitFits, ids: ids)
@@ -2135,7 +2114,9 @@ function buildManagedSocketIpv4(module StdModule)
 
 	emitBranchOnCompare(module, block: dotCount, value: closed, pred: StdCmpPred.ge, against: Ipv4LastOctetIndex, whenTrue: failed, whenFalse: dotClosed, ids: ids)
 
-	let dotScale = emitConst(module, block: dotClosed, value: Ipv4OctetScale, ids: ids)
+	// The address is accumulated in NETWORK order — the first octet is the LOW byte — because that is the
+	// order `sin_addr` holds it in and therefore what `emitSockaddrInWord` places without swapping.
+	let dotScale = emitConst(module, block: dotClosed, value: ByteOneScale, ids: ids)
 	let placedDot = emitBin(module, block: dotClosed, a: octet, b: scale, opcode: StdBinOpcode.mul, ids: ids)
 	let addressDot = emitBin(module, block: dotClosed, a: address, b: placedDot, opcode: StdBinOpcode.add, ids: ids)
 	let scaleNext = emitBin(module, block: dotClosed, a: scale, b: dotScale, opcode: StdBinOpcode.mul, ids: ids)
@@ -2184,7 +2165,7 @@ function buildManagedSocketHasColon(module StdModule)
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: len, whenTrue: missing, whenFalse: body, ids: ids)
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveColonByte, whenTrue: found, whenFalse: step, ids: ids)
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: AsciiColon, whenTrue: found, whenFalse: step, ids: ids)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -2204,7 +2185,7 @@ function ipv6LoopArgs(pos ValueId, value ValueId, digits ValueId, outIndex Value
 end 'ipv6LoopArgs'
 
 function emitIpv6StoreGroup(module StdModule, block IrBlock, out ValueId, outIndex ValueId, value ValueId, ids ValueMinter)
-	let byteBits = emitConst(module, block: block, value: ByteBits, ids: ids)
+	let byteBits = emitConst(module, block: block, value: BitsPerByte, ids: ids)
 	let highByte = emitBin(module, block: block, a: value, b: byteBits, opcode: StdBinOpcode.shrLogical, ids: ids)
 	emitStoreByte(module, block: block, base: out, index: outIndex, value: highByte, ids: ids)
 
@@ -2218,7 +2199,7 @@ function emitIpv6HexValue(module StdModule, block IrBlock, current ValueId, base
 	var digitValue = offset
 
 	if lettersAfter 'letters'
-		digitValue = emitBin(module, block: block, a: offset, b: emitConst(module, block: block, value: HexLetterBase, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+		digitValue = emitBin(module, block: block, a: offset, b: emitConst(module, block: block, value: HexLetterValue, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	end 'letters'
 
 	emitBranchCarrying(module, from: block, to: hex, values: argsOf(digitValue))
@@ -2298,12 +2279,12 @@ function buildManagedSocketIpv6(module StdModule)
 	emitBranchOnCompare(module, block: entry, value: len, pred: StdCmpPred.eq, against: 0, whenTrue: failed, whenFalse: first, ids: ids)
 
 	let firstByte = emitLoadByte(module, block: first, base: buf, index: emitConst(module, block: first, value: 0, ids: ids), ids: ids)
-	emitBranchOnCompare(module, block: first, value: firstByte, pred: StdCmpPred.eq, against: ResolveColonByte, whenTrue: leadColon, whenFalse: startPlain, ids: ids)
+	emitBranchOnCompare(module, block: first, value: firstByte, pred: StdCmpPred.eq, against: AsciiColon, whenTrue: leadColon, whenFalse: startPlain, ids: ids)
 
 	emitBranchOnCompare(module, block: leadColon, value: len, pred: StdCmpPred.lt, against: 2, whenTrue: failed, whenFalse: leadSecond, ids: ids)
 
 	let secondByte = emitLoadByte(module, block: leadSecond, base: buf, index: emitConst(module, block: leadSecond, value: 1, ids: ids), ids: ids)
-	emitBranchOnCompare(module, block: leadSecond, value: secondByte, pred: StdCmpPred.ne, against: ResolveColonByte, whenTrue: failed, whenFalse: startLead, ids: ids)
+	emitBranchOnCompare(module, block: leadSecond, value: secondByte, pred: StdCmpPred.ne, against: AsciiColon, whenTrue: failed, whenFalse: startLead, ids: ids)
 
 	let plainZero = emitConst(module, block: startPlain, value: 0, ids: ids)
 	let plainNoGap = emitConst(module, block: startPlain, value: Ipv6NoGap, ids: ids)
@@ -2317,21 +2298,21 @@ function buildManagedSocketIpv6(module StdModule)
 	emitBranchOnCompareValues(module, block: header, a: pos, pred: StdCmpPred.ge, b: len, whenTrue: finish, whenFalse: body, ids: ids)
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveColonByte, whenTrue: colon, whenFalse: notColon, ids: ids)
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: AsciiColon, whenTrue: colon, whenFalse: notColon, ids: ids)
 
-	emitBranchOnCompare(module, block: notColon, value: current, pred: StdCmpPred.eq, against: ResolveDotByte, whenTrue: dot, whenFalse: digitLow, ids: ids)
-	emitBranchOnCompare(module, block: digitLow, value: current, pred: StdCmpPred.lt, against: ResolveDigitZeroByte, whenTrue: failed, whenFalse: digitHigh, ids: ids)
-	emitBranchOnCompare(module, block: digitHigh, value: current, pred: StdCmpPred.le, against: ResolveDigitNineByte, whenTrue: decimal, whenFalse: upperLow, ids: ids)
-	emitBranchOnCompare(module, block: upperLow, value: current, pred: StdCmpPred.lt, against: ResolveUpperAByte, whenTrue: failed, whenFalse: upperHigh, ids: ids)
-	emitBranchOnCompare(module, block: upperHigh, value: current, pred: StdCmpPred.le, against: ResolveUpperFByte, whenTrue: upper, whenFalse: lowerLow, ids: ids)
-	emitBranchOnCompare(module, block: lowerLow, value: current, pred: StdCmpPred.lt, against: ResolveLowerAByte, whenTrue: failed, whenFalse: lowerHigh, ids: ids)
-	emitBranchOnCompare(module, block: lowerHigh, value: current, pred: StdCmpPred.le, against: ResolveLowerFByte, whenTrue: lower, whenFalse: failed, ids: ids)
+	emitBranchOnCompare(module, block: notColon, value: current, pred: StdCmpPred.eq, against: DotByte, whenTrue: dot, whenFalse: digitLow, ids: ids)
+	emitBranchOnCompare(module, block: digitLow, value: current, pred: StdCmpPred.lt, against: AsciiZeroDigit, whenTrue: failed, whenFalse: digitHigh, ids: ids)
+	emitBranchOnCompare(module, block: digitHigh, value: current, pred: StdCmpPred.le, against: AsciiNineDigit, whenTrue: decimal, whenFalse: upperLow, ids: ids)
+	emitBranchOnCompare(module, block: upperLow, value: current, pred: StdCmpPred.lt, against: AsciiUpperA, whenTrue: failed, whenFalse: upperHigh, ids: ids)
+	emitBranchOnCompare(module, block: upperHigh, value: current, pred: StdCmpPred.le, against: AsciiUpperF, whenTrue: upper, whenFalse: lowerLow, ids: ids)
+	emitBranchOnCompare(module, block: lowerLow, value: current, pred: StdCmpPred.lt, against: AsciiLowerA, whenTrue: failed, whenFalse: lowerHigh, ids: ids)
+	emitBranchOnCompare(module, block: lowerHigh, value: current, pred: StdCmpPred.le, against: AsciiLowerF, whenTrue: lower, whenFalse: failed, ids: ids)
 
 	let hexValue = ids.mint()
 	hex.blockArgs.push(IrBlockArg.create(hexValue, argType: StdType.i64))
-	emitIpv6HexValue(module, block: decimal, current: current, base: ResolveDigitZeroByte, lettersAfter: false, hex: hex, ids: ids)
-	emitIpv6HexValue(module, block: upper, current: current, base: ResolveUpperAByte, lettersAfter: true, hex: hex, ids: ids)
-	emitIpv6HexValue(module, block: lower, current: current, base: ResolveLowerAByte, lettersAfter: true, hex: hex, ids: ids)
+	emitIpv6HexValue(module, block: decimal, current: current, base: AsciiZeroDigit, lettersAfter: false, hex: hex, ids: ids)
+	emitIpv6HexValue(module, block: upper, current: current, base: AsciiUpperA, lettersAfter: true, hex: hex, ids: ids)
+	emitIpv6HexValue(module, block: lower, current: current, base: AsciiLowerA, lettersAfter: true, hex: hex, ids: ids)
 
 	emitBranchOnCompare(module, block: hex, value: digits, pred: StdCmpPred.ge, against: Ipv6GroupMaxDigits, whenTrue: failed, whenFalse: hexAccept, ids: ids)
 
@@ -2372,7 +2353,7 @@ function buildManagedSocketIpv6(module StdModule)
 	emitBranchOnCompare(module, block: dotParse, value: embedded, pred: StdCmpPred.eq, against: ResolveNoAddress, whenTrue: failed, whenFalse: dotStore, ids: ids)
 
 	for octetIndex in 0 upto Ipv4OctetCount 'eachOctet'
-		let shiftBits = emitConst(module, block: dotStore, value: octetIndex * ByteBits, ids: ids)
+		let shiftBits = emitConst(module, block: dotStore, value: octetIndex * BitsPerByte, ids: ids)
 		let shiftedOctet = emitBin(module, block: dotStore, a: embedded, b: shiftBits, opcode: StdBinOpcode.shrLogical, ids: ids)
 		let octetByte = emitBin(module, block: dotStore, a: shiftedOctet, b: emitConst(module, block: dotStore, value: ByteMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 		let octetAt = emitBin(module, block: dotStore, a: outIndex, b: emitConst(module, block: dotStore, value: octetIndex, ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -2802,7 +2783,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	emitBranchOnCompareValues(module, block: nameHeader, a: hostIndex, pred: StdCmpPred.ge, b: hostLen, whenTrue: nameFinish, whenFalse: nameByte, ids: ids)
 
 	let hostByte = emitLoadByte(module, block: nameByte, base: host, index: hostIndex, ids: ids)
-	emitBranchOnCompare(module, block: nameByte, value: hostByte, pred: StdCmpPred.eq, against: ResolveDotByte, whenTrue: nameDot, whenFalse: nameChar, ids: ids)
+	emitBranchOnCompare(module, block: nameByte, value: hostByte, pred: StdCmpPred.eq, against: DotByte, whenTrue: nameDot, whenFalse: nameChar, ids: ids)
 
 	emitStoreByte(module, block: nameChar, base: message, index: writeAt, value: hostByte, ids: ids)
 	let charStep = emitConst(module, block: nameChar, value: 1, ids: ids)
@@ -3030,7 +3011,7 @@ function emitDnsAddressWord(module StdModule, block IrBlock, message ValueId, at
 	var scale = 1 as FullRangeInt
 
 	for byteIndex in 1 to Ipv4LastOctetIndex 'eachByte'
-		scale = scale * Ipv4OctetScale
+		scale = scale * ByteOneScale
 		let step = emitConst(module, block: block, value: byteIndex, ids: ids)
 		let index = emitBin(module, block: block, a: at, b: step, opcode: StdBinOpcode.add, ids: ids)
 		let loaded = emitLoadByte(module, block: block, base: message, index: index, ids: ids)

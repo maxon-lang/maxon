@@ -301,7 +301,6 @@ export let MmCounterAllocBytesByTagName = b"__mm_counter_alloc_bytes_by_tag"
 let AllocTallyReaderArity = 1
 let AllocTallyBucketParamPosition = 0
 let AllocTallyLowestBucket = 0
-let MachineWordSignShift = 63
 
 // ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes asked of ONE GREEN THREAD.** Every
 // process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker would count
@@ -1272,15 +1271,6 @@ function emitStoreReleaseGlobalWord(module StdModule, block IrBlock, label ByteA
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	module.appendOp(block, op: StdOp.storeRelease(addr, offset: 0, valueId: value, valueType: StdType.i64))
 end 'emitStoreReleaseGlobalWord'
-
-// ⭐ **THE DECIMAL ALPHABET, ONE DECLARATION.** A radix and the ASCII codes that bound a digit — facts about
-// base ten and about ASCII, belonging to neither the String runtime that renders integers nor the scheduler
-// that parses an environment variable. ⚠ They were `StringRuntime`'s (`DecimalRadix`, `AsciiZeroDigit`) and
-// `SchedRuntime` declared a SECOND `DecimalRadix` under the identical name; two `let`s of one number in one
-// namespace is the shape `maxon flat-namespace check` exists to catch one level up.
-export let DecimalRadix = 10 as FullRangeInt
-export let AsciiZeroDigit = 0x30 as FullRangeInt
-export let AsciiNineDigit = 0x39 as FullRangeInt
 
 // A fresh i64 constant.
 export function emitConst(module StdModule, block IrBlock, value FullRangeInt, ids ValueMinter) returns ValueId
@@ -2980,7 +2970,7 @@ end 'emitAllocTallyRowAddr'
 function emitAllocTallyStep(module StdModule, block IrBlock, tagIndex ValueId, size ValueId, ids ValueMinter)
 	let lastBucket = emitConst(module, block: block, value: SlabCensusOverflowBucket, ids: ids)
 	let room = emitBin(module, block: block, a: lastBucket, b: tagIndex, opcode: StdBinOpcode.sub, ids: ids)
-	let signShift = emitConst(module, block: block, value: MachineWordSignShift, ids: ids)
+	let signShift = emitConst(module, block: block, value: SignBitPosition, ids: ids)
 	let overflowMask = emitBin(module, block: block, a: room, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
 	let pullBack = emitBin(module, block: block, a: overflowMask, b: room, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let bucket = emitBin(module, block: block, a: tagIndex, b: pullBack, opcode: StdBinOpcode.add, ids: ids)

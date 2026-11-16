@@ -94,8 +94,6 @@ let HashLow32Mask = 0xFFFFFFFF
 // How far a builtin hash shifts a 64-bit pattern to bring its high half down onto its low half.
 let HashHalfShift = 32
 
-let IntHashSignShift = 63
-
 let IntHashHighHalfMultiplier = 0x9E3779B1
 
 // ⭐ **`-0.0`'s IEEE-754 BIT PATTERN.** `+0.0` is 64 zero bits and `-0.0` is those bits with the SIGN
@@ -522,7 +520,7 @@ end 'emitHighHalf'
 // alone gives equal arrays different hashes on the two paths.
 function emitIntHashTerm(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let highHalf = emitHighHalf(module, block: block, value: value, opcode: StdBinOpcode.shr, ids: ids)
-	let signShift = emitConst(module, block: block, value: IntHashSignShift, ids: ids)
+	let signShift = emitConst(module, block: block, value: SignBitPosition, ids: ids)
 	let sign = emitBin(module, block: block, a: value, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
 	let wide = emitBin(module, block: block, a: highHalf, b: sign, opcode: StdBinOpcode.sub, ids: ids)
 	let multiplier = emitConst(module, block: block, value: IntHashHighHalfMultiplier, ids: ids)

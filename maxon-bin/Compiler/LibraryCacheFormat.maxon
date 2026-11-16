@@ -2,11 +2,13 @@ export typealias CacheUnsigned = int(0 to u64.max)
 export typealias CacheSigned = int(i64.min to i64.max)
 typealias CacheWord = bits(64)
 
+// The schema fingerprint hashes this file's text, so a wire-format constant declared outside it could
+// change the format without changing the fingerprint.
 let LibraryCacheMagic = "MXLC"
 let HeaderWordByteCount = 8
+let HeaderWordByteMask = 0xFF
 let HeaderWordCount = 2
 let ByteBitWidth = 8
-let ByteMask = 0xFF
 let VarintPayloadMask = 0x7F
 let VarintContinuationBit = 0x80
 let VarintPayloadBits = 7
@@ -137,7 +139,7 @@ function headerWordBytes(word CacheWord) returns ByteArray
 	let bytes = ByteArray.create(HeaderWordByteCount, zeroed: false)
 
 	for position in 0 upto HeaderWordByteCount 'eachByte'
-		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as Byte)
+		bytes.push(((word shr (position * ByteBitWidth)) and HeaderWordByteMask) as Byte)
 	end 'eachByte'
 
 	return bytes

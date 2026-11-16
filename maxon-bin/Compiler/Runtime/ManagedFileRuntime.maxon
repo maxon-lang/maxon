@@ -78,7 +78,7 @@ end 'emitHandleFromSlot'
 
 // `CreateFileW` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
 // carries. Two distinct sentinels for two distinct facts: "the OS refused" vs "this box holds no handle".
-let InvalidHandleValue = -1 as FullRangeInt
+export let InvalidHandleValue = -1
 
 // The Win32 last-error codes the corpus discriminates. `specs/managed-file.md`'s own note records that
 // Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
@@ -181,7 +181,7 @@ export let FileAttributeReadOnly = 0x1 as FullRangeInt
 // PRODUCER needs: Win32 sets it and no reader in this file tests it. A POSIX lane synthesizing a find
 // record has to write something for an ordinary file, and writing 0 would be a mask meaning "no attributes
 // at all", which is not what any Win32 `FindFirstFileW` ever answers.
-export let FileAttributeNormal = 0x80 as FullRangeInt
+export let FileAttributeNormal = 0x80
 
 // ⭐ **THE 48-BYTE STAT BUFFER — six i64 fields.** `stat` returns this buffer's ADDRESS as a bare `int`,
 // the caller
@@ -199,10 +199,6 @@ let StatCreatedOffset = 16
 let StatAccessedOffset = 24
 let StatIsDirectoryOffset = 32
 let StatIsReadOnlyOffset = 40
-
-// FILETIME counts 100 ns intervals since 1601-01-01 UTC; Unix time counts seconds since 1970-01-01. The
-// delta is the number of 100 ns intervals between those two epochs.
-let FileTimeUnixEpochDelta = 116444736000000000
 
 // `nFileSizeHigh`/`nFileSizeLow` are two DWORDs; the size is `(high << 32) | low`.
 let FileSizeHighShift = 32
@@ -1150,7 +1146,7 @@ end 'emitLoadDword'
 function emitFileTimeToUnixSeconds(module StdModule, block IrBlock, findData ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let ft = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(ft, addrId: findData, offset: offset, valueType: StdType.i64))
-	let epoch = emitConst(module, block: block, value: FileTimeUnixEpochDelta, ids: ids)
+	let epoch = emitConst(module, block: block, value: FileTimeTicksFrom1601To1970, ids: ids)
 	let sinceEpoch = emitBin(module, block: block, a: ft, b: epoch, opcode: StdBinOpcode.sub, ids: ids)
 	let ticks = emitConst(module, block: block, value: FileTimeTicksPerSecond, ids: ids)
 	let seconds = ids.mint()

@@ -24,15 +24,13 @@ let TextLengthName = b"__wt_text_length"
 let BlockExtentName = b"__wt_block_extent"
 
 let Utf8UnitBytes = 1 as FullRangeInt
-let Utf16UnitBytes = 2 as FullRangeInt
+export let Utf16UnitBytes = 2 as FullRangeInt
 let MeasureOnly = 0
 let SurrogateBase = 0x10000
 let SurrogateUnitMask = 0x3FF as FullRangeInt
-let HighSurrogateFloor = 0xD800
 let LowSurrogateFloor = 0xDC00
 let SurrogatePayloadBits = 10 as FullRangeInt
 let ByteValueMask = 0xFF as FullRangeInt
-let ByteValueBits = 8 as FullRangeInt
 
 function hostTextIsWide(module StdModule) returns bool
 	return module.hostText == HostTextEncoding.utf16
@@ -67,7 +65,7 @@ function utf16CStringBytes(text String) returns ByteArray
 		end 'basic' else 'beyondBasic'
 			let offset = value - SurrogateBase
 
-			appendUtf16Unit(bytes, unit: HighSurrogateFloor + (offset shr SurrogatePayloadBits))
+			appendUtf16Unit(bytes, unit: SurrogateFloor + (offset shr SurrogatePayloadBits))
 			appendUtf16Unit(bytes, unit: LowSurrogateFloor + (offset and SurrogateUnitMask))
 		end 'beyondBasic'
 	end 'eachCodepoint'
@@ -79,7 +77,7 @@ end 'utf16CStringBytes'
 
 function appendUtf16Unit(bytes ByteArray, unit FullRangeInt)
 	bytes.push((unit and ByteValueMask) as Byte)
-	bytes.push(((unit shr ByteValueBits) and ByteValueMask) as Byte)
+	bytes.push(((unit shr BitsPerByte) and ByteValueMask) as Byte)
 end 'appendUtf16Unit'
 
 function emitLiteralHostString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
@@ -326,7 +324,7 @@ function emitHostUnit(module StdModule, block IrBlock, base ValueId, unitIndex V
 	let one = emitConst(module, block: block, value: 1, ids: ids)
 	let highIndex = emitBin(module, block: block, a: low, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let highByte = emitLoadByte(module, block: block, base: base, index: highIndex, ids: ids)
-	let shift = emitConst(module, block: block, value: ByteValueBits, ids: ids)
+	let shift = emitConst(module, block: block, value: BitsPerByte, ids: ids)
 	let placed = emitBin(module, block: block, a: highByte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
 
 	return emitBin(module, block: block, a: lowByte, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)

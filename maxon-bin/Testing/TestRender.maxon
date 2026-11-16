@@ -223,13 +223,11 @@ function outcomeColorCode(outcome UnitTestOutcome) returns String
 	return SgrYellow if outcome == UnitTestOutcome.didNotRun else SgrRed
 end 'outcomeColorCode'
 
-// Milliseconds with two decimals, which is the unit a unit test is read in. The divisor is a FLOAT, so
-// the nanosecond count is promoted rather than truncated: an integer divide would report every test
-// under a millisecond as `0.00ms`.
-let NanosPerMilli = 1000000.0
-
+// Milliseconds with two decimals, which is the unit a unit test is read in. Both operands are floats,
+// so the nanosecond count is not truncated: an integer divide would report every test under a
+// millisecond as `0.00ms`.
 function durationText(nanos DurationNanos) returns String
-	let millis = nanos / NanosPerMilli
+	let millis = (nanos as FullRangeFloat) / (NanosPerMilli as FullRangeFloat)
 	return "{millis:.2}ms"
 end 'durationText'
 

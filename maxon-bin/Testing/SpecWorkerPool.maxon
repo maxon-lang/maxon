@@ -342,13 +342,7 @@ let WorkerShutdownTimeoutMs = 30 * MillisecondsPerSecond
 
 let WorkerHelloDeadlineMs = 60 * MillisecondsPerSecond
 
-// The bytes `encodeRecordPayload` escapes and `decodeRecordPayload` puts back. Named rather than
-// written as character literals so the escape table reads as one table.
-let AsciiBackslash = 0x5C
 let AsciiLowerN = 0x6E
-let AsciiLowerR = 0x72
-let AsciiLineFeed = 0x0A
-let AsciiCarriageReturn = 0x0D
 
 // A pool SIZE: at least one, because a pool of zero workers runs nothing — which is why
 // `--workers=0` is a refused command line rather than a silently empty run. There is no honest
@@ -864,7 +858,7 @@ function decodeRecordPayload(payload String) returns String
 	while i < n 'walk'
 		let b = try bytes.get(i) otherwise panic("decodeRecordPayload: bytes.get({i}) is in bounds by construction")
 
-		if b != AsciiBackslash or i + 1 >= n 'literalByte'
+		if b != BackslashByte or i + 1 >= n 'literalByte'
 			decoded.push(b)
 			i = i + 1
 			continue
@@ -873,19 +867,19 @@ function decodeRecordPayload(payload String) returns String
 		let escaped = try bytes.get(i + 1) otherwise panic("decodeRecordPayload: bytes.get({i} + 1) is in bounds by the guard above")
 
 		if escaped == AsciiLowerN 'newline'
-			decoded.push(AsciiLineFeed as Byte)
+			decoded.push(LineFeedByte as Byte)
 			i = i + 2
 			continue
 		end 'newline'
 
 		if escaped == AsciiLowerR 'carriageReturn'
-			decoded.push(AsciiCarriageReturn as Byte)
+			decoded.push(CarriageReturnByte)
 			i = i + 2
 			continue
 		end 'carriageReturn'
 
-		if escaped == AsciiBackslash 'backslash'
-			decoded.push(AsciiBackslash as Byte)
+		if escaped == BackslashByte 'backslash'
+			decoded.push(BackslashByte as Byte)
 			i = i + 2
 			continue
 		end 'backslash'
@@ -1837,9 +1831,6 @@ typealias PosixSignal = int(1 to 64)
 // why the decode is keyed on the HOST rather than on "POSIX". `PosixSigKill` is the runtime's own
 // constant, read rather than spelled a second time here.
 let PosixSigAbort = 6
-let LinuxSigBus = 7 as PosixSignal
-let DarwinSigBus = 10 as PosixSignal
-let PosixSigSegv = 11
 
 // How many bytes `hexOf` renders: the full width of `WorkerExitCode`'s band, so the render can never
 // truncate a code into a number the process did not exit with.

@@ -268,7 +268,6 @@ enum WasmMemAccess
 	float64
 end 'WasmMemAccess'
 
-let ByteSwapByteBits = 8
 let ByteSwapThreeByteBits = 24
 let ByteSwapByteMask = 0xFF
 let ByteSwapMaskBytes02 = 0x00FF00FF
@@ -3139,10 +3138,10 @@ type WasmFuncEmitter
 		self.pushOperandAt(operand, targetVt: WasmValType.i64)
 		self.body.i64Const(ByteSwapByteMask)
 		self.body.i64And()
-		self.body.i64Const(ByteSwapByteBits)
+		self.body.i64Const(BitsPerByte)
 		self.body.i64Shl()
 		self.pushOperandAt(operand, targetVt: WasmValType.i64)
-		self.body.i64Const(ByteSwapByteBits)
+		self.body.i64Const(BitsPerByte)
 		self.body.i64ShrU()
 		self.body.i64Const(ByteSwapByteMask)
 		self.body.i64And()
@@ -3153,7 +3152,7 @@ type WasmFuncEmitter
 	// upper half into the result.
 	function emitByteSwap32(operand ValueId, operandType StdType)
 		requireIntegerOperand(operandType, what: "byteSwap32")
-		self.emitRotatedMask32(operand, rotate: ByteSwapByteBits, mask: ByteSwapMaskBytes02)
+		self.emitRotatedMask32(operand, rotate: BitsPerByte, mask: ByteSwapMaskBytes02)
 		self.emitRotatedMask32(operand, rotate: ByteSwapThreeByteBits, mask: ByteSwapMaskBytes13)
 		self.body.i32Or()
 		self.body.i64ExtendI32U()

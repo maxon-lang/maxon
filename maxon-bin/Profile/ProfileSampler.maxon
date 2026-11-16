@@ -55,8 +55,6 @@
 	// handle starts refusing.
 	let ProfileThreadRefreshNanos = 100000000
 
-	let ProfileNanosPerSecond = 1000000000.0
-
 	// ========================================================================================
 	// THE TARGET'S IMAGE
 	// ========================================================================================
@@ -411,7 +409,7 @@
 			fastest = max(fastest, cyclesPerNano as ProfileCyclesPerNano)
 		end 'eachWindow'
 
-		let cyclesPerTick = trunc(try ((fastest as FullRangeFloat) * ProfileNanosPerSecond / (rateHz as FullRangeFloat)) otherwise panic("measureProfileCyclesPerTick: `--rate` is refused unless it is at least one sample per CPU-second"))
+		let cyclesPerTick = trunc(try ((fastest as FullRangeFloat) * (NanosPerSecond as FullRangeFloat) / (rateHz as FullRangeFloat)) otherwise panic("measureProfileCyclesPerTick: `--rate` is refused unless it is at least one sample per CPU-second"))
 
 		if cyclesPerTick < 1 'counterStood'
 			return ProfileCalibration.counterStood
@@ -719,7 +717,7 @@
 	// One tick's period, in nanoseconds: the unit `SampleTimer` is created in. Floored at one so a rate past the
 	// timer's own granularity still steps the schedule forward rather than re-arming the same instant.
 	function profileIntervalNanos(rateHz ProfileRate) returns SampleIntervalNanos
-		let nanos = trunc(try (ProfileNanosPerSecond / rateHz) otherwise panic("profileIntervalNanos: `--rate=` refuses a non-positive rate, so the divisor here cannot be zero"))
+		let nanos = trunc(try ((NanosPerSecond as ProfileRate) / rateHz) otherwise panic("profileIntervalNanos: `--rate=` refuses a non-positive rate, so the divisor here cannot be zero"))
 
 		return (nanos if nanos > 0 else 1) as SampleIntervalNanos
 	end 'profileIntervalNanos'
@@ -730,6 +728,6 @@
 	end 'profileThreadRefreshDue'
 
 	function profileSecondsOf(nanos DurationNanos) returns ProfileSeconds
-		return (nanos as ProfileSeconds) / ProfileNanosPerSecond
+		return (nanos as ProfileSeconds) / (NanosPerSecond as ProfileSeconds)
 	end 'profileSecondsOf'
 #endif

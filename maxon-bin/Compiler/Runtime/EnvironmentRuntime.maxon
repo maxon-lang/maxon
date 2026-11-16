@@ -39,10 +39,6 @@ export let EnvironmentCountLabel = b"__env_count"
 
 let EnvironmentUnreadableByte = 0
 
-// The `=` the WASI body rebuilds `NAME=VALUE` with, so `stdlib/Process.maxon` splits every lane's
-// entry one way.
-let EnvironmentSeparatorByte = 61
-
 // The block walk's state lives in a slab record, not in block arguments: a hand-built runtime
 // function's values are span-less, so register pressure there panics instead of diagnosing.
 let EnvCursor = 0
@@ -149,7 +145,7 @@ function buildEnvironmentEntryFromHostList(module StdModule)
 	let buffer = emitManagedByteBuffer(module, block: fromList, record: record, byteCount: total, ids: ids)
 	let afterName = emitForwardCopy(module, func: func, cur: fromList, dest: buffer, src: nameSource, byteCount: nameBytes, ids: ids)
 
-	let separator = emitConst(module, block: afterName, value: EnvironmentSeparatorByte, ids: ids)
+	let separator = emitConst(module, block: afterName, value: EnvEntrySeparator, ids: ids)
 	emitStoreByte(module, block: afterName, base: buffer, index: nameBytes, value: separator, ids: ids)
 
 	let valueDest = emitBin(module, block: afterName, a: buffer, b: nameAndSeparator, opcode: StdBinOpcode.add, ids: ids)

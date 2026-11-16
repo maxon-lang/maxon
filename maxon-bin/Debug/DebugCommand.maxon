@@ -49,7 +49,6 @@ let MachoTextSectionName = "__text"
 
 let HexOffsetPrefix = "0x"
 let HexBase = 16
-let DecimalBase = 10
 
 // Column widths of the dump. A name longer than its column widens its row rather than being truncated.
 let FunctionNameColumn = 32
@@ -999,7 +998,7 @@ function parseCodeOffset(spelled String) returns OffsetParse
 		return parseDigits(text, skipping: HexOffsetPrefix.count() as PrefixLength, base: HexBase)
 	end 'hex'
 
-	return parseDigits(text, skipping: 0, base: DecimalBase)
+	return parseDigits(text, skipping: 0, base: DecimalRadix)
 end 'parseCodeOffset'
 
 // ⚠ **A NUMBER TOO LARGE TO BE A CODE OFFSET IS INVALID, NOT A TRAP.** The accumulator is wider than the
@@ -1045,8 +1044,8 @@ function digitValue(c Character, base ParsedCodeOffset) returns DigitParse
 end 'digitValue'
 
 function decodedDigit(code AsciiValue) returns DigitParse
-	if code >= AsciiZero and code <= AsciiNine 'aDecimalDigit'
-		return DigitParse.valid((code - AsciiZero) as DigitValue)
+	if code >= AsciiZeroDigit and code <= AsciiNineDigit 'aDecimalDigit'
+		return DigitParse.valid((code - AsciiZeroDigit) as DigitValue)
 	end 'aDecimalDigit'
 
 	if code >= AsciiLowerA and code <= AsciiLowerF 'aLowerHexLetter'
@@ -1059,14 +1058,3 @@ function decodedDigit(code AsciiValue) returns DigitParse
 
 	return DigitParse.invalid
 end 'decodedDigit'
-
-// The ASCII runs a hex digit comes from, and the value the letters start at. Spelled as numbers rather
-// than as character literals for `tests/debug/sidecar-dump.maxtest`'s stated reason: a character
-// literal RECEIVER makes the resolver lose the declarations that follow it.
-let AsciiZero = 48
-let AsciiNine = 57
-let AsciiUpperA = 65
-let AsciiUpperF = 70
-let AsciiLowerA = 97
-let AsciiLowerF = 102
-let HexLetterValue = 10

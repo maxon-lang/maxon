@@ -102,20 +102,6 @@ let AsciiHighBit = 128
 let SingleByteGraphemesTrue = 1
 let SingleByteGraphemesFalse = 0
 
-// ⚠ **U+000D, AND THIS IS THE THIRD STATEMENT OF THE BYTE — the corpus already carries two, WITH a measured
-// reason, and this one has the same shape of reason.** `stdlib/helpers/string/grapheme.maxon:38` is the
-// AUTHORITY (it implements GB3); `stdlib/String.maxon:53` states it a second time because its classifier
-// tests every byte of every string as it is constructed and a cross-file call per byte measured worse than
-// the second walk it replaced. This copy exists because the scan below runs in the COMPILER, at lower time,
-// over a literal's bytes — it cannot call corpus Maxon at all. What holds the three together is a CHECK and
-// not a comment: `specs/grapheme-clusters`'s `grapheme-boundary-crlf` and the literal-flag cases go red
-// if any of them stops treating CR specially.
-//
-// ⚠ **EXPORTED FOR `GraphemeRuntime.buildCharFromCodepoint`, WHICH IS THE OTHER PRODUCER OF THIS FIELD.**
-// Slot@48's meaning is declared in this file, so the byte that clears it is declared here too — a second
-// `13` in the encoder would be a fourth statement of the number with nothing holding it to this one.
-let CarriageReturnByte = 13 as Byte
-
 // The blob is the payload bytes followed by a single NUL — a C string, so the record's pointer is
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
 // ⚠ EXPORTED. The blob's READER needs the same terminator its writer
@@ -128,11 +114,6 @@ export let NulTerminator = 0 as Byte
 // `i64.min` is handled with no overflow: signed `%`/`/` keep the value's sign (`x % 10 ∈ [-9,0]` for a
 // negative `x`), and the per-digit magnitude is recovered by MULTIPLYING by `sign = 1 - 2*neg` (`+1` for
 // a non-negative value, `-1` for a negative one) rather than by an `abs` that `i64.min` would overflow.
-let AsciiMinusSign = 45 as FullRangeInt
-
-// `value >>logical 63` is `1` exactly when the sign bit is set — the branch-free `isNegative` the sign
-// and the leading `-` are both derived from.
-let SignBitPosition = 63 as FullRangeInt
 let SignMultiplierBase = 1 as FullRangeInt
 let SignMultiplierSpan = 2 as FullRangeInt
 
@@ -155,18 +136,6 @@ let IntToStringScratchBytes = 21 as FullRangeInt
 // neither is `export`ed.
 let UIntToStringScratchBytes = 20 as FullRangeInt
 
-// `__bool_to_string` renders "true" (4) or "false" (5). The ASCII bytes of both, and the two lengths.
-//
-// ⚠ None is `export`ed: `AsciiLowerA` here is the byte `a` of "false" and nothing else, and the file that
-// owns the only reader owns the only name.
-let AsciiLowerT = 116
-let AsciiLowerR = 114
-let AsciiLowerU = 117
-let AsciiLowerE = 101
-let AsciiLowerF = 102
-let AsciiLowerA = 97
-let AsciiLowerL = 108
-let AsciiLowerS = 115
 let BoolTrueLength = 4 as FullRangeInt
 let BoolFalseLength = 5 as FullRangeInt
 
@@ -983,7 +952,7 @@ function emitRenderedSign(module StdModule, block IrBlock, ids ValueMinter, valu
 	let neg = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(neg, lhs: value, rhs: signBitConst, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
 	let minusConst = ids.mint()
-	module.appendOp(block, op: StdOp.const(minusConst, value: AsciiMinusSign, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.const(minusConst, value: AsciiHyphen, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.storeIndirect(dest, offset: 0, valueId: minusConst, valueType: StdType.u8))
 	let spanConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(spanConst, value: SignMultiplierSpan, valueType: StdType.i64))

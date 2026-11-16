@@ -2240,12 +2240,6 @@ function checkManagedGeometry()
 	end 'coAllocatedBufferOverlapsItsHeader'
 end 'checkManagedGeometry'
 
-// Every bit set — the `-1` the mask derivations start from. `(1 << bits) - 1` is the obvious spelling of a
-// width mask and is WRONG at the top of the range: `1 << 64` is undefined, and on x64 the shift count is
-// masked to 6 bits so it yields `1`, making a machine-word element's mask ZERO. `-1 >>logical (64 - bits)`
-// is correct for every width from 1 to 64 and needs no special case.
-let AllBitsSet = -1
-
 // Two operands below `1 << 31` multiply to less than 2^62, which fits a signed 64-bit word.
 let NonWrappingOperandShift = 31
 
@@ -2611,6 +2605,10 @@ function emitPackedFieldSlot(module StdModule, block IrBlock, index ValueId, bit
 
 	let wordBits = emitConst(module, block: block, value: MachineWordBits, ids: ids)
 	let spareBits = emitBin(module, block: block, a: wordBits, b: bits, opcode: StdBinOpcode.sub, ids: ids)
+	// `(1 << bits) - 1` is the obvious spelling of a width mask and is WRONG at the top of the range:
+	// `1 << 64` is undefined, and on x64 the shift count is masked to 6 bits so it yields `1`, making a
+	// machine-word element's mask ZERO. `-1 >>logical (64 - bits)` is correct for every width from 1 to
+	// 64 and needs no special case.
 	let allOnes = emitConst(module, block: block, value: AllBitsSet, ids: ids)
 	let widthMask = emitBin(module, block: block, a: allOnes, b: spareBits, opcode: StdBinOpcode.shrLogical, ids: ids)
 

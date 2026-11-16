@@ -1162,11 +1162,6 @@ end 'claimRunProcessErrorOrdinals'
 // --- Monotonic clock ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
 // `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq` — see `buildGtNowNs`.
-let NanosPerSecond = 1000000000
-
-// EXPORTED for `NetpollRuntime`, which turns a deadline in milliseconds into the absolute nanoseconds the
-// timer store keys on.
-let NanosPerMilli = 1000000
 
 // Where `emitGtDeadlineAfterMs` saturates. A send whose deadline is this waits with no timer armed,
 // which `ForeverMs` and every timeout too long to reach it share.
@@ -2023,10 +2018,6 @@ let PipeNamePrefixWchars = 11
 let PipeNameHexDigits = 16
 let WideCharBytes = 2
 let PipeNameTrailingNulBytes = 2
-let HexDigitZero = 48 as FullRangeInt  // '0'
-let HexDigitLetterA = 97 as FullRangeInt
-let HexAlphaThreshold = 10 as FullRangeInt
-let HexDigitLetterBase = HexDigitLetterA - HexAlphaThreshold
 let NibbleBits = 4
 let TopNibbleShift = 60  // (PipeNameHexDigits - 1) * NibbleBits — the highest nibble of a 64-bit value
 let NibbleMask = 0xF
@@ -8925,7 +8916,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	let nibble = ids.mint()
 	module.appendOp(hexBody, op: StdOp.binOp(nibble, lhs: shifted, rhs: maskConst, opcode: StdBinOpcode.bitAnd, operandType: StdType.i64))
 	let alphaThreshold = ids.mint()
-	module.appendOp(hexBody, op: StdOp.const(alphaThreshold, value: HexAlphaThreshold, valueType: StdType.i64))
+	module.appendOp(hexBody, op: StdOp.const(alphaThreshold, value: HexLetterValue, valueType: StdType.i64))
 	let isDigit = ids.mint()
 	module.appendOp(hexBody, op: StdOp.cmp(isDigit, lhs: nibble, rhs: alphaThreshold, pred: StdCmpPred.lt, operandType: StdType.i64))
 
@@ -8939,7 +8930,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	let dNibble = ids.mint()
 	digitArm.blockArgs.push(IrBlockArg.create(dNibble, argType: StdType.i64))
 	let digitZero = ids.mint()
-	module.appendOp(digitArm, op: StdOp.const(digitZero, value: HexDigitZero, valueType: StdType.i64))
+	module.appendOp(digitArm, op: StdOp.const(digitZero, value: AsciiZeroDigit, valueType: StdType.i64))
 	let digitCh = ids.mint()
 	module.appendOp(digitArm, op: StdOp.binOp(digitCh, lhs: dNibble, rhs: digitZero, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	emitBranchCarrying(module, from: digitArm, to: storeArm, values: argsOf(digitCh))
@@ -8948,7 +8939,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	let lNibble = ids.mint()
 	letterArm.blockArgs.push(IrBlockArg.create(lNibble, argType: StdType.i64))
 	let letterBase = ids.mint()
-	module.appendOp(letterArm, op: StdOp.const(letterBase, value: HexDigitLetterBase, valueType: StdType.i64))
+	module.appendOp(letterArm, op: StdOp.const(letterBase, value: HexAsciiLowerAMinusTen, valueType: StdType.i64))
 	let letterCh = ids.mint()
 	module.appendOp(letterArm, op: StdOp.binOp(letterCh, lhs: lNibble, rhs: letterBase, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	emitBranchCarrying(module, from: letterArm, to: storeArm, values: argsOf(letterCh))
@@ -9348,7 +9339,6 @@ let SubpChildStderrWriteOff = 16
 let SubpOwnedStdinOff = 24
 let SubpOwnedStdoutOff = 32
 let SubpOwnedStderrOff = 40
-let SubpNewlineByte = 10
 let SubpWaitInfinite = 0xFFFFFFFF as FullRangeInt
 
 let SubpYieldReadName = b"__gt_subp_yield_read"
@@ -11149,7 +11139,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let byteAddr = emitBin(module, block: scanCheck, a: bufPtrC, b: i, opcode: StdBinOpcode.add, ids: ids)
 	let scanByte = ids.mint()
 	module.appendOp(scanCheck, op: StdOp.loadIndirect(scanByte, addrId: byteAddr, offset: 0, valueType: StdType.u8))
-	emitBranchOnCompare(module, block: scanCheck, value: scanByte, pred: StdCmpPred.eq, against: SubpNewlineByte as FullRangeInt, whenTrue: found, whenFalse: scanInc, ids: ids)
+	emitBranchOnCompare(module, block: scanCheck, value: scanByte, pred: StdCmpPred.eq, against: LineFeedByte as FullRangeInt, whenTrue: found, whenFalse: scanInc, ids: ids)
 
 	let scanOne = emitConst(module, block: scanInc, value: 1, ids: ids)
 	let scanNext = emitBin(module, block: scanInc, a: i, b: scanOne, opcode: StdBinOpcode.add, ids: ids)
@@ -11403,7 +11393,7 @@ function buildSubpWriteLine(module StdModule)
 	let wcopy = ids.mint()
 	module.appendOp(doWrite, op: StdOp.call(wcopy, callee: StrCopyName, args: threeArgs(writeBuf, second: strBuf, third: strLen)))
 	let nlAddr = emitBin(module, block: doWrite, a: writeBuf, b: strLen, opcode: StdBinOpcode.add, ids: ids)
-	let nlByte = emitConst(module, block: doWrite, value: SubpNewlineByte as FullRangeInt, ids: ids)
+	let nlByte = emitConst(module, block: doWrite, value: LineFeedByte as FullRangeInt, ids: ids)
 	module.appendOp(doWrite, op: StdOp.storeIndirect(nlAddr, offset: 0, valueId: nlByte, valueType: StdType.u8))
 	let written = emitSubpWriteAll(module, func: func, ids: ids, cur: doWrite, writeEnd: stdinWrite, buffer: writeBuf, length: needed, whenClosed: closed, whenFailed: failed)
 

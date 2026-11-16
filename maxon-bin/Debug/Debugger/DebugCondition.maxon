@@ -34,14 +34,6 @@ let MaxLiteralMagnitude = u64.max as LiteralMagnitude
 let MaxNegatedLiteralMagnitude = 9223372036854775808 as LiteralMagnitude
 let MaxSignedLiteralMagnitude = 9223372036854775807
 
-let AsciiZero = 48
-let AsciiNine = 57
-let AsciiLowerA = 97
-let AsciiLowerF = 102
-let AsciiUpperA = 65
-let AsciiUpperF = 70
-let LetterDigitBase = 10
-
 export type DebugConditionRecord
 	export let operand as DebugConditionOperand
 	export let width as DebugConditionWidth
@@ -453,12 +445,12 @@ function literalDigitOf(character Character, base LiteralBase) returns Condition
 	let code = try character.asciiValue() otherwise return ConditionDigitLookup.none
 	var read = 0 as LiteralMagnitude
 
-	if code >= AsciiZero and code <= AsciiNine 'aDecimalDigit'
-		read = (code - AsciiZero) as LiteralMagnitude
+	if code >= AsciiZeroDigit and code <= AsciiNineDigit 'aDecimalDigit'
+		read = (code - AsciiZeroDigit) as LiteralMagnitude
 	end 'aDecimalDigit' else if code >= AsciiLowerA and code <= AsciiLowerF 'aLowerCaseLetter'
-		read = ((code - AsciiLowerA) as LiteralMagnitude) + LetterDigitBase
+		read = ((code - AsciiLowerA) as LiteralMagnitude) + HexLetterValue
 	end 'aLowerCaseLetter' else if code >= AsciiUpperA and code <= AsciiUpperF 'anUpperCaseLetter'
-		read = ((code - AsciiUpperA) as LiteralMagnitude) + LetterDigitBase
+		read = ((code - AsciiUpperA) as LiteralMagnitude) + HexLetterValue
 	end 'anUpperCaseLetter' else 'notADigitAtAll'
 		return ConditionDigitLookup.none
 	end 'notADigitAtAll'

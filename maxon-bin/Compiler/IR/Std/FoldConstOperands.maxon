@@ -491,6 +491,11 @@ function binOpImmIsIdentity(opcode StdBinOpcode, imm Imm32) returns bool
 		bitOr or
 		bitXor gives imm == AdditiveIdentity
 		mul gives imm == MultiplicativeIdentity
+
+		// ⚠ `-1`, NOT `0xFFFFFFFF`. The immediate field is SIGNED and every target sign-extends it to the
+		// machine word, so `-1` is an all-ones 64-bit mask while `4294967295` would be a 32-bit TRUNCATION —
+		// a different question, and one this fold must never answer yes to. (It cannot arrive here anyway:
+		// `fitsImm32` rejects it, so a real u32 mask keeps its register operand.)
 		bitAnd gives imm == AllBitsSet
 		shl or
 		shr or
@@ -517,12 +522,6 @@ end 'binOpImmIsIdentity'
 // sets no bit and flips none, which is the same statement about a bit that `+ 0` is about a sum.
 let AdditiveIdentity = 0
 let MultiplicativeIdentity = 1
-
-// ⚠ `-1`, NOT `0xFFFFFFFF`. The immediate field is SIGNED and every target sign-extends it to the
-// machine word, so `-1` is an all-ones 64-bit mask while `4294967295` would be a 32-bit TRUNCATION —
-// a different question, and one this fold must never answer yes to. (It cannot arrive here anyway:
-// `fitsImm32` rejects it, so a real u32 mask keeps its register operand.)
-let AllBitsSet = -1
 
 // A shift of zero moves no bit, at every width and in both directions.
 let NoShift = 0

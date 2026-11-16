@@ -53,9 +53,7 @@ let ManagedBufferOffset = 0
 let ManagedLengthOffset = 8
 let ManagedElementSizeOffset = 24
 
-let UnionTagOffset = 0
 let FunctionCodeOffset = FunctionRecordCodeOffset as DebugAddress
-let UnionTagBytes = 8
 
 function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
 	let tree = DebugValueTree.create()
@@ -421,7 +419,7 @@ function renderUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
 	end 'noBox'
 
-	let tag = try readRaw(memory, source: DebugValueSource.address(box + UnionTagOffset), width: UnionTagBytes) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let tag = try readRaw(memory, source: DebugValueSource.address(box + (UnionTagOffset as DebugAddress)), width: UnionTagBytes) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 
 	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: tag, payload: DebugValueSource.address(box + (UnionTagBytes as DebugAddress)))
 end 'renderUnion'

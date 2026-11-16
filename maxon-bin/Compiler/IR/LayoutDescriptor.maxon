@@ -461,6 +461,12 @@ end 'elementsByteLen'
 // here rather than in the runtime because the layout tier is the lower of the two.
 export let BitsPerByte = 8 as FullRangeInt
 
+export let ByteMask = 0xFF
+
+export let AllBitsSet = -1
+
+export let SignBitPosition = 63
+
 // ⭐⭐ **THE `.rdata` IMAGE OF A RUN OF CONSTANT ELEMENTS, AT EITHER LADDER — the serializer every constant
 // array literal's blob goes through, wherever the literal was written.** `constArrayBlobOf` below is its one
 // caller and composes the whole `(stride, count, bytes)` description around it, so the in-body and file-scope
@@ -530,11 +536,6 @@ export function appendLittleEndianScalar(image ByteArray, value FullRangeInt, by
 		image.push(((bits shr ((i as FullRangeInt) * BitsPerByte)) and ByteMask) as Byte)
 	end 'eachByte'
 end 'appendLittleEndianScalar'
-
-// Every bit of one byte set — the mask that keeps a shifted word to the byte being appended. Named beside
-// `BitsPerByte` because the two are one fact read two ways, and a bare `0xFF` a shift away from a bare `8`
-// is how a serializer comes to disagree with the width it is serializing at.
-let ByteMask = 0xFF as MachineWord
 
 // ⭐⭐ **THE BIT IMAGE OF A RUN OF CONSTANT ELEMENTS — LSB-FIRST WITHIN EACH BYTE.** Element `i` occupies
 // bits `[i·bits, i·bits + bits)` counted from bit 0 of byte 0, so the FIRST element sits in the LOW bits of

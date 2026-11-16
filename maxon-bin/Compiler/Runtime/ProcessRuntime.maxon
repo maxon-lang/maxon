@@ -76,6 +76,8 @@ export let ProcessDescendantGateName = b"__proc_descendant_gate"
 let DescendantsEnvValueUnits = 32
 let DescendantsArmedMark = 0x41
 export let DescendantsInertMark = 0x44
+// `'='` — what separates a name from its value in every `envp` entry. A lookup's match is the name
+// followed by THIS byte: comparing only the prefix makes `MAXON_MAX` match `MAXON_MAX_PROCS`.
 export let EnvEntrySeparator = 0x3D
 
 // A descendant's name is the host's, and every byte outside this range becomes `?`: a newline in it
@@ -84,7 +86,6 @@ export let DescendantsNameFirstPrintable = 0x20
 export let DescendantsNameLastPrintable = 0x7E
 export let DescendantsNameReplacement = 0x3F
 let DescendantGateReportBytes = 65536
-let DescendantGateLineEnd = 10
 let DescendantTokenLengthOffset = 0
 let DescendantTokenBytesOffset = 8
 let DescendantTokenMarkOffset = DescendantTokenBytesOffset - 1
@@ -399,7 +400,7 @@ function buildProcessDescendantGate(module StdModule)
 	emitBranchOnCompareValues(module, block: scanHeader, a: index, pred: StdCmpPred.ge, b: needed, whenTrue: finished, whenFalse: scanLook, ids: ids)
 	let byte = emitLoadByteIndexed(module, block: scanLook, base: report, index: index, ids: ids)
 	emitBranchOnCompare(module, block: scanLook, value: byte, pred: StdCmpPred.eq, against: 0, whenTrue: finished, whenFalse: scanByte, ids: ids)
-	emitBranchOnCompare(module, block: scanByte, value: byte, pred: StdCmpPred.eq, against: DescendantGateLineEnd, whenTrue: scanLine, whenFalse: scanStep, ids: ids)
+	emitBranchOnCompare(module, block: scanByte, value: byte, pred: StdCmpPred.eq, against: LineFeedByte, whenTrue: scanLine, whenFalse: scanStep, ids: ids)
 
 	let prefixLength = emitConst(module, block: scanLine, value: framePrefix.count() as FullRangeInt, ids: ids)
 	let one = emitConst(module, block: scanLine, value: 1, ids: ids)
@@ -418,7 +419,7 @@ function buildProcessDescendantGate(module StdModule)
 	let terminatorAddress = emitBin(module, block: scanLine, a: frame, b: throughToken, opcode: StdBinOpcode.add, ids: ids)
 	let zero = emitConst(module, block: scanLine, value: 0, ids: ids)
 	let separator = emitConst(module, block: scanLine, value: separatorByte as FullRangeInt, ids: ids)
-	let lineFeed = emitConst(module, block: scanLine, value: DescendantGateLineEnd, ids: ids)
+	let lineFeed = emitConst(module, block: scanLine, value: LineFeedByte, ids: ids)
 
 	let prefixCopied = emitForwardCopy(module, func: func, cur: scanLine, dest: frame, src: prefix, byteCount: prefixLength, ids: ids)
 	let nameCopied = emitForwardCopy(module, func: func, cur: prefixCopied, dest: nameAddress, src: lineAddress, byteCount: lineLength, ids: ids)

@@ -24,18 +24,8 @@
 
 let LspFileUriScheme = "file://"
 
-let HexRadix = 16
 let LastSingleHexDigit = 9
 
-let AsciiDigitZero = 48
-let AsciiDigitNine = 57
-let AsciiUpperA = 65
-let AsciiUpperZ = 90
-let AsciiLowerA = 97
-let AsciiLowerZ = 122
-let AsciiHyphen = 45
-let AsciiPeriod = 46
-let AsciiUnderscore = 95
 let AsciiTilde = 126
 
 // The inverse of `FilePath.from`'s decode of a `file:` uri, and the two must stay one: an answer's
@@ -58,15 +48,15 @@ function percentEncodedUriPath(text String) returns String
 		end 'needsNoEscape'
 
 		encoded.push(UrlPercentByte)
-		encoded.push(hexDigitByteOf((pathByte / HexRadix) as UrlHexDigitValue))
-		encoded.push(hexDigitByteOf((pathByte mod HexRadix) as UrlHexDigitValue))
+		encoded.push(hexDigitByteOf(((pathByte as FullRangeInt) / HexRadix) as UrlHexDigitValue))
+		encoded.push(hexDigitByteOf(((pathByte as FullRangeInt) mod HexRadix) as UrlHexDigitValue))
 	end 'eachByte'
 
 	return String.from(encoded)
 end 'percentEncodedUriPath'
 
 function literalInAUriPath(pathByte Byte) returns bool
-	if pathByte >= AsciiDigitZero and pathByte <= AsciiDigitNine 'digit'
+	if pathByte >= AsciiZeroDigit and pathByte <= AsciiNineDigit 'digit'
 		return true
 	end 'digit'
 
@@ -78,12 +68,12 @@ function literalInAUriPath(pathByte Byte) returns bool
 		return true
 	end 'lowerCaseLetter'
 
-	return pathByte == AsciiHyphen or pathByte == AsciiPeriod or pathByte == AsciiUnderscore or pathByte == AsciiTilde or pathByte == PortablePathSeparatorByte
+	return pathByte == AsciiHyphen or pathByte == DotByte or pathByte == AsciiUnderscore or pathByte == AsciiTilde or pathByte == PortablePathSeparatorByte
 end 'literalInAUriPath'
 
 function hexDigitByteOf(amount UrlHexDigitValue) returns Byte
 	if amount <= LastSingleHexDigit 'decimalDigit'
-		return (amount as Byte) + AsciiDigitZero
+		return (amount as Byte) + AsciiZeroDigit
 	end 'decimalDigit'
 
 	return (amount as Byte) - LastSingleHexDigit - 1 + AsciiUpperA

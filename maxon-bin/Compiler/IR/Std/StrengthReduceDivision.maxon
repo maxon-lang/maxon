@@ -75,10 +75,6 @@
 // itself a full-width `idiv` of whatever the register held, whatever the source type's width.
 let ReducedOperandType = StdType.i64
 
-// The bit position of a 64-bit value's SIGN, used twice: to broadcast it (`x shr 63` is all-ones for a
-// negative `x`) and to isolate it (`x shrLogical 63` is 0 or 1).
-let SignBitIndex = 63
-
 // The number of bits in the machine word the sequence computes at.
 let ReducedWordBits = 64
 
@@ -311,7 +307,7 @@ function deriveSignedMagic(divisor DivisionWord, out DivisionMagic)
 
 	let ancRatio = divideTwoToThe63(anc as PositiveModulus)
 
-	var p = SignBitIndex as FullRangeInt
+	var p = SignBitPosition as FullRangeInt
 
 	for _ in 0 upto MaxMagicRefinements 'refine'
 		p = p + 1
@@ -873,7 +869,7 @@ function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend Val
 	end 'logicalShift'
 
 	let signBroadcast = mint.mint()
-	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
+	let signBitCount = emitReducedConst(module, value: SignBitPosition, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(module.pushDetachedOp(StdOp.binOp(signBroadcast, lhs: dividend, rhs: signBitCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 
 	let bias = mint.mint()
@@ -899,7 +895,7 @@ function emitComparisonBitQuotient(module StdModule, resultId ValueId, dividend 
 	let noBorrow = mint.mint()
 	rebuilt.push(module.pushDetachedOp(StdOp.binOp(noBorrow, lhs: dividend, rhs: inverted, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
 
-	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
+	let signBitCount = emitReducedConst(module, value: SignBitPosition, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: noBorrow, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 end 'emitComparisonBitQuotient'
 
@@ -988,7 +984,7 @@ function emitSignedMagicTail(module StdModule, resultId ValueId, dividend ValueI
 	end 'scaleDown'
 
 	let signBit = mint.mint()
-	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
+	let signBitCount = emitReducedConst(module, value: SignBitPosition, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(module.pushDetachedOp(StdOp.binOp(signBit, lhs: high, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
 	rebuilt.push(module.pushDetachedOp(StdOp.binOp(resultId, lhs: high, rhs: signBit, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))

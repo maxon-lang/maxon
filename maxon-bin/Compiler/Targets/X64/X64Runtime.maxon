@@ -164,10 +164,6 @@ let ConsoleWidenNoFlags = 0
 // is a reading, and a reading with no gate under it is a comment that rots.
 let ConsoleWideBufferUnits = 32
 
-// The width of one UTF-16 code unit. It appears once as a `lea` index scale and once in the buffer's size;
-// there is no 16-bit load or store anywhere here, because only the kernel ever reads the units.
-let Utf16UnitBytes = 2
-
 // A UTF-8 CONTINUATION byte is `10xxxxxx`. A slice cut at `ConsoleWideBufferUnits` may land inside a
 // sequence, so the cut walks LEFT off any continuation bytes before converting — at most three steps,
 // which is the longest tail a well-formed sequence has.
@@ -1032,12 +1028,12 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 	encodeGrp2RegCl(asm.code, ext: Grp2ExtShr, reg: X64Register.rdx)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: HexNibbleMask)
 
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: HexDigitTen)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: HexLetterValue)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: isDigit)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: HexAsciiLowerAMinusTen)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: store)
 	asm.placeLabel(isDigit)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: HexAsciiZero)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: AsciiZeroDigit)
 
 	asm.placeLabel(store)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
@@ -2408,9 +2404,6 @@ let WindowsProcessDescendantsName = b"mrt_win_proc_descendants"
 
 let WinDescJobName = "Local\\MaxonDescendants"
 let WinDescScratchBytes = 0x10000
-let WinDescMemCommitReserve = 0x3000
-let WinDescPageReadWrite = 4
-let WinDescMemRelease = 0x8000
 let WinDescResultOffset = 0x80
 let WinDescSizeOffset = 0x88
 let WinDescLimitOffset = 0x100
@@ -2429,11 +2422,6 @@ let WinDescTerminatedExitCode = 1
 let WinDescPseudoCurrentProcess = 1
 let WinDescRoundSleepMs = 5
 let WinDescTempBytes = 32
-let WinDescBackslash = 0x5C
-let WinDescNewline = 10
-let WinDescSpace = 32
-let WinDescDecimalBase = 10
-let WinDescDigitZero = 0x30
 let WinDescEnumerationFailed = 1
 let WinDescSlotVerb = 0
 let WinDescSlotBuf = 1
@@ -2489,12 +2477,12 @@ function emitWinDescDecimalIntoTemp(asm X64RuntimeAsm, tempDisp Imm32)
 	let digit = asm.newLabel()
 
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: WinDescTempBytes)
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinDescDecimalBase)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: DecimalRadix)
 
 	asm.placeLabel(digit)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
 	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: WinDescDigitZero as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: AsciiZeroDigit as Imm32)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r10, imm: 1)
 	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: tempDisp, srcReg: X64Register.rdx, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -2577,8 +2565,8 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: 0)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: WinDescScratchBytes)
-	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: WinDescMemCommitReserve)
-	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: WinDescPageReadWrite)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PageReadWriteProtection)
 	emitWinDescImport(asm, slot: IatSlot.VirtualAlloc, usesGt: usesGt)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
@@ -2768,7 +2756,7 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 	encodeMovzxRegWordBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, index: X64Register.rsi, indexScale: MemoryIndexScale.byTwo)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: baseFound)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: WinDescBackslash as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: BackslashByte as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notBackslash)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r11, base: X64Register.rsi, disp: 1)
 
@@ -2807,7 +2795,7 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyLineDigits)
 
 	asm.placeLabel(lineDigitsDone)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WinDescSpace)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SpaceByte)
 	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
 
@@ -2836,7 +2824,7 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: narrow)
 
 	asm.placeLabel(nameCopied)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WinDescNewline)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LineFeedByte)
 	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
 
@@ -2908,7 +2896,7 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 	asm.placeLabel(releaseScratch)
 	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotScratch)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
-	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: WinDescMemRelease)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: VirtualFreeMemRelease)
 	emitWinDescImport(asm, slot: IatSlot.VirtualFree, usesGt: usesGt)
 
 	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotFailed)

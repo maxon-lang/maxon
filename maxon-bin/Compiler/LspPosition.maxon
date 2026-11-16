@@ -77,7 +77,7 @@ type LspLineIndex
 		var previousByte = 0 as Byte
 
 		for sourceByte in source.bytes() 'eachByte'
-			if sourceByte == LspNewlineByte 'lineBreak'
+			if sourceByte == LineFeedByte 'lineBreak'
 				// `offset` is this `\n`'s own index, so the line it ends stops here — or one byte
 				// earlier when the terminator is `\r\n`, which is ONE terminator and not two.
 				contentEnds.push(lineContentEndBefore(offset, previousByte: previousByte))
@@ -115,7 +115,7 @@ type LspLineIndex
 	// "CRLF is ONE terminator" is stated where a second reader of the rule would find it, rather than
 	// being an unexplained `- 1` in the middle of a scan loop.
 	static function lineContentEndBefore(newlineOffset ByteOffset, previousByte Byte) returns ByteOffset
-		if newlineOffset > 0 and previousByte == LspCarriageReturnByte 'crlf'
+		if newlineOffset > 0 and previousByte == CarriageReturnByte 'crlf'
 			return newlineOffset - 1
 		end 'crlf'
 
@@ -274,10 +274,6 @@ function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber, li
 
 	return tokenContentSpan(found, lines: lines)
 end 'tokenSpanAt'
-
-// The line terminator bytes. Named because `10` and `13` in a scan loop say nothing about why.
-let LspNewlineByte = 10
-let LspCarriageReturnByte = 13
 
 // ⭐⭐ **HOW MANY UTF-16 CODE UNITS THE CHARACTER AT `pos` COSTS — 1, or 2 for a supplementary one.**
 // This single branch is the entire difference between a correct `character` and the one everybody

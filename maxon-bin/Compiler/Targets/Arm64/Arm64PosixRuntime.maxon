@@ -631,7 +631,7 @@ function buildArm64PosixTickMsChunk() returns FunctionCodeChunk
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostMonotonicClockName)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFreq)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixMillisPerSecond)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MillisecondsPerSecond)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotTicks)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
@@ -2073,7 +2073,7 @@ function buildArm64PosixProcDescendantsChunk(kill PosixHostCall, lane PosixTreeL
 	asm.placeLabel(nameLengthKnown)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x10, slot: SlotLine)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: DescendantsLineLast as MachineWord)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x7, value: AsciiNewline as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x7, value: LineFeedByte as MachineWord)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x10, rhs: Arm64Register.x11)
 	arm64EmitStoreByte(asm, src: Arm64Register.x7, base: Arm64Register.x6)
 
@@ -2099,16 +2099,16 @@ function buildArm64PosixProcDescendantsChunk(kill PosixHostCall, lane PosixTreeL
 
 	asm.placeLabel(nameBackDone)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x11, base: Arm64Register.x11, imm: -1)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x7, value: AsciiSpace as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x7, value: SpaceByte as MachineWord)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x10, rhs: Arm64Register.x11)
 	arm64EmitStoreByte(asm, src: Arm64Register.x7, base: Arm64Register.x6)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x12, src: Arm64Register.x9)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x13, value: PosixDecimalBase as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x13, value: DecimalRadix as MachineWord)
 
 	asm.placeLabel(digitLoop)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x14, lhs: Arm64Register.x12, rhs: Arm64Register.x13)
 	arm64EmitMsub(asm.code, rd: arm64RuntimeReg(Arm64Register.x15), rn: arm64RuntimeReg(Arm64Register.x14), rm: arm64RuntimeReg(Arm64Register.x13), ra: arm64RuntimeReg(Arm64Register.x12))
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x15, base: Arm64Register.x15, imm: AsciiDigitZero as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x15, base: Arm64Register.x15, imm: AsciiZeroDigit as Imm32)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x11, base: Arm64Register.x11, imm: -1)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x10, rhs: Arm64Register.x11)
 	arm64EmitStoreByte(asm, src: Arm64Register.x15, base: Arm64Register.x6)
