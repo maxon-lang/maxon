@@ -1,6 +1,6 @@
 typealias KeptReadRowsBySite = Map with (ElementIndex, EntryIndexArray)
 
-function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
+function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonModule, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
 	let notes = func.capabilityNotes
 
 	if notes.keptArgOps.isEmpty() 'nothingKept'
@@ -19,10 +19,15 @@ function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonModule, 
 		end 'aMoveOfAParameter'
 
 		let argIndex = try notes.keptArgPositions.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgPositions.get OOB at {site} — the columns are pushed together")
-		let target = try keptParameterAt(project, module: module, funcNames: funcNames, facts: facts, opIdx: opIdx, argIndex: argIndex) otherwise continue
 		let name = String.from(try notes.keptArgNames.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgNames.get OOB at {site} — the columns are pushed together"))
 		let filePath = authoredFileOf(project, func: func, opIndex: opIdx)
 		let origin = try notes.keptArgOrigins.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgOrigins.get OOB at {site} — the columns are pushed together")
+
+		if origin == UniqueOrigin.lentByMatchBesideABinding 'lentBesideABindingOfTheArm'
+			checkMatchedRootIsNotWrittenBesideABinding(project, module: module, signatures: signatures, witnessSlots: witnessSlots, funcNames: funcNames, facts: facts, func: func, opIdx: opIdx, argIndex: argIndex, name: name, filePath: filePath)
+		end 'lentBesideABindingOfTheArm'
+
+		let target = try keptParameterAt(project, module: module, funcNames: funcNames, facts: facts, opIdx: opIdx, argIndex: argIndex) otherwise continue
 
 		if origin != UniqueOrigin.owned 'onlyLentToTheCaller'
 			let callRange = project.opRanges.get(opIdx)
@@ -45,6 +50,107 @@ function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonModule, 
 		reportPositioned(project, code: ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: read.0, column: read.1, filePath: filePath)
 	end 'eachKeptArgument'
 end 'checkKeptArgumentsAreNotReadAgain'
+
+function checkMatchedRootIsNotWrittenBesideABinding(project Project, module MaxonModule, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, argIndex ParamCount, name String, filePath FilePath)
+	let op = try module.ops.get(opIdx) otherwise panic("checkMatchedRootIsNotWrittenBesideABinding: ops.get OOB at {opIdx} — a kept-argument site names an op of this module")
+	let site = LentRootSite.create(name, argIndex: argIndex, range: project.opRanges.get(opIdx), filePath: filePath)
+
+	match capabilityDoorOf(op) 'door'
+		spawn then reportPositioned(project, code: ErrorCode.semanticUniqueValueRefused, message: "cannot pass '{name}' to a `spawn`, which keeps its arguments: {keptUniqueRefusalSentence(UniqueOrigin.lentByMatchBesideABinding, subject: name)}", line: site.range.line, column: site.range.column, filePath: filePath)
+		directCall then checkDirectCalleeWritesNoLentRoot(project, funcNames: funcNames, facts: facts, op: op, site: site)
+		functionValueCall then checkFunctionValueWritesNoLentRoot(project, funcNames: funcNames, facts: facts, func: func, op: op, site: site)
+		witnessCall then checkRequirementWritesNoLentRoot(project, signatures: signatures, witnessSlots: witnessSlots, op: op, site: site)
+		inert or
+		returned then panic("checkMatchedRootIsNotWrittenBesideABinding: a lent root beside a binding of the arm is filed only at a call, a spawn, a call through a function value or an interface method call, and op {opIdx} is none of them")
+	end 'door'
+end 'checkMatchedRootIsNotWrittenBesideABinding'
+
+function checkRequirementWritesNoLentRoot(project Project, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, op MaxonOp, site LentRootSite)
+	let parts = try witnessCallPartsOf(op) otherwise panic("checkRequirementWritesNoLentRoot: the witness-call door names only witness dispatches")
+	let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: parts.3, methodIndex: parts.2)
+	let first = requirementFirstPosition(slot.method)
+	let requirementName = "{String.from(slot.sourceInterfaceName)}.{String.from(slot.method.name)}"
+
+	let atTheReceiver = site.argIndex < first
+	let byReference = not atTheReceiver and maskHasParam(slot.method.byRefParams, param: site.argIndex - first)
+
+	if requirementCapabilityAt(slot.method, position: site.argIndex, first: first) != ParamCapability.mutable and not byReference 'declaredOnlyRead'
+		return
+	end 'declaredOnlyRead'
+
+	let into = "the `mutable self` receiver of '{requirementName}'" if atTheReceiver else "a `mutable` parameter of '{requirementName}'"
+	reportPositioned(project, code: ErrorCode.useAfterMove, message: matchedRootWrittenBesideABindingMessage(site.name, into: into), line: site.range.line, column: site.range.column, filePath: site.filePath)
+end 'checkRequirementWritesNoLentRoot'
+
+type LentRootSite
+	let name as String
+	let argIndex as ParamCount
+	let range as SourceRange
+	let filePath as FilePath
+
+	static function create(name String, argIndex ParamCount, range SourceRange, filePath FilePath) returns LentRootSite
+		return Self{name: name, argIndex: argIndex, range: range, filePath: filePath}
+	end 'create'
+end 'LentRootSite'
+
+function checkDirectCalleeWritesNoLentRoot(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, op MaxonOp, site LentRootSite)
+	let parts = try directCallPartsOf(op) otherwise panic("checkDirectCalleeWritesNoLentRoot: the direct-call door names only ops that carry a direct callee")
+
+	if not calleeHasASummary(project, funcNames: funcNames, callee: parts.0) 'aCalleeNoSummaryDescribes'
+		reportUnknownCalleeOfALentRoot(project, callee: String.from(parts.0), site: site)
+		return
+	end 'aCalleeNoSummaryDescribes'
+
+	let parameter = try calleeParameterOf(project, funcNames: funcNames, callee: parts.0, labels: parts.2, argIndex: site.argIndex) otherwise panic("checkDirectCalleeWritesNoLentRoot: argument {site.argIndex} of '{String.from(parts.0)}' fills no declared parameter, yet the call was filed with it")
+	reportWhereTheCalleeWritesTheLentRoot(project, funcNames: funcNames, facts: facts, parameter: parameter, into: "parameter '{parameter.name}' of '{String.from(parts.0)}'", site: site)
+end 'checkDirectCalleeWritesNoLentRoot'
+
+function checkFunctionValueWritesNoLentRoot(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, op MaxonOp, site LentRootSite)
+	let callee = match op 'op'
+		indirectCall(_, value, _, _) gives value
+		default panic("checkFunctionValueWritesNoLentRoot: the function-value door names only indirect calls")
+	end 'op'
+
+	let governing = functionValueGoverningName(project, func: func, value: callee)
+	let display = aliasDisplayOf(project, name: governing)
+
+	if let shape = try declaredBoundaryShapeOf(project, func: func, value: callee) 'aDeclaredBoundary'
+		if declaredCapabilityAt(shape.paramCapabilities, position: site.argIndex) == ParamCapability.mutable or maskHasParam(shape.markedParams, param: site.argIndex) 'declaredWritten'
+			reportPositioned(project, code: ErrorCode.useAfterMove, message: matchedRootWrittenBesideABindingMessage(site.name, into: "a `mutable` parameter of '{display}'"), line: site.range.line, column: site.range.column, filePath: site.filePath)
+		end 'declaredWritten'
+
+		return
+	end 'aDeclaredBoundary'
+
+	if not calleeHasASummary(project, funcNames: funcNames, callee: governing) 'aCalleeNoSummaryDescribes'
+		reportUnknownCalleeOfALentRoot(project, callee: display, site: site)
+		return
+	end 'aCalleeNoSummaryDescribes'
+
+	let calleeIndex = try funcNames.byName.get(governing) otherwise panic("checkFunctionValueWritesNoLentRoot: '{display}' was just found in the function index")
+	let sig = try project.funcSignatures.get(governing) otherwise panic("checkFunctionValueWritesNoLentRoot: '{display}' was just found among the signatures")
+	let parameterName = displayParamName(try sig.paramNames.get(site.argIndex) otherwise panic("checkFunctionValueWritesNoLentRoot: argument {site.argIndex} of a call through '{display}' fills no parameter"))
+	reportWhereTheCalleeWritesTheLentRoot(project, funcNames: funcNames, facts: facts, parameter: CalleeParameter.create(calleeIndex, position: site.argIndex, name: parameterName), into: "parameter '{parameterName}' of '{display}'", site: site)
+end 'checkFunctionValueWritesNoLentRoot'
+
+function calleeHasASummary(project Project, funcNames FunctionNameIndex, callee ByteArray) returns bool
+	return funcNames.byName.contains(callee) and project.funcSignatures.contains(callee)
+end 'calleeHasASummary'
+
+function reportUnknownCalleeOfALentRoot(project Project, callee String, site LentRootSite)
+	reportPositioned(project, code: ErrorCode.useAfterMove, message: "cannot lend '{site.name}' to '{callee}' in a call that also names a binding of the arm: nothing here shows that '{callee}' only reads it, and the binding views the matched value; lend '{site.name}' in a statement that names no binding of the arm", line: site.range.line, column: site.range.column, filePath: site.filePath)
+end 'reportUnknownCalleeOfALentRoot'
+
+function reportWhereTheCalleeWritesTheLentRoot(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, parameter CalleeParameter, into String, site LentRootSite)
+	let calleeFunc = try funcNames.functions.get(parameter.calleeIndex) otherwise panic("reportWhereTheCalleeWritesTheLentRoot: functions.get OOB at {parameter.calleeIndex}")
+	let class = facts.inferredClassAt(parameter.calleeIndex, position: parameter.position)
+
+	if calleeKeepsParameter(project, facts: facts, calleeFunc: calleeFunc, parameter: parameter, uniqueOnly: true) or (class != ParamClass.mutableOnly and class != ParamClass.both) 'keptOrOnlyRead'
+		return
+	end 'keptOrOnlyRead'
+
+	reportPositioned(project, code: ErrorCode.useAfterMove, message: matchedRootWrittenBesideABindingMessage(site.name, into: into), line: site.range.line, column: site.range.column, filePath: site.filePath)
+end 'reportWhereTheCalleeWritesTheLentRoot'
 
 function checkMovedParameterIsNotReadAgain(project Project, func IrFunction, notes CapabilityNotes, flow BlockFlow, readsBySite KeptReadRowsBySite, site ElementIndex)
 	let opIdx = try notes.keptArgOps.get(site) otherwise panic("checkMovedParameterIsNotReadAgain: keptArgOps.get OOB at {site}")
@@ -87,7 +193,7 @@ function keptParameterAt(project Project, module MaxonModule, funcNames Function
 	let parts = try directCallPartsOf(try module.ops.get(opIdx) otherwise throw AbsentError.absent)
 	let callee = parts.0
 
-	if not funcNames.byName.contains(callee) or not project.funcSignatures.contains(callee) 'aCalleeNoSummaryDescribes'
+	if not calleeHasASummary(project, funcNames: funcNames, callee: callee) 'aCalleeNoSummaryDescribes'
 		throw AbsentError.absent
 	end 'aCalleeNoSummaryDescribes'
 

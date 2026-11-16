@@ -282,13 +282,22 @@ declare it `as isolated Bag`, or store a copy``).
 A local initialised from a fresh value (`let spare = Bag.create()`) goes into an `isolated` position the first
 time the program reads it: an `isolated` parameter or slot, the initializer of an `isolated` declaration
 (`let keep = Slot.holding(spare) as isolated Slot` reads it inside the union literal), `freeze` and `merge`.
-That read moves the local, so a later read is **E3102**. A local the program read earlier, one an enclosing loop
-reads on every lap, and one with a second name are ordinary mutable data and **E3200**
-(`specs/regions-recover.md`).
+That read moves the local, so a later read is **E3102**. A local the program read earlier and one with a second
+name are ordinary mutable data and **E3200** (`specs/regions-recover.md`).
 
 A local assigned a fresh value (`spare = Bag.create()`) is fresh in the same way, from that assignment on. Where
 an `if`, a `match` or a statement `try` joins fresh values, the joined local is fresh until some path has read
-it, and a value a loop header joins is ordinary mutable data.
+it. A loop header joins the value before the loop with the value each back edge brings, the back edges of every
+enclosing loop included: a local that a loop relies on as fresh needs all of them to be fresh values nothing has
+read, so a lap that assigns it a fresh value on every path to its end, `continue` included, refills it, and any
+other lap is **E3200**.
+
+A `unique` argument is a clean input of a call only when its type is closed: every field and payload in its
+closure is a value, `immutable`, `isolated`, a service handle, or a `unique` or linear type that is itself closed.
+A call given a `unique` argument whose type holds a plain record, array, union, function value or interface value
+is not a clean call, and its result goes to no position that wants an `isolated` value (**E3200**). Reading a
+plain part out of a `unique` parameter the callee only lends is not a keep, so the caller's value stays usable
+after the call.
 
 `isolated` values are linear. Every use of an `isolated` local or parameter moves it except opening it, so
 `let b = a` moves `a` and a later read of `a` is **E3102**. An `isolated` parameter owns the region it is
@@ -347,9 +356,16 @@ Inside a block:
   into a parameter the callee keeps and that is not `isolated`, because it would become part of the open region
   (**E3201**): move it into an `isolated` parameter or slot, send it, or `merge` it. The receiver of a
   `consuming self` method is such a parameter when the method stores, returns or passes `self` on; a finalizer that
-  only reads `self` and ends in `destruct self` is accepted. The value stays outside the block through every
-  rename inside it: a local it is moved into, the `isolated` result of a call it is moved into, and the value a
-  failed send hands back in `mailboxFull` or `serviceStopped`.
+  only reads `self` and ends in `destruct self` is accepted. An `isolated` value older than the innermost open
+  block stays outside it through every rename inside it: a local it is moved into, the `isolated` result of a call
+  it is moved into, the payload a `match` of it binds, the value a failed send hands back in `mailboxFull` or
+  `serviceStopped`, and a `mutable isolated` parameter, which is the caller's variable. Such a value is not opened
+  inside the block (**E3199**) and still goes where an `isolated` value goes. A `mutable isolated` parameter open
+  in its own block is read inside a block nested in it.
+- Outside every open block, a method of an `isolated` receiver takes an un-opened `isolated` local of a linear type
+  into a parameter it owns: `bx.eat(v)` moves `v`, and its region joins the receiver's. A non-linear `isolated`
+  local, or a plain linear local, beside the opened receiver is **E3201**, and the call inside a `modify` block is
+  **E3199**, since the receiver is then an outer value.
 - `merge x` moves an `isolated` region into the region the block writes, so `built.reader = merge reader` is
   accepted inside `modify built`, and in a one-statement open as well.
 - A `for` over an array the loop drains makes the array read-only in the body (**E3197**).
@@ -389,6 +405,17 @@ arm opens it, as it opens any `isolated` value it does not own, and an owned `is
 parameter or slot, a send, `freeze`, a binding) refuses it with **E3198**. A payload bound from a union held in an
 `isolated` local is an owned value, and passing it twice to `isolated` parameters is **E3102**.
 `specs/regions-match-lend.md` pins both.
+
+An arm that lends a `unique` payload, and a `for` body that lends `unique` elements, are no window when the payload
+or element is not `isolated`: outer data stays writable (`have(t) then o.n = 5`), and the holder is protected
+instead. The matched variable is not reassigned, rebound, swapped, moved, copied, kept or passed by reference in
+its arm. In a lend from a field path (`match h.u`, `for t in h.xs`) the whole root `h` is the holder, read-only
+for the lend: a write through it is **E3197** (`cannot write 'n' through 'h', which is read-only while 'arm' lends
+a unique value out of it`), and a call that needs it writable is **E3207**. The matched variable itself goes to a
+callee that writes through it only in a statement that names no binding of the arm: the receiver, a function
+value or an interface method that writes through it beside a binding is **E3102**, because the callee cannot know
+that two of its parameters reach one unique value. The binding is a lent `unique` value that is never kept,
+stored, moved or sent, and its plain parts are ordinary data of the current region.
 
 ### Part Reads and Handed-Back Results
 
@@ -460,7 +487,8 @@ operand of a `cond` scrutinee) is not moved, copied, stored, captured or passed 
 inside an arm (**E3214**), while a call that only reads it is accepted; move or copy it before or after the
 `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
 own a unique value there: one read from a field or an element, lent by a loop, a tuple or a `match`, or
-borrowed through a `mutable` parameter is **E3214**. The standard library's `Promise` is
+borrowed through a `mutable` parameter is **E3214**, and an owned one crosses only as the whole of its region
+([What crosses a message](/docs/language/async/#services--spawn)). The standard library's `Promise` is
 unique, so is `Reply`, and so are the OS handle types (`TcpClient`,
 `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
 that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
@@ -526,11 +554,13 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
   error E3223: this drops 'dropped', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
   ```
 
-- **A linear value lives only in locals, parameters and message arguments.** A field, a container or other type
-  argument, a tuple item, a closure capture, a promise payload, a message reply, a union stored in a field, the
-  argument or result of an `async` call and an argument of an interface or function value call are
-  [E3224](/docs/cli/error-codes/#e3224--semanticlinearrefused): each would keep the value past the code that
-  must consume it. A value lent to code that does not own it, such as a parameter of a function that does not
+- **A linear value lives only in locals, parameters, message arguments and the arguments of a `spawn`.** A field,
+  a container or other type argument, a tuple item, a closure capture, a promise payload, a message reply, a union
+  stored in a field, the argument or result of an `async` call and an argument of an interface or function value
+  call are [E3224](/docs/cli/error-codes/#e3224--semanticlinearrefused): each would keep the value past the code
+  that must consume it. A `spawn` of a factory that cannot throw takes a linear argument, which the factory
+  consumes; a factory that may throw takes none (E3224), because a factory that fails starts no service and drops
+  the value. A value lent to code that does not own it, such as a parameter of a function that does not
   take it or `self` of a method that does not take `consuming self`, is consumed only by its owner: passing,
   returning or building it into a union there is E3224.
 - **No linear value is live across a wait.** An `await`, a send with a `sendTimeout:` and a call that waits
@@ -549,6 +579,14 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
   where an `isolated` value goes (an `isolated` parameter or slot, `freeze`, `merge`), and inside an open `modify`
   window it belongs to the window's region, so the arm may write it, keep it in a call, or store it into the
   window's data. The linear argument a failed send hands back is `isolated` too (`specs/regions-recover.md`).
+- **An owned linear value goes where an `isolated` value goes only when its type is closed.** An owned linear
+  parameter or `consuming self` receiver goes to an `isolated` parameter, slot, declaration or result, a send or
+  `merge` only when every field and payload in its type's closure is a value, `immutable`, `isolated`, a service
+  handle, or a `unique` or linear type that is itself closed. A plain record, array or union, a function value
+  and an interface value are plain parts, which other code may still name: such a value is ordinary data of its
+  region, matched, finalized or moved on to another plain linear position, and an `isolated` position refuses it
+  with **E3200**, naming the plain part. Declare the part `isolated`, or consume the value where it is.
+  The payload a `match` of a union in an `isolated` local binds keeps the standing of that local.
 - **A case that carries no linear value owes nothing.** A variable of a linear union that holds such a case
   (`Maybe.nothing`) on every path to a point is not a linear value there: assigning it, leaving its scope or
   leaving it live across a wait is not a drop. A branch, a loop lap or a `try` handler that can leave the linear

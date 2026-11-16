@@ -483,3 +483,537 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:27:28: use of moved value 'o': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: a-writing-lend-of-the-matched-variable-beside-an-arm-binding-is-refused -->
+`both` writes through `u`, and the same call names `tV`, the arm's view of the payload `u` holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+function both(u Ut, t Tk)
+	t.n = 4
+	match u 'inner'
+		none then print("none\n")
+		have(x) then x.n = 5
+	end 'inner'
+end 'both'
+
+function main() returns ExitCode
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then both(uV, t: tV)
+	end 'outer'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:17: cannot lend 'uV' to parameter 'u' of 'both', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+```
+
+<!-- test: a-writing-lend-of-the-matched-variable-as-the-receiver-beside-an-arm-binding-is-refused -->
+The receiver is an argument: `both` writes through `self`, which is `uV`, and the same call names `tV`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+
+	function both(t Tk)
+		t.n = 4
+		match self 'inner'
+			none then print("none\n")
+			have(x) then x.n = 5
+		end 'inner'
+	end 'both'
+end 'Ut'
+
+function main() returns ExitCode
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then uV.both(tV)
+	end 'outer'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:20: cannot lend 'uV' to parameter 'self' of 'Ut.both', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+```
+
+<!-- test: a-writing-lend-of-the-matched-variable-beside-an-arm-binding-that-is-the-receiver-is-refused -->
+The receiver `tV` is the arm's binding, and `absorb` writes through `u`, which is `uV`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function absorb(u Ut)
+		self.n = 4
+		match u 'inner'
+			none then print("none\n")
+			have(x) then x.n = 5
+		end 'inner'
+	end 'absorb'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+function main() returns ExitCode
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then tV.absorb(uV)
+	end 'outer'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:20: cannot lend 'uV' to parameter 'u' of 'Tk.absorb', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+```
+
+<!-- test: a-writing-lend-of-the-matched-variable-to-a-function-value-beside-an-arm-binding-is-refused -->
+`BothFn` declares its first parameter `mutable`, so a call through `f` writes through `uV` while naming `tV`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+function both(u mutable Ut, t Tk)
+	match u 'inner'
+		none then print("none\n")
+		have(x) then x.n = 5
+	end 'inner'
+	print("{t.n}\n")
+end 'both'
+
+typealias BothFn = function(u mutable Ut, t Tk)
+
+function main() returns ExitCode
+	let f = both as BothFn
+	var uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then f(uV, tV)
+	end 'outer'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:32:18: cannot lend 'uV' to a `mutable` parameter of 'BothFn', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+```
+
+<!-- test: a-read-only-lend-of-the-matched-variable-as-the-receiver-beside-an-arm-binding-is-accepted -->
+`total` only reads `self` and `t`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function plus(u Ut) returns Num
+		return match u 'inner'
+			none gives self.n
+			have(x) gives self.n + x.n
+		end 'inner'
+	end 'plus'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+
+	function total(t Tk) returns Num
+		return match self 'inner'
+			none gives t.n
+			have(x) gives t.n + x.n
+		end 'inner'
+	end 'total'
+end 'Ut'
+
+function main() returns ExitCode
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then print("{uV.total(tV)} {tV.plus(uV)}\n")
+	end 'outer'
+	return 0
+end 'main'
+```
+```stdout
+2 2
+```
+```exitcode
+0
+```
+
+<!-- test: a-read-only-lend-of-the-matched-variable-to-a-function-value-beside-an-arm-binding-is-accepted -->
+`SumFn` declares no parameter `mutable`, so a call through `f` only reads `uV` and `tV`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+function sum(u Ut, t Tk) returns Num
+	return match u 'inner'
+		none gives t.n
+		have(x) gives t.n + x.n
+	end 'inner'
+end 'sum'
+
+typealias SumFn = function(u Ut, t Tk) returns Num
+
+function main() returns ExitCode
+	let f = sum as SumFn
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then print("{f(uV, tV)}\n")
+	end 'outer'
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: a-writing-lend-of-the-matched-variable-to-an-interface-method-beside-an-arm-binding-is-refused -->
+`Both.both` declares its first parameter `mutable`, so a call through the interface value `w` writes through `uV` while naming `tV`, whichever conformer `w` holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+interface Both
+	function both(u mutable Ut, t Tk)
+end 'Both'
+
+type W implements Both
+	var k as Num
+
+	static function create() returns Self
+		return Self{k: 0}
+	end 'create'
+
+	function both(u mutable Ut, t Tk)
+		match u 'inner'
+			none then print("none\n")
+			have(x) then x.n = 5
+		end 'inner'
+		print("{t.n}\n")
+	end 'both'
+end 'W'
+
+function run(w Both)
+	var uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then w.both(uV, t: tV)
+	end 'outer'
+end 'run'
+
+function main() returns ExitCode
+	run(W.create())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:41:19: cannot lend 'uV' to a `mutable` parameter of 'Both.both', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+```
+
+<!-- test: a-read-only-lend-of-the-matched-variable-to-an-interface-method-beside-an-arm-binding-is-accepted -->
+`Sums.total` declares no parameter `mutable`, so a call through the interface value `w` only reads `uV` and `tV`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+interface Sums
+	function total(u Ut, t Tk) returns Num
+end 'Sums'
+
+type W implements Sums
+	var k as Num
+
+	static function create() returns Self
+		return Self{k: 0}
+	end 'create'
+
+	function total(u Ut, t Tk) returns Num
+		return match u 'inner'
+			none gives self.k + t.n
+			have(x) gives self.k + t.n + x.n
+		end 'inner'
+	end 'total'
+end 'W'
+
+function run(w Sums)
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then print("{w.total(uV, t: tV)}\n")
+	end 'outer'
+end 'run'
+
+function main() returns ExitCode
+	run(W.create())
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: a-writing-lend-of-the-matched-variable-in-an-arm-that-names-no-binding-is-accepted -->
+`poke` writes through `u` and keeps nothing, and the arm names no binding.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+function poke(u Ut)
+	match u 'inner'
+		none then print("none\n")
+		have(x) then x.n = 5
+	end 'inner'
+end 'poke'
+
+function main() returns ExitCode
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have then poke(uV)
+	end 'outer'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-read-only-lend-of-the-matched-variable-beside-an-arm-binding-is-accepted -->
+`both` only reads `u` and `t`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+function both(u Ut, t Tk) returns Num
+	let a = t.n
+	let b = match u 'inner'
+		none gives 0
+		have(x) gives x.n
+	end 'inner'
+	return a + b
+end 'both'
+
+function main() returns ExitCode
+	let uV = Ut.have(Tk.create(1))
+	match uV 'outer'
+		none then print("none\n")
+		have(tV) then print("{both(uV, t: tV)}\n")
+	end 'outer'
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: a-write-through-the-holder-of-a-matched-field-in-the-arm-that-lends-it-is-refused -->
+`match h.u` lends a unique value that `h` holds, so `h` is read-only in the arm.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+type H
+	var u as Ut
+	var n as Num
+
+	static function create() returns Self
+		return Self{u: Ut.have(Tk.create(1)), n: 0}
+	end 'create'
+end 'H'
+
+function main() returns ExitCode
+	let h = H.create()
+
+	match h.u 'arm'
+		none then print("none\n")
+		have(t) then h.n = t.n
+	end 'arm'
+
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:31:16: cannot write 'n' through 'h', which is read-only while 'arm' lends a unique value out of it
+```
+
+<!-- test: the-holder-of-a-matched-field-passed-to-a-writing-parameter-in-the-arm-that-lends-it-is-refused -->
+`bump` writes `h`, which is read-only in the arm that `match h.u` lends from.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Ut
+	none
+	have(t Tk)
+end 'Ut'
+
+type H
+	var u as Ut
+	var n as Num
+
+	static function create() returns Self
+		return Self{u: Ut.have(Tk.create(1)), n: 0}
+	end 'create'
+end 'H'
+
+function bump(h H)
+	h.n = h.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let h = H.create()
+
+	match h.u 'arm'
+		none then print("none\n")
+		have(t) then bump(h)
+	end 'arm'
+
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:35:21: 'bump' needs a writable parameter 'h' at line 27; 'h' is read-only while 'arm' is open
+```

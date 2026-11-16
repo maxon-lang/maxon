@@ -693,6 +693,7 @@ extension Parser
 		let phiVars = self.mintCarriedPhis(header, carried: carried)
 		self.installCarriedPhis(phiVars, phiBlock: header.id)
 		self.noteLoopHeaderPhisCarried(phiVars)
+		self.noteHeaderFreshLocals(phiVars)
 		return phiVars
 	end 'mintLoopHeaderPhis'
 
@@ -1379,6 +1380,8 @@ extension Parser
 
 		let outerDrainingLabel = self.statement.drainingLabel
 
+		let heldByTheLend = self.pauseLentHolders(walkedSource) if drainsItsSource else PausedHolders.create()
+
 		if drainsItsSource 'readOnlyInTheBody'
 			self.setValueCapability(drainedValue, capability: ValueCapability.paused)
 			self.statement.drainingLoops = self.statement.drainingLoops + 1
@@ -1392,6 +1395,8 @@ extension Parser
 			self.statement.drainingLoops = self.statement.drainingLoops - 1
 			self.statement.drainingLabel = outerDrainingLabel
 		end 'writableAgain'
+
+		self.resumeLentHolders(heldByTheLend)
 
 		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
 		self.assertScanAligned("parseForStatement", predictedEnd: bodyEndIndex)
@@ -3458,6 +3463,7 @@ extension Parser
 		let scan = try self.bodyState.loopScans.pop() otherwise panic("finishLoopMoves: the loop scan stack is empty at the end of a loop that opened one")
 
 		try self.settleCarriedCapabilities()
+		try self.settleHeaderFreshLocals(scan)
 
 		self.discardLoopReleaseChains(scan.blockFloor)
 		let movedAtTheHeader = ValueMarkSet.create()
@@ -5095,6 +5101,13 @@ extension Parser
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
 				let lentArmFloor = self.enterLentArm(lentRoots, scrutStart: scrutStart, scrutEnd: scrutEnd)
+				let heldByTheLend = self.pauseLentHolders(scrut) if hasPayloadBindings and not lentRoots.isEmpty() else PausedHolders.create()
+				let outerLendingLabel = self.statement.lendingLabel
+
+				if not heldByTheLend.values.isEmpty() 'readOnlyInTheArm'
+					self.statement.lendingArms = self.statement.lendingArms + 1
+					self.statement.lendingLabel = matchLabel
+				end 'readOnlyInTheArm'
 
 				if armLendsIsolatedPayload 'openArmWindow'
 					self.openLentArmWindow(matchLabel, valueFloor: armValueFloor)
@@ -5106,6 +5119,12 @@ extension Parser
 					self.closeLentArmWindow()
 				end 'closeArmWindow'
 
+				if not heldByTheLend.values.isEmpty() 'writableAgain'
+					self.statement.lendingArms = self.statement.lendingArms - 1
+					self.statement.lendingLabel = outerLendingLabel
+				end 'writableAgain'
+
+				self.resumeLentHolders(heldByTheLend)
 				self.leaveLentArm(lentArmFloor)
 
 				if opensArmScope 'closeArmScope'
@@ -5468,6 +5487,37 @@ extension Parser
 			end 'aUniqueOperand'
 		end 'eachToken'
 	end 'pushNamedOperandRoots'
+
+	function pauseLentHolders(lent ValueId) returns PausedHolders
+		let paused = PausedHolders.create()
+		var held = lent
+
+		while true 'eachHolder'
+			let origin = try self.regionFactsForRead().fieldOrigins.get(held) otherwise break
+			held = origin.holder
+			let capability = self.capabilityOfValue(held)
+
+			if capability == ValueCapability.immutable 'alreadyReadOnly'
+				continue
+			end 'alreadyReadOnly'
+
+			paused.values.push(held)
+			paused.capabilities.push(capability)
+			self.setValueCapability(held, capability: ValueCapability.paused)
+		end 'eachHolder'
+
+		return paused
+	end 'pauseLentHolders'
+
+	function resumeLentHolders(paused PausedHolders)
+		var position = paused.values.count()
+
+		while position > 0 'innermostFirst'
+			position = position - 1
+			let held = try paused.values.get(position) otherwise panic("resumeLentHolders: values.get OOB at {position} below its own count")
+			self.setValueCapability(held, capability: try paused.capabilities.get(position) otherwise panic("resumeLentHolders: capabilities.get OOB at {position} — the columns are pushed together"))
+		end 'innermostFirst'
+	end 'resumeLentHolders'
 
 	function enterLentArm(roots LentArmRoots, scrutStart ElementIndex, scrutEnd ElementIndex) returns ElementIndex
 		let floor = self.bodyState.lentArmRoots.count()
@@ -7948,7 +7998,7 @@ extension Parser
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, standing ScrutineeStanding, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
 		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
-		let ownsItsRegion = self.valueIsLinear(scrutBox) and (self.valueIsAnOwnedIsolatedRegion(scrutBox) or self.valueIsAMessageParameter(scrutBox))
+		let ownsItsRegion = self.valueIsLinear(scrutBox) and (self.valueIsAnOwnedIsolatedRegion(scrutBox) or (self.valueIsAMessageParameter(scrutBox) and self.valueTypeIsClosed(scrutBox)))
 		let loneRegionPayload = ownsItsRegion and self.regionPayloadCount(bindings, layout: layout) == 1
 		let handedBack = self.signatures.isServiceSendError(layout.name)
 
@@ -7993,7 +8043,7 @@ extension Parser
 				self.registerFreshLocal(loaded, binding: bindingInfo)
 			end 'aPayloadNoOtherSlotNames'
 
-			if handedBack and self.valueIsLinear(loaded) and not self.valueIsAValueType(loaded) 'aHandedBackLinearArgument'
+			if handedBack and self.valueIsLinear(loaded) and not self.valueIsAValueType(loaded) and self.valueTypeIsClosed(loaded) 'aHandedBackLinearArgument'
 				self.setValueCapability(loaded, capability: ValueCapability.isolated)
 			end 'aHandedBackLinearArgument'
 

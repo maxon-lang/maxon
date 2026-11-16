@@ -17,134 +17,6 @@ the day the compiler stops agreeing with a verdict the model pinned. The rule se
 
 ## Tests
 
-<!-- test: model-finding-ad-match-window-both-arms -->
-The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `match-window-both-arms` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Ub
-	u0
-	u1(b isolated Box)
-end 'Ub'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-end 'Rl'
-
-type Box
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-function giveS(r Rl) returns Sn
-	return Sn.notSent(r)
-end 'giveS'
-
-function useS(s Sn)
-	match s 'x1'
-		ok then break
-		notSent(r) then r.fin(1)
-	end 'x1'
-end 'useS'
-
-function useR(r Rl)
-	r.fin(1)
-end 'useR'
-
-function main() returns ExitCode
-	let u = Ub.u1(Box.create(0)) as isolated Ub
-	let v = Rl.create(0) as isolated Rl
-	match u 'x1'
-		u0 then useR(v)
-		u1 then useS(giveS(v))
-	end 'x1'
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3201: <fragment>:55:16: 'giveS' hands back mutable data of the isolated region it opens; use it inside a `modify` block
-```
-
-<!-- test: model-finding-ad-match-window-both-arms-gives -->
-The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `match-window-both-arms-giveS` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Ub
-	u0
-	u1(b isolated Box)
-end 'Ub'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-end 'Rl'
-
-type Box
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-function giveS(r Rl) returns Sn
-	return Sn.notSent(r)
-end 'giveS'
-
-function useS(s Sn)
-	match s 'x1'
-		ok then break
-		notSent(r) then r.fin(1)
-	end 'x1'
-end 'useS'
-
-function main() returns ExitCode
-	let u = Ub.u1(Box.create(0)) as isolated Ub
-	let v = Rl.create(0) as isolated Rl
-	match u 'x1'
-		u0 then useS(giveS(v))
-		u1 then useS(giveS(v))
-	end 'x1'
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3201: <fragment>:50:16: 'giveS' hands back mutable data of the isolated region it opens; use it inside a `modify` block
-```
-
 <!-- test: model-finding-ad-state-window-reply-union-state -->
 The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `state-window-reply-union-state` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
@@ -252,8 +124,53 @@ end 'main'
 error E3196: <fragment>:31:18: cannot store an isolated 'Rl' into 'Sn.notSent.r', which holds a mutable 'Rl'; `merge` it first
 ```
 
+<!-- test: model-finding-ad-h1-nomodify -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `h1-nomodify` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let v = Rl.create(0) as isolated Rl
+	useS(giveS(v))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-finding-ad-v-match-window -->
-The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `v-match-window` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3223. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `v-match-window` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -311,7 +228,162 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:51:16: 'giveS' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+error E3223: <fragment>:49:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-finding-ad-oneopen-method -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `oneopen-method` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		useS(giveS(r))
+	end 'eat'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-finding-ad-oneopen-method-direct -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `oneopen-method-direct` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		r.fin(1)
+	end 'eat'
+end 'Bx'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-finding-ad-oneopen-method-local-union-let -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `oneopen-method-local-union-let` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		let s = Sn.notSent(r)
+		useS(s)
+	end 'eat'
+end 'Bx'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: model-finding-ad-oneopen-state-field-path -->
@@ -10906,7 +10978,7 @@ error E3102: <fragment>:32:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ac-ld-method-arg -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-arg` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-method-arg` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10966,11 +11038,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:53:2: 'e' is mutable outside 'r'; a call into an isolated region takes values, immutable or isolated
+error E3102: <fragment>:54:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-ld-method-arg2 -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-arg2` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-method-arg2` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11030,11 +11102,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:53:2: 'e' is mutable outside 'r'; a call into an isolated region takes values, immutable or isolated
+error E3102: <fragment>:54:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-ld-method-wrap-union -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-method-wrap-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-method-wrap-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11102,11 +11174,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:60:10: 'e' is mutable outside 'r'; a call into an isolated region takes values, immutable or isolated
+error E3102: <fragment>:62:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-ld-wrap-fn-union -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-wrap-fn-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-wrap-fn-union` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11153,11 +11225,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:39:10: 'wrapI' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+error E3102: <fragment>:41:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-ld-wrap-fn-union-twice -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ld-wrap-fn-union-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `ld-wrap-fn-union-twice` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11205,7 +11277,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:39:10: 'wrapI' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+error E3102: <fragment>:40:16: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ac-ld-union-var -->
@@ -17636,7 +17708,7 @@ error E3102: <fragment>:34:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-through-method -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-through-method` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-through-method` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17688,11 +17760,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:45:7: 'h' is mutable outside 'r'; a call into an isolated region takes values, immutable or isolated
+error E3102: <fragment>:46:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-in-spawn -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `k-forward-keeper-in-spawn` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `k-forward-keeper-in-spawn` of redteamAD.hand_ad7, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17731,7 +17803,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3224: <fragment>:32:19: a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running
+error E3102: <fragment>:33:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ad-k-forward-keeper-in-new -->
@@ -17917,8 +17989,8 @@ end 'main'
 0
 ```
 
-<!-- test: model-hand-ad-hole-match-window -->
-The model (`core-m3w-fa14`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-match-window` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
+<!-- test: model-hand-ad-clean-one-call-open -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `clean-one-call-open` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17927,11 +17999,6 @@ union Sn
 	ok
 	notSent(r Rl)
 end 'Sn'
-
-union Ub
-	u0
-	u1(b isolated Bx)
-end 'Ub'
 
 type Rl
 	var code as Num
@@ -17946,13 +18013,17 @@ type Rl
 	end 'fin'
 end 'Rl'
 
-type Bx
+type Bx2
 	var n as Num
 
 	static function create(n Num) returns Self
 		return Self{n: n}
 	end 'create'
-end 'Bx'
+
+	function eat(r Rl)
+		useS(giveS(r))
+	end 'eat'
+end 'Bx2'
 
 function giveS(r Rl) returns Sn
 	return Sn.notSent(r)
@@ -17966,17 +18037,14 @@ function useS(s Sn)
 end 'useS'
 
 function main() returns ExitCode
-	let u = Ub.u1(Bx.create(0)) as isolated Ub
+	let bx = Bx2.create(0) as isolated Bx2
 	let v = Rl.create(0) as isolated Rl
-	match u 'x1'
-		u0 then useS(giveS(v))
-		u1 then useS(giveS(v))
-	end 'x1'
+	bx.eat(v)
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3201: <fragment>:50:16: 'giveS' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+```exitcode
+0
 ```
 
 <!-- test: model-hand-af-m1-union-method-match-self -->
@@ -22901,6 +22969,88 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ag-s13-w1-match-then-send-state-method -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s13-w1-match-then-send-state-method` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type K
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function put(r Rl)
+		r.fin(1)
+	end 'put'
+
+	export function eat(u Sh)
+		match u 'x1'
+			none then break
+			held(q) then self.put(q)
+		end 'x1'
+	end 'eat'
+end 'K'
+
+function eatSh(p Sh)
+	match p 'x1'
+		none then break
+		held(q) then q.fin(1)
+	end 'x1'
+end 'eatSh'
+
+function main() returns ExitCode
+	let k = spawn K.create(0)
+	try k.eat(Sh.held(Rl.create(1))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then eatSh(z)
+			serviceStopped(z) then eatSh(z)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ag-s14-w2-refill-from-arm-fn -->
 The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s14-w2-refill-from-arm-fn` of redteamAG.hand_ag17, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -23663,108 +23813,6 @@ type Bm
 		match u 'x1'
 			m0(x) then x.fin(1)
 			m1(y) then self.keepP(y)
-		end 'x1'
-	end 'eat'
-end 'Bm'
-
-function eatMp(pV Mp)
-	match pV 'x1'
-		m0(x) then x.fin(1)
-		m1(y) then y.n = 1
-	end 'x1'
-end 'eatMp'
-
-function main() returns ExitCode
-	let k = spawn Bm.create(0, item: Bx.create(0), plain: Bx.create(1), hq: Hq.create(Bx.create(1), q: Bx.create(1)))
-	try k.eat(Mp.m1(Bx.create(1))) otherwise (sendFailure) 'h1'
-		match sendFailure 'x2'
-			mailboxFull(z) then eatMp(z)
-			serviceStopped(z) then eatMp(z)
-		end 'x2'
-	end 'h1'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: model-hand-ag-beh-mp-state-item -->
-The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-mp-state-item` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Mp
-	m0(x Rl)
-	m1(y Bx)
-end 'Mp'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function peek() returns Num
-		return self.code
-	end 'peek'
-
-	function set(c Num)
-		self.code = c
-	end 'set'
-
-	function wrap(consuming self) returns Sn
-		return Sn.notSent(self)
-	end 'wrap'
-end 'Rl'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Hq
-	var p as Bx
-	var q as Bx
-
-	static function create(p Bx, q Bx) returns Self
-		return Self{p: p, q: q}
-	end 'create'
-end 'Hq'
-
-type Bm
-	var n as Num
-	var item as isolated Bx
-	var plain as Bx
-	var hq as Hq
-
-	static function create(n Num, item isolated Bx, plain isolated Bx, hq isolated Hq) returns Self
-		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
-	end 'create'
-
-	function keepP(b Bx)
-		self.plain = b
-	end 'keepP'
-
-	export function eat(u Mp)
-		match u 'x1'
-			m0(x) then x.fin(1)
-			m1(y) then self.item = y
 		end 'x1'
 	end 'eat'
 end 'Bm'
@@ -25055,7 +25103,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3224: <fragment>:41:6: the field 's' holds a linear value, and a linear value lives only in locals, parameters and message arguments: a field would keep it past the code that must consume it
-error E3224: <fragment>:63:19: a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running
 ```
 
 <!-- test: model-hand-ag-v32-vacant-fill-from-state-then-overwrite -->
@@ -25131,7 +25178,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3224: <fragment>:41:6: the field 's' holds a linear value, and a linear value lives only in locals, parameters and message arguments: a field would keep it past the code that must consume it
-error E3224: <fragment>:64:19: a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running
 ```
 
 <!-- test: model-hand-ag-v33-vacant-moved-then-refilled-then-overwritten -->
@@ -26002,6 +26048,61 @@ end 'g'
 
 function main() returns ExitCode
 	g()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-s-linear-arg-nothrow-factory -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s-linear-arg-nothrow-factory` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zq
+	var n as Num
+
+	static function create(r Rl) returns Self
+		r.fin(1)
+		return Self{n: 1}
+	end 'create'
+end 'Zq'
+
+function main() returns ExitCode
+	let r = Rl.create(0)
+	let _ = spawn Zq.create(r)
 	return 0
 end 'main'
 ```
@@ -27791,6 +27892,113 @@ end 'main'
 error E3102: <fragment>:64:13: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: model-hand-fa14-l-fn-param-isolated-param -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l-fn-param-isolated-param` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function useI(r isolated Rl)
+	r.fin(1)
+end 'useI'
+
+function viaI(r Rl)
+	useI(r)
+end 'viaI'
+
+function main() returns ExitCode
+	viaI(Rl.create(0))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-l-fn-param-isolated-decl -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l-fn-param-isolated-decl` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function useI(r isolated Rl)
+	r.fin(1)
+end 'useI'
+
+function viaD(r Rl)
+	let u = r as isolated Rl
+	useI(u)
+end 'viaD'
+
+function main() returns ExitCode
+	viaD(Rl.create(0))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa14-l-borrowed-self-send -->
 The model (`core-m3w-fa14`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `l-borrowed-self-send` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
 
@@ -28614,6 +28822,257 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa14-a-vc-callee-sends -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-callee-sends` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zs'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function sendS(s Sn, k Zs.handle)
+	try k.takeS(s) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then later2(z)
+			serviceStopped(z) then later2(z)
+		end 'x2'
+	end 'h1'
+end 'sendS'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 4) Zs.create(0)
+	let s = Sn.ok
+	sendS(s, k: k)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-callee-sends-twice -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-callee-sends-twice` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zs'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function sendS(s Sn, k Zs.handle)
+	try k.takeS(s) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then later2(z)
+			serviceStopped(z) then later2(z)
+		end 'x2'
+	end 'h1'
+end 'sendS'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 4) Zs.create(0)
+	let s = Sn.ok
+	sendS(s, k: k)
+	sendS(s, k: k)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa14-a-vc-iso-callee-sends -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-vc-iso-callee-sends` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Zs
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		useS(s)
+	end 'takeS'
+end 'Zs'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function later2(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'later2'
+
+function sendS(s Sn, k Zs.handle)
+	try k.takeS(s) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then later2(z)
+			serviceStopped(z) then later2(z)
+		end 'x2'
+	end 'h1'
+end 'sendS'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 4) Zs.create(0)
+	let s = Sn.ok as isolated Sn
+	sendS(s, k: k)
+	sendS(s, k: k)
+	later2(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa14-a-vc-loop-fill-second-lap -->
 The model (`core-m3w-fa14`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `a-vc-loop-fill-second-lap` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
 
@@ -29280,7 +29739,7 @@ error E3102: <fragment>:67:14: use of moved value 's': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa14-a-lp-param-then-isolated-decl-then-use -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a-lp-param-then-isolated-decl-then-use` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a-lp-param-then-isolated-decl-then-use` of redteamFA14.hand_fa14d, in capmodel `reggio/REPORTFA14.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29331,7 +29790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:39:10: 'r as isolated Rl' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+error E3102: <fragment>:40:10: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-fa14-a-lp-param-assigned-then-sent -->

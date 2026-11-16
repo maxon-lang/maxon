@@ -93,10 +93,11 @@ export enum UniqueOrigin
 	lentByTuple
 	readFromSlot
 	lentByMatch
+	lentByMatchBesideABinding
 end 'UniqueOrigin'
 
 // @generated library-cache begin
-let CacheCasesUniqueOrigin = [UniqueOrigin.owned, UniqueOrigin.lentByLoop, UniqueOrigin.lentByTuple, UniqueOrigin.readFromSlot, UniqueOrigin.lentByMatch]
+let CacheCasesUniqueOrigin = [UniqueOrigin.owned, UniqueOrigin.lentByLoop, UniqueOrigin.lentByTuple, UniqueOrigin.readFromSlot, UniqueOrigin.lentByMatch, UniqueOrigin.lentByMatchBesideABinding]
 
 function cacheReadUniqueOrigin(reader LibraryCacheReader) returns UniqueOrigin throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -163,10 +164,15 @@ function keptUniqueRefusalSentence(origin UniqueOrigin, subject String) returns 
 		lentByLoop then return "'{subject}' is only lent by the loop; move it out with `pop` or `remove`"
 		lentByTuple then return "'{subject}' is only lent by the tuple it was destructured from; move it out with `pop` or `remove`"
 		readFromSlot then return "a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field"
-		lentByMatch then return "'{subject}' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`"
+		lentByMatch or
+		lentByMatchBesideABinding then return "'{subject}' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`"
 		owned then panic("keptUniqueRefusalSentence: an owned unique value has nothing to refuse")
 	end 'origin'
 end 'keptUniqueRefusalSentence'
+
+function matchedRootWrittenBesideABindingMessage(name String, into String) returns String
+	return "cannot lend '{name}' to {into}, which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through '{name}' in a statement that names no binding of the arm"
+end 'matchedRootWrittenBesideABindingMessage'
 
 function borrowedUniqueRefusalSentence(origin UniqueOrigin, subject String) returns String
 	match origin 'origin'
@@ -174,7 +180,8 @@ function borrowedUniqueRefusalSentence(origin UniqueOrigin, subject String) retu
 		lentByLoop or
 		lentByTuple or
 		readFromSlot or
-		lentByMatch then return keptUniqueRefusalSentence(origin, subject: subject)
+		lentByMatch or
+		lentByMatchBesideABinding then return keptUniqueRefusalSentence(origin, subject: subject)
 	end 'origin'
 end 'borrowedUniqueRefusalSentence'
 

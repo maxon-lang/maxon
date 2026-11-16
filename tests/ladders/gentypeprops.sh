@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ladder generator for the PER-TYPE PROPERTY WALKS — "does this type hold a unique value" (and why), "is this
 # type linear" and "does this type hold a Reply" (`ProgramSignatures.typeNameHoldsAUnique`,
-# `aggregateUniqueCause`, `valueIsLinear`, `aggregateIsLinear`, `typeHoldsAReply`, `aggregateReplyHolding`).
+# `walkedOwnership`, `valueIsLinear`, `aggregateIsLinear`, `typeHoldsAReply`, `aggregateReplyHolding`).
 #
 # Usage: gentypeprops.sh <N> <unique|linear|reply|services|control> <outdir> [<depth>]
 #

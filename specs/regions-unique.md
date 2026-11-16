@@ -2038,6 +2038,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3214: <fragment>:39:40: cannot pass 'holder' to parameter 'holder' of 'keepHolder': it keeps a unique value, and 'holder' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+error E3207: <fragment>:39:51: 'keepHolder' needs a writable parameter 'holder' at line 29; 'holder' is read-only while 'which' is open
 ```
 
 <!-- test: an-operand-of-a-cond-scrutinee-kept-in-the-arm-is-refused -->
@@ -2713,4 +2714,91 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-write-through-the-holder-of-an-array-of-uniques-in-a-for-over-it-is-refused -->
+`for t in h.xs` lends elements that `h` holds, so `h` is read-only in the body.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias TkArray = Array with Tk
+
+type H
+	var xs as TkArray
+	var n as Num
+
+	static function create() returns Self
+		let xs = TkArray.create(0)
+		xs.push(Tk.create(1))
+		return Self{xs: xs, n: 0}
+	end 'create'
+end 'H'
+
+function main() returns ExitCode
+	let h = H.create()
+
+	for t in h.xs 'each'
+		h.n = t.n
+	end 'each'
+
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:29:3: cannot write 'n' through 'h', which is read-only while 'each' drains it
+```
+
+<!-- test: the-holder-of-an-array-of-uniques-passed-to-a-writing-parameter-in-a-for-over-it-is-refused -->
+`bump` writes `h`, which is read-only in the body of a `for` over `h.xs`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias TkArray = Array with Tk
+
+type H
+	var xs as TkArray
+	var n as Num
+
+	static function create() returns Self
+		let xs = TkArray.create(0)
+		xs.push(Tk.create(1))
+		return Self{xs: xs, n: 0}
+	end 'create'
+end 'H'
+
+function bump(h H)
+	h.n = h.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let h = H.create()
+
+	for t in h.xs 'each'
+		print("{t.n}\n")
+		bump(h)
+	end 'each'
+
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:34:8: 'bump' needs a writable parameter 'h' at line 26; 'h' is read-only while 'each' is open
 ```

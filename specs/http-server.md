@@ -2922,5 +2922,5 @@ end 'main'
 ```
 ```maxoncstderr
 error E3210: <fragment>:11:11: 'CountingHandler.handle' writes its receiver, but 'HttpHandler.handle' does not declare `mutable self`
-error E3207: stdlib/HttpServer.maxon:596:56: 'dispatch' writes 'handler' (it calls 'dispatchExchange', which calls 'handle', which writes its receiver); 'handler' is immutable
+error E3207: stdlib/HttpServer.maxon:600:56: 'dispatch' writes 'handler' (it calls 'dispatchExchange', which calls 'handle', which writes its receiver); 'handler' is immutable
 ```

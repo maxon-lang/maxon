@@ -15,6 +15,11 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- While a `match` arm binds the payload of a union held in a field (`match self.pending 'p' … ready(p) then …`),
+  the record holding that field is read-only in the arm: writing it (`self.count = 1`) or passing it to a
+  function that writes it is E3197 / E3207.
+  Fix: write through the binding, or make the write before or after the `match`.
+
 - A finalizer reads and writes nothing of its receiver after `destruct self`: `self.field`, `self.field = …`
   and a bare field name written after it are E3102, as a read of any moved value is.
   Fix: read what the finalizer needs into a local before `destruct self`.

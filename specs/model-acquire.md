@@ -4102,7 +4102,7 @@ error E3201: <fragment>:55:15: an isolated value from outside 'm3' cannot be mov
 ```
 
 <!-- test: model-finding-ae-outer-plain-union-match-in-acquire -->
-The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `outer-plain-union-match-in-acquire` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa14`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3207, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `outer-plain-union-match-in-acquire` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4166,7 +4166,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3224: <fragment>:24:6: the field 'keep' holds a linear value, and a linear value lives only in locals, parameters and message arguments: a field would keep it past the code that must consume it
-error E3224: <fragment>:48:18: a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running
+error E3207: <fragment>:53:31: 'giveS' needs a writable parameter 'r' at line 37; 'q' is read-only while 'a1' is open
 ```
 
 <!-- test: model-finding-ae-w-match-consume-acquire -->

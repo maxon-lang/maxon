@@ -1823,9 +1823,6 @@ extension Parser
 		// against every conformer it may land on.
 		let argImmutableNames = NameRoster.create(0)
 
-		// Filled and DISCARDED: the per-argument TOKEN exists so a slot-type refusal can point at the
-		// value, and a witness dispatch's arguments ARE typed by SemanticCheck against the resolved
-		// requirement, so nothing here has one to raise.
 		let argAnchors = TokenIndexArray.create(0)
 
 		// The first argument's label is OPTIONAL at an interface / type-parameter receiver and MANDATORY
@@ -1858,7 +1855,7 @@ extension Parser
 		let result = try self.mintWitnessDispatchResult(target, receiver: receiver, methodTok: methodTok, resultUsed: resultUsed)
 		let opIdx = self.emitWitnessDispatch(result, args: args, blames: blames, target: target, range: range, siteTok: methodTok)
 
-		self.noteRequirementCallSite(func, opIdx: opIdx, target: target, args: args, argLabels: argLabels, argAnchors: argAnchors, receiverTok: self.tokenAt(methodIndex - 2))
+		self.noteRequirementCallSite(func, opIdx: opIdx, target: target, args: args, argLabels: argLabels, argAnchors: argAnchors, receiver: receiver, methodIndex: methodIndex)
 		self.noteResultCapabilityThrough(result, carrier: receiver, declared: requirement.returnCapability)
 		self.regionFactsForWrite().paramSources.noteDerivedBesideOtherData(result)
 
@@ -1883,16 +1880,22 @@ extension Parser
 		end 'eachSourceArgument'
 	end 'handIsolatedWitnessArguments'
 
-	function noteRequirementCallSite(func IrFunction, opIdx ElementIndex, target WitnessDispatchTarget, args ValueIdArray, argLabels NameRoster, argAnchors TokenIndexArray, receiverTok Token)
+	function noteRequirementCallSite(func IrFunction, opIdx ElementIndex, target WitnessDispatchTarget, args ValueIdArray, argLabels NameRoster, argAnchors TokenIndexArray, receiver ValueId, methodIndex ElementIndex)
 		let notes = self.notesForWrite(func)
+		let dotIndex = methodIndex - 1
+		let receiverTok = self.tokenAt(dotIndex - 1)
+		let slottedAnchors = TokenIndexArray.create(args.count())
 		notes.noteArgumentName(opIdx, position: 0, name: receiverTok.value)
 
 		for i in 0 upto argAnchors.count() 'eachWrittenArgument'
 			let slot = try argSlotPosition(target.paramNames, argIndex: i as ParamCount, label: try argLabels.get(i) otherwise panic("noteRequirementCallSite: argLabels.get OOB at {i}")) otherwise continue
-			self.noteWrittenArgumentName(notes, opIdx: opIdx, position: slot + WitnessReceiverArgCount, anchorIndex: try argAnchors.get(i) otherwise panic("noteRequirementCallSite: argAnchors.get OOB at {i}"))
+			let anchorIndex = try argAnchors.get(i) otherwise panic("noteRequirementCallSite: argAnchors.get OOB at {i}")
+			self.noteWrittenArgumentName(notes, opIdx: opIdx, position: slot + WitnessReceiverArgCount, anchorIndex: anchorIndex)
+			try slottedAnchors.set(slot + WitnessReceiverArgCount, value: anchorIndex) otherwise panic("noteRequirementCallSite: formal {slot} is past the {args.count()} arguments the dispatch was slotted into")
 		end 'eachWrittenArgument'
 
 		self.noteWindowCall(func, opIdx: opIdx, args: args, callOpen: PendingCallOpen.none)
+		_ = self.fileLentRootsBesideABinding(func, opIdx: opIdx, args: args, argAnchors: slottedAnchors, receiver: ReceiverArg.value(receiver, immutableName: EmptySourceText, anchor: receiverTok, extent: ReceiverExtent.writtenBefore(dotIndex)))
 	end 'noteRequirementCallSite'
 
 	function witnessDeclarationFacts(candidates WitnessDispatchTargetArray) returns DeclarationFactsArray
@@ -8308,6 +8311,50 @@ extension Parser
 		return self.valueIsIsolatedRegionData(value) and not self.valueIsAnIsolatedSlotRead(value)
 	end 'valueIsAnOwnedIsolatedRegion'
 
+	function valueTypeIsClosed(value ValueId) returns bool
+		return self.signatures.valueTypeIsClosed(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames)
+	end 'valueTypeIsClosed'
+
+	function valueIsTheLentReceiver(value ValueId) returns bool
+		if self.bodyState.consumesSelf or not self.bodyState.scope.contains(SelfParamName) 'noLentReceiver'
+			return false
+		end 'noLentReceiver'
+
+		return self.bodyState.scope.getInfo(SelfParamName).boundValue == value
+	end 'valueIsTheLentReceiver'
+
+	function valueIsAnOwnedClosedLinearParameter(value ValueId) returns bool
+		if not self.valueIsLinear(value) or not valueIsAParameter(value, paramCount: self.bodyFunction().paramCount) or self.valueIsTheLentReceiver(value) 'notAnOwnedLinearParameter'
+			return false
+		end 'notAnOwnedLinearParameter'
+
+		return self.valueTypeIsClosed(value)
+	end 'valueIsAnOwnedClosedLinearParameter'
+
+	function valueCrossesWhole(value ValueId) returns bool
+		return self.valueIsAValueType(value) or not self.valueHoldsAUniqueRecord(value) or self.valueTypeIsClosed(value) or self.valueIsAnOwnedIsolatedRegion(value) or self.effectiveCapabilityOf(value) == ValueCapability.temporary or self.relyOnFreshLocal(value)
+	end 'valueCrossesWhole'
+
+	function requireCrossesWhole(value ValueId, text String, door CrossingDoor, anchor Token) throws SourceParseError
+		if self.valueCrossesWhole(value) 'wholeOrNoRegion'
+			return
+		end 'wholeOrNoRegion'
+
+		if self.valueSettlesAfterParsing(value) 'aResultAssumedFresh'
+			self.fileResultUse(value, slot: ParamCapability.isolated, sends: false, judged: true, place: self.notWholeRegionMessage(value, text: text, door: door), line: anchor.line, column: anchor.column)
+			return
+		end 'aResultAssumedFresh'
+
+		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: self.notWholeRegionMessage(value, text: text, door: door), line: anchor.line, column: anchor.column)
+	end 'requireCrossesWhole'
+
+	function notWholeRegionMessage(value ValueId, text String, door CrossingDoor) returns String
+		match self.signatures.valueRegionClosure(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames) 'closure'
+			closed then panic("notWholeRegionMessage: '{text}' is refused as not closed, yet its type's closure has no plain part")
+			plainPart(holder, part, held) then return "'{text}' crosses to {crossingDoorText(door)} only as the whole of its region, and '{self.valueDisplayTypeName(value)}' is not closed: '{String.from(holder)}.{String.from(part)}' is a plain '{String.from(held)}' that other code may still name. Declare '{String.from(part)}' `isolated`, pass a fresh value, or consume the value here"
+		end 'closure'
+	end 'notWholeRegionMessage'
+
 	function noteIsolatedPartRead(value ValueId)
 		self.bodyState.isolatedPartReads = withValueMarked(self.bodyState.isolatedPartReads, value: value)
 	end 'noteIsolatedPartRead'
@@ -8407,7 +8454,7 @@ extension Parser
 			return false
 		end 'noBlockIsOpen'
 
-		self.openStatementWindowThrough(box, floor: result, range: range)
+		self.openStatementWindowThrough(box, floor: result, opensALinear: false, range: range)
 		self.setValueCapability(result, capability: ValueCapability.mutable)
 		return true
 	end 'windowThroughAnOpenBlock'
@@ -8489,7 +8536,7 @@ extension Parser
 			return true
 		end 'aHandleCarriesNoRegion'
 
-		if self.bodyState.recoveringInitializer and self.freshLocalIsRecoverable(value) 'aFreshLocalTheDeclarationTakes'
+		if self.bodyState.recoveringInitializer and self.relyOnFreshLocal(value) 'aFreshLocalTheDeclarationTakes'
 			self.noteFreshLocalRelied(value)
 			return true
 		end 'aFreshLocalTheDeclarationTakes'
@@ -9112,25 +9159,136 @@ extension Parser
 		end 'notNotedYet'
 	end 'noteFreshLocalRelied'
 
-	function freshLocalIsRecoverable(value ValueId) returns bool
+	function relyOnFreshLocal(value ValueId) returns bool
 		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
 			return false
 		end 'nothingIsFresh'
 
 		let fresh = try self.bodyState.freshLocals.get(value) otherwise return false
 
-		if fresh.reads != 1 or fresh.binding.movedFrom or fresh.binding.partiallyMoved or fresh.loopDepth != self.bodyState.loops.count() 'readBeforeOrMovedOrInALoop'
+		if fresh.reads != 1 or fresh.binding.movedFrom or fresh.binding.partiallyMoved or fresh.loopDepth != self.bodyState.loops.count() or self.effectiveCapabilityOf(value) != ValueCapability.mutable 'readBeforeOrMovedOrInALoop'
 			return false
 		end 'readBeforeOrMovedOrInALoop'
 
-		return self.effectiveCapabilityOf(value) == ValueCapability.mutable
-	end 'freshLocalIsRecoverable'
+		self.noteHeaderFreshRelied(value, name: fresh.binding.name)
+		return true
+	end 'relyOnFreshLocal'
+
+	function noteHeaderFreshRelied(value ValueId, name immutable ByteArray)
+		let tok = self.tokenAt(self.pos - 1)
+		var reached = value
+
+		while true 'eachEnclosingHeader'
+			let header = try self.headerFreshWhosePhiIs(reached) otherwise return
+
+			match header.reliance 'reliance'
+				unrelied then header.reliance = FreshReliance.relied(name, line: tok.line, column: tok.column)
+				relied then break
+			end 'reliance'
+
+			reached = header.entry
+		end 'eachEnclosingHeader'
+	end 'noteHeaderFreshRelied'
+
+	function headerFreshWhosePhiIs(phi ValueId) returns HeaderFresh throws AbsentError
+		for header in self.bodyState.headerFreshLocals 'eachHeaderPhi'
+			if header.phi == phi 'theHeader'
+				return header
+			end 'theHeader'
+		end 'eachHeaderPhi'
+
+		throw AbsentError.absent
+	end 'headerFreshWhosePhiIs'
 
 	function takeFreshLocal(value ValueId)
 		let fresh = try self.bodyState.freshLocals.get(value) otherwise return
 		self.notePartiallyMoved(fresh.binding, line: self.lineJustRead())
 		_ = self.bodyState.freshLocals.remove(value)
 	end 'takeFreshLocal'
+
+	function noteHeaderFreshLocals(phiVars LoopPhiVarArray)
+		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
+			return
+		end 'nothingIsFresh'
+
+		let outerDepth = self.bodyState.loops.count()
+
+		for phiVar in phiVars 'eachHeaderPhi'
+			let fresh = try self.bodyState.freshLocals.get(phiVar.entryValue) otherwise continue
+
+			if fresh.binding.movedFrom or fresh.binding.partiallyMoved or fresh.loopDepth != outerDepth 'notFreshAtTheHeader'
+				continue
+			end 'notFreshAtTheHeader'
+
+			let header = FreshLocal.create(fresh.binding, loopDepth: outerDepth + 1)
+			header.reads = fresh.reads
+			self.bodyState.freshLocals.upsert(phiVar.phiId, value: header)
+			self.bodyState.headerFreshLocals.push(HeaderFresh.create(phiVar.phiId, entry: phiVar.entryValue, loopDepth: outerDepth + 1, entryReads: fresh.reads))
+		end 'eachHeaderPhi'
+	end 'noteHeaderFreshLocals'
+
+	function settleHeaderFreshLocals(scan LoopMoveScan) throws SourceParseError
+		if self.bodyState.headerFreshLocals.isEmpty() 'noHeaderIsFresh'
+			return
+		end 'noHeaderIsFresh'
+
+		let depth = self.bodyState.loops.count() + 1
+		let enclosing = HeaderFreshArray.create(0)
+
+		for header in self.bodyState.headerFreshLocals 'eachHeaderPhi'
+			if header.loopDepth != depth 'anEnclosingLoops'
+				enclosing.push(header)
+				continue
+			end 'anEnclosingLoops'
+
+			_ = self.bodyState.freshLocals.remove(header.phi)
+
+			match header.reliance 'reliance'
+				unrelied then continue
+				relied(name, line, column) then try self.requireEveryBackEdgeBringsAFreshValue(scan, header: header, name: name, line: line, column: column)
+			end 'reliance'
+		end 'eachHeaderPhi'
+
+		self.bodyState.headerFreshLocals = enclosing
+	end 'settleHeaderFreshLocals'
+
+	function requireEveryBackEdgeBringsAFreshValue(scan LoopMoveScan, header HeaderFresh, name immutable ByteArray, line LineNumber, column ColumnNumber) throws SourceParseError
+		if not self.everyBackEdgeBringsAFreshValue(scan, header: header) 'aLapReadsAValueNotFresh'
+			throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{String.from(name)}' is recovered into an isolated position inside a loop, so every lap must start with a fresh value in it that nothing has read: assign it a fresh value on every path to the end of the lap, `continue` included", line: line, column: column)
+		end 'aLapReadsAValueNotFresh'
+	end 'requireEveryBackEdgeBringsAFreshValue'
+
+	function everyBackEdgeBringsAFreshValue(scan LoopMoveScan, header HeaderFresh) returns bool
+		let position = try self.headerFreshPositionOf(scan, header: header) otherwise return false
+
+		for back in scan.backEdges 'eachBackEdge'
+			let value = back.mark.valueAt(position)
+
+			if value != header.phi and self.valueIsAnOwnedIsolatedRegion(value) 'aWholeRegionAlready'
+				continue
+			end 'aWholeRegionAlready'
+
+			let fresh = try self.bodyState.freshLocals.get(value) otherwise return false
+
+			if fresh.loopDepth != header.loopDepth or fresh.reads > header.entryReads 'readOrFromAnotherLoop'
+				return false
+			end 'readOrFromAnotherLoop'
+		end 'eachBackEdge'
+
+		return true
+	end 'everyBackEdgeBringsAFreshValue'
+
+	function headerFreshPositionOf(scan LoopMoveScan, header HeaderFresh) returns ElementIndex throws AbsentError
+		for position in 0 upto scan.entryMark.height() 'eachOwnedBinding'
+			let value = scan.entryMark.valueAt(position)
+
+			if value == header.phi or value == header.entry 'theCarriedBinding'
+				return position
+			end 'theCarriedBinding'
+		end 'eachOwnedBinding'
+
+		throw AbsentError.absent
+	end 'headerFreshPositionOf'
 
 	function consumeFreshReadsFrom(readFloor ElementIndex)
 		for position in readFloor upto self.bodyState.freshReadsInInitializer.count() 'eachRead'
@@ -9193,39 +9351,104 @@ extension Parser
 
 	// A linear value is moved, not opened; the keeping-position checks judge it. An acquired state is
 	// held by its `acquire`, so the other-state window rules judge it, not the block it is outside.
-	function openedRootIsOutsideTheOpenBlock(opened ValueId) returns bool
+	function openedRootIsOutsideTheOpenBlock(opened ValueId, opensALinear bool) returns bool
 		let root = self.rootValueOf(opened)
 
-		if not self.valueIsAnOwnedIsolatedRegion(root) or self.valueIsLinear(root) or self.valueIsAnAcquiredState(root) 'notAnIsolatedRootToOpen'
+		if (self.valueIsLinear(root) and not opensALinear) or self.valueIsAnAcquiredState(root) 'notAnIsolatedRootToOpen'
 			return false
 		end 'notAnIsolatedRootToOpen'
 
 		let table = self.regionFactsForRead()
-		return valueIsOutsideInnermostBlock(table.windows, value: table.birthOf(root))
+		let byReference = self.byReferenceIsolatedParametersOf(self.bodyFunction(), value: root)
+
+		if byReference != NoParamPositions 'theCallersVariable'
+			return self.byReferenceRootIsOutsideTheInnermostBlock(table.windows, parameters: byReference)
+		end 'theCallersVariable'
+
+		return self.valueIsAnOwnedIsolatedRegion(root) and valueIsOutsideInnermostBlock(table.windows, value: table.birthOf(root))
 	end 'openedRootIsOutsideTheOpenBlock'
+
+	function byReferenceIsolatedParametersOf(func IrFunction, value ValueId) returns ParamPositionMask
+		if self.effectiveCapabilityOf(value) != ValueCapability.isolated 'notIsolated'
+			return NoParamPositions
+		end 'notIsolated'
+
+		return self.paramSourcesOf(func, value: value) and self.bodyState.declaredMutableParams
+	end 'byReferenceIsolatedParametersOf'
+
+	function byReferenceRootIsOutsideTheInnermostBlock(windows WindowStack, parameters ParamPositionMask) returns bool
+		let position = try innermostStrandBlockPosition(windows) otherwise return false
+		let window = try windows.get(position) otherwise panic("byReferenceRootIsOutsideTheInnermostBlock: windows.get OOB at {position}, the position the stack just answered")
+
+		return not windowOpensARoot(window) or (self.paramSourcesOf(self.bodyFunction(), value: window.openedValue) and parameters) == NoParamPositions
+	end 'byReferenceRootIsOutsideTheInnermostBlock'
 
 	function openedRootOutsideRefusalMessage(pathText String) returns String
 		return "'{pathText}' cannot be opened: the value that holds it is read-only{self.readOnlyReasonOf(false)}"
 	end 'openedRootOutsideRefusalMessage'
 
-	function requireOpenedRootInsideTheOpenBlock(opened ValueId, pathText String, line LineNumber, column ColumnNumber) throws SourceParseError
-		if self.openedRootIsOutsideTheOpenBlock(opened) 'outsideTheBlock'
+	function requireOpenedRootInsideTheOpenBlock(opened ValueId, opensALinear bool, pathText String, line LineNumber, column ColumnNumber) throws SourceParseError
+		if self.openedRootIsOutsideTheOpenBlock(opened, opensALinear: opensALinear) 'outsideTheBlock'
 			throw self.regionRefusal(ErrorCode.semanticIsolatedHolderNotWritable, message: self.openedRootOutsideRefusalMessage(pathText), line: line, column: column)
 		end 'outsideTheBlock'
 	end 'requireOpenedRootInsideTheOpenBlock'
 
-	function noteOpenedRootOutsideTheOpenBlock(opened ValueId, range SourceRange)
-		if self.openedRootIsOutsideTheOpenBlock(opened) 'outsideTheBlock'
+	function noteOpenedRootOutsideTheOpenBlock(opened ValueId, opensALinear bool, range SourceRange)
+		if self.openedRootIsOutsideTheOpenBlock(opened, opensALinear: opensALinear) 'outsideTheBlock'
 			self.deferRegionRefusal(ErrorCode.semanticIsolatedHolderNotWritable, message: self.openedRootOutsideRefusalMessage(self.isolatedRootNameOf(opened)), line: range.line, column: range.column)
 		end 'outsideTheBlock'
 	end 'noteOpenedRootOutsideTheOpenBlock'
 
 	function isolatedRootNameOf(opened ValueId) returns String
 		let root = self.rootValueOf(opened)
-		let index = try self.liveOwnerIndexOf(root) otherwise return String.from(IsolatedValueLabel)
 
-		return String.from((try self.bodyState.ownedBindings.get(index) otherwise panic("isolatedRootNameOf: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf`")).name)
+		if let index = try self.liveOwnerIndexOf(root) 'anOwnedBinding'
+			return String.from((try self.bodyState.ownedBindings.get(index) otherwise panic("isolatedRootNameOf: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf`")).name)
+		end 'anOwnedBinding'
+
+		return String.from(try self.byReferenceParameterNameOf(root) otherwise IsolatedValueLabel)
 	end 'isolatedRootNameOf'
+
+	function byReferenceParameterNameOf(value ValueId) returns immutable ByteArray throws AbsentError
+		let parameters = self.byReferenceIsolatedParametersOf(self.bodyFunction(), value: value)
+
+		if parameters == NoParamPositions 'notAByReferenceParameter'
+			throw AbsentError.absent
+		end 'notAByReferenceParameter'
+
+		let paramCount = self.bodyFunction().paramCount
+
+		for (_, binding) in self.bodyState.scope.allVars() 'eachBinding'
+			if binding.isParameter and binding.isCellBinding and valueIsAParameter(binding.boundValue, paramCount: paramCount) and maskHasParam(parameters, param: binding.boundValue as ParamCount) 'theParameter'
+				return binding.name
+			end 'theParameter'
+		end 'eachBinding'
+
+		throw AbsentError.absent
+	end 'byReferenceParameterNameOf'
+
+	function byReferenceRootIsAnEnclosingBlocksRoot(value ValueId) returns bool
+		let func = self.bodyFunction()
+		let parameters = self.byReferenceIsolatedParametersOf(func, value: value)
+
+		if parameters == NoParamPositions 'notAByReferenceParameter'
+			return false
+		end 'notAByReferenceParameter'
+
+		let windows = self.regionFactsForRead().windows
+
+		if not self.byReferenceRootIsOutsideTheInnermostBlock(windows, parameters: parameters) 'itsOwnBlockIsInnermost'
+			return false
+		end 'itsOwnBlockIsInnermost'
+
+		for window in windows 'eachWindow'
+			if windowIsAStrandBlock(window) and windowOpensARoot(window) and (self.paramSourcesOf(func, value: window.openedValue) and parameters) != NoParamPositions 'aBlockOpensTheParameter'
+				return true
+			end 'aBlockOpensTheParameter'
+		end 'eachWindow'
+
+		return false
+	end 'byReferenceRootIsAnEnclosingBlocksRoot'
 
 	function isolatedSlotFieldName(hop ValueId) returns String
 		let origin = try self.regionFactsForRead().fieldOrigins.get(hop) otherwise panic("isolatedSlotFieldName: v{hop} is an isolated hop, and a hop is a value some field was read into")
@@ -9372,9 +9595,7 @@ extension Parser
 	end 'seedIsolatedParameter'
 
 	function requireByReferenceIsolatedStaysPut(func IrFunction, value ValueId, at Token) throws SourceParseError
-		let reached = self.paramSourcesOf(func, value: value)
-
-		if (reached and self.bodyState.declaredMutableParams) == NoParamPositions or self.effectiveCapabilityOf(value) != ValueCapability.isolated 'notAMutableIsolatedParameter'
+		if self.byReferenceIsolatedParametersOf(func, value: value) == NoParamPositions 'notAMutableIsolatedParameter'
 			return
 		end 'notAMutableIsolatedParameter'
 
@@ -9411,7 +9632,7 @@ extension Parser
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{self.tokenTextFrom(valueStart, endIndex: self.pos)}' is mutable outside '{placeText}'; a store into an isolated region takes values, immutable or isolated", line: outerTok.line, column: outerTok.column)
 		end 'outerDataIntoARegion'
 
-		try self.requireOpenedRootInsideTheOpenBlock(box, pathText: placeText, line: line, column: column)
+		try self.requireOpenedRootInsideTheOpenBlock(box, opensALinear: true, pathText: placeText, line: line, column: column)
 		try self.requireIsolatedSlotHolderWritable(box, placeText: placeText, line: line, column: column)
 		self.noteMutableUse(box, line: line)
 		self.noteUseSite(func, value: box, mutable: true, line: line)
@@ -9574,7 +9795,7 @@ extension Parser
 		let isValueType = self.valueIsAValueType(value)
 		let isSlotRead = self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType)
 
-		if slot == ParamCapability.isolated and not isSlotRead and self.freshLocalIsRecoverable(value) 'aFreshLocalTheSlotTakes'
+		if slot == ParamCapability.isolated and not isSlotRead and self.relyOnFreshLocal(value) 'aFreshLocalTheSlotTakes'
 			return StoreVerdict.recovers
 		end 'aFreshLocalTheSlotTakes'
 
@@ -9622,12 +9843,13 @@ extension Parser
 	function requireAssignmentFitsVariable(binding VarInfo, value ValueId, valueStart ElementIndex, valueEnd ElementIndex) throws SourceParseError
 		var given = self.effectiveCapabilityOf(value)
 		let isValueType = self.valueIsAValueType(value)
+		let variable = self.capabilityOfValue(binding.boundValue)
 
-		if self.capabilityOfValue(binding.boundValue) == ValueCapability.isolated and self.freshLocalIsRecoverable(value) 'aFreshLocalTheVariableTakes'
+		if variable == ValueCapability.isolated and self.relyOnFreshLocal(value) 'aFreshLocalTheVariableTakes'
 			given = ValueCapability.temporary
 		end 'aFreshLocalTheVariableTakes'
 
-		let verdict = assignmentVerdict(self.capabilityOfValue(binding.boundValue), value: given, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType))
+		let verdict = assignmentVerdict(variable, value: given, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: given, isValueType: isValueType))
 
 		if verdict == StoreVerdict.isolatedIntoMutable and self.valueIsVacant(binding.boundValue) 'aVacantVariableTakesTheMerge'
 			self.noteMergedIntoRegion(value)
@@ -9649,7 +9871,7 @@ extension Parser
 			self.fileResultUse(value, slot: ParamCapability.isolated, sends: false, judged: true, place: refusal, line: tok.line, column: tok.column)
 		end 'aResultAssumedFresh'
 
-		if self.freshLocalIsRecoverable(value) 'aFreshLocalTheRecoveryTakes'
+		if self.relyOnFreshLocal(value) 'aFreshLocalTheRecoveryTakes'
 			self.takeFreshLocal(value)
 		end 'aFreshLocalTheRecoveryTakes'
 
@@ -9776,6 +9998,10 @@ extension Parser
 		if windows.isEmpty() and self.statement.drainingLoops > 0 'aDrainedArray'
 			return ReadOnlyReason.whileDrained(String.from(self.statement.drainingLabel))
 		end 'aDrainedArray'
+
+		if windows.isEmpty() and self.statement.lendingArms > 0 'aLendingArm'
+			return ReadOnlyReason.whileLent(String.from(self.statement.lendingLabel))
+		end 'aLendingArm'
 
 		if windows.isEmpty() 'noWindow'
 			return ReadOnlyReason.joinedData
@@ -9936,6 +10162,10 @@ extension Parser
 		let alsoLocalData = self.valueHasOtherPath(value) or heldByTheLiteral != NoParamPositions or literalHoldsAResult
 
 		try self.requireValueMayLeaveWindows(value, startIndex: retStart)
+
+		if declared == ResultCapability.unmarked and self.signatures.namesAServiceMessage(func.name) 'aReply'
+			try self.requireCrossesWhole(value, text: self.returnedExpressionText(retStart), door: CrossingDoor.reply, anchor: retTok)
+		end 'aReply'
 
 		if declared == ResultCapability.isolated 'declaredIsolated'
 			try self.recoverIsolated(value, startIndex: retStart, site: IsolatedRecoverySite.returnPath)

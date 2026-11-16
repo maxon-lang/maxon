@@ -472,7 +472,7 @@ either side could write, because the two green threads may run at the same time 
   reply is judged at its declaration, so a generic message that `returns T` is not refused here. A word is
   needed on none of these: numbers, `bool`, `ExitCode`, `String`, `Character`, enums, unions whose cases carry
   nothing, service and interface handles, `SharedValue` cells, a tuple none of whose elements owns heap, and a
-  `unique` type, which moves (the OS handles `TcpClient`, `TcpListener`, `TlsStream`, `TlsListener` and the
+  `unique` type, which moves and crosses as the whole of its region (the OS handles `TcpClient`, `TcpListener`, `TlsStream`, `TlsListener` and the
   types that hold them are `unique`).
 - **Four kinds of value cannot cross at all, and are E3217 too:** a promise or any type that can hold one (a
   record with a promise in a field, a union with a case carrying one, an array or list of promises, empty or
@@ -493,6 +493,13 @@ either side could write, because the two green threads may run at the same time 
   it is not `isolated` (**E3200**); send a `.clone()`. An `isolated` local that an enclosing `for` iterates
   (`for x in items` or `for (it, x) in items.withIterator()`) is held by the loop until it ends, so a message
   or factory argument of it inside the loop is **E3200** as well; send it after the loop.
+- **A value crosses a thread only as the whole of its region.** The rule holds for a send argument, a `spawn`
+  factory argument, a reply and the arguments a failed send hands back. The value is a fresh expression, a variable
+  declared `isolated`, or an owned `unique` or linear value of a closed type: one whose closure holds no plain part
+  (see [Linear Types and Finalizers](/docs/language/regions/#linear-types-and-finalizers)). A `unique` value whose type holds a plain
+  record, array, union, function value or interface value, and that is not fresh or declared `isolated`, is
+  **E3200**: the message names the plain part, which the sender or another holder may still reach. Declare the part
+  `isolated`, pass a fresh value, or consume the value where it is.
 - An `immutable` argument must be frozen data: `freeze x.clone()`, a constant, a module-level `let`, or a
   `SharedValue` or registry read. It is **shared**: its graph is marked shared, so every count on it steps
   atomically, and neither side may write it. A mutable argument at an `immutable` parameter is **E3207**.

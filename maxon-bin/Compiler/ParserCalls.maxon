@@ -123,7 +123,7 @@ extension Parser
 		let loaded = read.value
 
 		if loaded != box 'aFieldWasRead'
-			self.openStatementWindowThrough(box, floor: loaded, range: range)
+			self.openStatementWindowThrough(box, floor: loaded, opensALinear: true, range: range)
 			let windows = self.regionFactsForRead().windows
 			let slot = layout.fieldTypeSites.capabilityAt(index)
 
@@ -4440,6 +4440,11 @@ extension Parser
 		end 'firstLabelNeedsADefault'
 
 		let opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor, spawning: CallSpawning.direct)
+
+		if serviceSite.isASpawn() 'aFactoryOnAnotherThread'
+			try self.checkCrossingArguments(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, firstSource: receiverArgs, door: CrossingDoor.spawn)
+		end 'aFactoryOnAnotherThread'
+
 		let instantiated = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
 		let storedSlots = self.storedSlotCandidates(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, constructorInstance: instantiated)
 
@@ -7607,7 +7612,9 @@ extension Parser
 		// A `spawn`'s factory call is not adopted: its result is the service's state, held by the
 		// cown.
 		if let launch = try serviceSite.launch() 'aFactoryCall'
-			try self.requireNoLinearArgumentIn(args, refusal: "a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running", anchor: anchor)
+			if throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'aFactoryThatMayNotStart'
+				try self.requireNoLinearArgumentIn(args, refusal: "a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running", anchor: anchor)
+			end 'aFactoryThatMayNotStart'
 
 			return try self.emitServiceSpawnOp(launch, spawnTok: try serviceSite.token() otherwise panic("emitResolvedCall: a site that answers a launch answers its token"), writtenCallee: writtenCallee, callee: callee, state: result, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, mint: mint, constructed: constructed, inferInstanceOf: inferInstanceOf)
 		end 'aFactoryCall'

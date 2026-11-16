@@ -34,6 +34,7 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "published"): "SettledCellArray.create(0)",
     ("ProgramSignatures", "replyFreeTypes"): "BareNameSet.create()",
     ("SettledDeclarations", "settledUniqueHoldings"): "DeepCloneAnswerMap.create()",
+    ("SettledDeclarations", "settledClosedTypes"): "DeepCloneAnswerMap.create()",
     ("SettledDeclarations", "settledLinearTypes"): "DeepCloneAnswerMap.create()",
     ("ProgramSignatures", "sharedSettled"): "freeze SettledDeclarations.unused()",
     ("ProgramSignatures", "contestedAliasesDigest"): "Hasher.empty()",

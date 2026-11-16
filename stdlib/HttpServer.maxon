@@ -421,6 +421,13 @@ public type HttpServer
 		return try self.listener.accept()
 	end 'nextTransport'
 
+	function handNextConnection(handler immutable HttpHandler) returns ConnectionPromise throws HttpServerError
+		let transport = try self.nextTransport()
+		let worker = spawn ConnectionWorker.create(self.connectionPolicy())
+
+		return try worker.serve(handler, transport: transport, worker: worker.clone()) otherwise panic("HttpServer.handNextConnection: a connection worker that has just been spawned takes its first message")
+	end 'handNextConnection'
+
 	function connectionPolicy() returns immutable ServerConnection
 		return freeze ServerConnection.over(self.limits.clone(), scheme: self.listener.scheme())
 	end 'connectionPolicy'
@@ -443,7 +450,7 @@ public type HttpServer
 		var reapAt = ConnectionReapFloor
 
 		while stillServing(progress) 'acceptLoop'
-			let transport = try self.nextTransport() otherwise (fault) 'refused'
+			let connection = try self.handNextConnection(handler) otherwise (fault) 'refused'
 				progress = progressAfter(fault)
 				retryMs = acceptRetryAfter(fault, previous: retryMs)
 
@@ -456,10 +463,7 @@ public type HttpServer
 			end 'refused'
 
 			retryMs = NoAcceptRetryMs
-
-			let worker = spawn ConnectionWorker.create(self.connectionPolicy())
-
-			inFlight.push(try worker.serve(handler, transport: transport, worker: worker.clone()) otherwise panic("HttpServer.serve: a connection worker that has just been spawned takes its first message"))
+			inFlight.push(connection)
 
 			if inFlight.count() >= reapAt 'reap'
 				reapFinished(inFlight)

@@ -452,7 +452,7 @@ consumed 7
 ```
 
 <!-- test: an-owned-payload-stored-into-an-open-window-merges-its-region -->
-The `match` inside the `modify` window consumes `parcel`, and storing the payload `b` into the window's `label` merges the payload's region into the window's.
+The `match` inside the `modify` window consumes the `isolated` message parameter `p`, and storing the payload `b` into the window's `label` merges the payload's region into the window's.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -504,7 +504,7 @@ type Bay
 		return Self{loads: 0}
 	end 'create'
 
-	export function load(p Parcel)
+	export function load(p isolated Parcel)
 		self.loads = 1
 		let shelf = Shelf.create(Box.create(0)) as isolated Shelf
 
@@ -597,7 +597,7 @@ end 'main'
 ```
 
 <!-- test: a-behaviour-stores-the-plain-payload-of-its-message-in-an-isolated-slot -->
-The behaviour owns its message parameter `p`, matches it, and stores the payload in the `isolated` field `item`.
+The behaviour owns its `isolated` message parameter `p`, matches it, and stores the payload in the `isolated` field `item`.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -641,7 +641,7 @@ type Shed
 		return Self{item: item}
 	end 'create'
 
-	export function store(p Parcel)
+	export function store(p isolated Parcel)
 		match p 'unpack'
 			pad(x) then x.fin()
 			box(b) then self.item = b
@@ -731,4 +731,1644 @@ fin 2
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-linear-union-with-a-plain-payload-does-not-cross-from-a-literal-over-a-live-local -->
+`Mp.m1(b)` is no fresh value, because `b` is a local the sender writes after the send, and `Mp` is not closed: its payload `y` is a plain `Bx`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+function drain(m Mp)
+	match m 'drained'
+		m0(x) then x.fin()
+		m1(y) then print("drained {y.n}\n")
+	end 'drained'
+end 'drain'
+type Taker
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(m Mp)
+		match m 'taken'
+			m0(x) then x.fin()
+			m1(y) then y.n = 2
+		end 'taken'
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let s = spawn Taker.create(0)
+	let b = Bx.create(1)
+
+	try s.take(Mp.m1(b)) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back) then drain(back)
+			serviceStopped(back) then drain(back)
+		end 'why'
+	end 'refused'
+
+	b.n = 5
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:52:13: 'Mp.m1(b)' crosses to the service it is sent to only as the whole of its region, and 'Mp' is not closed: 'Mp.y' is a plain 'Bx' that other code may still name. Declare 'y' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-linear-union-local-with-a-plain-payload-does-not-cross -->
+`m` is an owned linear value, but `Mp` holds the plain part `y`, which `b` still names, so `m` is not the whole of its region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+function drain(m Mp)
+	match m 'drained'
+		m0(x) then x.fin()
+		m1(y) then print("drained {y.n}\n")
+	end 'drained'
+end 'drain'
+type Taker
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(m Mp)
+		match m 'taken'
+			m0(x) then x.fin()
+			m1(y) then y.n = 2
+		end 'taken'
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let s = spawn Taker.create(0)
+	let b = Bx.create(1)
+	let m = Mp.m1(b)
+
+	try s.take(m) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back) then drain(back)
+			serviceStopped(back) then drain(back)
+		end 'why'
+	end 'refused'
+
+	b.n = 5
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:53:13: 'm' crosses to the service it is sent to only as the whole of its region, and 'Mp' is not closed: 'Mp.y' is a plain 'Bx' that other code may still name. Declare 'y' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-local-whose-type-holds-a-plain-part-does-not-cross -->
+`Tp` is `unique` and holds the plain `Bx` field `b`; `h.k` keeps a second name for it, so `t` is not the whole of its region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	let h = Holder.create()
+	let t = Tp.create(1)
+	h.k = t.b
+
+	try s.take(t) otherwise ignore
+
+	h.k.n = 4
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:44:13: 't' crosses to the service it is sent to only as the whole of its region, and 'Tp' is not closed: 'Tp.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-parameter-whose-type-holds-a-plain-part-does-not-cross -->
+A parameter is no fresh value, so `t` crosses only if `Tp` is closed, and it is not.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function relay(s TpTaker.handle, t Tp)
+	try s.take(t) otherwise ignore
+end 'relay'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	let h = Holder.create()
+	let t = Tp.create(1)
+	h.k = t.b
+	relay(s, t: t)
+	h.k.n = 4
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:39:13: 't' crosses to the service it is sent to only as the whole of its region, and 'Tp' is not closed: 'Tp.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-message-parameter-whose-type-holds-a-plain-part-is-not-sent-on -->
+The behaviour keeps `t.b` in its own state and then sends `t` on: the message parameter is owned, but `Tp` is not closed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+type Forwarder
+	var keep as Bx
+	var out as TpTaker.handle
+
+	static function create(out TpTaker.handle) returns Self
+		return Self{keep: Bx.create(0), out: out}
+	end 'create'
+
+	export function put(t Tp)
+		self.keep = t.b
+		try self.out.take(t) otherwise ignore
+		self.keep.n = 7
+	end 'put'
+end 'Forwarder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	h.k.n = 1
+	let s = spawn TpTaker.create(0)
+	let f = spawn Forwarder.create(s)
+	try f.put(Tp.create(1)) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:48:21: 't' crosses to the service it is sent to only as the whole of its region, and 'Tp' is not closed: 'Tp.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-spawn-factory-argument-whose-type-holds-a-plain-part-does-not-cross -->
+A factory argument crosses to the service's thread under the same rule as a message argument; a fresh `Tp` crosses.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+type Keeper
+	var t as Tp
+
+	static function create(t Tp) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function poke()
+		self.t.b.n = 3
+	end 'poke'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let t = Tp.create(1)
+	h.k = t.b
+	let s = spawn Keeper.create(t)
+	try s.poke() otherwise ignore
+	h.k.n = 4
+	let z = spawn TpTaker.create(0)
+	try z.take(Tp.create(2)) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:54:30: 't' crosses to the service the `spawn` starts only as the whole of its region, and 'Tp' is not closed: 'Tp.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-unique-reply-whose-type-holds-a-plain-part-does-not-cross -->
+The behaviour keeps `t.b` and replies with `t`, which is then not the whole of its region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+type Maker
+	var keep as Bx
+
+	static function create() returns Self
+		return Self{keep: Bx.create(0)}
+	end 'create'
+
+	export function make() returns Tp
+		let t = Tp.create(1)
+		self.keep = t.b
+		return t
+	end 'make'
+end 'Maker'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	h.k.n = 1
+	let s = spawn Maker.create()
+	let t = try await s.make() otherwise return 1
+	print("{t.b.n}\n")
+	let z = spawn TpTaker.create(0)
+	try z.take(Tp.create(2)) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:48:10: 't' crosses to the sender awaiting the reply only as the whole of its region, and 'Tp' is not closed: 'Tp.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: the-payload-of-a-message-parameter-whose-union-is-not-closed-is-not-isolated -->
+`Parcel` holds the plain payload `b`, so the behaviour's unmarked message parameter `p` is owned plain data and its payload goes to no `isolated` slot.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Parcel
+	pad(p Rl)
+	box(b Bx)
+end 'Parcel'
+
+function settle(p Parcel)
+	match p 'which'
+		pad(x) then x.fin()
+		box then print("box\n")
+	end 'which'
+end 'settle'
+
+type Shed
+	var item as isolated Bx
+
+	static function create(item isolated Bx) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function store(p Parcel)
+		match p 'unpack'
+			pad(x) then x.fin()
+			box(b) then self.item = b
+		end 'unpack'
+	end 'store'
+end 'Shed'
+
+function main() returns ExitCode
+	let shed = spawn Shed.create(Bx.create(0))
+
+	try shed.store(Parcel.box(Bx.create(1))) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back) then settle(back)
+			serviceStopped(back) then settle(back)
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:45:28: 'b' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Bx`, or store a copy
+```
+
+<!-- test: a-linear-local-of-a-closed-type-crosses-in-a-message -->
+`Rl` holds only a value, so the owned linear local `r` is the whole of its region and crosses.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type RlTaker
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(r Rl)
+		r.fin()
+	end 'take'
+end 'RlTaker'
+
+function main() returns ExitCode
+	let s = spawn RlTaker.create(0)
+	let r = Rl.create(1)
+	print("peek {r.code}\n")
+
+	try s.take(r) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back) then back.fin()
+			serviceStopped(back) then back.fin()
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```stdout
+peek 1
+fin 1
+```
+```exitcode
+0
+```
+
+<!-- test: a-linear-union-whose-payloads-are-values-or-isolated-crosses-in-a-message -->
+Every payload of `Mq` is linear and closed or declared `isolated`, so `Mq` is closed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Mq
+	q0(x Rl)
+	q1(y isolated Bx)
+end 'Mq'
+
+function drainQ(m Mq)
+	match m 'drained'
+		q0(x) then x.fin()
+		q1 then print("drained\n")
+	end 'drained'
+end 'drainQ'
+
+type QTaker
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(m Mq)
+		match m 'taken'
+			q0(x) then x.fin()
+			q1 then self.k = 1
+		end 'taken'
+	end 'take'
+end 'QTaker'
+
+function main() returns ExitCode
+	let s = spawn QTaker.create(0)
+	let m = Mq.q1(Bx.create(1))
+	drainQ(Mq.q0(Rl.create(2)))
+
+	try s.take(m) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back) then drainQ(back)
+			serviceStopped(back) then drainQ(back)
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```stdout
+fin 2
+```
+```exitcode
+0
+```
+
+<!-- test: a-linear-union-declared-isolated-crosses-though-its-type-is-not-closed -->
+`m` is declared `isolated`, so it is the whole of its region whatever `Mp` holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+function drain(m Mp)
+	match m 'drained'
+		m0(x) then x.fin()
+		m1(y) then print("drained {y.n}\n")
+	end 'drained'
+end 'drain'
+type Taker
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(m Mp)
+		match m 'taken'
+			m0(x) then x.fin()
+			m1(y) then y.n = 2
+		end 'taken'
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let s = spawn Taker.create(0)
+	let m = Mp.m1(Bx.create(1)) as isolated Mp
+	drain(Mp.m0(Rl.create(3)))
+
+	try s.take(m) otherwise (failure) 'refused'
+		match failure 'why'
+			mailboxFull(back) then drain(back)
+			serviceStopped(back) then drain(back)
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```stdout
+fin 3
+```
+```exitcode
+0
+```
+
+<!-- test: a-fresh-unique-local-crosses-though-its-type-is-not-closed -->
+`t` holds a fresh value nothing has read, so it is the whole of its region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	h.k.n = 1
+	let s = spawn TpTaker.create(0)
+	let t = Tp.create(1)
+
+	try s.take(t) otherwise ignore
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-owned-linear-parameter-of-a-closed-type-goes-to-an-isolated-parameter -->
+A linear parameter is owned by the function, and `Mq` is closed, so `m` goes where an `isolated` value goes.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Mq
+	q0(x Rl)
+	q1(y isolated Bx)
+end 'Mq'
+
+function takeIso(m isolated Mq)
+	match m 'taken'
+		q0(x) then x.fin()
+		q1(y) then print("took {y.n}\n")
+	end 'taken'
+end 'takeIso'
+
+function relay(m Mq)
+	takeIso(m)
+end 'relay'
+
+function main() returns ExitCode
+	relay(Mq.q0(Rl.create(1)))
+	relay(Mq.q1(Bx.create(2)))
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+took 2
+```
+```exitcode
+0
+```
+
+<!-- test: an-owned-linear-parameter-of-a-type-that-is-not-closed-stays-plain -->
+`Mp` holds the plain payload `y`, which the caller's `b` still names, so `m` is ordinary data of its region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+function drain(m Mp)
+	match m 'drained'
+		m0(x) then x.fin()
+		m1(y) then print("drained {y.n}\n")
+	end 'drained'
+end 'drain'
+
+function takeIso(m isolated Mp)
+	drain(m)
+end 'takeIso'
+
+function relay(m Mp)
+	takeIso(m)
+end 'relay'
+
+function main() returns ExitCode
+	let b = Bx.create(1)
+	relay(Mp.m1(b))
+	b.n = 5
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:39:10: 'm' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+```
+
+<!-- test: a-consuming-receiver-of-a-closed-type-returns-as-isolated -->
+`pass` owns its `consuming self`, and `Lc` holds only a value, so `self` fits `returns isolated Lc`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Lc
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+
+	function pass(consuming self) returns isolated Lc
+		return self
+	end 'pass'
+end 'Lc'
+
+function takeIso(l isolated Lc)
+	l.fin()
+end 'takeIso'
+
+function main() returns ExitCode
+	let l = Lc.create(4)
+	takeIso(l.pass())
+	return 0
+end 'main'
+```
+```stdout
+fin 4
+```
+```exitcode
+0
+```
+
+<!-- test: an-outer-isolated-value-moved-into-a-local-inside-a-window-is-not-opened -->
+`p` is declared inside 'mh', but its region is `g`'s, which is older than the window, so `modify p` opens an outer region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq6
+	i0
+	i1(w isolated Wo6)
+end 'Iq6'
+
+union Oq6
+	o0
+	o1(q isolated Iq6)
+end 'Oq6'
+
+type Bx6
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx6'
+
+type Wo6
+	var keep as Bx6
+	var item as isolated Bx6
+
+	static function create(keep Bx6, item isolated Bx6) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+
+	function touch(k Num)
+		self.keep.n = k
+	end 'touch'
+end 'Wo6'
+
+function mk() returns isolated Wo6
+	return Wo6.create(Bx6.create(0), item: Bx6.create(1))
+end 'mk'
+
+function pass(x isolated Wo6) returns isolated Wo6
+	return x
+end 'pass'
+
+function openO(o isolated Wo6)
+	modify o 'mo'
+		o.keep.n = 3
+	end 'mo'
+end 'openO'
+
+function scn()
+	let h = mk()
+	let g = mk()
+	modify h 'mh'
+		let p = g as isolated Wo6
+		modify p 'mp'
+			p.keep.n = 4
+		end 'mp'
+	end 'mh'
+end 'scn'
+
+function cover()
+	let z = Oq6.o1(Iq6.i0) as isolated Oq6
+	match z 'cz'
+		o0 then break
+		o1(q) then take(q)
+	end 'cz'
+	let w = pass(mk())
+	openO(w)
+	let t = Wo6.create(Bx6.create(0), item: Bx6.create(1))
+	t.touch(1)
+end 'cover'
+
+function take(q isolated Iq6)
+	let _ = q
+end 'take'
+
+function main() returns ExitCode
+	scn()
+	cover()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:54:10: 'p' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: the-payload-matched-out-of-an-outer-isolated-union-inside-a-window-is-not-opened -->
+`o` is bound inside 'mh' by a consuming match of `u`, which is declared outside it, so a one-statement open of `o` opens an outer region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq6
+	i0
+	i1(w isolated Wo6)
+end 'Iq6'
+
+union Oq6
+	o0
+	o1(q isolated Iq6)
+end 'Oq6'
+
+type Bx6
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx6'
+
+type Wo6
+	var keep as Bx6
+	var item as isolated Bx6
+
+	static function create(keep Bx6, item isolated Bx6) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+
+	function touch(k Num)
+		self.keep.n = k
+	end 'touch'
+end 'Wo6'
+
+function mk() returns isolated Wo6
+	return Wo6.create(Bx6.create(0), item: Bx6.create(1))
+end 'mk'
+
+function pass(x isolated Wo6) returns isolated Wo6
+	return x
+end 'pass'
+
+function openO(o isolated Wo6)
+	modify o 'mo'
+		o.keep.n = 3
+	end 'mo'
+end 'openO'
+
+function scn()
+	let h = mk()
+	let u = Iq6.i1(mk()) as isolated Iq6
+	modify h 'mh'
+		match u 'x1'
+			i0 then break
+			i1(o) then o.keep.n = 4
+		end 'x1'
+	end 'mh'
+end 'scn'
+
+function cover()
+	let z = Oq6.o1(Iq6.i0) as isolated Oq6
+	match z 'cz'
+		o0 then break
+		o1(q) then take(q)
+	end 'cz'
+	let w = pass(mk())
+	openO(w)
+	let t = Wo6.create(Bx6.create(0), item: Bx6.create(1))
+	t.touch(1)
+end 'cover'
+
+function take(q isolated Iq6)
+	let _ = q
+end 'take'
+
+function main() returns ExitCode
+	scn()
+	cover()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:55:15: 'o' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: an-outer-isolated-linear-value-renamed-inside-a-window-is-not-opened-for-a-statement -->
+A linear `isolated` value keeps its birth through the rename, like any other `isolated` value.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq7
+	i0
+	i1(w isolated Lw7)
+end 'Iq7'
+
+type Bx7
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx7'
+
+type Lw7
+	var keep as Bx7
+
+	static function create(keep Bx7) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function touch(k Num)
+		self.keep.n = k
+	end 'touch'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Lw7'
+
+function mk() returns isolated Lw7
+	return Lw7.create(Bx7.create(0))
+end 'mk'
+
+function sink(o isolated Lw7)
+	o.fin()
+end 'sink'
+
+function scn()
+	let h = Bx7.create(0) as isolated Bx7
+	let g = mk()
+	modify h 'mh'
+		let p = g
+		p.keep.n = 4
+		sink(p)
+	end 'mh'
+	let _ = h
+end 'scn'
+
+function cover()
+	let z = Iq7.i1(mk()) as isolated Iq7
+	match z 'cz'
+		i0 then break
+		i1(q) then sink(q)
+	end 'cz'
+end 'cover'
+
+function main() returns ExitCode
+	scn()
+	cover()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:46:3: 'p' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: an-outer-isolated-linear-value-renamed-inside-a-window-is-not-modified -->
+`modify p` inside 'mh' opens the region of `g`, which is older than the window.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq7
+	i0
+	i1(w isolated Lw7)
+end 'Iq7'
+
+type Bx7
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx7'
+
+type Lw7
+	var keep as Bx7
+
+	static function create(keep Bx7) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function touch(k Num)
+		self.keep.n = k
+	end 'touch'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Lw7'
+
+function mk() returns isolated Lw7
+	return Lw7.create(Bx7.create(0))
+end 'mk'
+
+function sink(o isolated Lw7)
+	o.fin()
+end 'sink'
+
+function scn()
+	let h = Bx7.create(0) as isolated Bx7
+	let g = mk()
+	modify h 'mh'
+		let p = g
+		modify p 'mp'
+			p.keep.n = 4
+		end 'mp'
+		sink(p)
+	end 'mh'
+	let _ = h
+end 'scn'
+
+function cover()
+	let z = Iq7.i1(mk()) as isolated Iq7
+	match z 'cz'
+		i0 then break
+		i1(q) then sink(q)
+	end 'cz'
+end 'cover'
+
+function main() returns ExitCode
+	scn()
+	cover()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:46:10: 'p' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: an-outer-isolated-linear-value-renamed-inside-a-window-is-not-opened-for-a-call -->
+`touch` lends its receiver, so `p.touch(4)` opens `p` for the call.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq7
+	i0
+	i1(w isolated Lw7)
+end 'Iq7'
+
+type Bx7
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx7'
+
+type Lw7
+	var keep as Bx7
+
+	static function create(keep Bx7) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function touch(k Num)
+		self.keep.n = k
+	end 'touch'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Lw7'
+
+function mk() returns isolated Lw7
+	return Lw7.create(Bx7.create(0))
+end 'mk'
+
+function sink(o isolated Lw7)
+	o.fin()
+end 'sink'
+
+function scn()
+	let h = Bx7.create(0) as isolated Bx7
+	let g = mk()
+	modify h 'mh'
+		let p = g
+		p.touch(4)
+		sink(p)
+	end 'mh'
+	let _ = h
+end 'scn'
+
+function cover()
+	let z = Iq7.i1(mk()) as isolated Iq7
+	match z 'cz'
+		i0 then break
+		i1(q) then sink(q)
+	end 'cz'
+end 'cover'
+
+function main() returns ExitCode
+	scn()
+	cover()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:46:3: 'p' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: an-outer-isolated-linear-value-is-not-opened-inside-a-window -->
+`g` is declared outside 'mh'.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq7
+	i0
+	i1(w isolated Lw7)
+end 'Iq7'
+
+type Bx7
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx7'
+
+type Lw7
+	var keep as Bx7
+
+	static function create(keep Bx7) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function touch(k Num)
+		self.keep.n = k
+	end 'touch'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Lw7'
+
+function mk() returns isolated Lw7
+	return Lw7.create(Bx7.create(0))
+end 'mk'
+
+function sink(o isolated Lw7)
+	o.fin()
+end 'sink'
+
+function scn()
+	let h = Bx7.create(0) as isolated Bx7
+	let g = mk()
+	modify h 'mh'
+		g.keep.n = 4
+	end 'mh'
+	sink(g)
+	let _ = h
+end 'scn'
+
+function cover()
+	let z = Iq7.i1(mk()) as isolated Iq7
+	match z 'cz'
+		i0 then break
+		i1(q) then sink(q)
+	end 'cz'
+end 'cover'
+
+function main() returns ExitCode
+	scn()
+	cover()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:45:3: 'g' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: a-plain-part-read-out-of-a-lent-unique-parameter-is-not-a-keep -->
+`stash` stores `t.b`, a part read out of `t`, and never `t` itself, so `q` is only lent to the call and stays the caller's to write.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tq is unique
+	var b as Bx
+
+	static function create(b Bx) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Tq'
+
+type Ko
+	var keep as Bx
+
+	static function create(keep Bx) returns Self
+		return Self{keep: keep}
+	end 'create'
+end 'Ko'
+
+function stash(t Tq) returns Ko
+	let o = Ko.create(Bx.create(0))
+	o.keep = t.b
+	return o
+end 'stash'
+
+function main() returns ExitCode
+	let q = Tq.create(Bx.create(2))
+	let o = stash(q)
+	q.b.n = 3
+	print("{q.b.n} {o.keep.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 3
+```
+```exitcode
+0
+```
+
+<!-- test: a-call-lent-a-unique-local-whose-type-holds-a-plain-part-is-not-a-clean-call -->
+`Tq` is not closed, so the lent `q` is no clean input even though nothing read it before, and the result, which holds `q.b`, cannot become isolated.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tq is unique
+	var b as Bx
+
+	static function create(b Bx) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Tq'
+
+type Ko
+	var keep as Bx
+
+	static function create(keep Bx) returns Self
+		return Self{keep: keep}
+	end 'create'
+end 'Ko'
+
+type Taker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function takeK(k isolated Ko)
+		k.keep.n = 7
+	end 'takeK'
+end 'Taker'
+
+function stash(t Tq) returns Ko
+	let o = Ko.create(Bx.create(0))
+	o.keep = t.b
+	return o
+end 'stash'
+
+function main() returns ExitCode
+	let s = spawn Taker.create()
+	let q = Tq.create(Bx.create(2))
+	let k = stash(q) as isolated Ko
+	try s.takeK(k) otherwise ignore
+	q.b.n = 3
+	print("{q.b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:47:10: 'stash(q) as isolated Ko' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
+<!-- test: a-call-lent-a-unique-local-whose-type-holds-a-plain-part-is-not-sent -->
+The same call handed straight to a message's `isolated` parameter is refused for the same reason.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tq is unique
+	var b as Bx
+
+	static function create(b Bx) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Tq'
+
+type Ko
+	var keep as Bx
+
+	static function create(keep Bx) returns Self
+		return Self{keep: keep}
+	end 'create'
+end 'Ko'
+
+type Taker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function takeK(k isolated Ko)
+		k.keep.n = 7
+	end 'takeK'
+end 'Taker'
+
+function stash(t Tq) returns Ko
+	let o = Ko.create(Bx.create(0))
+	o.keep = t.b
+	return o
+end 'stash'
+
+function main() returns ExitCode
+	let s = spawn Taker.create()
+	let q = Tq.create(Bx.create(2))
+	try s.takeK(stash(q)) otherwise ignore
+	q.b.n = 3
+	print("{q.b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:47:14: 'stash(q)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+```
+
+<!-- test: a-call-lent-a-unique-local-of-a-closed-type-is-a-clean-call -->
+`Tc` is closed, so lending `q` keeps `make(q)` a clean call: its result becomes isolated and `q` stays the caller's.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tc is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tc'
+
+type Ko
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Ko'
+
+function make(t Tc) returns Ko
+	return Ko.create(t.n + 1)
+end 'make'
+
+function main() returns ExitCode
+	let q = Tc.create(2)
+	print("{q.n}\n")
+	let k = make(q) as isolated Ko
+
+	modify k 'k'
+		k.n = k.n + q.n
+	end 'k'
+
+	q.n = 5
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+5
+```
+```exitcode
+0
+```
+
+<!-- test: a-call-that-keeps-a-unique-local-whose-type-holds-a-plain-part-is-not-a-clean-call -->
+`wrap` keeps `q`, whose `Tq` holds the plain `shared`, so the result is not a whole region.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tq is unique
+	var b as Bx
+
+	static function create(b Bx) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Tq'
+
+type Wrap is unique
+	var t as Tq
+
+	static function create(t Tq) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Wrap'
+
+function wrap(t Tq) returns Wrap
+	return Wrap.create(t)
+end 'wrap'
+
+function main() returns ExitCode
+	let shared = Bx.create(2)
+	let q = Tq.create(shared)
+	print("{q.b.n}\n")
+	let w = wrap(q) as isolated Wrap
+
+	modify w 'w'
+		w.t.b.n = 7
+	end 'w'
+
+	print("{shared.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:36:10: 'wrap(q) as isolated Wrap' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
 ```

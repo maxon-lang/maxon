@@ -96,13 +96,14 @@ export function runDapServer() returns ExitCode
 	sweepStaleDebugBuilds()
 
 	let adapter = DapAdapter.create()
+	let debuggee = DebugSessionSlot.create()
 	let reader = spawn DapFrameReader.create()
 	let wakes = DapWakePromiseArray.create(0)
 	wakes.push(async dapNextFrame(reader.clone()))
 
 	while adapter.isServing() 'pump'
-		if adapter.wantsASlice() 'aProgramToWatch'
-			wakes.push(async dapSliceElapsed(adapter.sliceMs()))
+		if adapter.wantsASlice(debuggee) 'aProgramToWatch'
+			wakes.push(async dapSliceElapsed(adapter.sliceMs(debuggee)))
 			adapter.noteSliceArmed()
 		end 'aProgramToWatch'
 
@@ -110,8 +111,8 @@ export function runDapServer() returns ExitCode
 		let woke = try wakes.remove(ready) otherwise panic("runDapServer: wakes.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		match await woke 'which'
-			sliceElapsed then adapter.sliceElapsed()
-			frame(incoming) then adapter.rearm(wakes, reader: reader, incoming: incoming)
+			sliceElapsed then adapter.sliceElapsed(debuggee)
+			frame(incoming) then adapter.rearm(wakes, reader: reader, incoming: incoming, debuggee: debuggee)
 		end 'which'
 	end 'pump'
 
@@ -124,7 +125,7 @@ export function runDapServer() returns ExitCode
 		end 'leftover'
 	end 'drainTheSlices'
 
-	return adapter.finish()
+	return adapter.finish(debuggee)
 end 'runDapServer'
 
 enum DapLifecycle
@@ -160,7 +161,6 @@ end 'DapSourceBreakpoints'
 
 type DapAdapter
 	var writer as DapWriter
-	var debuggee as DebugSessionSlot
 	var lifecycle as DapLifecycle
 	var stopOnEntry as bool
 	var stoppedThread as DapNumber
@@ -175,30 +175,30 @@ type DapAdapter
 	var sliceArmed as bool
 
 	static function create() returns DapAdapter
-		return Self{writer: DapWriter.create(), debuggee: DebugSessionSlot.create(), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(0), functionBreakpoints: DapBreakpointAskArray.create(0), frameRefs: DapFrameRefArray.create(0), variableRefs: DapVariableRefArray.create(0), renderedTrees: DebugValueTreeArray.create(0), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
+		return Self{writer: DapWriter.create(), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(0), functionBreakpoints: DapBreakpointAskArray.create(0), frameRefs: DapFrameRefArray.create(0), variableRefs: DapVariableRefArray.create(0), renderedTrees: DebugValueTreeArray.create(0), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
 	end 'create'
 
-	function programState() returns DebugProgramState
-		return match self.debuggee.hold 'held'
+	function programState(debuggee DebugSessionSlot) returns DebugProgramState
+		return match debuggee.hold 'held'
 			empty gives DebugProgramState.ended
 			held(session) gives session.conversation.programState()
 		end 'held'
 	end 'programState'
 
-	function sliceMs() returns Milliseconds
-		return DapWalkYieldMs if self.programState() == DebugProgramState.walking else DapPollSliceMs
+	function sliceMs(debuggee DebugSessionSlot) returns Milliseconds
+		return DapWalkYieldMs if self.programState(debuggee) == DebugProgramState.walking else DapPollSliceMs
 	end 'sliceMs'
 
 	function isServing() returns bool
 		return self.serving
 	end 'isServing'
 
-	function isWatching() returns bool
+	function isWatching(debuggee DebugSessionSlot) returns bool
 		if self.lifecycle != DapLifecycle.live 'notReleased'
 			return false
 		end 'notReleased'
 
-		return match self.programState() 'program'
+		return match self.programState(debuggee) 'program'
 			running or
 			walking or
 			detached or
@@ -208,33 +208,33 @@ type DapAdapter
 		end 'program'
 	end 'isWatching'
 
-	function wantsASlice() returns bool
-		return self.isWatching() and not self.sliceArmed
+	function wantsASlice(debuggee DebugSessionSlot) returns bool
+		return self.isWatching(debuggee) and not self.sliceArmed
 	end 'wantsASlice'
 
 	function noteSliceArmed()
 		self.sliceArmed = true
 	end 'noteSliceArmed'
 
-	function sliceElapsed()
+	function sliceElapsed(debuggee DebugSessionSlot)
 		self.sliceArmed = false
 
-		if self.isWatching() 'stillRunning'
-			self.watch()
+		if self.isWatching(debuggee) 'stillRunning'
+			self.watch(debuggee)
 		end 'stillRunning'
 	end 'sliceElapsed'
 
-	function rearm(wakes DapWakePromiseArray, reader DapFrameReader.handle, incoming LspIncoming)
-		self.take(incoming)
+	function rearm(wakes DapWakePromiseArray, reader DapFrameReader.handle, incoming LspIncoming, debuggee DebugSessionSlot)
+		self.take(incoming, debuggee: debuggee)
 
 		if self.serving 'anotherFrame'
 			wakes.push(async dapNextFrame(reader))
 		end 'anotherFrame'
 	end 'rearm'
 
-	function take(incoming LspIncoming)
+	function take(incoming LspIncoming, debuggee DebugSessionSlot)
 		match incoming 'which'
-			message(body) then self.handleBody(body)
+			message(body) then self.handleBody(body, debuggee: debuggee)
 			endOfStream then self.serving = false
 			framingError(detail) then self.breakDown(detail)
 		end 'which'
@@ -246,21 +246,21 @@ type DapAdapter
 		self.serving = false
 	end 'breakDown'
 
-	function finish() returns ExitCode
-		_ = self.debuggee.reap(DebugSessionEnding.terminateTheProgram)
+	function finish(debuggee DebugSessionSlot) returns ExitCode
+		_ = debuggee.reap(DebugSessionEnding.terminateTheProgram)
 
 		return OwnFailureExit if self.broken else SucceededExit
 	end 'finish'
 
-	function watch()
-		match self.debuggee.hold 'which'
+	function watch(debuggee DebugSessionSlot)
+		match debuggee.hold 'which'
 			empty then panic("DapAdapter.watch: the adapter watches only while a launched program runs")
 			held(session) then self.watchSession(session)
 		end 'which'
 	end 'watch'
 
 	function watchSession(session DebugToolSession)
-		let sliceMs = DapWalkSliceMs if self.programState() == DebugProgramState.walking else DapStopLookMs
+		let sliceMs = DapWalkSliceMs if session.conversation.programState() == DebugProgramState.walking else DapStopLookMs
 		let answers = self.delivered(session, replies: session.conversation.pollForStop(sliceMs), announceResume: false)
 
 		for failure in answers.failures 'eachFailure'
@@ -268,7 +268,7 @@ type DapAdapter
 		end 'eachFailure'
 	end 'watchSession'
 
-	function handleBody(body String)
+	function handleBody(body String, debuggee DebugSessionSlot)
 		let request = try DapRequest.parse(body) otherwise (e) 'notARequest'
 			match e 'why'
 				notJson then self.breakDown("a frame's body is not JSON")
@@ -278,7 +278,7 @@ type DapAdapter
 			return
 		end 'notARequest'
 
-		try self.answer(request) otherwise (e) 'badArguments'
+		try self.answer(request, debuggee: debuggee) otherwise (e) 'badArguments'
 			match e 'why'
 				missing(name) then self.writer.refuse(request, message: "`{request.command}` needs the argument `{name}`")
 				wrongType(name) then self.writer.refuse(request, message: "`{request.command}`'s argument `{name}` is not the type the protocol defines")
@@ -286,7 +286,7 @@ type DapAdapter
 		end 'badArguments'
 	end 'handleBody'
 
-	function answer(request DapRequest) throws DapArgumentError
+	function answer(request DapRequest, debuggee DebugSessionSlot) throws DapArgumentError
 		if request.command == InitializeCommand 'initialize'
 			self.numbering = try DapNumbering.askedBy(request.arguments)
 			let doc = JsonDoc.create()
@@ -296,13 +296,13 @@ type DapAdapter
 		end 'initialize'
 
 		if request.command == LaunchCommand 'launch'
-			try self.launch(request)
+			try self.launch(request, debuggee: debuggee)
 
 			return
 		end 'launch'
 
 		if request.command == DisconnectCommand or request.command == TerminateCommand 'ending'
-			try self.endSession(request)
+			try self.endSession(request, debuggee: debuggee)
 
 			return
 		end 'ending'
@@ -313,11 +313,11 @@ type DapAdapter
 			return
 		end 'unsupported'
 
-		if self.answeredAfterTheEnd(request) 'theProgramHasEnded'
+		if self.answeredAfterTheEnd(request, ended: self.programHasEnded(debuggee)) 'theProgramHasEnded'
 			return
 		end 'theProgramHasEnded'
 
-		match self.debuggee.hold 'which'
+		match debuggee.hold 'which'
 			empty then self.refuseWithoutAProgram(request)
 			held(session) then try self.answerLive(request, session: session)
 		end 'which'
@@ -333,7 +333,7 @@ type DapAdapter
 		end 'where'
 	end 'refuseWithoutAProgram'
 
-	function launch(request DapRequest) throws DapArgumentError
+	function launch(request DapRequest, debuggee DebugSessionSlot) throws DapArgumentError
 		if self.lifecycle != DapLifecycle.idle 'alreadyLaunched'
 			self.writer.refuse(request, message: AlreadyLaunchedMessage)
 
@@ -342,20 +342,20 @@ type DapAdapter
 
 		match try dapLaunch(request.arguments) 'launched'
 			refused(message) then self.writer.refuse(request, message: message)
-			launched(session, parkAtEntry) then self.adopt(request, session: session, parkAtEntry: parkAtEntry)
+			launched(session, parkAtEntry) then self.adopt(request, session: session, parkAtEntry: parkAtEntry, debuggee: debuggee)
 		end 'launched'
 	end 'launch'
 
-	function adopt(request DapRequest, session DebugToolSession, parkAtEntry bool)
-		self.debuggee.place(session)
+	function adopt(request DapRequest, session DebugToolSession, parkAtEntry bool, debuggee DebugSessionSlot)
+		debuggee.place(session)
 		self.stopOnEntry = parkAtEntry
 		self.lifecycle = DapLifecycle.configuring
 		self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
 		self.writer.event(InitializedEvent, doc: JsonDoc.create(), body: DapBody.none)
 	end 'adopt'
 
-	function endSession(request DapRequest) throws DapArgumentError
-		self.emitProgramOutput(self.debuggee.reap(try self.endingAskedBy(request)))
+	function endSession(request DapRequest, debuggee DebugSessionSlot) throws DapArgumentError
+		self.emitProgramOutput(debuggee.reap(try self.endingAskedBy(request)))
 		self.lifecycle = DapLifecycle.ended
 		self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
 
@@ -533,7 +533,7 @@ type DapAdapter
 	function threads(request DapRequest, session DebugToolSession)
 		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.threads), announceResume: false)
 
-		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
+		if self.answeredAfterTheEnd(request, ended: self.sessionHasEnded(session)) 'itEndedWhileWeAsked'
 			return
 		end 'itEndedWhileWeAsked'
 
@@ -568,7 +568,7 @@ type DapAdapter
 
 		let answers = self.delivered(session, replies: session.conversation.perform(walk), announceResume: false)
 
-		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
+		if self.answeredAfterTheEnd(request, ended: self.sessionHasEnded(session)) 'itEndedWhileWeAsked'
 			return
 		end 'itEndedWhileWeAsked'
 
@@ -728,19 +728,19 @@ type DapAdapter
 
 	// An empty slot is also the state before any launch, which is refused as no program rather than
 	// answered as an ended one.
-	function programHasEnded() returns bool
-		if self.lifecycle == DapLifecycle.ended 'endedHere'
-			return true
-		end 'endedHere'
-
-		return match self.debuggee.hold 'held'
-			empty gives false
-			held(session) gives session.conversation.programState() == DebugProgramState.ended
+	function programHasEnded(debuggee DebugSessionSlot) returns bool
+		return match debuggee.hold 'held'
+			empty gives self.lifecycle == DapLifecycle.ended
+			held(session) gives self.sessionHasEnded(session)
 		end 'held'
 	end 'programHasEnded'
 
-	function answeredAfterTheEnd(request DapRequest) returns bool
-		if not self.programHasEnded() 'stillRunning'
+	function sessionHasEnded(session DebugToolSession) returns bool
+		return self.lifecycle == DapLifecycle.ended or session.conversation.programState() == DebugProgramState.ended
+	end 'sessionHasEnded'
+
+	function answeredAfterTheEnd(request DapRequest, ended bool) returns bool
+		if not ended 'stillRunning'
 			return false
 		end 'stillRunning'
 

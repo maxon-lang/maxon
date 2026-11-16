@@ -1325,11 +1325,11 @@ extension Parser
 		try self.requireNotAnAcquiredState(operand, verb: "merged", anchor: self.tokenAt(operandStart))
 		try self.requireNotAnIsolatedSlotRead(operand, startIndex: operandStart, endIndex: self.pos, anchor: opTok)
 
-		if not self.valueIsAValueType(operand) and self.effectiveCapabilityOf(operand) != ValueCapability.isolated and self.freshLocalIsRecoverable(operand) 'aFreshLocalTheMergeTakes'
+		if not self.valueIsAValueType(operand) and self.effectiveCapabilityOf(operand) != ValueCapability.isolated and self.relyOnFreshLocal(operand) 'aFreshLocalTheMergeTakes'
 			self.recoverAsIsolated(operand, startIndex: operandStart, endIndex: self.pos)
 		end 'aFreshLocalTheMergeTakes'
 
-		if self.valueIsAValueType(operand) or self.effectiveCapabilityOf(operand) != ValueCapability.isolated 'notIsolated'
+		if self.valueIsAValueType(operand) or (self.effectiveCapabilityOf(operand) != ValueCapability.isolated and not self.valueIsAnOwnedClosedLinearParameter(operand)) 'notIsolated'
 			throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{self.pathTextOf(operandStart)}' is not an isolated value; `merge` moves an isolated region into the current one", line: opTok.line, column: opTok.column)
 		end 'notIsolated'
 
@@ -1474,6 +1474,10 @@ extension Parser
 		return self.signatures.declaredParamCapability(declaration, position: position)
 	end 'declaredArgumentCapability'
 
+	function declaredArgumentCapabilityAt(declaration SweptDeclaration, argLabels NameRoster, position ElementIndex, firstSource ElementIndex) returns ParamCapability
+		return self.declaredArgumentCapability(declaration, argColumn: (position - firstSource) as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText)
+	end 'declaredArgumentCapabilityAt'
+
 	function parameterIsOpaque(declaration SweptDeclaration, argColumn ParamCount, label ByteArray) returns bool
 		let position = try argSlotPosition(declaration.paramNames, argIndex: argColumn, label: label) otherwise return false
 		let paramType = try declaration.paramTypes.get(position) otherwise return false
@@ -1494,7 +1498,7 @@ extension Parser
 		for position in firstSource upto args.count() 'eachSourceArgument'
 			let argument = try args.get(position) otherwise panic("checkCallCapabilities: args.get OOB at {position} below the count just read")
 			let column = (position - firstSource) as ParamCount
-			let declared = self.declaredArgumentCapability(declaration, argColumn: column, label: try argLabels.get(position) otherwise EmptySourceText)
+			let declared = self.declaredArgumentCapabilityAt(declaration, argLabels: argLabels, position: position, firstSource: firstSource)
 			let writtenAtTheCall = position < argAnchors.count()
 
 			if declared == ParamCapability.isolated and writtenAtTheCall and not self.declarationByRefConvention(callee).takesArgumentByRef(position as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText) 'aMovedArgument'
@@ -1533,9 +1537,11 @@ extension Parser
 			return true
 		end 'theReceiver'
 
-		let firstSource = 1 if receiverFirst else 0
-		let column = (position - firstSource) as ParamCount
-		return self.declaredArgumentCapability(declaration, argColumn: column, label: try argLabels.get(position) otherwise EmptySourceText) == ParamCapability.unmarked
+		if self.valueIsLinear(argument) and self.regionFactsForRead().windows.isEmpty() 'aLinearArgumentTheCalleeTakes'
+			return false
+		end 'aLinearArgumentTheCalleeTakes'
+
+		return self.declaredArgumentCapabilityAt(declaration, argLabels: argLabels, position: position, firstSource: 1 if receiverFirst else 0) == ParamCapability.unmarked
 	end 'positionOpensItsValue'
 
 	function nextOpenedPosition(args ValueIdArray, declaration SweptDeclaration, argLabels NameRoster, receiverFirst bool, start ElementIndex) returns ElementIndex throws AbsentError
@@ -1573,7 +1579,8 @@ extension Parser
 			direct then break
 		end 'spawning'
 
-		try self.requireOpenedRootInsideTheOpenBlock(firstValue, pathText: self.tokenTextFrom(firstSpan.startIndex, endIndex: firstSpan.endIndex), line: firstTok.line, column: firstTok.column)
+		let calleeTakesIt = not self.positionIsTheReceiver(first, receiver: receiver) or declaration.selfCapability == ParamCapability.consuming
+		try self.requireOpenedRootInsideTheOpenBlock(firstValue, opensALinear: not calleeTakesIt, pathText: self.tokenTextFrom(firstSpan.startIndex, endIndex: firstSpan.endIndex), line: firstTok.line, column: firstTok.column)
 		let rootName = self.openedRootName(firstValue, openedTok: firstTok)
 
 		if let second = try self.nextOpenedPosition(args, declaration: declaration, argLabels: argLabels, receiverFirst: receiverFirst, start: first + 1) 'aSecondRegion'
@@ -1592,7 +1599,7 @@ extension Parser
 		for position in 0 upto args.count() 'eachOtherArgument'
 			let other = try args.get(position) otherwise panic("openIsolatedPositions: args.get OOB at {position}")
 
-			if position == first or self.valueIsCleanIntoARegion(other) or (position >= firstSource and self.declaredArgumentCapability(declaration, argColumn: (position - firstSource) as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText) == ParamCapability.isolated and self.freshLocalIsRecoverable(other)) 'staysInsideOrIsClean'
+			if position == first or self.valueIsCleanIntoARegion(other) or (position >= firstSource and self.declaredArgumentCapabilityAt(declaration, argLabels: argLabels, position: position, firstSource: firstSource) == ParamCapability.isolated and self.relyOnFreshLocal(other)) 'staysInsideOrIsClean'
 				continue
 			end 'staysInsideOrIsClean'
 
@@ -1637,19 +1644,36 @@ extension Parser
 		self.noteUseSite(func, value: value, mutable: mutable, line: line)
 	end 'notePassedParamNeed'
 
-	function checkSendArgumentCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, anchor Token) throws SourceParseError
-		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: anchor, spawning: CallSpawning.direct)
+	function checkCrossingArguments(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, firstSource ElementIndex, door CrossingDoor) throws SourceParseError
 		let declaration = try self.declarationNameableHere(callee) otherwise return
 
-		for position in 0 upto argAnchors.count() 'eachSourceArgument'
-			let label = try argLabels.get(position) otherwise EmptySourceText
+		for position in firstSource upto argAnchors.count() 'eachWrittenArgument'
+			let anchorIndex = try argAnchors.get(position) otherwise panic("checkCrossingArguments: argAnchors.get OOB at {position} below its own count")
+			let argument = try args.get(position) otherwise panic("checkCrossingArguments: args.get OOB at {position} — every written argument has a value")
 
-			if self.declaredArgumentCapability(declaration, argColumn: position as ParamCount, label: label) != ParamCapability.immutable 'nothingToRefuse'
-				continue
-			end 'nothingToRefuse'
+			match self.declaredArgumentCapabilityAt(declaration, argLabels: argLabels, position: position, firstSource: firstSource) 'declared'
+				unmarked then try self.requireCrossesWhole(argument, text: self.tokenTextFrom(anchorIndex, endIndex: self.argumentEndIndex(anchorIndex)), door: door, anchor: self.tokenAt(anchorIndex))
+				immutable then try self.requireCrossingArgumentFrozen(func, callee: callee, declaration: declaration, argument: argument, anchorIndex: anchorIndex, argColumn: (position - firstSource) as ParamCount, label: try argLabels.get(position) otherwise EmptySourceText, door: door)
+				isolated or
+				mutable or
+				consuming then continue
+			end 'declared'
+		end 'eachWrittenArgument'
+	end 'checkCrossingArguments'
 
-			try self.requireArgumentFrozen(func, callee: callee, declaration: declaration, argument: try args.get(position) otherwise panic("checkSendArgumentCapabilities: args.get OOB at {position} below the count just read"), anchorIndex: try argAnchors.get(position) otherwise panic("checkSendArgumentCapabilities: argAnchors.get OOB at {position} below its own count"), argColumn: position as ParamCount, label: label)
-		end 'eachSourceArgument'
+	function requireCrossingArgumentFrozen(func IrFunction, callee ByteArray, declaration SweptDeclaration, argument ValueId, anchorIndex ElementIndex, argColumn ParamCount, label ByteArray, door CrossingDoor) throws SourceParseError
+		match door 'door'
+			message then break
+			spawn then return
+			reply then panic("requireCrossingArgumentFrozen: a reply crosses as a returned value, never as an argument")
+		end 'door'
+
+		try self.requireArgumentFrozen(func, callee: callee, declaration: declaration, argument: argument, anchorIndex: anchorIndex, argColumn: argColumn, label: label)
+	end 'requireCrossingArgumentFrozen'
+
+	function checkSendArgumentCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, anchor Token) throws SourceParseError
+		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: anchor, spawning: CallSpawning.direct)
+		try self.checkCrossingArguments(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, firstSource: 0, door: CrossingDoor.message)
 	end 'checkSendArgumentCapabilities'
 
 	function requireArgumentFrozen(func IrFunction, callee ByteArray, declaration SweptDeclaration, argument ValueId, anchorIndex ElementIndex, argColumn ParamCount, label ByteArray) throws SourceParseError
@@ -1808,21 +1832,21 @@ extension Parser
 	end 'fileCallNotes'
 
 	function noteKeptArgumentSites(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray, receiver ReceiverArg, anchor Token)
+		let lentRoots = self.fileLentRootsBesideABinding(func, opIdx: opIdx, args: args, argAnchors: argAnchors, receiver: receiver)
+
 		for position in 0 upto args.count() 'eachArgument'
 			let argValue = try args.get(position) otherwise panic("noteKeptArgumentSites: args.get OOB at {position} below its own count")
 
-			if not (self.valueHoldsAUniqueRecord(argValue) or self.valueIsAnOwnedIsolatedLocal(argValue)) 'cannotBeMoved'
+			if maskHasParam(lentRoots, param: position as ParamCount) or not (self.valueHoldsAUniqueRecord(argValue) or self.valueIsAnOwnedIsolatedLocal(argValue)) or self.valueIsAVacantImageCase(argValue) 'cannotBeMoved'
 				continue
 			end 'cannotBeMoved'
 
-			let passesTheReceiver = self.positionIsTheReceiver(position, receiver: receiver)
-
-			if not passesTheReceiver 'aWrittenArgument'
+			if not self.positionIsTheReceiver(position, receiver: receiver) 'aWrittenArgument'
 				let anchorIndex = try argAnchors.get(position) otherwise panic("noteKeptArgumentSites: argAnchors.get OOB at {position} below its own count")
 				let origin = self.uniqueOriginOf(argValue, namesABinding: self.argumentNamesABindingAt(anchorIndex), anchorIndex: anchorIndex)
 
 				if origin != UniqueOrigin.owned 'onlyLentToTheCaller'
-					self.fileLentKeptArgument(func, opIdx: opIdx, position: position, origin: origin, anchorIndex: anchorIndex)
+					self.fileLentKeptArgument(func, opIdx: opIdx, position: position, origin: origin, span: self.writtenArgumentSpan(anchorIndex))
 					continue
 				end 'onlyLentToTheCaller'
 			end 'aWrittenArgument'
@@ -1842,6 +1866,28 @@ extension Parser
 			self.fileKeptArgumentSite(func, opIdx: opIdx, position: position, anchor: spelled, argValue: argValue, holder: binding.payloadScrutBox() if binding.isPayloadBinding() else argValue, argAnchors: argAnchors)
 		end 'eachArgument'
 	end 'noteKeptArgumentSites'
+
+	function fileLentRootsBesideABinding(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray, receiver ReceiverArg) returns ParamPositionMask
+		var filed = NoParamPositions
+
+		if self.bodyState.lentArmRoots.isEmpty() 'noArmLendsAUnique'
+			return filed
+		end 'noArmLendsAUnique'
+
+		for position in 0 upto argAnchors.count() 'eachArgument'
+			let argValue = try args.get(position) otherwise panic("fileLentRootsBesideABinding: args.get OOB at {position} — every written argument has a value")
+
+			if not self.matchedRootIsLentBesideABinding(argValue, position: position, argAnchors: argAnchors, receiver: receiver) 'notALentRoot'
+				continue
+			end 'notALentRoot'
+
+			let span = self.receiverSpanOf(receiver) if self.positionIsTheReceiver(position, receiver: receiver) else self.writtenArgumentSpan(try argAnchors.get(position) otherwise panic("fileLentRootsBesideABinding: argAnchors.get OOB at {position} below its own count"))
+			self.fileLentKeptArgument(func, opIdx: opIdx, position: position, origin: UniqueOrigin.lentByMatchBesideABinding, span: span)
+			filed = maskWithParam(filed, param: position as ParamCount)
+		end 'eachArgument'
+
+		return filed
+	end 'fileLentRootsBesideABinding'
 
 	function argumentNamesABindingAt(anchorIndex ElementIndex) returns bool
 		let tok = self.tokenAt(anchorIndex)
@@ -1870,6 +1916,79 @@ extension Parser
 		return UniqueOrigin.owned
 	end 'uniqueOriginOf'
 
+	function matchedRootIsLentBesideABinding(value ValueId, position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns bool
+		return self.argumentIsTheLentRoot(value, position: position, argAnchors: argAnchors, receiver: receiver) and self.anotherArgumentNamesAnArmBinding(argAnchors, receiver: receiver, except: position)
+	end 'matchedRootIsLentBesideABinding'
+
+	function argumentIsTheLentRoot(value ValueId, position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns bool
+		if self.bodyState.lentArmRoots.contains(value) 'theMatchedValue'
+			return true
+		end 'theMatchedValue'
+
+		let named = try self.bindingNamedAt(position, argAnchors: argAnchors, receiver: receiver) otherwise return false
+		return not named.isPayloadBinding() and self.bodyState.lentArmNames.contains(named.name)
+	end 'argumentIsTheLentRoot'
+
+	function anotherArgumentNamesAnArmBinding(argAnchors TokenIndexArray, receiver ReceiverArg, except ElementIndex) returns bool
+		for position in 0 upto argAnchors.count() 'eachArgument'
+			if position == except 'theLentArgument'
+				continue
+			end 'theLentArgument'
+
+			let named = try self.bindingNamedAt(position, argAnchors: argAnchors, receiver: receiver) otherwise continue
+
+			if named.isPayloadBinding() and self.bodyState.lentArmRoots.contains(named.payloadScrutBox()) 'aBindingOfTheArm'
+				return true
+			end 'aBindingOfTheArm'
+		end 'eachArgument'
+
+		return false
+	end 'anotherArgumentNamesAnArmBinding'
+
+	function bindingNamedAt(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns VarInfo throws AbsentError
+		let index = try self.bareNameIndexAt(position, argAnchors: argAnchors, receiver: receiver)
+		let tok = self.tokenAt(index)
+
+		if not tokenCanBeAName(tok) or not self.bodyState.scope.contains(tok.value) 'namesNoBinding'
+			throw AbsentError.absent
+		end 'namesNoBinding'
+
+		return self.bodyState.scope.getInfo(tok.value)
+	end 'bindingNamedAt'
+
+	function bareNameIndexAt(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns ElementIndex throws AbsentError
+		if self.positionIsTheReceiver(position, receiver: receiver) 'theReceiver'
+			match receiver 'shape'
+				value(_, _, _, extent) then return try self.bareReceiverNameIndex(extent)
+				none or
+				unavailable then panic("bareNameIndexAt: `positionIsTheReceiver` answered true for a call that passes no receiver")
+			end 'shape'
+		end 'theReceiver'
+
+		let anchorIndex = try argAnchors.get(position) otherwise panic("bareNameIndexAt: argAnchors.get OOB at {position} below its own count")
+
+		if self.argumentSpanEnd(anchorIndex) != anchorIndex + 1 'notABareName'
+			throw AbsentError.absent
+		end 'notABareName'
+
+		return anchorIndex
+	end 'bareNameIndexAt'
+
+	function bareReceiverNameIndex(extent ReceiverExtent) returns ElementIndex throws AbsentError
+		match extent 'shape'
+			implicitAt then throw AbsentError.absent
+			writtenBefore then break
+		end 'shape'
+
+		let span = self.receiverExtentSpan(extent)
+
+		if span.endIndex != span.startIndex + 1 'notABareName'
+			throw AbsentError.absent
+		end 'notABareName'
+
+		return span.startIndex
+	end 'bareReceiverNameIndex'
+
 	function argumentIsAMatchedUnique(value ValueId, namesABinding bool, anchorIndex ElementIndex) returns bool
 		if self.bodyState.lentArmRoots.isEmpty() 'noArmLendsAUnique'
 			return false
@@ -1882,10 +2001,14 @@ extension Parser
 		return namesABinding and self.bodyState.lentArmNames.contains(self.tokenAt(anchorIndex).value)
 	end 'argumentIsAMatchedUnique'
 
-	function fileLentKeptArgument(func IrFunction, opIdx ElementIndex, position ElementIndex, origin UniqueOrigin, anchorIndex ElementIndex)
+	function writtenArgumentSpan(anchorIndex ElementIndex) returns TokenSpan
+		return TokenSpan.create(anchorIndex, endIndex: self.argumentSpanEnd(anchorIndex, throughOtherwise: true))
+	end 'writtenArgumentSpan'
+
+	function fileLentKeptArgument(func IrFunction, opIdx ElementIndex, position ElementIndex, origin UniqueOrigin, span TokenSpan)
 		let notes = self.notesForWrite(func)
-		let anchorTok = self.tokenAt(anchorIndex)
-		let subject = self.tokenTextFrom(anchorIndex, endIndex: self.argumentSpanEnd(anchorIndex, throughOtherwise: true))
+		let anchorTok = self.tokenAt(span.startIndex)
+		let subject = self.tokenTextFrom(span.startIndex, endIndex: span.endIndex)
 
 		notes.keptArgOps.push(opIdx)
 		notes.keptArgPositions.push(position as ParamCount)
@@ -2116,12 +2239,29 @@ extension Parser
 	end 'pausedRegionLabel'
 
 	function noteWindowCall(func IrFunction, opIdx ElementIndex, args ValueIdArray, callOpen PendingCallOpen)
-		let label = try self.pausedRegionLabel(self.regionFactsForRead().windows, callOpen: callOpen) otherwise return
+		if let label = try self.pausedRegionLabel(self.regionFactsForRead().windows, callOpen: callOpen) 'aRegionIsOpen'
+			self.fileWindowCall(func, opIdx: opIdx, label: label, paused: self.pausedOperandsOf(args), waitsRefused: true)
+			return
+		end 'aRegionIsOpen'
+
+		if self.statement.lendingArms == 0 'nothingIsLent'
+			return
+		end 'nothingIsLent'
+
+		let paused = self.pausedOperandsOf(args)
+
+		if paused != NoParamPositions 'aHolderOfTheLend'
+			self.fileWindowCall(func, opIdx: opIdx, label: self.statement.lendingLabel, paused: paused, waitsRefused: false)
+		end 'aHolderOfTheLend'
+	end 'noteWindowCall'
+
+	function fileWindowCall(func IrFunction, opIdx ElementIndex, label immutable ByteArray, paused ParamPositionMask, waitsRefused bool)
 		let notes = self.notesForWrite(func)
 		notes.windowCallOps.push(opIdx)
 		notes.windowCallLabels.push(label)
-		notes.windowCallPausedOperands.push(self.pausedOperandsOf(args))
-	end 'noteWindowCall'
+		notes.windowCallPausedOperands.push(paused)
+		notes.windowCallWaitsRefused.push(waitsRefused)
+	end 'fileWindowCall'
 
 	function finishCapabilityFacts(func IrFunction) throws SourceParseError
 		// Runs once the whole body is parsed: a loop's back-edge values are recorded last, and a merged value is
@@ -2159,11 +2299,11 @@ extension Parser
 	function isolateIfPossible(value ValueId, startIndex ElementIndex, endIndex ElementIndex) returns bool
 		let capability = self.effectiveCapabilityOf(value)
 
-		if self.valueIsAValueType(value) or self.valueIsAnOwnedIsolatedRegion(value) 'alreadyIsolated'
+		if self.valueIsAValueType(value) or self.valueIsAnOwnedIsolatedRegion(value) or self.valueIsAnOwnedClosedLinearParameter(value) 'alreadyIsolated'
 			return true
 		end 'alreadyIsolated'
 
-		if capability == ValueCapability.temporary or self.freshLocalIsRecoverable(value) 'aCleanTemporary'
+		if capability == ValueCapability.temporary or self.relyOnFreshLocal(value) 'aCleanTemporary'
 			self.recoverAsIsolated(value, startIndex: startIndex, endIndex: endIndex)
 			return true
 		end 'aCleanTemporary'
@@ -2549,13 +2689,29 @@ extension Parser
 
 	function inputsAreClean(inputs ValueIdArray) returns bool
 		for input in inputs 'eachInput'
-			if not self.valueIsCleanInput(input) 'anUncleanInput'
+			if not self.argumentIsACleanInput(input) 'anUncleanInput'
 				return false
 			end 'anUncleanInput'
 		end 'eachInput'
 
 		return true
 	end 'inputsAreClean'
+
+	function argumentIsACleanInput(argument ValueId) returns bool
+		if self.valueIsAValueType(argument) or self.effectiveCapabilityOf(argument) != ValueCapability.mutable or not self.valueHoldsAUniqueRecord(argument) 'notAUniqueArgument'
+			return self.valueIsCleanInput(argument)
+		end 'notAUniqueArgument'
+
+		if not self.valueTypeIsClosed(argument) 'holdsAPlainPart'
+			return false
+		end 'holdsAPlainPart'
+
+		if self.valueIsASlotRead(argument) or self.valueIsAnAcquiredState(argument) or windowIsOpen(self.regionFactsForRead().windows) 'regionDataOfAnotherOwner'
+			return self.valueIsCleanInput(argument)
+		end 'regionDataOfAnotherOwner'
+
+		return true
+	end 'argumentIsACleanInput'
 
 	function markFreshWhenInputsClean(value ValueId, inputs ValueIdArray)
 		if self.inputsAreClean(inputs) 'allClean'
@@ -2591,7 +2747,7 @@ extension Parser
 			try self.requireHolderCapabilityWritable(ValueCapability.paused, pathText: rootText, action: "opened", joinedAtALoop: false, line: targetTok.line, column: targetTok.column)
 		end 'anotherStatesData'
 
-		try self.requireOpenedRootInsideTheOpenBlock(target, pathText: rootText, line: targetTok.line, column: targetTok.column)
+		try self.requireOpenedRootInsideTheOpenBlock(target, opensALinear: true, pathText: rootText, line: targetTok.line, column: targetTok.column)
 
 		var holderValue = 0 as ValueId
 		var holderField = 0 as FieldIndex
@@ -2961,7 +3117,7 @@ extension Parser
 		self.forgetStatementFacts()
 	end 'closeWindowsTo'
 
-	function openStatementWindowThrough(box ValueId, floor ValueId, range SourceRange)
+	function openStatementWindowThrough(box ValueId, floor ValueId, opensALinear bool, range SourceRange)
 		if self.valueIsAValueType(box) or self.effectiveCapabilityOf(box) != ValueCapability.isolated 'notAnUnopenedIsolated'
 			return
 		end 'notAnUnopenedIsolated'
@@ -2975,7 +3131,7 @@ extension Parser
 			end 'alreadyOpen'
 
 			let rootName = try self.layoutOfOrigin(origin).fieldNames.get(origin.field) otherwise panic("openStatementWindowThrough: fieldNames.get OOB at {origin.field}")
-			self.noteOpenedRootOutsideTheOpenBlock(box, range: range)
+			self.noteOpenedRootOutsideTheOpenBlock(box, opensALinear: opensALinear, range: range)
 			self.noteSecondRootOfAStatement(origin.holder, field: origin.field, name: rootName, range: range)
 			windows.push(OpenWindow.create(rootName, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.oneStatement, floor: floor, openedValue: box, holderValue: origin.holder, holderField: origin.field, opensAField: true, ownerStatement: self.bodyState.statementStart))
 			return
@@ -2985,11 +3141,16 @@ extension Parser
 			return
 		end 'alreadyOpenValue'
 
+		if self.byReferenceRootIsAnEnclosingBlocksRoot(box) 'anEnclosingBlockOpensTheParameter'
+			self.setValueCapability(box, capability: ValueCapability.paused)
+			return
+		end 'anEnclosingBlockOpensTheParameter'
+
 		if self.valueIsAValueType(floor) and valueIsAParameter(box, paramCount: self.bodyFunction().paramCount) 'aNumberReadFromAnIsolatedParameter'
 			return
 		end 'aNumberReadFromAnIsolatedParameter'
 
-		self.noteOpenedRootOutsideTheOpenBlock(box, range: range)
+		self.noteOpenedRootOutsideTheOpenBlock(box, opensALinear: opensALinear, range: range)
 		windows.push(OpenWindow.create(IsolatedValueLabel, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.oneStatement, floor: floor, openedValue: box, holderValue: 0, holderField: 0, opensAField: false, ownerStatement: self.bodyState.statementStart))
 	end 'openStatementWindowThrough'
 

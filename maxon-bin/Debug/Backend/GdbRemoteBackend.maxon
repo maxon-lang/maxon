@@ -105,6 +105,13 @@ union GdbListenerHold
 	held(listener TcpListener)
 end 'GdbListenerHold'
 
+union GdbStubAccept
+	notYet
+	noDeadline
+	failed(error NetworkError)
+	accepted(link GdbRemoteLink)
+end 'GdbStubAccept'
+
 type GdbSlottedRegister
 	export let info as GdbRegisterInfo
 	export let slot as BackendRegisterNumber
@@ -325,13 +332,13 @@ export type GdbRemoteBackend
 	export function adoptLaunchedProgram(program Pid) returns BackendAdoption
 		match self.listener 'holding'
 			none then panic("GdbRemoteBackend.adoptLaunchedProgram: the door the stub connects back on is opened in `create` and closed only with the session, so a program this backend attaches to is adopted through a door it still holds")
-			held(door) then return self.attachedThrough(door, program: program)
+			held then return self.attachedThrough(program)
 		end 'holding'
 	end 'adoptLaunchedProgram'
 
 	// The driver spawns the program suspended and the stub attaches to it, so the program is the driver's
 	// child here as on every lane, and a program left running after a detach reports its own exit code.
-	function attachedThrough(door TcpListener, program Pid) returns BackendAdoption
+	function attachedThrough(program Pid) returns BackendAdoption
 		let argv = StringArray.create(4, zeroed: false)
 		argv.push(GdbReverseConnectOption)
 		argv.push("{GdbListenHost}:{self.port}")
@@ -349,10 +356,10 @@ export type GdbRemoteBackend
 		let output = pumpOfSpawned(launched)
 		self.stubProcess = GdbStubProcess.running(launched, output: output)
 
-		return self.connectedThrough(door)
+		return self.connectedThrough()
 	end 'attachedThrough'
 
-	function connectedThrough(door TcpListener) returns BackendAdoption
+	function connectedThrough() returns BackendAdoption
 		let deadline = debugDeadlineAfter(GdbAcceptBudgetMs as StopTimeoutMs)
 
 		while not debugDeadlinePassed(deadline) 'untilTheStubConnects'
@@ -364,28 +371,30 @@ export type GdbRemoteBackend
 				exited(code) then return BackendAdoption.refused("the debug stub exited with {code} before it connected back to the debugger{self.stubSaidText()}")
 			end 'stub'
 
-			try door.setAcceptDeadline(GdbAcceptSliceMs) otherwise 'noDeadline'
-				return BackendAdoption.refused("the debugger could not put a deadline on the debug stub's connection")
-			end 'noDeadline'
+			let slice = match self.listener 'holding'
+				none panic("GdbRemoteBackend.connectedThrough: the stub's connection is awaited only through the door `adoptLaunchedProgram` found held")
+				held(door) gives stubAcceptedOn(door)
+			end 'holding'
 
-			let socket = try door.accept() otherwise (e) 'nothingConnected'
-				if e == NetworkError.timedOut or e == NetworkError.acceptInterrupted 'notYet'
-					continue
-				end 'notYet'
-
-				return BackendAdoption.refused("the debug stub did not connect back to the debugger ({e.name}){self.stubSaidText()}")
-			end 'nothingConnected'
-
-			self.link = GdbRemoteLink.connected(GdbRemoteConnection.over(socket))
-			self.stopListening()
-
-			return self.shookHandsAndStopped()
+			match slice 'slice'
+				notYet then continue
+				noDeadline then return BackendAdoption.refused("the debugger could not put a deadline on the debug stub's connection")
+				failed(e) then return BackendAdoption.refused("the debug stub did not connect back to the debugger ({e.name}){self.stubSaidText()}")
+				accepted(stubLink) then return self.adoptedStubLink(stubLink)
+			end 'slice'
 		end 'untilTheStubConnects'
 
 		self.stubOutputDrained()
 
 		return BackendAdoption.refused("the debug stub did not connect back to the debugger within {GdbAcceptBudgetMs} ms{self.stubSaidText()}")
 	end 'connectedThrough'
+
+	function adoptedStubLink(accepted GdbRemoteLink) returns BackendAdoption
+		self.link = accepted
+		self.stopListening()
+
+		return self.shookHandsAndStopped()
+	end 'adoptedStubLink'
 
 	function stubExit() returns ExitPoll
 		return match self.stubProcess 'stub'
@@ -395,19 +404,18 @@ export type GdbRemoteBackend
 	end 'stubExit'
 
 	function stubOutputDrained()
-		match self.stubProcess 'stub'
-			none then return
-			running(_, output) then self.heardFrom(output)
+		let said = match self.stubProcess 'stub'
+			none gives CollectedLines.create()
+			running(_, output) gives drainedStubOutput(output)
 		end 'stub'
+
+		self.heardFrom(said)
 	end 'stubOutputDrained'
 
 	// Drained on every look, because a stub that fills its pipe blocks. The last lines are kept so a stub
 	// that never connects is refused with what it said.
-	function heardFrom(output ChildPump)
-		let sink = OutputSink.create()
-		_ = forwardChildOutput(output, routing: ChildOutputRouting.collect(sink), budget: ChildLineBudget.unbounded)
-
-		for heard in sink.takeAll().lines 'eachLine'
+	function heardFrom(said CollectedLines)
+		for heard in said.lines 'eachLine'
 			self.heardLine(heard.text)
 		end 'eachLine'
 	end 'heardFrom'
@@ -1758,6 +1766,27 @@ export type GdbRemoteBackend
 		return connection.threadSuffixSupported()
 	end 'threadSuffixSupported'
 end 'GdbRemoteBackend'
+
+function drainedStubOutput(output ChildPump) returns CollectedLines
+	let sink = OutputSink.create()
+	_ = forwardChildOutput(output, routing: ChildOutputRouting.collect(sink), budget: ChildLineBudget.unbounded)
+
+	return sink.takeAll()
+end 'drainedStubOutput'
+
+function stubAcceptedOn(door TcpListener) returns GdbStubAccept
+	try door.setAcceptDeadline(GdbAcceptSliceMs) otherwise return GdbStubAccept.noDeadline
+
+	let socket = try door.accept() otherwise (e) 'nothingConnected'
+		if e == NetworkError.timedOut or e == NetworkError.acceptInterrupted 'notYet'
+			return GdbStubAccept.notYet
+		end 'notYet'
+
+		return GdbStubAccept.failed(e)
+	end 'nothingConnected'
+
+	return GdbStubAccept.accepted(GdbRemoteLink.connected(GdbRemoteConnection.over(socket)))
+end 'stubAcceptedOn'
 
 function gdbThreadText(thread BackendThreadId) returns String
 	return "{thread:x}"

@@ -1173,6 +1173,10 @@ export enum ErrorCode
 	// One promise, or one value of an opaque type parameter, passed at two arguments of one call whose
 	// parameters take it is refused at the second argument, naming the binding written there: the first
 	// argument already moved it. Pass it at one argument.
+	// The variable a `match` arm lends a unique payload from is refused to a callee that writes through it, in a
+	// call that also names a binding of the arm: the binding views the matched value, and a unique value has one
+	// name. The receiver, a call through a function value and a call through an interface method are judged the
+	// same way. Write through the variable in a statement that names no binding of the arm.
 	useAfterMove = "E3102"
 
 	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
@@ -2255,8 +2259,9 @@ export enum ErrorCode
 	// is made. The elements a `for` loop hands out over a read-only `List` (frozen, or a module `let`) or over
 	// a collection whose element type is `immutable` (`Array with immutable Box`) are read-only, and so is
 	// what an extension member returns out of an instance with `immutable` elements, and the result of a
-	// function whose return paths mix frozen data with writable data, whatever the receiver is. Reported at
-	// the write. Write through a mutable value, a `clone()` for one, or
+	// function whose return paths mix frozen data with writable data, whatever the receiver is. The root that
+	// holds a unique value a `match` arm or `for` loop lends out of a field path (`match h.u`) is read-only
+	// while the arm or body lends it. Reported at the write. Write through a mutable value, a `clone()` for one, or
 	// make the write where the data is still writable; a function whose every path is frozen declares
 	// `returns immutable`.
 	semanticWriteThroughReadOnly = "E3197"
@@ -2273,11 +2278,14 @@ export enum ErrorCode
 	// An isolated value is reached through a holder that is not writable: it is opened, swapped, or moved on
 	// (bound, assigned, stored, given or returned) while the value that holds it is `immutable`, read-only
 	// as the result of joining immutable and mutable data, or outside an open `modify` block, where every
-	// root other than the opened value is read-only. An `isolated` local or parameter declared outside an
-	// open `modify` or `acquire` block is such a root: passing it in an unmarked position (argument or
-	// receiver), reading or writing through it, and a nested `modify` of it open it. It still moves into an
-	// `isolated` parameter or slot, is sent, or is merged. Reported at the isolated value. Open it from
-	// writable data, or inside the block that opened its holder, or before or after the block.
+	// root other than the opened value is read-only. An `isolated` value older than the innermost open
+	// `modify` or `acquire` block is such a root: a local or parameter declared outside it, a `mutable isolated`
+	// parameter (the caller's variable), a local or call result it was moved into, and the payload a `match` of
+	// it bound. Passing it in an unmarked position (argument or receiver), reading or writing through it, and
+	// a nested `modify` of it open it. It still moves into an `isolated` parameter or slot, is sent, or is
+	// merged. A `mutable isolated` parameter open in its own block is read inside a block nested in it.
+	// Reported at the isolated value. Open it from writable data, or inside the block that opened its holder,
+	// or before or after the block.
 	semanticIsolatedHolderNotWritable = "E3199"
 
 	// A position that needs a region of its own, or `freeze` or `merge`, is given a value that is not clean.
@@ -2290,7 +2298,14 @@ export enum ErrorCode
 	// every arm isolated or fresh. `freeze` takes a fresh region: a literal over locals is refused, so build
 	// the value in a function that returns it (`freeze Pool.build()`). An `isolated` local that an enclosing
 	// `for` iterates is held by the loop, so it is not moved as a message or factory argument inside the
-	// loop: send it after the loop. Declare the local `as isolated T`, or pass a copy.
+	// loop: send it after the loop. A local an enclosing loop relies on as fresh needs every path to the end of
+	// each lap, `continue` and the back edges of outer loops included, to assign it a fresh value nothing has
+	// read. A `unique` argument is a clean input only when its type is closed: a call given one whose type holds
+	// a plain record, array, union, function value or interface value is not a clean call. A value crosses to
+	// another thread (a send or `spawn` argument, a reply, a failed send's hand-back) only as the whole of its
+	// region: a fresh expression, an `isolated` variable or an owned `unique` or linear value of a closed type.
+	// One whose type holds a plain part is refused, naming the part: declare it `isolated`, pass a fresh value,
+	// or consume the value where it is. Declare the local `as isolated T`, or pass a copy.
 	semanticIsolatedRecoverNeedsCleanInputs = "E3200"
 
 	// One call or statement opens a second region, or mixes in mutable data of the current one. A statement
@@ -2355,7 +2370,8 @@ export enum ErrorCode
 	// `immutable` parameter is refused (freeze it first); an immutable or read-only argument at a parameter
 	// the callee writes or marks `mutable` is refused, naming the use that needs it writable; an isolated
 	// argument to an `async` call is taken only by an `isolated` parameter, which moves it; and while a
-	// `modify` block is open its read-only outer data cannot go to a parameter that needs writable data.
+	// `modify` block is open its read-only outer data cannot go to a parameter that needs writable data, and
+	// neither can the root that holds a unique value an arm or `for` body lends out of it.
 	// Constant data (a constant `let`, a `b"..."` literal) is immutable: handing it to a parameter the callee
 	// writes or stores into a plain place is refused (``'grow' writes 'name' (line 5: `name.push(100)`);
 	// 'Name' is immutable``), and so is writing through it (``'push' needs a writable receiver; 'name' is
@@ -2540,10 +2556,12 @@ export enum ErrorCode
 	// not a drop. Consume it before the exit or the wait: call its finalizer, or hand it to code that does.
 	semanticLinearValueNotConsumed = "E3223"
 
-	// A linear value is used where it cannot be consumed exactly once. It lives only in locals, parameters and
-	// message arguments: a field, a container or other type argument, a tuple item, a closure capture, a
-	// promise payload, a message reply, a union stored in a field, an argument of an `async` call, the result
-	// of an `async` call and an argument of an interface or function value call are refused. A linear value
+	// A linear value is used where it cannot be consumed exactly once. It lives only in locals, parameters,
+	// message arguments and the arguments of a `spawn` whose factory cannot throw: a field, a container or
+	// other type argument, a tuple item, a closure capture, a promise payload, a message reply, a union stored
+	// in a field, an argument of an `async` call, the result of an `async` call, an argument of an interface or
+	// function value call and an argument of a `spawn` whose factory may throw (it starts no service when it
+	// fails, and drops the value) are refused. A linear value
 	// lent to code that does not own it (a parameter of a function that does not take it, or `self` of a method
 	// that does not take `consuming self`) is not consumed there, returned or built into a union.
 	// `consuming self` belongs to a method of a `type` that declares a finalizer, and `destruct self`

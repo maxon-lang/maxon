@@ -111,7 +111,7 @@ type LspSession
 
 	function finishRelay()
 		match self.mode 'mode'
-			relaying(relay) then relay.shutDown(self.workspace)
+			relaying then self.relayOrPanic().shutDown(self.workspace)
 			unrouted or
 			served then return
 		end 'mode'
@@ -141,7 +141,7 @@ type LspSession
 		return match self.mode 'mode'
 			relaying(relay) gives relay
 			unrouted or
-			served panic("LspSession.relayOrPanic: a child compiler's arrival reached a session that relays to none")
+			served panic("LspSession.relayOrPanic: only a relaying session reaches its relay, and this session relays to none")
 		end 'mode'
 	end 'relayOrPanic'
 
@@ -153,7 +153,7 @@ type LspSession
 		end 'notJson'
 
 		match self.mode 'mode'
-			relaying(relay) then self.relayFrameArrived(relay, body: body, doc: doc)
+			relaying then self.relayFrameArrived(body, doc: doc)
 			unrouted or
 			served then self.servedFrameArrived(body, doc: doc)
 		end 'mode'
@@ -218,7 +218,7 @@ type LspSession
 		relay.report(reason, workspace: self.workspace)
 	end 'answerInitializeThenReport'
 
-	function relayFrameArrived(relay LspRelay, body String, doc JsonDoc)
+	function relayFrameArrived(body String, doc JsonDoc)
 		let ends = endsTheSession(doc)
 
 		if not ends 'moreToCome'
@@ -229,7 +229,7 @@ type LspSession
 			self.shutdownRequested = true
 		end 'shutdown'
 
-		relay.clientFrame(body, doc: doc, workspace: self.workspace)
+		self.relayOrPanic().clientFrame(body, doc: doc, workspace: self.workspace)
 
 		if ends 'sessionOver'
 			self.stopped = true

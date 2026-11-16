@@ -55,9 +55,13 @@ function executeDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args O
 		return startDebugSession(reqDoc, idNode: idNode, args: args, exePath: exePath, debug: debug)
 	end 'start'
 
+	if name.equals(DebugStopToolName) and debug.holdsASession() 'stop'
+		return stopDebugSession(reqDoc, idNode: idNode, debug: debug)
+	end 'stop'
+
 	return match debug.hold 'live'
 		empty gives toolErrorText(reqDoc, idNode: idNode, message: NoSessionMessage, repoRoot: ActingTree.host)
-		held(session) gives runDebugTool(reqDoc, idNode: idNode, name: name, args: args, session: session, debug: debug)
+		held(session) gives runDebugTool(reqDoc, idNode: idNode, name: name, args: args, session: session)
 	end 'live'
 end 'executeDebugTool'
 
@@ -136,11 +140,7 @@ function placedSessionReply(reqDoc JsonDoc, idNode JsonNodeId, session DebugTool
 	return debugToolReply(reqDoc, idNode: idNode, state: state, replies: DebugReplyArray.create(0), output: output)
 end 'placedSessionReply'
 
-function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args OptionalNode, session DebugToolSession, debug DebugSessionSlot) returns String
-	if name.equals(DebugStopToolName) 'stop'
-		return stopDebugSession(reqDoc, idNode: idNode, debug: debug)
-	end 'stop'
-
+function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args OptionalNode, session DebugToolSession) returns String
 	return match debugCommandFor(name, reqDoc: reqDoc, args: args) 'command'
 		refused(reason) gives toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: ActingTree.host)
 		command(command) gives ranDebugCommand(reqDoc, idNode: idNode, replies: session.conversation.perform(command), session: session)

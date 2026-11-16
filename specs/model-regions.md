@@ -1895,6 +1895,44 @@ end 'main'
 error E3196: <fragment>:23:8: cannot store an isolated 'Bx' into 'b', which holds a mutable 'Bx'; `merge` it first
 ```
 
+<!-- test: model-hand-fa14-r-iso-decl-loop -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r-iso-decl-loop` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeBx(b isolated Bx)
+	let _ = b.n
+end 'takeBx'
+
+function main() returns ExitCode
+	var w = Bx.create(1)
+	var i = 2 as Num
+	while i != 0 'w1'
+		let u = w as isolated Bx
+		takeBx(u)
+		w = Bx.create(2)
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa14-r-call-before-refill -->
 The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r-call-before-refill` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
 
@@ -2292,7 +2330,7 @@ error E3200: <fragment>:34:9: 'w' is not isolated: only a clean call, a `swap` o
 ```
 
 <!-- test: model-hand-fa14-r-recover-twice-after-refill-missing -->
-The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `r-recover-twice-after-refill-missing` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+The model (`core-m3w-fa14`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `r-recover-twice-after-refill-missing` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2327,11 +2365,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:24:10: 'w' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3102: <fragment>:24:10: use of moved value 'w': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: model-hand-fa14-r-loop-alias-second-lap -->
-The model (`core-m3w-fa14`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-loop-alias-second-lap` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-RECOVER`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `r-loop-alias-second-lap` of redteamFA14.hand_fa14b, in capmodel `reggio/REPORTFA14.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2365,7 +2403,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:24:10: 'w' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3102: <fragment>:24:10: use of moved value 'w': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: model-hand-fa14-a-rf-pick-result -->

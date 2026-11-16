@@ -1584,6 +1584,78 @@ end 'main'
 0
 ```
 
+<!-- test: model-finding-ae-union-payload-fn-wrap-consumer -->
+The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-fn-wrap-consumer` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function wrapH(r isolated Rl) returns Sh
+	return Sh.held(r)
+end 'wrapH'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function unwrapKeep(h Sh)
+	match h 'x1'
+		none then break
+		held(r) then useS(giveS(r))
+	end 'x1'
+end 'unwrapKeep'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	modify bx 'm1'
+		unwrapKeep(wrapH(v))
+	end 'm1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-finding-ae-outer-plain-union-match-in-modify -->
 The model (`core-m3w-fa14`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-match-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
@@ -6546,7 +6618,7 @@ error E3196: <fragment>:63:27: cannot store a read-only 'Bx' into 'keep' while '
 ```
 
 <!-- test: model-hand-ag-bm-modify-keep-p -->
-The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3201. Model program `bm-modify-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa14`) refuses it by `C-STORE`; the compiler refuses it with E3196, E3201. Model program `bm-modify-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6656,6 +6728,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into an isolated region takes values, immutable or isolated
+error E3196: <fragment>:83:33: cannot store a read-only 'Bx' into 'keep' while 'm1' is open; store a copy
 ```
 
 <!-- test: model-hand-ag-bm-modify-plain -->
@@ -7639,100 +7712,6 @@ end 'f'
 
 function main() returns ExitCode
 	f(Mp.m1(Bx.create(1)))
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: model-hand-ag-f1-behaviour-param -->
-The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-behaviour-param` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Mp
-	m0(x Rl)
-	m1(y Bx)
-end 'Mp'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function wrap(consuming self) returns Sn
-		return Sn.notSent(self)
-	end 'wrap'
-end 'Rl'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Wo
-	var keep as Bx
-	var item as isolated Bx
-
-	static function create(keep Bx, item isolated Bx) returns Self
-		return Self{keep: keep, item: item}
-	end 'create'
-end 'Wo'
-
-type Bm
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-
-	export function eat(u Mp)
-		let h = Wo.create(Bx.create(0), item: Bx.create(1)) as isolated Wo
-		modify h 'm1'
-			match u 'x2'
-				m0(x) then x.fin(1)
-				m1(y) then keepIn(y, w: h)
-			end 'x2'
-		end 'm1'
-	end 'eat'
-end 'Bm'
-
-function keepIn(b Bx, w Wo)
-	w.keep = b
-end 'keepIn'
-
-function eatMp(p Mp)
-	match p 'x1'
-		m0(x) then x.fin(1)
-		m1(y) then y.n = 1
-	end 'x1'
-end 'eatMp'
-
-function main() returns ExitCode
-	let q = spawn Bm.create(0)
-	try q.eat(Mp.m1(Bx.create(1))) otherwise (sendFailure) 'h1'
-		match sendFailure 'x2'
-			mailboxFull(z) then eatMp(z)
-			serviceStopped(z) then eatMp(z)
-		end 'x2'
-	end 'h1'
 	return 0
 end 'main'
 ```
@@ -9336,226 +9315,6 @@ end 'main'
 error E3197: <fragment>:78:16: cannot write 'p' through 'self.hq', which is read-only while 'm1' is open
 ```
 
-<!-- test: model-hand-ag-beh-win-mr-modify-keep -->
-The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-win-mr-modify-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Mr
-	m0(x Rl)
-	m1(y Hq)
-end 'Mr'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function peek() returns Num
-		return self.code
-	end 'peek'
-
-	function set(c Num)
-		self.code = c
-	end 'set'
-
-	function wrap(consuming self) returns Sn
-		return Sn.notSent(self)
-	end 'wrap'
-end 'Rl'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Wo
-	var keep as Bx
-	var item as isolated Bx
-
-	static function create(keep Bx, item isolated Bx) returns Self
-		return Self{keep: keep, item: item}
-	end 'create'
-end 'Wo'
-
-type Hq
-	var p as Bx
-	var q as Bx
-
-	static function create(p Bx, q Bx) returns Self
-		return Self{p: p, q: q}
-	end 'create'
-end 'Hq'
-
-type Bm
-	var n as Num
-	var hq as Hq
-
-	static function create(n Num, hq isolated Hq) returns Self
-		return Self{n: n, hq: merge hq}
-	end 'create'
-
-	export function eat(u Mr)
-		let h = Wo.create(Bx.create(0), item: Bx.create(1)) as isolated Wo
-		modify h 'm1'
-			match u 'x2'
-				m0(x) then x.fin(1)
-				m1(y) then h.keep = y.p
-			end 'x2'
-		end 'm1'
-	end 'eat'
-end 'Bm'
-
-function eatMr(pV Mr)
-	match pV 'x1'
-		m0(x) then x.fin(1)
-		m1(y) then y.q.n = 1
-	end 'x1'
-end 'eatMr'
-
-function main() returns ExitCode
-	let k = spawn Bm.create(0, hq: Hq.create(Bx.create(1), q: Bx.create(1)))
-	try k.eat(Mr.m1(Hq.create(Bx.create(1), q: Bx.create(2)))) otherwise (sendFailure) 'h1'
-		match sendFailure 'x2'
-			mailboxFull(z) then eatMr(z)
-			serviceStopped(z) then eatMr(z)
-		end 'x2'
-	end 'h1'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: model-hand-ag-beh-win-mr-modify-keepfn -->
-The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `beh-win-mr-modify-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Mr
-	m0(x Rl)
-	m1(y Hq)
-end 'Mr'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function peek() returns Num
-		return self.code
-	end 'peek'
-
-	function set(c Num)
-		self.code = c
-	end 'set'
-
-	function wrap(consuming self) returns Sn
-		return Sn.notSent(self)
-	end 'wrap'
-end 'Rl'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Wo
-	var keep as Bx
-	var item as isolated Bx
-
-	static function create(keep Bx, item isolated Bx) returns Self
-		return Self{keep: keep, item: item}
-	end 'create'
-end 'Wo'
-
-type Hq
-	var p as Bx
-	var q as Bx
-
-	static function create(p Bx, q Bx) returns Self
-		return Self{p: p, q: q}
-	end 'create'
-end 'Hq'
-
-type Bm
-	var n as Num
-	var hq as Hq
-
-	static function create(n Num, hq isolated Hq) returns Self
-		return Self{n: n, hq: merge hq}
-	end 'create'
-
-	export function eat(u Mr)
-		let h = Wo.create(Bx.create(0), item: Bx.create(1)) as isolated Wo
-		modify h 'm1'
-			match u 'x2'
-				m0(x) then x.fin(1)
-				m1(y) then keepIn(y.p, w: h)
-			end 'x2'
-		end 'm1'
-	end 'eat'
-end 'Bm'
-
-function keepIn(b Bx, w Wo)
-	w.keep = b
-end 'keepIn'
-
-function eatMr(pV Mr)
-	match pV 'x1'
-		m0(x) then x.fin(1)
-		m1(y) then y.q.n = 1
-	end 'x1'
-end 'eatMr'
-
-function main() returns ExitCode
-	let k = spawn Bm.create(0, hq: Hq.create(Bx.create(1), q: Bx.create(1)))
-	try k.eat(Mr.m1(Hq.create(Bx.create(1), q: Bx.create(2)))) otherwise (sendFailure) 'h1'
-		match sendFailure 'x2'
-			mailboxFull(z) then eatMr(z)
-			serviceStopped(z) then eatMr(z)
-		end 'x2'
-	end 'h1'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: model-hand-ag-fn-mr-keep -->
 The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fn-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -10402,306 +10161,6 @@ function main() returns ExitCode
 			m1(y) then useHq(Hq.create(y, q: Bx.create(2)))
 		end 'x2'
 	end 'm1'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: model-hand-ag-hb-fn-keepfn -->
-The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-keepfn` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Mp
-	m0(x Rl)
-	m1(y Bx)
-end 'Mp'
-
-union Mr
-	m0(x Rl)
-	m1(y Hq)
-end 'Mr'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function peek() returns Num
-		return self.code
-	end 'peek'
-
-	function set(c Num)
-		self.code = c
-	end 'set'
-
-	function wrap(consuming self) returns Sn
-		return Sn.notSent(self)
-	end 'wrap'
-end 'Rl'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Wo
-	var keep as Bx
-	var item as isolated Bx
-
-	static function create(keep Bx, item isolated Bx) returns Self
-		return Self{keep: keep, item: item}
-	end 'create'
-end 'Wo'
-
-type Hq
-	var p as Bx
-	var q as Bx
-
-	static function create(p Bx, q Bx) returns Self
-		return Self{p: p, q: q}
-	end 'create'
-end 'Hq'
-
-type Cap1
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-
-	export function takeMp(u Mp)
-		match u 'x1'
-			m0(x) then x.fin(1)
-			m1(y) then y.n = 1
-		end 'x1'
-	end 'takeMp'
-
-	export function takeMr(u Mr)
-		match u 'x1'
-			m0(x) then x.fin(1)
-			m1(y) then y.q.n = 1
-		end 'x1'
-	end 'takeMr'
-
-	export function busy()
-		var i = 1 as Num
-		var j = 1 as Num
-		while i != 0 'w1'
-			i = j
-			j = lg(0)
-		end 'w1'
-	end 'busy'
-
-	export function poke()
-		self.n = 1
-	end 'poke'
-end 'Cap1'
-
-function lg(x Num) returns Num
-	return x
-end 'lg'
-
-function keepIn(b Bx, w Wo)
-	w.keep = b
-end 'keepIn'
-
-function inWin(z isolated Mp, h isolated Wo)
-	modify h 'm1'
-		match z 'x2'
-			m0(x) then x.fin(1)
-			m1(y) then keepIn(y, w: h)
-		end 'x2'
-	end 'm1'
-end 'inWin'
-
-function main() returns ExitCode
-	let k = spawn(capacity: 1) Cap1.create(0)
-	try k.busy() otherwise (sendFailure) 'h1'
-		match sendFailure 'x2'
-			mailboxFull then break
-			serviceStopped then break
-		end 'x2'
-	end 'h1'
-	try k.poke() otherwise (sendFailure) 'h3'
-		match sendFailure 'x4'
-			mailboxFull then break
-			serviceStopped then break
-		end 'x4'
-	end 'h3'
-	let u = Mp.m1(Bx.create(1)) as isolated Mp
-	try k.takeMp(u) otherwise (sendFailure) 'h5'
-		match sendFailure 'x6'
-			mailboxFull(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
-			serviceStopped(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
-		end 'x6'
-	end 'h5'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: model-hand-ag-hb-fn-none -->
-The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-none` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sn
-	ok
-	notSent(r Rl)
-end 'Sn'
-
-union Mp
-	m0(x Rl)
-	m1(y Bx)
-end 'Mp'
-
-union Mr
-	m0(x Rl)
-	m1(y Hq)
-end 'Mr'
-
-type Rl
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function peek() returns Num
-		return self.code
-	end 'peek'
-
-	function set(c Num)
-		self.code = c
-	end 'set'
-
-	function wrap(consuming self) returns Sn
-		return Sn.notSent(self)
-	end 'wrap'
-end 'Rl'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Wo
-	var keep as Bx
-	var item as isolated Bx
-
-	static function create(keep Bx, item isolated Bx) returns Self
-		return Self{keep: keep, item: item}
-	end 'create'
-end 'Wo'
-
-type Hq
-	var p as Bx
-	var q as Bx
-
-	static function create(p Bx, q Bx) returns Self
-		return Self{p: p, q: q}
-	end 'create'
-end 'Hq'
-
-type Cap1
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-
-	export function takeMp(u Mp)
-		match u 'x1'
-			m0(x) then x.fin(1)
-			m1(y) then y.n = 1
-		end 'x1'
-	end 'takeMp'
-
-	export function takeMr(u Mr)
-		match u 'x1'
-			m0(x) then x.fin(1)
-			m1(y) then y.q.n = 1
-		end 'x1'
-	end 'takeMr'
-
-	export function busy()
-		var i = 1 as Num
-		var j = 1 as Num
-		while i != 0 'w1'
-			i = j
-			j = lg(0)
-		end 'w1'
-	end 'busy'
-
-	export function poke()
-		self.n = 1
-	end 'poke'
-end 'Cap1'
-
-function lg(x Num) returns Num
-	return x
-end 'lg'
-
-function inWin(z isolated Mp, h isolated Wo)
-	modify h 'm1'
-		match z 'x2'
-			m0(x) then x.fin(1)
-			m1 then break
-		end 'x2'
-	end 'm1'
-end 'inWin'
-
-function main() returns ExitCode
-	let k = spawn(capacity: 1) Cap1.create(0)
-	try k.busy() otherwise (sendFailure) 'h1'
-		match sendFailure 'x2'
-			mailboxFull then break
-			serviceStopped then break
-		end 'x2'
-	end 'h1'
-	try k.poke() otherwise (sendFailure) 'h3'
-		match sendFailure 'x4'
-			mailboxFull then break
-			serviceStopped then break
-		end 'x4'
-	end 'h3'
-	let u = Mp.m1(Bx.create(1)) as isolated Mp
-	try k.takeMp(u) otherwise (sendFailure) 'h5'
-		match sendFailure 'x6'
-			mailboxFull(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
-			serviceStopped(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
-		end 'x6'
-	end 'h5'
 	return 0
 end 'main'
 ```

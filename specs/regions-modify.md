@@ -2829,3 +2829,233 @@ end 'main'
 ```stdout
 13 6
 ```
+
+<!-- test: a-nested-modify-cannot-open-a-mutable-isolated-parameter -->
+A `mutable isolated` parameter is the caller's variable, so it is outside every block the callee opens, like an `isolated` local declared before the block.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+function refill(g mutable isolated Gauge)
+	let shelf = Gauge.create(1) as isolated Gauge
+
+	modify shelf 'w'
+		modify g 'v'
+			g.n = 9
+		end 'v'
+	end 'w'
+end 'refill'
+
+function main() returns ExitCode
+	var g = Gauge.create(5) as isolated Gauge
+	refill(g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:16:10: 'g' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-write-inside-a-modify-block-cannot-open-a-mutable-isolated-parameter -->
+A store through the parameter opens it for the statement, inside a block that opened another region.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+function refill(g mutable isolated Gauge)
+	let shelf = Gauge.create(1) as isolated Gauge
+
+	modify shelf 'w'
+		g.n = 9
+	end 'w'
+end 'refill'
+
+function main() returns ExitCode
+	var g = Gauge.create(5) as isolated Gauge
+	refill(g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:16:3: 'g' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-method-call-inside-a-modify-block-cannot-open-a-mutable-isolated-parameter -->
+The receiver of a call is opened for the call, so the parameter is refused as a receiver inside the block too.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Gauge'
+
+function refill(g mutable isolated Gauge)
+	let shelf = Gauge.create(1) as isolated Gauge
+
+	modify shelf 'w'
+		g.bump()
+	end 'w'
+end 'refill'
+
+function main() returns ExitCode
+	var g = Gauge.create(5) as isolated Gauge
+	refill(g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:20:3: 'g' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-read-inside-a-modify-block-cannot-open-a-mutable-isolated-parameter -->
+Reading a field through the parameter opens it for the statement, which the block does not allow.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+function refill(g mutable isolated Gauge) returns Code
+	let shelf = Gauge.create(1) as isolated Gauge
+	var seen = 0 as Code
+
+	modify shelf 'w'
+		seen = g.n
+	end 'w'
+
+	return seen
+end 'refill'
+
+function main() returns ExitCode
+	var g = Gauge.create(5) as isolated Gauge
+	print("{refill(g)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:17:10: 'g' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: a-mutable-isolated-parameter-is-opened-outside-every-block-and-inside-its-own -->
+Outside every block the parameter opens for a statement, a call or a block of its own, and inside its own block it is the opened root.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Gauge'
+
+function refill(g mutable isolated Gauge)
+	g.n = 1
+	g.bump()
+
+	modify g 'v'
+		g.n = g.n + 5
+		g.bump()
+	end 'v'
+end 'refill'
+
+function main() returns ExitCode
+	var g = Gauge.create(5) as isolated Gauge
+	refill(g)
+
+	modify g 'r'
+		print("{g.n}\n")
+	end 'r'
+
+	return 0
+end 'main'
+```
+```stdout
+8
+```
+```exitcode
+0
+```
+
+<!-- test: a-mutable-isolated-parameter-open-in-its-own-block-is-read-inside-a-nested-block -->
+Inside a block nested in the parameter's own block, the parameter is the enclosing opened root, read-only as an `isolated` local opened there would be, and the nested block's region stays writable.
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Gauge
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Gauge'
+
+function refill(g mutable isolated Gauge)
+	modify g 'v'
+		g.n = 3
+		let shelf = Gauge.create(1) as isolated Gauge
+
+		modify shelf 'w'
+			shelf.n = g.n
+			print("{shelf.n}\n")
+		end 'w'
+
+		g.n = 4
+	end 'v'
+end 'refill'
+
+function main() returns ExitCode
+	var g = Gauge.create(5) as isolated Gauge
+	refill(g)
+
+	modify g 'r'
+		print("{g.n}\n")
+	end 'r'
+
+	return 0
+end 'main'
+```
+```stdout
+3
+4
+```
+```exitcode
+0
+```

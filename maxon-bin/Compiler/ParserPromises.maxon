@@ -231,6 +231,10 @@ extension Parser
 			return
 		end 'borrowed'
 
+		if self.valueIsAVacantImageCase(argValue) 'aVacantCaseIsCopied'
+			return
+		end 'aVacantCaseIsCopied'
+
 		try self.requireConsumedArgumentStillOwned(argValue, consumedOwned: consumedOwned, range: range)
 		let parameterName = try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position} — the position came from `argSlotPosition` over these names")
 
@@ -257,6 +261,10 @@ extension Parser
 
 		try args.set(column, value: self.transferConsumedArg(argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 	end 'transferConsumedColumn'
+
+	function valueIsAVacantImageCase(value ValueId) returns bool
+		return self.valueIsLinear(value) and self.valueIsAnImmortalImageRecord(value)
+	end 'valueIsAVacantImageCase'
 
 	function requireNoLinearArgumentIn(args ValueIdArray, refusal String, anchor Token) throws SourceParseError
 		for argument in args 'eachArgument'
@@ -1804,6 +1812,7 @@ extension Parser
 		end 'eachWrittenArgument'
 
 		self.noteWindowCall(func, opIdx: opIdx, args: args, callOpen: PendingCallOpen.none)
+		_ = self.fileLentRootsBesideABinding(func, opIdx: opIdx, args: args, argAnchors: argAnchors, receiver: ReceiverArg.none)
 	end 'noteFunctionValueCallSite'
 
 	function argOwesTheQuantityDoor(arg ValueId) returns bool

@@ -3685,8 +3685,8 @@ end 'main'
 error E3224: <fragment>:38:8: a linear value is never sent with a `sendTimeout:`: a timed send waits for room in the mailbox, and a wait may never end, so the sender could neither hand the value over nor consume it. Send it without a timeout, and consume the value `mailboxFull` and `serviceStopped` hand back
 ```
 
-<!-- test: a-spawn-takes-no-linear-argument -->
-
+<!-- test: a-spawn-of-a-factory-that-throws-takes-no-linear-argument -->
+A factory that throws may not start the service, and then it would drop the linear value.
 ```maxon
 typealias Code = int(0 to 999)
 
@@ -3707,10 +3707,19 @@ type Resp
 	end 'fin'
 end 'Resp'
 
+enum SinkError implements Error
+	refused
+end 'SinkError'
+
 type Sink
 	var n as Code
 
-	static function create(r Resp) returns Self
+	static function create(r Resp) returns Self throws SinkError
+		if r.peek() > 500 'tooHigh'
+			r.fin()
+			throw SinkError.refused
+		end 'tooHigh'
+
 		r.fin()
 		return Self{n: 0}
 	end 'create'
@@ -3721,13 +3730,13 @@ type Sink
 end 'Sink'
 
 function main() returns ExitCode
-	let s = spawn Sink.create(Resp.create(1))
+	let s = try spawn Sink.create(Resp.create(1)) otherwise return 1
 	try s.bump() otherwise ignore
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3224: <fragment>:35:21: a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running
+error E3224: <fragment>:44:25: a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running
 ```
 
 <!-- test: cond-over-two-linear-locals-is-refused -->
@@ -6710,4 +6719,919 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:46:10: an isolated value from outside 'w' cannot be moved into the parameter 'self' of 'Resp.wrap', which keeps it while 'w' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
+<!-- test: an-isolated-linear-local-moves-into-a-method-of-an-opened-isolated-receiver -->
+`bx.eat(v)` opens `bx` for the call; `v` is an un-opened `isolated` local and `eat` owns its linear parameter, so `v` is moved, not opened, and its region joins the opened one.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'useS'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		r.fin(1)
+	end 'eat'
+end 'Bx'
+
+function main() returns ExitCode
+	useS(giveS(Rl.create(0)))
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-isolated-linear-local-moves-into-a-method-that-builds-a-union-around-it -->
+The same move, with the method wrapping its parameter in a union it consumes.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'useS'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		useS(giveS(r))
+	end 'eat'
+end 'Bx'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-non-linear-isolated-local-into-an-unmarked-parameter-beside-an-opened-receiver-is-refused -->
+An unmarked parameter of a record type lends its argument, so `v` would be a second region opened by the call.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'useS'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Bx)
+		r.n = 1
+	end 'eat'
+end 'Bx'
+
+function main() returns ExitCode
+	useS(giveS(Rl.create(0)))
+	let bx = Bx.create(0) as isolated Bx
+	let v = Bx.create(0) as isolated Bx
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:49:9: one statement reaches through two isolated values, 'bx' and 'v'; a statement opens one isolated value, so open one with `modify` or split the statement
+```
+
+<!-- test: a-plain-linear-local-beside-an-opened-receiver-is-refused -->
+`v` is ordinary data of the caller's region, which a call into `bx`'s region does not take.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'useS'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		r.fin(1)
+	end 'eat'
+end 'Bx'
+
+function main() returns ExitCode
+	useS(giveS(Rl.create(0)))
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0)
+	bx.eat(v)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:49:9: 'v' is mutable outside 'bx'; a call into an isolated region takes values, immutable or isolated
+```
+
+<!-- test: a-move-into-a-method-of-an-outer-isolated-receiver-inside-a-window-is-refused -->
+Inside 'mh' the receiver `bx` is outer data and cannot be opened.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'useS'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function eat(r Rl)
+		r.fin(1)
+	end 'eat'
+end 'Bx'
+
+function main() returns ExitCode
+	useS(giveS(Rl.create(0)))
+	let h = Bx.create(0) as isolated Bx
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	modify h 'mh'
+		bx.eat(v)
+	end 'mh'
+	let _ = h
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:51:3: 'bx' cannot be opened: the value that holds it is read-only while 'mh' is open
+```
+
+<!-- test: a-spawn-of-a-factory-that-cannot-throw-takes-a-linear-argument -->
+`create` cannot throw, so the service always starts and its factory consumes `r`; `Rl` is closed, so `r` crosses whole.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Starter
+	var k as Num
+
+	static function create(r Rl) returns Self
+		let c = r.code
+		r.fin()
+		return Self{k: c}
+	end 'create'
+
+	export function poke()
+		print("poke {self.k}\n")
+	end 'poke'
+end 'Starter'
+
+function main() returns ExitCode
+	let r = Rl.create(3)
+	let s = spawn Starter.create(r)
+	try s.poke() otherwise ignore
+	return 0
+end 'main'
+```
+```stdout
+fin 3
+poke 3
+```
+```exitcode
+0
+```
+
+<!-- test: a-linear-factory-argument-of-a-type-that-is-not-closed-does-not-cross -->
+`Mp` holds the plain payload `y`, which `b` still names after the spawn.
+```maxon
+typealias Num = int(i64.min to i64.max)
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Rl'
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+function drain(m Mp)
+	match m 'drained'
+		m0(x) then x.fin()
+		m1(y) then print("drained {y.n}\n")
+	end 'drained'
+end 'drain'
+
+type Starter
+	var k as Num
+
+	static function create(m Mp) returns Self
+		drain(m)
+		return Self{k: 0}
+	end 'create'
+
+	export function poke()
+		print("poke {self.k}\n")
+	end 'poke'
+end 'Starter'
+
+function main() returns ExitCode
+	let b = Bx.create(1)
+	let m = Mp.m1(b)
+	let s = spawn Starter.create(m)
+	try s.poke() otherwise ignore
+	b.n = 2
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:50:31: 'm' crosses to the service the `spawn` starts only as the whole of its region, and 'Mp' is not closed: 'Mp.y' is a plain 'Bx' that other code may still name. Declare 'y' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-local-refilled-on-every-lap-is-recovered-at-the-start-of-each-lap -->
+Every value `w` holds at the loop's header is a fresh one nothing has read: the one before the loop and the one each lap assigns.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function takeIso(b isolated Bx)
+	let _ = b
+end 'takeIso'
+
+function main() returns ExitCode
+	var w = Bx.create(1)
+	var i = 0 as Num
+	while i < 3 'l'
+		takeIso(w)
+		w = Bx.create(2)
+		i = i + 1
+	end 'l'
+	w.n = 4
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-local-refilled-with-an-alias-is-not-recovered-in-the-loop -->
+After `takeIso` recovers `w`, the variable takes only isolated values, and `keep` is a record another name holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function takeIso(b isolated Bx)
+	let _ = b
+end 'takeIso'
+
+function main() returns ExitCode
+	let keep = Bx.create(9)
+	var w = Bx.create(1)
+	var i = 0 as Num
+	while i < 3 'l'
+		takeIso(w)
+		w = keep
+		i = i + 1
+	end 'l'
+	w.n = 4
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:22:7: 'keep' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Bx`, or store a copy
+```
+
+<!-- test: a-unique-local-sent-on-every-lap-is-refused-when-a-lap-reads-the-value-it-refills -->
+`t` crosses whole only because the value it holds at the header is fresh, and the value each lap assigns is read by `h.k = t.b` before the next lap sends it, so `h` would still name a part of what the service holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	let h = Holder.create()
+	var t = Tp.create(1)
+	var i = 0 as Num
+
+	while i < 3 'laps'
+		try s.take(t) otherwise ignore
+		t = Tp.create(2)
+		h.k = t.b
+		i = i + 1
+	end 'laps'
+
+	h.k.n = 4
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:47:15: 't' is recovered into an isolated position inside a loop, so every lap must start with a fresh value in it that nothing has read: assign it a fresh value on every path to the end of the lap, `continue` included
+```
+
+<!-- test: a-unique-local-sent-in-an-inner-loop-is-refused-when-an-outer-lap-reads-the-value-it-refills -->
+The inner loop's header holds the value the outer loop's header holds, so relying on it in the inner loop relies on the outer header too: `h.k = t.b` reads what the last inner lap assigned, and the next outer lap sends it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	let h = Holder.create()
+	var t = Tp.create(1)
+	var i = 0 as Num
+
+	while i < 3 'outer'
+		var j = 0 as Num
+
+		while j < 2 'inner'
+			try s.take(t) otherwise ignore
+			t = Tp.create(2)
+			j = j + 1
+		end 'inner'
+
+		h.k = t.b
+		i = i + 1
+	end 'outer'
+
+	h.k.n = 4
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:50:16: 't' is recovered into an isolated position inside a loop, so every lap must start with a fresh value in it that nothing has read: assign it a fresh value on every path to the end of the lap, `continue` included
+```
+
+<!-- test: a-unique-local-sent-in-an-inner-loop-is-accepted-when-every-outer-lap-refills-it-after-reading -->
+Each outer lap reads what the last inner lap assigned and then assigns `t` a fresh value, so the value `h.k` names a part of is never sent.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	let h = Holder.create()
+	var t = Tp.create(1)
+	var i = 0 as Num
+
+	while i < 3 'outer'
+		var j = 0 as Num
+
+		while j < 2 'inner'
+			try s.take(t) otherwise ignore
+			t = Tp.create(2)
+			j = j + 1
+		end 'inner'
+
+		h.k = t.b
+		t = Tp.create(3)
+		i = i + 1
+	end 'outer'
+
+	h.k.n = 4
+	print("{h.k.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+4
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-local-sent-on-every-lap-of-a-for-loop-is-refused-when-a-lap-reads-the-value-it-refills -->
+A `for` loop's header joins `t` the way a `while` loop's does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type Holder
+	var k as Bx
+
+	static function create() returns Self
+		return Self{k: Bx.create(0)}
+	end 'create'
+end 'Holder'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	let h = Holder.create()
+	var t = Tp.create(1)
+
+	for i in 0 upto 3 'laps'
+		try s.take(t) otherwise ignore
+		t = Tp.create(i)
+		h.k = t.b
+	end 'laps'
+
+	h.k.n = 4
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:46:15: 't' is recovered into an isolated position inside a loop, so every lap must start with a fresh value in it that nothing has read: assign it a fresh value on every path to the end of the lap, `continue` included
+```
+
+<!-- test: a-unique-local-sent-on-every-lap-and-refilled-with-a-fresh-value-crosses -->
+Every value `t` holds at the header is fresh and unread when the lap sends it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var b as Bx
+
+	static function create(n Num) returns Self
+		return Self{b: Bx.create(n)}
+	end 'create'
+end 'Tp'
+
+type TpTaker
+	var seen as Num
+
+	static function create(seen Num) returns Self
+		return Self{seen: seen}
+	end 'create'
+
+	export function take(t Tp)
+		self.seen = t.b.n
+	end 'take'
+end 'TpTaker'
+
+function main() returns ExitCode
+	let s = spawn TpTaker.create(0)
+	var t = Tp.create(1)
+	var i = 0 as Num
+
+	while i < 3 'laps'
+		try s.take(t) otherwise ignore
+		t = Tp.create(i)
+		i = i + 1
+	end 'laps'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-vacant-linear-union-is-copied-into-a-callee-that-sends-it -->
+`s` holds the payload-free case on every path, so it owes nothing: each call takes a copy, and `relay` sends its parameter, whose type is closed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		match s 'm'
+			ok then return
+			notSent(r) then r.fin(1)
+		end 'm'
+	end 'takeS'
+end 'Hq'
+
+function relay(a Hq.handle, s Sn)
+	try a.takeS(s) otherwise (q) 'h'
+		match q 'x'
+			mailboxFull(z) then drain(z)
+			serviceStopped(z) then drain(z)
+		end 'x'
+	end 'h'
+end 'relay'
+
+function drain(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'drain'
+
+function main() returns ExitCode
+	let a = spawn Hq.create(0)
+	let s = Sn.ok as isolated Sn
+	relay(a, s: s)
+	relay(a, s: s)
+	drain(Sn.notSent(Rl.create(1)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-vacant-linear-union-local-is-passed-twice-to-a-callee-that-sends-it -->
+The same with an unmarked `let`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Hq
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeS(s Sn)
+		match s 'm'
+			ok then return
+			notSent(r) then r.fin(1)
+		end 'm'
+	end 'takeS'
+end 'Hq'
+
+function relay(a Hq.handle, s Sn)
+	try a.takeS(s) otherwise (q) 'h'
+		match q 'x'
+			mailboxFull(z) then drain(z)
+			serviceStopped(z) then drain(z)
+		end 'x'
+	end 'h'
+end 'relay'
+
+function drain(s Sn)
+	match s 'm'
+		ok then return
+		notSent(r) then r.fin(1)
+	end 'm'
+end 'drain'
+
+function main() returns ExitCode
+	let a = spawn Hq.create(0)
+	let s = Sn.ok
+	relay(a, s: s)
+	relay(a, s: s)
+	drain(Sn.notSent(Rl.create(1)))
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```

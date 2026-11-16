@@ -19,9 +19,9 @@ function checkCapabilityCalls(project Project, module MaxonModule, signatures Pr
 		end 'eachOp'
 
 		checkStoredSlotArguments(project, module: module, funcNames: funcNames, facts: facts, func: func, memo: memo)
-		checkKeptArgumentsAreNotReadAgain(project, module: module, funcNames: funcNames, facts: facts, func: func)
+		checkKeptArgumentsAreNotReadAgain(project, module: module, signatures: signatures, witnessSlots: witnessSlots, funcNames: funcNames, facts: facts, func: func)
 		checkResultUses(project, funcNames: funcNames, facts: facts, func: func, memo: memo)
-		checkNoWaitInsideWindows(project, module: module, funcNames: funcNames, facts: facts, func: func, windowCallOps: func.capabilityNotes.windowCallOps, windowCallLabels: func.capabilityNotes.windowCallLabels)
+		checkNoWaitInsideWindows(project, module: module, funcNames: funcNames, facts: facts, func: func, notes: func.capabilityNotes)
 		checkWindowReceiversKeepNothing(project, module: module, funcNames: funcNames, facts: facts, func: func)
 		checkPausedOperandsAreNotWritten(project, module: module, signatures: signatures, witnessSlots: witnessSlots, funcNames: funcNames, facts: facts, func: func)
 		checkWrittenCapturesAreWritable(project, facts: facts, func: func)
@@ -1463,10 +1463,14 @@ function blockingChain(project Project, module MaxonModule, funcNames FunctionNa
 	return blockingChainThrough(project, module: module, funcNames: funcNames, path: blockingPathOrPanic(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: waits), waits: waits)
 end 'blockingChain'
 
-function checkNoWaitInsideWindows(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, windowCallOps FuncIndexArray, windowCallLabels NameRoster)
-	for position in 0 upto windowCallOps.count() 'eachWindowCall'
-		let opIdx = try windowCallOps.get(position) otherwise panic("checkNoWaitInsideWindows: windowCallOps.get OOB at {position}")
-		let label = try windowCallLabels.get(position) otherwise panic("checkNoWaitInsideWindows: windowCallLabels.get OOB at {position} — the two columns are parallel")
+function checkNoWaitInsideWindows(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, notes CapabilityNotes)
+	for position in 0 upto notes.windowCallOps.count() 'eachWindowCall'
+		if not (try notes.windowCallWaitsRefused.get(position) otherwise panic("checkNoWaitInsideWindows: windowCallWaitsRefused.get OOB at {position} — the window columns are parallel")) 'aLendThatAllowsAWait'
+			continue
+		end 'aLendThatAllowsAWait'
+
+		let opIdx = try notes.windowCallOps.get(position) otherwise panic("checkNoWaitInsideWindows: windowCallOps.get OOB at {position}")
+		let label = try notes.windowCallLabels.get(position) otherwise panic("checkNoWaitInsideWindows: windowCallLabels.get OOB at {position} — the window columns are parallel")
 		let edge = try callOrClosureEdgeOf(project, func: func, op: try module.ops.get(opIdx) otherwise panic("checkNoWaitInsideWindows: opIdx {opIdx} not in module.ops")) otherwise continue
 		let calleeIndex = try funcNames.byName.get(edge.0) otherwise continue
 

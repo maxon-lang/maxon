@@ -3070,6 +3070,34 @@ end 'FreshLocal'
 
 typealias FreshLocalMap = Map with (ValueId, FreshLocal)
 
+union FreshReliance
+	unrelied
+	relied(name immutable ByteArray, line LineNumber, column ColumnNumber)
+end 'FreshReliance'
+
+type HeaderFresh
+	export let phi as ValueId
+	export let entry as ValueId
+	export let loopDepth as ElementIndex
+	export let entryReads as ElementIndex
+	export var reliance as FreshReliance
+
+	static function create(phi ValueId, entry ValueId, loopDepth ElementIndex, entryReads ElementIndex) returns HeaderFresh
+		return Self{phi: phi, entry: entry, loopDepth: loopDepth, entryReads: entryReads, reliance: FreshReliance.unrelied}
+	end 'create'
+end 'HeaderFresh'
+
+typealias HeaderFreshArray = Array with HeaderFresh
+
+type PausedHolders
+	export let values as ValueIdArray
+	export let capabilities as ValueCapabilityArray
+
+	static function create() returns PausedHolders
+		return Self{values: ValueIdArray.create(0), capabilities: ValueCapabilityArray.create(0)}
+	end 'create'
+end 'PausedHolders'
+
 // The union of two move marks' `movedFrom` bits — the move state of a path that ran BOTH the moves `a`
 // records and the moves `b` records. Its one use is the inline-conditional's TRUE path: the true arm's
 // own moves (`a`), plus the unconditionally-evaluated condition's (`b`), which parse in the opposite
@@ -5218,6 +5246,8 @@ type StatementSlots
 	var pendingSendTimeout as SendTimeoutArgument
 	var drainingLoops as ElementIndex
 	var drainingLabel as immutable ByteArray
+	var lendingArms as ElementIndex
+	var lendingLabel as immutable ByteArray
 	var handedPlaceStorage as PlaceStorage
 
 	// ⭐⭐ **A RECEIVING SLOT HAS STATED THE `Array` INSTANCE THE LITERAL AT THIS TOKEN MUST BE BUILT AT.**
@@ -5254,7 +5284,7 @@ type StatementSlots
 	end 'takeHandedPlaceStorage'
 
 	static function quiescent() returns StatementSlots
-		return Self{claimOpFloor: 0, qualifiedTypeBase: QualifiedTypeBase.none, handedResolution: NothingHanded, errorMatchRefusal: ErrorMatchRefusal.none, lastBlockBodyEnd: 0, constDependencyFailed: false, constDependsOnARecord: false, lastCast: RecordedCast.nothingRecorded, lastCapabilityAnnotation: RecordedCast.nothingRecorded, lastBareBindingImmutableName: EmptySourceText, lastWitnessDispatch: RecordedTryTarget.nothingRecorded, pendingRequirementParam: PendingUnstorableRequirement.none, lastAwait: RecordedTryTarget.nothingRecorded, lastSpawnStart: SpawnStartReply.noReply, lastSend: RecordedSend.nothingRecorded, unsettledSend: UnsettledSend.settled, sentLeg: SentLegSlot.none, lastDispatchedMemberIndex: 0, lastDispatchedReceiver: 0, constInitializerEnd: 0, initializerBinding: EmptySourceText.clone(), initializerClosureHost: EmptySourceText, elementStoreDestination: ElementStoreDestination.none, cellArgumentToken: CellArgumentToken.none, cellArgumentWantsAPlace: false, argumentRoot: ArgumentRoot.none, pendingSendTimeout: SendTimeoutArgument.absent, drainingLoops: 0, drainingLabel: EmptySourceText, handedPlaceStorage: noHandedPlaceStorage, arrayLiteralTargetTokenIndex: 0, arrayLiteralTarget: DeclaredArrayInstance.none, tupleLiteralTargetTokenIndex: 0, tupleLiteralTarget: NoDeclaredTupleTarget, pendingClosureParamOffer: PendingClosureParamOffer.none}
+		return Self{claimOpFloor: 0, qualifiedTypeBase: QualifiedTypeBase.none, handedResolution: NothingHanded, errorMatchRefusal: ErrorMatchRefusal.none, lastBlockBodyEnd: 0, constDependencyFailed: false, constDependsOnARecord: false, lastCast: RecordedCast.nothingRecorded, lastCapabilityAnnotation: RecordedCast.nothingRecorded, lastBareBindingImmutableName: EmptySourceText, lastWitnessDispatch: RecordedTryTarget.nothingRecorded, pendingRequirementParam: PendingUnstorableRequirement.none, lastAwait: RecordedTryTarget.nothingRecorded, lastSpawnStart: SpawnStartReply.noReply, lastSend: RecordedSend.nothingRecorded, unsettledSend: UnsettledSend.settled, sentLeg: SentLegSlot.none, lastDispatchedMemberIndex: 0, lastDispatchedReceiver: 0, constInitializerEnd: 0, initializerBinding: EmptySourceText.clone(), initializerClosureHost: EmptySourceText, elementStoreDestination: ElementStoreDestination.none, cellArgumentToken: CellArgumentToken.none, cellArgumentWantsAPlace: false, argumentRoot: ArgumentRoot.none, pendingSendTimeout: SendTimeoutArgument.absent, drainingLoops: 0, drainingLabel: EmptySourceText, lendingArms: 0, lendingLabel: EmptySourceText, handedPlaceStorage: noHandedPlaceStorage, arrayLiteralTargetTokenIndex: 0, arrayLiteralTarget: DeclaredArrayInstance.none, tupleLiteralTargetTokenIndex: 0, tupleLiteralTarget: NoDeclaredTupleTarget, pendingClosureParamOffer: PendingClosureParamOffer.none}
 	end 'quiescent'
 end 'StatementSlots'
 
@@ -8262,6 +8292,7 @@ type FunctionBodyState
 	export var partialMoves as VarInfoArray
 
 	export var freshLocals as FreshLocalMap
+	export var headerFreshLocals as HeaderFreshArray
 
 	export var freshReadsInInitializer as VarInfoArray
 
@@ -9339,6 +9370,7 @@ type FunctionBodyState
 			promiseConsumes: PromiseConsumes.none(),
 			partialMoves: VarInfoArray.create(0),
 			freshLocals: FreshLocalMap.create(),
+			headerFreshLocals: HeaderFreshArray.create(0),
 			freshReadsInInitializer: VarInfoArray.create(0),
 			recoveringInitializer: false,
 			enumAccessorReads: EnumAccessorReadArray.create(0),
