@@ -55135,12 +55135,19 @@ func @__gt_stack_alloc {
     x64.cmpRegImm32 rax, 65536
     x64.jcc lessEqual, stkpooled
   stkdirect:
+    x64.leaRegRegImm32 rdx, rax, 16384
     x64.movRegImm32 rcx, 0
-    x64.movRegReg rdx, rax
     x64.movRegImm32 r8, 12288
     x64.movRegImm32 r9, 4
     x64.iatCall 4
+    x64.cmpRegImm32 rax, 0
+    x64.jcc lessEqual, critsplit#49
+  stkmapoffset#17:
+    x64.leaRegRegImm32 r8, rax, 16384
+    x64.jmp stkmapped#18
+  critsplit#49:
     x64.movRegReg r8, rax
+  stkmapped#18:
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -55193,53 +55200,62 @@ func @__gt_stack_alloc {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#38
-  __rl_cont#37:
+    x64.jcc notEqual, __rl_slow#44
+  __rl_cont#43:
     x64.movRegReg r15, r14
   stkrefilltop:
     x64.leaRegBaseIndexScale rax, [r12 + r13*8]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, stkpop#20
-  stkcarve#21:
+    x64.jcc notEqual, stkpop#22
+  stkcarve#23:
     x64.loadRegBaseDisp.word64 rax, [r12 + 48]
     x64.loadRegBaseDisp.word64 rcx, [r12 + 56]
     x64.leaRegRegReg rdx, rax, rbx
     x64.cmpRegReg rdx, rcx
-    x64.jcc lessEqual, critsplit#44
-  stknewchunk#22:
-    x64.movRegImm32 rdx, 1048576
+    x64.jcc lessEqual, critsplit#51
+  stknewchunk#24:
+    x64.movRegImm32 rdx, 1064960
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 r8, 12288
     x64.movRegImm32 r9, 4
     x64.iatCall 4
     x64.cmpRegImm32 rax, 0
+    x64.jcc lessEqual, critsplit#52
+  stkmapoffset#27:
+    x64.leaRegRegImm32 r8, rax, 16384
+    x64.jmp stkmapped#28
+  critsplit#52:
+    x64.movRegReg r8, rax
+  stkmapped#28:
+    x64.cmpRegImm32 r8, 0
     x64.jcc lessEqual, stkrefillrefused
-  stkchunkmapped#23:
-    x64.leaRegRegImm32 rcx, rax, 1048576
-    x64.storeBaseDispReg.word64 [r12 + 56], rcx
-    x64.leaRegRegReg rcx, rax, rbx
-    x64.jmp stkcarved#24
-  critsplit#44:
-    x64.movRegReg rcx, rdx
-  stkcarved#24:
-    x64.storeBaseDispReg.word64 [r12 + 48], rcx
+  stkchunkmapped#25:
+    x64.leaRegRegImm32 rax, r8, 1048576
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.leaRegRegReg rax, r8, rbx
+    x64.jmp stkcarved#26
+  critsplit#51:
+    x64.movRegReg r8, rax
+    x64.movRegReg rax, rdx
+  stkcarved#26:
+    x64.storeBaseDispReg.word64 [r12 + 48], rax
     x64.jmp stkrefillgot
-  stkpop#20:
+  stkpop#22:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.movRegReg rax, rcx
+    x64.movRegReg r8, rcx
   stkrefillgot:
-    x64.storeBaseDispReg.word64 [r15 + 0], rax
-    x64.movRegImm32 rcx, 0
-    x64.storeBaseDispReg.word64 [rax + 0], rcx
-    x64.loadRegBaseDisp.word64 rcx, [r14 + 8]
-    x64.leaRegRegReg rcx, rcx, rbx
-    x64.storeBaseDispReg.word64 [r14 + 8], rcx
-    x64.cmpRegImm32 rcx, 16384
+    x64.storeBaseDispReg.word64 [r15 + 0], r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.leaRegRegReg rax, rax, rbx
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.cmpRegImm32 rax, 16384
     x64.jcc greaterEqual, stkrefilldone
-  critsplit#43:
-    x64.movRegReg r15, rax
+  critsplit#50:
+    x64.movRegReg r15, r8
     x64.jmp stkrefilltop
   stkrefilldone:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -55249,8 +55265,8 @@ func @__gt_stack_alloc {
     x64.loadRegSlot rcx, slot0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#42
-  __rl_cont#41:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.aluBaseDispImm32.add [rax + 832], -1
   stkpopcached:
     x64.loadRegBaseDisp.word64 r8, [r14 + 0]
@@ -55274,39 +55290,47 @@ func @__gt_stack_alloc {
     x64.movRegImm32 rax, 1
     x64.xchg8 [r13], rax <- rax
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_slow#32
+    x64.jcc notEqual, __rl_slow#38
   stkpoolonlytake:
     x64.leaRegRegImm32 rax, rdx, -11
     x64.leaRegBaseIndexScale rax, [r12 + rax*8]
     x64.loadRegBaseDisp.word64 r8, [rax + 0]
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, stkpop#26
-  stkcarve#27:
+    x64.jcc notEqual, stkpop#30
+  stkcarve#31:
     x64.loadRegBaseDisp.word64 rax, [r12 + 48]
     x64.loadRegBaseDisp.word64 rcx, [r12 + 56]
     x64.leaRegRegReg rdx, rax, rbx
     x64.cmpRegReg rdx, rcx
-    x64.jcc lessEqual, critsplit#45
-  stknewchunk#28:
-    x64.movRegImm32 rdx, 1048576
+    x64.jcc lessEqual, critsplit#53
+  stknewchunk#32:
+    x64.movRegImm32 rdx, 1064960
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 r8, 12288
     x64.movRegImm32 r9, 4
     x64.iatCall 4
     x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, stkpoolonlyrefused
-  stkchunkmapped#29:
-    x64.leaRegRegImm32 rcx, rax, 1048576
-    x64.storeBaseDispReg.word64 [r12 + 56], rcx
-    x64.leaRegRegReg rcx, rax, rbx
-    x64.jmp stkcarved#30
-  critsplit#45:
-    x64.movRegReg rcx, rdx
-  stkcarved#30:
-    x64.storeBaseDispReg.word64 [r12 + 48], rcx
+    x64.jcc lessEqual, critsplit#54
+  stkmapoffset#35:
+    x64.leaRegRegImm32 r8, rax, 16384
+    x64.jmp stkmapped#36
+  critsplit#54:
     x64.movRegReg r8, rax
+  stkmapped#36:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc lessEqual, stkpoolonlyrefused
+  stkchunkmapped#33:
+    x64.leaRegRegImm32 rax, r8, 1048576
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.leaRegRegReg rax, r8, rbx
+    x64.jmp stkcarved#34
+  critsplit#53:
+    x64.movRegReg r8, rax
+    x64.movRegReg rax, rdx
+  stkcarved#34:
+    x64.storeBaseDispReg.word64 [r12 + 48], rax
     x64.jmp stkpoolonlygot
-  stkpop#26:
+  stkpop#30:
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.storeBaseDispReg.word64 [rax + 0], rcx
   stkpoolonlygot:
@@ -55316,8 +55340,8 @@ func @__gt_stack_alloc {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r13], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#34
-  __rl_cont#33:
+    x64.jcc notEqual, __rl_slow#40
+  __rl_cont#39:
     x64.aluBaseDispImm32.add [rax + 832], -1
     x64.epilogue 72
     x64.popReg r15
@@ -55330,28 +55354,28 @@ func @__gt_stack_alloc {
   stkclassstep:
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp stkclasshdr
-  __rl_slow#38:
+  __rl_slow#44:
     x64.callDirect __rtlock_pool_acquire
-    x64.jmp __rl_cont#37
+    x64.jmp __rl_cont#43
   stkrefillrefused:
-    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, stkrefillempty
     x64.jmp stkrefilldone
-  __rl_slow#42:
+  __rl_slow#48:
     x64.loadRegSlot rcx, slot0
     x64.storeSlotReg slot1, rax
     x64.callDirect __rtlock_pool_release
     x64.loadRegSlot rax, slot1
-    x64.jmp __rl_cont#41
-  __rl_slow#32:
+    x64.jmp __rl_cont#47
+  __rl_slow#38:
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, rax
     x64.callDirect __rtlock_pool_acquire
     x64.loadRegSlot rdx, slot2
     x64.jmp stkpoolonlytake
-  __rl_slow#34:
+  __rl_slow#40:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot3, r8
     x64.movRegReg rcx, r13
@@ -55359,26 +55383,25 @@ func @__gt_stack_alloc {
     x64.movRegReg rcx, r8
     x64.loadRegSlot rax, slot1
     x64.loadRegSlot r8, slot3
-    x64.jmp __rl_cont#33
+    x64.jmp __rl_cont#39
   stkrefillempty:
     x64.leaRegRegImm32 rcx, r12, 64
-    x64.leaRegGlobal rdx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.mov rdx, gs:[rdx]
-    x64.movRegImm32 rsi, 0
-    x64.xchg8 [rcx], rsi <- rsi
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc equal, __rl_cont#39
-  __rl_slow#40:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.mov rax, gs:[rax]
+    x64.movRegImm32 rdx, 0
+    x64.xchg8 [rcx], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#45
+  __rl_slow#46:
     x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rdx
-    x64.movRegReg rdx, rsi
+    x64.storeSlotReg slot3, r8
     x64.callDirect __rtlock_pool_release
+    x64.movRegReg rcx, r8
     x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rdx, slot2
-  __rl_cont#39:
-    x64.aluBaseDispImm32.add [rdx + 832], -1
-    x64.movRegReg r8, rax
+    x64.loadRegSlot r8, slot3
+  __rl_cont#45:
+    x64.aluBaseDispImm32.add [rax + 832], -1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -55389,23 +55412,22 @@ func @__gt_stack_alloc {
     x64.ret
   stkpoolonlyrefused:
     x64.leaRegRegImm32 rcx, r12, 64
-    x64.leaRegGlobal rdx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.mov rdx, gs:[rdx]
-    x64.movRegImm32 rsi, 0
-    x64.xchg8 [rcx], rsi <- rsi
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc equal, __rl_cont#35
-  __rl_slow#36:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.mov rax, gs:[rax]
+    x64.movRegImm32 rdx, 0
+    x64.xchg8 [rcx], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#41
+  __rl_slow#42:
     x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rdx
-    x64.movRegReg rdx, rsi
+    x64.storeSlotReg slot3, r8
     x64.callDirect __rtlock_pool_release
+    x64.movRegReg rcx, r8
     x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rdx, slot2
-  __rl_cont#35:
-    x64.aluBaseDispImm32.add [rdx + 832], -1
-    x64.movRegReg r8, rax
+    x64.loadRegSlot r8, slot3
+  __rl_cont#41:
+    x64.aluBaseDispImm32.add [rax + 832], -1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -55425,7 +55447,8 @@ func @__gt_stack_free {
     x64.cmpRegImm32 rdx, 65536
     x64.jcc lessEqual, stkfreepooled
   stkfreedirect:
-    x64.movRegReg rcx, rax
+    x64.leaRegRegImm32 rcx, rax, -16384
+    x64.leaRegRegImm32 rax, rdx, 16384
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 r8, 32768
     x64.iatCall 11
@@ -67810,7 +67833,7 @@ chunk @__gt_import_WriteFile {
     01c0: 28 65 89 0c 25 68 00 00 00 48 83 c4 38 c3 e9 00
     01d0: 00 00 00 48 8d 05 00 00 00 00 48 8b 00 65 48 8b
     01e0: 00 4c 8b 58 10 4c 39 dc 0f 83 e0 ff ff ff 49 81
-    01f0: eb 00 30 01 00 4c 39 dc 0f 82 d0 ff ff ff 48 8d
+    01f0: eb 00 50 01 00 4c 39 dc 0f 82 d0 ff ff ff 48 8d
     0200: 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 3c 00 00
     0210: 00 65 48 8b 00 48 85 c0 0f 84 2f 00 00 00 48 81
     0220: b8 b0 03 00 00 00 00 00 00 0f 85 1e 00 00 00 48

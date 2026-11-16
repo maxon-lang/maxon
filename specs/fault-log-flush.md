@@ -17,6 +17,12 @@ stack first, and on the POSIX targets the signal handler already runs on the thr
 that arrives while the first is flushing waits for it to finish, for at most the same half second. The wait is skipped when
 the faulting thread holds a runtime lock, runs on a scheduler's own stack, or is part-way through parking.
 
+A fault whose exception dispatch lands below the bottom of the green thread's stack is the fatal error `exception dispatched
+below green thread stack bottom` instead: it flushes no log and runs no green thread, because the dispatch may have
+overwritten a neighbour's live stack. The kernel's dispatch of a hardware exception puts the processor's saved state on the
+faulting stack, over 12 KB on a host with AMX, so a fault raised from a shallow frame of a stack that has not grown can land
+there. A fault raised after the stack has grown dispatches within it and is the panic that flushes.
+
 ## Tests
 
 <!-- test: an-error-logged-before-a-stack-overflow-is-written -->
@@ -155,13 +161,30 @@ Stack trace:
 <!-- procs: 1 -->
 <!-- preempt: off -->
 <!-- unsupported-targets: wasm32-wasi -->
-The same holds on a hardware fault: on x64-windows the fault runs on the thread's stack, and the vectored handler leaves for
-the system stack and flushes before it reports; the POSIX signal handlers already run on the thread's signal stack and flush
-there before they report.
+The same holds on a hardware fault raised from a grown stack: on x64-windows the fault runs on the thread's stack, and the
+vectored handler leaves for the system stack and flushes before it reports; the POSIX signal handlers already run on the
+thread's signal stack and flush there before they report. The program recurses first, so the stack has grown by the time the
+fault is raised and the kernel's dispatch fits on every host. A fault whose dispatch lands below the stack's bottom is the
+named fatal error, which flushes nothing.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function descend(depth Integer) returns Integer
+	if depth == 0 'bottom'
+		return 0
+	end 'bottom'
+
+	return descend(depth - 1) + 1
+end 'descend'
+
 function main() returns ExitCode
 	Log.setDefault(LogSink.create(spawn(capacity: InstrumentationMailboxCapacity) TextLogHandler.create(LogHandlerOptions.create(LogStream.standardError, addTime: false, addSource: false)), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 	Log.error("boom")
+
+	if descend(1000) != 1000 'grownWrongly'
+		return 2
+	end 'grownWrongly'
+
 	__Builtins.forceSegfault()
 	return 0
 end 'main'

@@ -6330,7 +6330,10 @@ Exit code 70 with `fatal error: <reason>` on stderr is a broken runtime invarian
 its runtime, worth reporting with the program that produced it. One reason marks a limit of the host:
 on x64-windows, `fatal error: exception dispatched below green thread stack bottom` ends a program whose
 green thread faulted with too little stack left for the operating system's exception dispatch, whose size
-grows with the processor's vector state.
+grows with the processor's vector state. On a host whose processor state includes AMX the dispatch exceeds
+12 KB, so a fault on a green thread whose stack has not grown past the 8 KiB it starts with ends with this
+fatal. A stack overflow on the runtime's per-machine system stack has room for the dispatch on every host,
+AMX included, and ends with `panic: stack overflow`.
 
 Exit code 2 with `fatal error: cannot open standard fds` is the start-up check described under
 [Entry Point](#entry-point).
@@ -8112,7 +8115,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | a second green thread calling `Scheduler.quiesce()` while another is waiting in it | exit code **123** |
 | the operating system refusing a green-thread program's OS thread the event it sleeps on while it waits for a runtime lock | exit code **126** |
 | a broken runtime invariant — a bug in the compiler or its runtime | the program prints `fatal error: <reason>` to stderr and exits with code **70** |
-| on x64-windows, a fault on a green thread with too little stack left for the operating system's exception dispatch | the program prints `fatal error: exception dispatched below green thread stack bottom` to stderr and exits with code **70** |
+| on x64-windows, a fault on a green thread with too little stack left for the operating system's exception dispatch — on a host with AMX, any fault before the thread's stack grows past the 8 KiB it starts with | the program prints `fatal error: exception dispatched below green thread stack bottom` to stderr and exits with code **70** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).

@@ -29,7 +29,7 @@ fault there is reported as `panic: stack overflow`. The per-M system stack's gua
 
 | lane | guard region below the per-M system stack |
 |---|---|
-| x64-windows | 12 KiB: 8 KiB of headroom for the fault dispatcher, then a 4 KiB `PAGE_GUARD` page |
+| x64-windows | 20 KiB: 16 KiB of headroom for the fault dispatcher, then a 4 KiB `PAGE_GUARD` page |
 | x64-linux | 4 KiB, no access |
 | arm64-macos | 16 KiB, no access |
 | arm64-linux | 64 KiB, no access |

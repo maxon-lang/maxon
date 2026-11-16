@@ -1,0 +1,20 @@
+let AShallowFaultEndsAsThePanicOrTheNamedFatalCaseLabel = "shallow-fault"
+
+let ShallowFaultPanicExitCode = 1
+let ShallowFaultPanicPrefix = "panic: nil pointer or invalid memory access"
+let ShallowFaultFatalExitCode = 70
+let ShallowFaultFatalLine = "fatal error: exception dispatched below green thread stack bottom"
+
+let ShallowFaultReason = "A hardware fault raised from the shallowest frame of the main green thread's seed stack is dispatched by the operating system onto that stack. On x64-windows the kernel's frame on a host with AMX is about 12.6 KB, so it can land below the stack's bottom. Every green-stack mapping has writable headroom below it, so the vectored handler is always reached, and it ends the program one of two ways: the ordinary fault panic when the frame fit above the bottom, or `{ShallowFaultFatalLine}` with exit {ShallowFaultFatalExitCode} when it did not. The fatal flushes no log and runs no green thread, because the dispatch may have overwritten a neighbour's live stack. A bare 0xC0000005 from the process is the kernel failing to build the frame at all."
+
+test 'a shallow fault on the main green thread ends as the panic or the named fatal'
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: AShallowFaultEndsAsThePanicOrTheNamedFatalCaseLabel, fixture: ShallowFaultFixtureName)
+	let run = runStagedForHost(builtExecutable(staged), staged: staged, procs: SoleProcessor, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	let endedAsThePanic = run.exitCode() == ShallowFaultPanicExitCode and run.stderr.startsWith(ShallowFaultPanicPrefix)
+	let endedAsTheFatal = run.exitCode() == ShallowFaultFatalExitCode and run.stderr.contains(ShallowFaultFatalLine)
+
+	Expect.isTrue(endedAsThePanic or endedAsTheFatal, message: "a program that faulted from main at seed depth exited {run.exitCode()} and said `{oneLine(run.stdout)}` on stdout and `{oneLine(run.stderr)}` on stderr. It must end with exit {ShallowFaultPanicExitCode} and stderr starting `{ShallowFaultPanicPrefix}`, or with exit {ShallowFaultFatalExitCode} and stderr holding `{ShallowFaultFatalLine}`.\n\n  {ShallowFaultReason}")
+
+	discardStagedDir(staged)
+end 'a shallow fault on the main green thread ends as the panic or the named fatal'

@@ -895,6 +895,7 @@ tests/
     a-pinned-green-thread-runs-while-another-sits-in-a-blocking-syscall.maxtest     the pinned thread's owner is woken and given a processor even while another machine is inside a blocking call
     a-fed-run-ends-at-its-childs-exit-though-a-process-it-started-holds-its-output.maxtest     a fed run returns an exited child's whole output, a process it started still printing after the exit included, within a bound instead of waiting for that process to end
     a-program-that-only-pins-lays-out-no-profile-runtime.maxtest     a `MachinePin` program runs, lays out `__gt_pin_destruct` and carries no `__prof_close`, on both arm64 lanes
+    a-shallow-fault-on-the-main-green-thread-ends-as-the-panic-or-the-named-fatal.maxtest     a library-tier program that faults from `main` at seed depth ends as the fault panic (exit 1) or as the named fatal `exception dispatched below green thread stack bottom` (exit 70), never as a bare access violation
     SafePointTable.maxon                    the second shared half: finds `__symtable` in a built executable and reads one symbol's safe-point byte
     the-cown-queue-publishers-are-never-stopped-by-asynchronous-preemption.maxtest     every cown queue publisher's safe-point byte is `never`, on x64-windows, x64-linux, arm64-linux and arm64-macos
     the-cown-runner-links-no-queue-node-inline.maxtest     `__cown_run` carries no release store and `__cown_enqueue_finish` exactly one, on both arm64 lanes
@@ -912,6 +913,7 @@ tests/
     fixtures/census-during-scavenge/main.maxon.fixture   stored name only - see rule 1
     fixtures/census-during-remote-frees/main.maxon.fixture   stored name only - see rule 1
     fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
+    fixtures/shallow-fault/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine/main.maxon.fixture   stored name only - see rule 1
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
     fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
@@ -1735,6 +1737,15 @@ program prints a line, starts a process that keeps printing on the same stdout a
 exits 7. The run must return the program's whole output, the process's lines after the exit included,
 in under `HeldPipePromptMs`: it ends on the silence bound after the last of them, not when the holder
 ends.
+
+**`a-shallow-fault-on-the-main-green-thread-ends-as-the-panic-or-the-named-fatal`** — builds the
+`shallow-fault` fixture as library tier (`builtLibraryTierFixture`, because `__Builtins.forceSegfault()`
+is refused elsewhere) and runs it at one processor. The program logs nothing and faults from `main` at
+seed depth. On x64-windows the kernel's dispatch frame is about 12.6 KB on a host with AMX and can land
+below the seed stack's bottom, so the run ends one of two ways and the case accepts exactly those: exit 1
+with stderr starting `panic: nil pointer or invalid memory access`, or exit 70 with stderr holding
+`fatal error: exception dispatched below green thread stack bottom`. A bare 0xC0000005 is neither. It
+runs on every host, where the first outcome is the one that occurs off x64-windows.
 
 **`steal-reads-the-victim-ring-with-acquire-loads`** — `__sched_steal`, the green-thread scheduler's
 thief, and the victim's `runqHead`, `runqTail` and `runnext`.

@@ -746,38 +746,71 @@ function gtStackSystemBytes(target Target) returns FullRangeInt
 	end 'home'
 end 'gtStackSystemBytes'
 
-// ⭐ **The room Windows needs to dispatch a fault on a green thread, sized for the widest host.** The kernel
+// ⭐ **The room Windows needs to dispatch a fault on a green thread, sized for the reserve host.** The kernel
 // builds the exception record, the CONTEXT with its XSAVE area and the dispatcher's frames on the faulting
 // stack, and the XSAVE area grows with the host's vector state. A fault can land with only the guard height
-// left under the stack pointer, so the sum of those parts at their widest (AVX-512) plus the diagnostic chain
-// (`X64Runtime.UnguardedDiagnosticChainBytes`, of which only the handler's own frame lands here: it
+// left under the stack pointer, so the sum of those parts on the reserve host (AVX-512) plus the diagnostic
+// chain (`X64Runtime.UnguardedDiagnosticChainBytes`, of which only the handler's own frame lands here: it
 // prints from the machine's system stack) must fit in the margin plus this reserve, and
-// `requireWindowsDispatchFitsItsReserve` refuses a build where it would not. A dispatch that still lands
-// below the stack's bottom is `RuntimeFatal.exceptionDispatchedBelowGreenThreadStackBottom` when the handler
-// runs, and ends the process with the fault's own status (0xC0000005) when the kernel cannot build its frame.
-// Go reserves 4096 here, which does not hold this sum; 0x1200 holds it with little slack, so widening either
-// part can fail the check.
+// `requireWindowsDispatchFitsItsReserve` refuses a build where it would not. A wider host (AMX) can dispatch
+// below the stack's bottom; that is sound only because `emitGtStackMap` leaves headroom sized for the widest
+// host under every mapping, so the handler runs and ends the process with
+// `RuntimeFatal.exceptionDispatchedBelowGreenThreadStackBottom`. Go reserves 4096 here, which does not hold
+// this sum.
 let WindowsPageBytes = 0x1000 as FullRangeInt
 let GtWindowsExceptionDispatchBytes = 0x1200 as FullRangeInt
 let WindowsContextRecordBytes = 1232 as FullRangeInt
 let WindowsContextExtensionBytes = 256 as FullRangeInt
-let WindowsWidestXStateBytes = 2688 as FullRangeInt
+let WindowsXStateHeaderBytes = 64 as FullRangeInt
+let WindowsXStateAvxBytes = 256 as FullRangeInt
+let WindowsXStateAvx512OpmaskBytes = 64 as FullRangeInt
+let WindowsXStateAvx512ZmmHi256Bytes = 512 as FullRangeInt
+let WindowsXStateAvx512Hi16ZmmBytes = 1024 as FullRangeInt
+let WindowsXStateProtectionKeysBytes = 8 as FullRangeInt
+let WindowsXStateAmxTileConfigBytes = 64 as FullRangeInt
+let WindowsXStateAmxTileDataBytes = 8192 as FullRangeInt
+let WindowsReserveHostXStateBytes = WindowsXStateHeaderBytes + WindowsXStateAvxBytes + WindowsXStateAvx512OpmaskBytes + WindowsXStateAvx512ZmmHi256Bytes + WindowsXStateAvx512Hi16ZmmBytes + WindowsXStateProtectionKeysBytes
+let WindowsWidestHostXStateBytes = WindowsReserveHostXStateBytes + WindowsXStateAmxTileConfigBytes + WindowsXStateAmxTileDataBytes
 let WindowsExceptionRecordBytes = 152 as FullRangeInt
-let WindowsDispatcherFramesBytes = 512 as FullRangeInt
-let WindowsWidestDispatchBytes = WindowsContextRecordBytes + WindowsContextExtensionBytes + WindowsWidestXStateBytes + WindowsExceptionRecordBytes + WindowsDispatcherFramesBytes
+let WindowsDispatcherFramesBytes = 1024 as FullRangeInt
+let WindowsDispatchBytesBesideXState = WindowsContextRecordBytes + WindowsContextExtensionBytes + WindowsExceptionRecordBytes + WindowsDispatcherFramesBytes
+let WindowsReserveHostDispatchBytes = WindowsDispatchBytesBesideXState + WindowsReserveHostXStateBytes
+let WindowsWidestHostDispatchBytes = WindowsDispatchBytesBesideXState + WindowsWidestHostXStateBytes
 
 function requireWindowsDispatchFitsItsReserve(target Target)
 	if gtFaultFrameHome(target) != FaultFrameHome.faultingStack 'noFrameOnTheStack'
 		return
 	end 'noFrameOnTheStack'
 
-	let needed = WindowsWidestDispatchBytes + UnguardedDiagnosticChainBytes
+	let needed = WindowsReserveHostDispatchBytes + UnguardedDiagnosticChainBytes
 	let room = gtStackGuardHeight(target)
 
 	if needed > room 'dispatchOutgrowsGuardHeight'
-		panic("requireWindowsDispatchFitsItsReserve: the widest exception dispatch is {WindowsWidestDispatchBytes} bytes and the diagnostic chain under it {UnguardedDiagnosticChainBytes}, but a fault can land with only the guard height ({room} bytes) left under the stack pointer — a fault on a nearly full stack would have no room for the kernel to build its frame and the process would end with the fault's own status. Raise GtWindowsExceptionDispatchBytes")
+		panic("requireWindowsDispatchFitsItsReserve: the reserve host's exception dispatch is {WindowsReserveHostDispatchBytes} bytes and the diagnostic chain under it {UnguardedDiagnosticChainBytes}, but a fault can land with only the guard height ({room} bytes) left under the stack pointer — a fault on a nearly full stack would dispatch below the stack's bottom on every host. Raise GtWindowsExceptionDispatchBytes")
 	end 'dispatchOutgrowsGuardHeight'
 end 'requireWindowsDispatchFitsItsReserve'
+
+let GtWindowsStackMappingHeadroomBytes = 0x4000 as FullRangeInt
+
+function gtStackMappingHeadroomBytes(target Target) returns FullRangeInt
+	return match gtFaultFrameHome(target) 'home'
+		faultingStack gives GtWindowsStackMappingHeadroomBytes
+		signalStack gives 0
+	end 'home'
+end 'gtStackMappingHeadroomBytes'
+
+function requireWindowsWidestDispatchFitsTheMappingHeadroom(target Target)
+	if gtFaultFrameHome(target) != FaultFrameHome.faultingStack 'noFrameOnTheStack'
+		return
+	end 'noFrameOnTheStack'
+
+	let needed = WindowsWidestHostDispatchBytes + FaultThunkFrameBytes
+	let room = gtStackMappingHeadroomBytes(target)
+
+	if needed > room 'dispatchOutgrowsHeadroom'
+		panic("requireWindowsWidestDispatchFitsTheMappingHeadroom: the widest host's exception dispatch is {WindowsWidestHostDispatchBytes} bytes and the fault thunk's frame up to its switch to the system stack {FaultThunkFrameBytes}, but the headroom under the lowest green-thread stack of a mapping is {room} bytes — a fault at that stack's bottom would leave the kernel no writable memory for its frame, and the process would end with the fault's own status instead of the below-bottom fatal. Raise GtWindowsStackMappingHeadroomBytes")
+	end 'dispatchOutgrowsHeadroom'
+end 'requireWindowsWidestDispatchFitsTheMappingHeadroom'
 
 // How an M's system stack is guarded, decided by where a fault's frame lands (`FaultFrameHome`).
 enum SystemStackGuard
@@ -829,7 +862,7 @@ function arm64SystemStackGuardRegionBytes(os Os) returns FullRangeInt
 	end 'os'
 end 'arm64SystemStackGuardRegionBytes'
 
-let WindowsSystemStackHeadroomBytes = (WindowsWidestDispatchBytes + UnguardedDiagnosticChainBytes + WindowsPageBytes - 1) and not (WindowsPageBytes - 1)
+let WindowsSystemStackHeadroomBytes = (WindowsWidestHostDispatchBytes + UnguardedDiagnosticChainBytes + WindowsPageBytes - 1) and not (WindowsPageBytes - 1)
 let WindowsSystemStackGuardPageBytes = 0x1000 as FullRangeInt
 export let WindowsSystemStackGuardRegionBytes = WindowsSystemStackHeadroomBytes + WindowsSystemStackGuardPageBytes
 let X64LinuxSystemStackGuardRegionBytes = 0x1000 as FullRangeInt
@@ -2730,8 +2763,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtCoroSweepDropped(module)
 	buildGtRunStrand(module, target: target)
 	buildGtStackShrink(module, target: target)
-	buildGtStackAlloc(module)
-	buildGtStackFree(module)
+	buildGtStackAlloc(module, target: target)
+	buildGtStackFree(module, target: target)
 	buildGtSystemStackAlloc(module, target: target)
 	buildGtSeedAdapt(module, target: target)
 	buildGtSeedScan(module, target: target)
@@ -7765,7 +7798,55 @@ function emitGtStackPoolPush(module StdModule, block IrBlock, pool ValueId, shif
 	emitStoreField(module, block: block, record: headAddr, offset: 0, value: stack)
 end 'emitGtStackPoolPush'
 
-function emitGtStackPoolTake(module StdModule, func IrFunction, cur IrBlock, pool ValueId, shift ValueId, bytes ValueId, got IrBlock, refused IrBlock, ids ValueMinter)
+type GtStackMapping
+	export let block as IrBlock
+	export let base as ValueId
+
+	static function create(block IrBlock, base ValueId) returns GtStackMapping
+		return Self{block: block, base: base}
+	end 'create'
+end 'GtStackMapping'
+
+function emitGtStackMap(module StdModule, func IrFunction, cur IrBlock, usableBytes ValueId, target Target, ids ValueMinter) returns GtStackMapping
+	let headroom = gtStackMappingHeadroomBytes(target)
+	let raw = ids.mint()
+
+	if headroom == 0 'noHeadroom'
+		module.appendOp(cur, op: StdOp.osAllocPages(raw, sizeId: usableBytes))
+		return GtStackMapping.create(cur, base: raw)
+	end 'noHeadroom'
+
+	let offset = module.addBlock(func, label: b"stkmapoffset", heat: BlockHeat.normal)
+	let mapped = module.addBlock(func, label: b"stkmapped", heat: BlockHeat.normal)
+	let headroomBytes = emitConst(module, block: cur, value: headroom, ids: ids)
+	let mappingBytes = emitBin(module, block: cur, a: usableBytes, b: headroomBytes, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(cur, op: StdOp.osAllocPages(raw, sizeId: mappingBytes))
+	module.setTerminator(cur, op: StdOp.condBranch(emitGtStackRefused(module, block: cur, stackBase: raw, ids: ids), thenBlockId: mapped.id, elseBlockId: offset.id))
+	pushBranchEdge(cur, to: mapped, values: argsOf(raw))
+
+	let lowest = emitBin(module, block: offset, a: raw, b: headroomBytes, opcode: StdBinOpcode.add, ids: ids)
+	emitBranchCarrying(module, from: offset, to: mapped, values: argsOf(lowest))
+
+	let base = ids.mint()
+	mapped.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+	return GtStackMapping.create(mapped, base: base)
+end 'emitGtStackMap'
+
+function emitGtStackUnmap(module StdModule, block IrBlock, base ValueId, usableBytes ValueId, target Target, ids ValueMinter)
+	let headroom = gtStackMappingHeadroomBytes(target)
+
+	if headroom == 0 'noHeadroom'
+		module.appendOp(block, op: StdOp.osFreePages(base, sizeId: usableBytes))
+		return
+	end 'noHeadroom'
+
+	let headroomBytes = emitConst(module, block: block, value: headroom, ids: ids)
+	let mappingBase = emitBin(module, block: block, a: base, b: headroomBytes, opcode: StdBinOpcode.sub, ids: ids)
+	let mappingBytes = emitBin(module, block: block, a: usableBytes, b: headroomBytes, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(block, op: StdOp.osFreePages(mappingBase, sizeId: mappingBytes))
+end 'emitGtStackUnmap'
+
+function emitGtStackPoolTake(module StdModule, func IrFunction, cur IrBlock, pool ValueId, shift ValueId, bytes ValueId, got IrBlock, refused IrBlock, target Target, ids ValueMinter)
 	let pop = module.addBlock(func, label: b"stkpop", heat: BlockHeat.normal)
 	let carve = module.addBlock(func, label: b"stkcarve", heat: BlockHeat.normal)
 	let newChunk = module.addBlock(func, label: b"stknewchunk", heat: BlockHeat.normal)
@@ -7787,14 +7868,13 @@ function emitGtStackPoolTake(module StdModule, func IrFunction, cur IrBlock, poo
 	pushBranchEdge(carve, to: carved, values: twoArgs(cursor, second: pastCarve))
 
 	let chunkBytes = emitConst(module, block: newChunk, value: GtStackPoolChunkBytes, ids: ids)
-	let raw = ids.mint()
-	module.appendOp(newChunk, op: StdOp.osAllocPages(raw, sizeId: chunkBytes))
-	module.setTerminator(newChunk, op: StdOp.condBranch(emitGtStackRefused(module, block: newChunk, stackBase: raw, ids: ids), thenBlockId: refused.id, elseBlockId: chunkMapped.id))
-	pushBranchEdge(newChunk, to: refused, values: argsOf(raw))
+	let chunk = emitGtStackMap(module, func: func, cur: newChunk, usableBytes: chunkBytes, target: target, ids: ids)
+	module.setTerminator(chunk.block, op: StdOp.condBranch(emitGtStackRefused(module, block: chunk.block, stackBase: chunk.base, ids: ids), thenBlockId: refused.id, elseBlockId: chunkMapped.id))
+	pushBranchEdge(chunk.block, to: refused, values: argsOf(chunk.base))
 
-	emitStoreField(module, block: chunkMapped, record: pool, offset: GtStackPoolLimitOffset, value: emitBin(module, block: chunkMapped, a: raw, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids))
-	let pastFirst = emitBin(module, block: chunkMapped, a: raw, b: bytes, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchCarrying(module, from: chunkMapped, to: carved, values: twoArgs(raw, second: pastFirst))
+	emitStoreField(module, block: chunkMapped, record: pool, offset: GtStackPoolLimitOffset, value: emitBin(module, block: chunkMapped, a: chunk.base, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids))
+	let pastFirst = emitBin(module, block: chunkMapped, a: chunk.base, b: bytes, opcode: StdBinOpcode.add, ids: ids)
+	emitBranchCarrying(module, from: chunkMapped, to: carved, values: twoArgs(chunk.base, second: pastFirst))
 
 	let address = ids.mint()
 	let nextCursor = ids.mint()
@@ -7808,8 +7888,9 @@ end 'emitGtStackPoolTake'
 // only overflow check is its prologue guard, so a frame that outgrew the guard margin would write
 // into a neighbour's stack without a fault — which is why `UnguardedChains` proves every unguarded
 // chain fits that margin (E5004).
-function buildGtStackAlloc(module StdModule)
+function buildGtStackAlloc(module StdModule, target Target)
 	requireStackPoolGeometry()
+	requireWindowsWidestDispatchFitsTheMappingHeadroom(target)
 
 	let func = IrFunction.createFromStd(GtStackAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
@@ -7833,13 +7914,12 @@ function buildGtStackAlloc(module StdModule)
 	let popCached = module.addBlock(func, label: b"stkpopcached", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let size = 0 as ValueId
+	let size = 0
 
 	emitBranchOnCompare(module, block: entry, value: size, pred: StdCmpPred.gt, against: GtStackPoolMaxBytes, whenTrue: direct, whenFalse: pooled, ids: ids)
 
-	let mapped = ids.mint()
-	module.appendOp(direct, op: StdOp.osAllocPages(mapped, sizeId: size))
-	module.setTerminator(direct, op: StdOp.ret(mapped))
+	let alone = emitGtStackMap(module, func: func, cur: direct, usableBytes: size, target: target, ids: ids)
+	module.setTerminator(alone.block, op: StdOp.ret(alone.base))
 
 	let sized = emitGtStackClassOf(module, func: func, cur: pooled, found: found, size: size, ids: ids)
 	let pool = emitLoadGlobalWord(module, block: found, label: GtStackPoolLabel, ids: ids)
@@ -7863,7 +7943,7 @@ function buildGtStackAlloc(module StdModule)
 	let refillTail = ids.mint()
 	refillTop.blockArgs.push(IrBlockArg.create(refillTail, argType: StdType.i64))
 	emitBranchCarrying(module, from: refill, to: refillTop, values: argsOf(entryAddr))
-	emitGtStackPoolTake(module, func: func, cur: refillTop, pool: pool, shift: sized.shift, bytes: sized.bytes, got: refillGot, refused: refillRefused, ids: ids)
+	emitGtStackPoolTake(module, func: func, cur: refillTop, pool: pool, shift: sized.shift, bytes: sized.bytes, got: refillGot, refused: refillRefused, target: target, ids: ids)
 
 	let filled = emitGtStackCacheAppend(module, block: refillGot, tail: refillTail, entry: entryAddr, stack: refillStack, bytes: sized.bytes, ids: ids)
 	emitBranchOnCompare(module, block: refillGot, value: filled, pred: StdCmpPred.lt, against: GtStackCacheHalfBytes, whenTrue: refillTop, whenFalse: refillDone, ids: ids)
@@ -7885,7 +7965,7 @@ function buildGtStackAlloc(module StdModule)
 	poolOnlyRefused.blockArgs.push(IrBlockArg.create(poolOnlyRefusal, argType: StdType.i64))
 	let poolOnlyTake = module.addBlock(func, label: b"stkpoolonlytake", heat: BlockHeat.normal)
 	module.setTerminator(poolOnly, op: StdOp.branch(poolOnlyTake.id))
-	emitGtStackPoolTake(module, func: func, cur: poolOnlyTake, pool: pool, shift: sized.shift, bytes: sized.bytes, got: poolOnlyGot, refused: poolOnlyRefused, ids: ids)
+	emitGtStackPoolTake(module, func: func, cur: poolOnlyTake, pool: pool, shift: sized.shift, bytes: sized.bytes, got: poolOnlyGot, refused: poolOnlyRefused, target: target, ids: ids)
 
 	emitGtStackPoolLock(module, block: poolOnlyGot, pool: pool, held: false, ids: ids)
 	module.setTerminator(poolOnlyGot, op: StdOp.ret(poolOnlyStack))
@@ -7896,7 +7976,7 @@ function buildGtStackAlloc(module StdModule)
 	module.functions.push(func)
 end 'buildGtStackAlloc'
 
-function buildGtStackFree(module StdModule)
+function buildGtStackFree(module StdModule, target Target)
 	let func = IrFunction.createFromStd(GtStackFreeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	let ids = ValueMinter.create(2)
 
@@ -7916,12 +7996,12 @@ function buildGtStackFree(module StdModule)
 	let kept = module.addBlock(func, label: b"stkkept", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let base = 0 as ValueId
-	let size = 1 as ValueId
+	let base = 0
+	let size = 1
 
 	emitBranchOnCompare(module, block: entry, value: size, pred: StdCmpPred.gt, against: GtStackPoolMaxBytes, whenTrue: direct, whenFalse: pooled, ids: ids)
 
-	module.appendOp(direct, op: StdOp.osFreePages(base, sizeId: size))
+	emitGtStackUnmap(module, block: direct, base: base, usableBytes: size, target: target, ids: ids)
 	module.setTerminator(direct, op: StdOp.retVoid)
 
 	let sized = emitGtStackClassOf(module, func: func, cur: pooled, found: found, size: size, ids: ids)

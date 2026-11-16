@@ -59,6 +59,9 @@ ends with an `...additional frames elided...` line. A processor fault has no sou
 `panic: nil pointer or invalid memory access` or `panic: stack overflow`, followed by the same stack trace.
 On x64-windows, a fault on a green thread whose stack has no room left for the operating system's exception
 dispatch ends with `fatal error: exception dispatched below green thread stack bottom` and exit code 70.
+On a host whose processor state includes AMX the dispatch exceeds 12 KB, so a fault on a green thread whose
+stack has not grown past the 8 KiB it starts with ends this way. A stack overflow on the runtime's
+per-machine system stack has room for the dispatch on every host and ends with `panic: stack overflow`.
 
 A `wasm32-wasi` program panics the same way: the same message, the same trace with the same function
 names, and exit code 1. A memory fault or a stack overflow there is a trap in the WebAssembly runtime,

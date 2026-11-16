@@ -1582,6 +1582,7 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 	let SlotPanicPrefix = 4
 	let SlotLeaveTheStack = 5
 	let asm = X64RuntimeAsm.beginFunction(6)
+	requireFaultThunkFrameWithinItsShare(asm)
 
 	let continueSearch = asm.newLabel()
 	let classified = asm.newLabel()
@@ -1641,6 +1642,16 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 
 	return asm.finishFunction(FaultThunkName)
 end 'buildFaultThunkChunk'
+
+export let FaultThunkFrameBytes = 96 as FullRangeInt
+
+function requireFaultThunkFrameWithinItsShare(asm X64RuntimeAsm)
+	let footprint = asm.stackBytesPerCall() as FullRangeInt
+
+	if footprint > FaultThunkFrameBytes 'thunkOutgrewItsShare'
+		panic("requireFaultThunkFrameWithinItsShare: mrt_fault_thunk's frame is {footprint} bytes but the headroom under a green-thread stack mapping budgets {FaultThunkFrameBytes} for it — a fault at a stack's bottom could run the thunk off that headroom before it leaves for the system stack. Raise FaultThunkFrameBytes")
+	end 'thunkOutgrewItsShare'
+end 'requireFaultThunkFrameWithinItsShare'
 
 // ==========================================================================
 // mrt_runtime_init()

@@ -1096,7 +1096,10 @@ Exit code 70 with `fatal error: <reason>` on stderr is a broken runtime invarian
 its runtime, worth reporting with the program that produced it. One reason marks a limit of the host:
 on x64-windows, `fatal error: exception dispatched below green thread stack bottom` ends a program whose
 green thread faulted with too little stack left for the operating system's exception dispatch, whose size
-grows with the processor's vector state.
+grows with the processor's vector state. On a host whose processor state includes AMX the dispatch exceeds
+12 KB, so a fault on a green thread whose stack has not grown past the 8 KiB it starts with ends with this
+fatal. A stack overflow on the runtime's per-machine system stack has room for the dispatch on every host,
+AMX included, and ends with `panic: stack overflow`.
 
 Exit code 2 with `fatal error: cannot open standard fds` is the start-up check described under
 [Entry Point](/docs/language/overview/#entry-point).
