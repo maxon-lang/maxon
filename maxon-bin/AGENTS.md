@@ -4,7 +4,7 @@ One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, b
 `maxon-bin/.maxon/maxon`, suite `specs/`. On Windows the binary is `maxon.exe`; commands below show
 the Windows form.
 
-⭐ **TWO SOURCE TIERS ARE READ ON EVERY COMPILE, AND BOTH LIVE AT THE CHECKOUT ROOT.** `stdlib/` is the
+**Two source tiers are read on every compile, and both live at the checkout root.** `stdlib/` is the
 standard library; `runtime/` beside it is the language runtime. The compiler locates `stdlib/` by
 walking UP from its own executable and reaches `runtime/` as its sibling, so a tree holding one without
 the other compiles nothing. A third, `scriptlib/` beside them, holds the USER's own packages (gitignored,
@@ -43,11 +43,9 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   ```
   ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon
   ```
-  **A SEED OLDER THAN NAMED MANIFEST TARGETS READS `maxon-bin` AS A PATH, NOT A TARGET**, and a path
-  build picks its own output name. MEASURED with the v0.1.0 release as the seed: it wrote
-  an executable named after a source under `maxon-bin/Compiler/`, left the slot EMPTY, and **exited 0** — so the next command is
-  a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `--output=` for this reason;
-  `CONTRIBUTING.md` spells it too.
+  A seed older than named manifest targets reads `maxon-bin` as a path, not a target: a path build names
+  its own output, leaves the slot empty and exits 0, so the next command fails with a bare `127`.
+  `scripts/build-from-seed.sh` passes `--output=` for this reason; `CONTRIBUTING.md` spells it too.
   A seed build that fails on E6002 (a slot it could not replace: read-only, or held open in a way that
   forbids a rename) is a lock, not a refusal; the message names which. A slot binary that is only running,
   an editor's language server for one, is renamed aside and replaced. A slot binary's version stamp names the last commit, never the
@@ -96,13 +94,12 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 >
 > ⇒ **It bites hardest where the compiler is the program under test**: `spec-test`'s worker IS the
 > compiler, so a runtime fix to subprocess, the scheduler or memory management does not change what the
-> HARNESS does until the second build. MEASURED: a delayed-stdin fix looked like a Windows-only lane bug
-> for exactly this reason — the case failed 3/3 against `C1` and passed 3/3 against `C2`.
+> HARNESS does until the second build.
 >
 > ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds two stages under `temp/fixpoint/` and compares
 > them — both are past the convergence point, so they agree while the SLOT still holds `C1`.
 >
-> ⭐⭐ **`maxon run build` DOES THE SECOND BUILD ITSELF.** The compiler stamps the commit it was built
+> **`maxon run build` does the second build itself.** The compiler stamps the commit it was built
 > from, so *"has any runtime file changed since the running compiler was built"* is a `git diff` — it
 > counts uncommitted changes too — and `maxon-bin/maxon.maxproj` asks it on every `run build`. When the
 > answer is yes, or unknown, it prints the reason to stderr and describes the build with
@@ -169,7 +166,8 @@ structured results. Use Bash only where no tool covers the case.
 ⚠ **A RUNNING SERVER IS THE COMPILER YOU BUILT IT FROM.** Rebuilding the slot renames the running
 image to `maxon.previous` and writes a new one; the live process keeps serving from the vacated image
 until the host restarts it. So after a build, a tool answer still comes from the PREVIOUS compiler —
-restart the MCP server when you need the new one to answer.
+restart the MCP server when you need the new one to answer. `tests/mcp/rebuild.maxtest` pins that the
+process keeps answering across the replacement.
 
 > ## 🟡 IN A WORKTREE, EVERY MCP TOOL NEEDS `repoRoot` — OR IT DRIVES THE **MAIN REPO**
 >
@@ -187,7 +185,7 @@ restart the MCP server when you need the new one to answer.
 > verdict about your tree.
 >
 > ```
-> build(repoRoot: "C:/Users/Eric/dev/maxon/.claude/worktrees/agent-xyz")
+> build(repoRoot: "<absolute path of your worktree>")
 > ```
 >
 > - **Every result echoes the `repoRoot` it actually used**, in the payload's `repoRoot` field —
@@ -238,9 +236,8 @@ which pays the startup per file and runs each on one worker. A comma is part of 
 the whole run, naming it, so a typo'd member cannot run nowhere while the rest reads green. (`maxon test`
 lowercases its patterns and also splits a value on commas.)
 
-The runner has no `--verbose` (it always prints a line per test), no `--no-batch` (`--batch=off` turns
-off program batching; how a lane's executions are grouped is `RunStrategy`, chosen by target and host)
-and no `--debug-info`; it does have `--network`.
+Program batching is `--batch=on|off`; how a lane's executions are grouped is `RunStrategy`, chosen by
+target and host. The runner always prints a line per test.
 
 ### Common flags
 
@@ -266,7 +263,7 @@ installers read the same table. What a target MEANS — its `CpuArch`/`Os` case,
 debug interface — stays compiler code, so a row naming a cpu or os the compiler lacks fails the build.
 `docs/RELEASING.md` owns adding a target.
 
-> #### ⛔⛔ `--target=` CROSS-COMPILES THE PROGRAMS. IT NEVER HOSTS THE COMPILER.
+> #### `--target=` cross-compiles the programs; it never hosts the compiler
 >
 > `spec-test --target=x64-linux` on a Windows host builds and runs the TEST binaries for Linux while
 > the compiler stays a Windows process. So that lane never runs the compiler's own `main` **as** a
@@ -275,11 +272,8 @@ debug interface — stays compiler code, so a row naming a cpu or os the compile
 > architecture**: seed → `C1` → `C2` → the suite under `C2`, which is a whole class of defect a cross
 > lane cannot reach.
 >
-> MEASURED: the x64 large-frame page walk touched-then-compared, so its last store landed below the
-> frame base (`ca4abf52b8`). Harmless on an OS-grown stack; a SIGSEGV on a green thread's exact mmap'd
-> one — and reachable only once the called-once inliner carried the compiler's own `main` past one
-> page. **Three consecutive pushes to `main` died at exit 139 in `build-from-seed.sh` before the suite
-> could start, while the cross lane read 7706/0 on the same tree.**
+> A defect that needs the compiler itself running on that OS (a Linux green thread's exact mmap'd stack,
+> the Linux runtime, that lane's frame layout) stays green on the cross lane.
 >
 > ⇒ **TO HOST x64-linux LOCALLY, CROSS-BUILD ONCE AND THEN STAY INSIDE WSL** — the recipe is in the
 > `compiler-workflow` skill.
@@ -343,7 +337,7 @@ REFUSES a key naming no supported target or named twice, refuses a marker that e
 them (a case that runs nowhere is fixed or deleted), and refuses the retired `<!-- targets: -->`
 spelling.
 
-⛔⛔ **DO NOT MARK A CASE THE COMPILER ALREADY REFUSES.** A lane with no substrate answers **E3104**, and
+**Do not mark a case the compiler already refuses.** A lane with no substrate answers **E3104**, and
 the harness reports that as a counted **SKIP** naming the case; a marker removes the case from selection
 with nothing said anywhere. The two are not two spellings of one fact — one is the fact and the other is
 the fact made invisible. So async, the thread-CPU clock, file and directory IO and console stdin
@@ -617,14 +611,3 @@ no doc comment, which is how it finds them.
 - `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) and the
   ` ```TargetIr:<lane> ` pins in a spec file but **not** its `maxoncstderr` blocks — an error-code renumber
   moves those by hand.
-
-## ⚠ A running MCP server keeps answering from the compiler it was started as
-
-The server is the compiler, so editing `maxon-bin/Compiler/Mcp/` and rebuilding the slot leaves the
-LIVE process running the old code: a build renames the running image to `maxon.previous` rather than
-overwriting it (an OS will not let a running executable be deleted, but will let one be renamed), and
-the process serves on from the vacated image. **RESTART THE MCP SERVER after a build whose result you
-want the tools to reflect.**
-
-`tests/mcp/rebuild.maxtest` pins the surviving half of that: the process keeps answering across the
-replacement rather than dying mid-session.

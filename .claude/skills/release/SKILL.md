@@ -47,14 +47,12 @@ scripts/release-notes.sh --commits-since
 ```
 
 ⭐ **THAT LISTING IS REFERENCE MATERIAL, NOT A DRAFT.** A commit subject is written for someone
-changing the compiler; the entry is for someone installing it. Measured on `v0.1.0..HEAD`: 21 commits,
-about six of which mean anything to a reader. Rename `## Unreleased` — the breaking changes the
+changing the compiler; the entry is for someone installing it. Rename `## Unreleased` — the breaking changes the
 release's commits already recorded — to `## X.Y.Z — YYYY-MM-DD`, or write that heading when the file
 has no `## Unreleased`, and add `### Added` / `### Changed` / `### Fixed` / `### Removed` beneath it.
 `### Breaking changes` comes first.
 
-⛔ **DO NOT PASTE COMMIT SUBJECTS IN.** That was tried, and generating the entry then correcting it
-meant rewriting seventeen lines of twenty-one.
+**Do not paste commit subjects in**: nearly every one would need rewriting for an installer.
 
 ⛔ **EVERY BREAKING CHANGE CARRIES ITS FIX.** A change that can break an existing project, script or
 workflow — a removed or renamed spelling, command, flag, file name, syntax or stdlib API, or a program

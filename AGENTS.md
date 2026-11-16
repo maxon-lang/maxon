@@ -177,7 +177,7 @@ Apply these standards when writing or reviewing any code:
 - **No magic values** — replace bare literal constants with named `static` constants that describe
   their meaning. Group a related set into a `static enum` rather than scattering them.
 
-### ⛔⭐ COMMENTS — YOU WRITE NONE. THE `documenter` SKILL WRITES THEM ALL, JUST BEFORE THE COMMIT.
+### Comments — you write none; the `documenter` skill writes them all, just before the commit
 
 **While you are writing code, write NO comments.** Not a `//`, not a `///` doc comment, not the doc
 block above an `ErrorCodeRegistry.maxon` case. **Code changes shape while a change is being written**,
@@ -188,9 +188,8 @@ never reaches the commit. Only the final shape is worth commenting, and it does 
 finished diff, immediately before the commit.** It also updates the `docs/` source the change's surface
 owns and regenerates the site, so the Documentation section above is the same step.
 
-⚠ **Running last is not a licence to write more.** What it writes is **minimal and concise — the
-default is still no comment**, and most declarations end with none. The rules below bind it, and bind
-every comment anyone touches:
+Running last is not a licence to write more: most declarations end with no comment. The rules below
+bind it, and bind every comment anyone touches:
 
 - **Minimal and concise.** The default is **no comment**. Write one only where the code cannot carry
   the point by itself, and then in as few words as it takes. A comment per line, a banner over every

@@ -1,75 +1,38 @@
 ---
 name: land
-description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, document it, rebase on origin/main, then the landing gates ONCE (build, filtered specs, codecs check, plus the self-compile and seed chain when the diff calls for them; CI runs the rest), commit and push without waiting for CI. Main checkout, no worktree, no branch. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any compiler change — HOWEVER LARGE it turns out to be: the task is done AS ONE CHUNK, in ONE commit, with no slicing and no escalation out of this process. Invoke as `/land <what to do>`.
+description: Implement one self-contained compiler change end to end and push it as one commit on main — a spec set watched red first, the code, optimization, independent review, documentation, rebase, the landing gates once (CI runs the rest). Use for a bug fix, a missing diagnostic, a defect found by hand, or a feature of any size. Invoke as `/land <what to do>`.
 ---
 
 # Land one change
 
 **One invocation = ONE change, done WHOLE: specified, implemented, reviewed and pushed as a single
-commit.** You work directly in the main checkout, alone on `main`, and you run the landing gates
+commit.** You work directly in the main checkout, on `main` with no branch, and you run the landing gates
 **exactly once, at the end**. There is **no full local battery**: you commit and push on a build, filtered
 specs covering what changed and the codecs check, and CI runs the rest.
 
 **This is the process for compiler work:** the bug you just found, the diagnostic nobody wrote, the pass
 that answers wrong, a feature however large. There is no heavier sibling to escalate into.
 
-> ## ⛔⛔ THERE IS NO ESCALATION. YOU FINISH THE CHANGE IN THIS PROCESS.
+> ## One change, finished here, in one commit
 >
-> **The process was CHOSEN, deliberately, by the person who invoked it. It is not a guess for you to
-> second-guess once you see how big the work is.** You may not open a worktree, you may not invent a
-> contract or a board, you may not stop and recommend that someone run a heavier process instead, and
-> you may not land half the change and file the rest. **You finish it here.**
+> The person who invoked `/land` chose this process deliberately. Finish the change in it, however large
+> it turns out: no worktree, no contract or board, no recommendation to run a heavier process, no landing
+> half and filing the rest. Size, several passes, new IR ops, a design decision you can make, or hours of
+> work are not reasons to leave: `AGENTS.md` says there are no time constraints and complexity doesn't
+> matter. A big change is a longer §2 and §3, not more commits. The only stops are the HALT list at the
+> end, and each of those is a question answered in place, after which you carry on here.
 >
-> ⛔ **NONE of these is a reason to leave, and each has been offered as one:** it turned out large; it
-> touches several passes; it needs new IR ops; it wants a design decision you are able to make; it
-> "deserves" a contract or a plan; it will take hours. `AGENTS.md` settles all of them at once —
-> ***"There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it
-> properly."***
+> Do not slice the deliverable. The task goes through §1–§9 once and reaches `main` as one commit, because:
+> - §8 runs once because the change is one chunk; four slices mean four rebases, gate runs, self-compiles
+>   and reviews.
+> - between slices `main` carries half a mechanism (an `export` without its consumer is an E3092 that
+>   breaks the self-compile; a diagnostic no case reaches is dead code; a lowering with no emitter is a
+>   wrong answer waiting for a caller).
+> - §1's red set is the acceptance for the whole change; slices each invent a smaller one.
 >
-> You delegate, heavily (see *Coordinating*, below) — but every agent you send works in the **SAME
-> tree, under you, integrated as it arrives**. A second tree buys nothing and costs you the red set,
-> the diagnosis and the context you have already paid for.
->
-> **When the change turns out to be big, the loop is what scales — not the process:** widen the spec set
-> (§1), write new IR ops as ordinary code (§2 — a "contract" is a signature you land *with* its first
-> consumer, and with one author that is just writing it), delegate to another implementer agent when the
-> diagnosis runs long — one mechanism at a time **into your own tree, integrated as it arrives**, which
-> is delegated labour and never a slice of the deliverable — and land the whole thing in one commit.
-> **A big change is a longer §2 and §3, not more commits.**
->
-> **The ONLY thing that stops you is the HALT list at the end of this file, and none of its entries is a
-> reroute** — each is a question for the user, answered in place, after which you carry on here.
-
-> ## ⛔⛔ ONE CHANGE, ONE CHUNK, ONE COMMIT. **DO NOT SLICE THE TASK.**
->
-> **The task you were given is the unit.** It goes through §1–§9 **once**, whole, and reaches `main` as
-> **one commit**. ⛔ **No phases, no "part 1 of 3", no landing the reachable half and filing the rest,
-> no per-piece commit-and-push, no separate red/green cycle per piece.** A task cut into four is not
-> four small `/land`s; it is one `/land` done four times, badly.
->
-> **A slice is only safe with the two things this process deliberately lacks: a separate worktree per
-> slice and a board saying who owns which.** Here there is ONE tree and ONE commit, and **you are the
-> integrator** — so nothing waits at the far end to put slices back together. A slice is not a smaller
-> unit of work; it is an unintegrated one that lands half-finished on `main`.
->
-> **Three things go wrong, and the first is the one that made this process worth writing:**
-> - **The gates multiply.** §8 runs ONCE precisely because the change is one chunk. Four slices is four
->   rebases, four gate runs, four self-compiles and four reviews — **four times the gate cost**, for the
->   same code.
-> - **`main` carries half a mechanism between slices**, and the next agent builds on it. An `export`
->   without its consumer is an E3092 that breaks the self-compile; a diagnostic no case reaches is dead
->   code; a lowering with no emitter is a wrong answer waiting for a caller.
-> - **The acceptance set dissolves.** §1's red set is the acceptance for the WHOLE change. Slice it and
->   each piece invents its own smaller one — which is how "done" gets declared against cases nobody
->   chose.
->
-> ✅ **What IS allowed — and it is most of the work — is delegating LABOUR.** Every step of this process
-> is handed to an agent (that is the next section), and several implementer agents may run at once on
-> **disjoint files**, or sequentially when the files overlap. **That is not slicing**: they share your
-> one tree, you integrate as their work arrives, and the whole thing goes through §3–§9 as a unit and
-> lands as one commit. **Cutting up the WORK is the method; cutting up the DELIVERABLE is the failure.**
-> Also fine: fixing a pre-existing red **you did not cause** in its own commit first (§8) — somebody
-> else's defect, not a slice of your task.
+> Delegating labour is the method: several implementers may run at once on disjoint files (sequentially
+> when files overlap), in your one tree, integrated as their work arrives. Fixing a pre-existing red you
+> did not cause, in its own commit first (§8), is also fine.
 
 ## The shape — who does what
 
@@ -118,9 +81,8 @@ still runs**, because independence is not a size question.
 
 **What is NEVER delegated**, because delegating it would move the gate:
 
-- **The choice of spec set (§1).** An agent left to choose its own coverage tests what it remembered —
-  which is exactly how a "finished" scalar core once scored 48 of 2,746. The scout returns FACTS; the
-  set is yours.
+- **The choice of spec set (§1).** An agent left to choose its own coverage tests what it remembered,
+  and declares done against cases nobody chose. The scout returns facts; the set is yours.
 - **Reading the RED (§1) and confirming the GREEN (§3)** with your own filtered run.
 - **The `scale-test` ladder read and its `optimization-log.md` row (§4)** — attribution is only
   available now, and only to whoever knows what changed.
@@ -241,9 +203,8 @@ stop out.
 
 **Do not trust a report — read its evidence.** Read the crux run's log file yourself, check the binary
 was current when it ran (the staleness check above), read the crux lines of the diff, **check exit
-codes, and never grep for a success string** — a past session reported a
-green build by grepping for `^error` while the real failure printed `[CMP] ERROR:`. Exit **101** is a
-leak. What you must NOT do is re-derive the agent's diagnosis or re-run what it already ran; auditing
+codes, and never grep for a success string** — the compiler's failures do not share one prefix
+(`[CMP] ERROR:` does not match `^error`). Exit **101** is a leak. What you must NOT do is re-derive the agent's diagnosis or re-run what it already ran; auditing
 its diff for quality is **§5's** job, not yours.
 
 ---
@@ -438,9 +399,8 @@ run** — the log file it reported, with the binary current when it ran — and 
 standing between an agent's report and §8. Re-run the filter yourself only when that evidence is
 missing or something changed after it.
 
-- ⛔ **NOBODY runs the full suite — not in this loop, not in §8, not you, not the agent.** It is CI's. A
-  suite run per iteration is the single largest piece of duplicated work these processes have ever paid
-  for, and every agent's brief must say so.
+- **Nobody runs the full suite — not in this loop, not in §8, not you, not the agent.** It is CI's; a
+  run per iteration repeats work CI does anyway, and every agent's brief must say so.
 - ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
@@ -494,7 +454,7 @@ situation:
   not by this diff.
 - **Anything it leaves for triage arrives in its REPORT, and you decide it here**, by §10's test: a
   related defect is fixed now; an unrelated one is filed as a known issue and drained after the
-  push. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
+  push. Never a `todo.md` bullet: an entry there is a deferred defect that nothing drains
   (AGENTS.md, "No skipped work").
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
@@ -627,8 +587,8 @@ the WSL lane runs.
 
 > ### ⭐ THE SELF-COMPILE IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
 > `checkUnusedExports` (**E3092**) and `checkUnusedUnexported` (**E3219**) run only when the compiler compiles a *program*, and the
-> only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A three-line
-> commit once broke stage-2 with the suite at 6673/0.** It is the only E3092 gate, and CI's failure there
+> only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A fully green
+> suite says nothing about it.** It is the only E3092 gate, and CI's failure there
 > is a red `main`.
 > Run it where §8's row says. An E3092 here is a declaration more visible than its uses: narrow it, or land it *with* its
 > first consumer.

@@ -37,13 +37,13 @@ slows the self-compile by more than 5% is a HALT for the user's ruling. `docs/op
 the current figures. Look for:
 
 - **Nested scans** over compiler-sized collections (`ops`, values, blocks, symbols) — an O(n) lookup
-  inside an O(n) walk is the classic, and this project has shipped it more than once.
+  inside an O(n) walk is the classic.
 - **Linear lookups that want a hash/index** — `findFirst` over an array in a loop.
 - **Repeated rebuilds** — recomputing a fixpoint, liveness, or a dominator tree per element instead of
   once. (The register allocator builds liveness once per function and repairs it incrementally after
   each split, `refreshAfterSplit`; a rebuild per split is the shape to catch.)
 - **Iterating a dense index space when you should walk set BITS** — `0 upto valueCount` instead of the
-  live-set's set bits. Making exactly this change is what turned the compiler's allocator linear.
+  live-set's set bits.
 - **Allocation in a hot path**, especially anything that allocates into the very `mm` stream being
   traced. (Hashing through a `toByteArray()` copy allocates; `String.hash` walks the bytes in place.)
   ⚠ **An allocation count is a proxy, not a time**: a slab fast-path allocation costs about 8 ns. For a
@@ -64,27 +64,22 @@ free in the optimizer.
 
 **Scope the hunt to the change.** A new pass, a new IR op, or a new collection the compiler indexes by
 earns the full hunt above. A change that added none of those gives the hunt structurally nothing to
-find — confirm no new superlinear structure crept in, read one `scale-test`, and stop. **If nothing
-triggered, say so**; a superlinear hunt over a change that added no algorithm has nothing to find, and
-reporting that honestly is the correct outcome. Do not manufacture work where there is none; do not
-micro-optimize to look busy.
+find — confirm no new superlinear structure crept in, read one `scale-test`, and stop. If nothing
+triggered, say so: that is the correct outcome.
 
-## ⚠ `scale-test` IS AN INSTRUMENT. It collects data for TREND ANALYSIS. That is all it is.
+## `scale-test` is an instrument for trend analysis
 
 **No verdict. No goldens. No gate. Nothing to pass.** This is easy to get backwards, and getting it
 backwards makes you optimize the instrument instead of the compiler.
 
 **The `compiler-workflow` skill carries the short form; this is the full reading guide.**
 
-- **Do NOT chase a green scale-test. There isn't one.** A curve that looks wrong is a **reading to
-  explain**, not a light to turn green.
-- **NEVER touch the instrument to make a number look better.** The right response to a curve that bends
-  is to say WHY it bends — a bucket that bills two call sites of different growth is a *sum of two
+- **Never touch the instrument to make a number look better.** A curve that bends is a reading to
+  explain: say WHY it bends — a bucket that bills two call sites of different growth is a *sum of two
   exponents*, and bends on a perfectly idle machine. Write it down; do not launder it.
 - **The per-rung MEMORY numbers are EXACT and bit-for-bit reproducible** — load cannot move them. A
   change in allocations/frees/bytes for the same input is **real, every time**, and is the single most
-  informative thing in your report. It has caught a trace hook that *allocated* into the very `mm`
-  stream it was added to trace, and a field store that boxed a union at +4 allocations per function.
+  informative thing in your report.
   **Explain any movement. Attribute it.**
 - ⚠ **An A/B of two binaries' CPU needs several samples per arm**, since a single sample's per-phase
   ratios wobble up to ±0.5 run to run — take them with `--repeat=N`, which reports the least CPU per
@@ -134,10 +129,7 @@ backwards makes you optimize the instrument instead of the compiler.
 
 ### The two blind spots — and never credit one with the other's fix
 
-✅ **The CPU column exists because a cost that ALLOCATES NOTHING was invisible**, and this project keeps
-measuring them — the op-insertion quadratic inside `regalloc:splitting` (68% of the whole compile at
-N=1024, allocation-free), `requireInterfaceForParse` (allocates identically to the digit across a
-+24.15 ms parse delta), `InsertRangeChecks`' per-guard-site block scan, the cascade fixpoint duals.
+✅ **The CPU column exists because a cost that allocates nothing is invisible to the memory columns.**
 
 ⚠ **That cures ONE blind spot. The other is the CORPUS**, and a Δ0 from a ladder that cannot express the
 feature is the instrument's blind spot, not the cost — in **every** column, CPU included. *(Clearest
@@ -203,8 +195,7 @@ git worktree at the harness's `<out-dir>/ref-<sha>/tree/`, built by that tree's 
 control carries its own runtime. The worktree is deleted once built; `<out-dir>/ref-<sha>/` keeps the
 binary and its `stdlib/`, `runtime/` and `scriptlib/`.
 
-⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
-dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just
+⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** Load can MASK a bug, not just
 inflate numbers.
 
 - **Instrument phases disjointly** (X's time excludes the Y it calls), fail if the parts exceed the

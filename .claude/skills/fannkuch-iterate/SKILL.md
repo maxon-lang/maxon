@@ -68,8 +68,7 @@ A candidate that names no shape is not a candidate.
 - ⛔ **A filtered-green compiler is not a working compiler.** Once the filter is green, before the A/B,
   the implementer runs `maxon test tests/examples --filter=fannkuch`, which builds the example this
   round measures and checks its n=10 answer (73196 / 38). A red case there is a red gate,
-  and the function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that
-  could not compile the example.
+  and the function it died in becomes a spec case.
 - Run §5 and §6 below between `/land`'s landing gates and its commit, so the round is ONE commit carrying
   the compiler change, its spec, the README row, the log rows and the roadmap row. A push rejected
   by a newer `origin/main` is `/land`'s: rebase and re-run §8.
@@ -93,7 +92,7 @@ Control and experiment are two compilers in ONE session, runs interleaved, the c
 the argument order. A before/after across a source change is not an A/B (roadmap, EC19). The note
 carries the WHY; the tool cannot.
 
-> ## ⛔ HALT ON A SLOWER SELF-COMPILE (user ruling 2026-09-08)
+> ## ⛔ HALT ON A SLOWER SELF-COMPILE (user ruling)
 >
 > `--self-compile` times each arm's compiler compiling `maxon-bin`. **A `HALT` line means the change made the compiler compile
 > itself more than 5% slower than the control does.** Do not land it; do not narrow the pass to make

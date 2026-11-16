@@ -14,7 +14,6 @@ read; `/land` does everything from the red set onward. This skill adds the three
 > The reading is dispatched (§2). You read **reports** and write the **plan**. `/land`: *"A coordinator
 > who starts reading a third file to form a hypothesis has stopped coordinating."* You reach §6 still
 > owing `/land` §1–§9 **including its landing gates** — spend what is left on judgement, not greps.
-> ⚠ Planning *feels* like reading; that is why this box exists.
 > ⛔ **No worktree, no branch** — `/land` §0 requires a CLEAN tree and this skill must not dirty it.
 
 | | | who |
@@ -127,7 +126,7 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 |---|---|---|
 | 1 | The problem, as a program with actual-vs-expected | §5 |
 | 2a | **SOURCE facts**, `file:line` per claim | `/land` §2 — *"the diagnosis you already did while reading the red"* |
-| **2b** | **SPEC-SURFACE facts** — §1's four fields, field for field | **`/land` §1 — this IS the scout report** |
+| **2b** | **SPEC-SURFACE facts** — §1's three fields, field for field | **`/land` §1 — this IS the scout report** |
 | 3 | The approach; the alternatives and why they lost | the approval; §2's brief |
 | 4 | Blast radius — file list; disjoint partition if >1 implementer | `/land`'s brief item 3, the *"EXCLUSIVE file list"* |
 | 5 | Obligations — cross-target arms · `ErrorCodeRegistry` case + band · emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`) ⇒ two self-compiles, which `maxon run build` does by itself · `runtime/` tier roster · which `docs/` source owns the surface | every brief; `/land` §8 |
@@ -185,7 +184,7 @@ S1 - THE SCOUT IS ALREADY RUN. Its FACTS are <planfile> section 2b, taken at <BA
 S2 - the DIAGNOSIS your brief must carry is <planfile> sections 2a and 3. The EXCLUSIVE
    file list is section 4. Every obligation in section 5 goes into the relevant brief.
 
-A NINTH THING IN EVERY BRIEF, beside your eight. Quote it to each agent:
+A TENTH THING IN EVERY BRIEF, beside your nine. Quote it to each agent:
    "You are implementing an APPROVED DESIGN, named in your brief. HALT AND REPORT - do
     not work around it, do not substitute a design of your own, do not carry on and
     mention it at the end - the moment you find something in the tree that makes that
@@ -196,8 +195,8 @@ A NINTH THING IN EVERY BRIEF, beside your eight. Quote it to each agent:
     files than my list', 'a cleaner design occurred to me' and 'this wants a refactor
     first' are NOT it - for those, carry on and say so in your report."
 
-STAGE <n> of <N>. Your unit is the WHOLE of this stage. Your "ONE CHANGE, ONE CHUNK, ONE
-   COMMIT" box binds absolutely inside it: do not propose and do not accept any further
+STAGE <n> of <N>. Your unit is the WHOLE of this stage. Your "One change, finished here,
+   in one commit" box binds absolutely inside it: do not propose and do not accept any further
    division. Staging was decided before you started and is not reopened here.
 ```
 
@@ -208,8 +207,8 @@ expires at the first commit — a multi-stage plan re-scouts before the next sta
 > ### ⛔ FROM HERE YOU ARE NO LONGER A PLANNER. YOU READ EXIT CODES, NOT REPORTS.
 > §2–§4 were spent believing agent reports, which is right for facts and fatal for gates. `/land`:
 > *"Do not trust a report — read its evidence… check exit codes, and never grep for a success string —
-> a past session reported a green build by grepping for `^error` while the real failure printed
-> `[CMP] ERROR:`. **Exit 101 is a leak.**"*
+> the compiler's failures do not share one prefix (`[CMP] ERROR:` does not match `^error`). **Exit 101
+> is a leak.**"*
 
 ## 7. Close the plan
 
@@ -231,7 +230,7 @@ the file holds no claimable entry.
 chose the mechanism itself. Here it is **approved before the agent exists**, which creates a failure
 `/land` never had to name: an implementer that discovers the approved design cannot work. Without a halt
 it grinds on against a refuted design, or silently substitutes one the user never approved — and **the
-substitution is invisible in the report.** ⇒ **the ninth brief item, §6.** It binds every dispatched
+substitution is invisible in the report.** ⇒ **the tenth brief item, §6.** It binds every dispatched
 agent; the reviewer counts, since `/land` §5 is often where a design flaw is first visible.
 
 > ⭐ **THE TEST IS REFUTATION, NOT DIFFICULTY: the approved mechanism CANNOT produce the acceptance
@@ -244,7 +243,7 @@ agent; the reviewer counts, since `/land` §5 is often where a design flaw is fi
 > way is FIXED, not filed"* — now if it blocks the acceptance, after the push via a known issue if it
 > does not). Each of those is **carry on and say so in the report**.
 
-**This is not escalation.** `/land`'s *"THERE IS NO ESCALATION"* forbids the **coordinator** rerouting to
+**This is not escalation.** `/land`'s *"One change, finished here, in one commit"* forbids the **coordinator** rerouting to
 a heavier process, opening a worktree, or landing half. An agent reporting to its coordinator is the
 ordinary report path, and this halt **never leaves this skill** — it returns to §3, one step up in the
 same file. `/land`'s *"⚠ A specific instruction in your brief OUTRANKS the agent's own stop rule"* is the
@@ -272,8 +271,8 @@ approach; do not rewrite it by reflex.
 
 ## Staging
 
-> ## ⛔⛔ STAGING IS DECIDED **BEFORE** `/land` IS INVOKED. A RUNNING `/land` NEVER STAGES.
-> No contradiction with *"ONE CHANGE, ONE CHUNK, ONE COMMIT"*: the rules act at different times. Staging
+> ## Staging is decided before `/land` is invoked; a running `/land` never stages.
+> No contradiction with `/land`'s *"One change, finished here, in one commit"*: the rules act at different times. Staging
 > is decided while **no `/land` is running**; from the moment one starts, its unit is fixed and its own
 > boxes bind absolutely. ⛔ A running `/land` may not be told to stage and may not propose it.
 

@@ -97,11 +97,6 @@ Find them all, name them with `file:line`, and say whether they share one source
   the rule. ⚠ It is a DESIGN finding: report it as one, with the full consumer list, so the caller can
   take it to the user. Do not file it as one more per-site follow-up.
 
-MEASURED, 2026-10-18: a qualified chain (`stdlib.Range.create`, `sub.Calc.create`) was resolved by the
-parser's token collapse, then re-derived by the async door, `spawn`, `default`, service discovery and the
-E3112 census. Five `/land`s fixed it one consumer at a time, and six reviews each merged the copies inside
-their own diff without asking why the next consumer needed the same fix.
-
 ### When two places must agree on one fact, climb the ladder
 
 1. **DERIVE** one from the other, so drift is unrepresentable.
@@ -119,8 +114,7 @@ the answer at a door that never used the new feature, with the suite green: a su
 
 ## 4. Latent bugs — not just style
 
-- **Resource release on EVERY path**, including throw/panic/abort. (Two `StreamingSubprocess` handle
-  leaks on error paths were found exactly this way.)
+- **Resource release on EVERY path**, including throw/panic/abort.
 - **Ordering hazards**: a flag published before the data it guards is readable. "Safe because nothing
   yields in between" is a property of today's code, not an invariant.
 - Concurrency: dropped/double-dispatched work, starvation, races between a producer and a consumer.
@@ -294,10 +288,9 @@ never a further list beside them.
 **`AGENTS.md`'s "Code Quality" section is the checklist and is already in your context — apply
 it to every changed file, do not restate it.** The three that get missed:
 
-- ⛔ **COMMENTS ARE NOT YOUR CONCERN — YOU REVIEW THE CODE.** Do not judge, rewrite, delete or report
-  one, and do not count a missing comment as a finding. Code is written with none and the `documenter`
-  skill authors them all *after* this review, so the tree you are reading has few or none by design and
-  anything you wrote about them would be overwritten anyway. **This is a decision, not an omission.**
+- **Comments are out of scope.** Do not judge, rewrite, delete or report one, or count a missing comment
+  as a finding: the `documenter` skill writes them all after this review, so the tree has few or none by
+  design.
 - **Typed ranges as narrow as PROVABLY correct** — a wrong narrow bound is a runtime panic; wide is fine
   where there is no real bound.
 - **Cross-target consistency:** an x64 change needs its arm64 equivalent — **the CODE, which you review
@@ -326,8 +319,8 @@ name what the change owes in your report for §6 rather than writing it. Standal
   and you never touch it to make a number look better.** Read the doubling ladder straight off the
   ALLOCATION columns: **×2 is linear, ×4 is quadratic.** A curve that bends is a reading to explain.
 
-**Check EXIT CODES. Never grep for a success string** — a past session reported a green build by
-grepping for `^error` while the real failure printed `[CMP] ERROR:`. Exit **101** = memory leak.
+**Check EXIT CODES. Never grep for a success string** — a failure can print `[CMP] ERROR:`, which a
+grep for `^error` misses. Exit **101** = memory leak.
 
 **The `ir-specs/` Target IR pins are gates, not a review item.** A pin the change moves is re-minted
 with `--update-required --filter=<spec>/` on each lane this host runs, and the diff of the pins is the
