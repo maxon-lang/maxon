@@ -9,58 +9,43 @@ category: functions
 
 ## Documentation
 
-A frame larger than 4 KiB cannot be allocated by subtracting from `rsp` in one step: Windows grows
-the stack one guard page at a time, and skipping a guard page faults the process. A prologue that
-allocates one therefore calls `__chkstk`, which touches each 4 KiB page on the way down.
+A frame larger than one 4 KiB page cannot be allocated by subtracting from `rsp` in one step: Windows
+grows the stack one guard page at a time, and skipping a guard page faults the process. The compiler
+emits no `__chkstk` call; an x64 prologue whose frame is past one page walks the pages down INLINE
+(`X64Backend.encodeStackProbe`), touching each one, on every x64 OS. The Target IR renders that
+prologue as `x64.prologue <bytes>`, and a size past 4096 is the walking form.
 
-`__chkstk` needs the frame size in a register, and **the prologue runs BEFORE the incoming argument
-registers are spilled to their stack slots**. So the register it uses must be one that carries no
-argument. RAX is an argument register under either order:
+The walk needs a scratch register, and **the prologue runs BEFORE the incoming argument registers are
+read**. So the register it borrows must be one that carries no argument. This backend passes the first
+six integer parameters in `rcx, rdx, rax, r9, rsi, rdi` and the rest on the caller's stack, so RAX is
+**parameter 3**: a walk that borrowed RAX would overwrite it before it was read, a silent wrong-answer
+miscompile, not a crash, invisible to any function with a small frame. The walk borrows R11, which
+carries no argument and is caller-saved. The **seventh** parameter arrives on the stack and is read
+through `rbp`, which the walk does not move, after the prologue.
 
-    eight-register: rcx, rdx, r8, r9, rsi, rdi, rax, rbx   -> RAX is parameter 7
-    this backend:   rcx, rdx, rax, r9, rsi, rdi, rbx       -> RAX is parameter 3
+`wide` takes seven parameters and is forced past a page by 800 values that are all live at its final
+sum. Each is `opaque(N)`, and the case's `RequiredRuntime` block names both `opaque` and `wide`, so
+both stay out of line: each value is the result of a real call that the folder cannot evaluate, and
+each one a callee-saved register cannot hold takes a stack slot. On both x64 lanes the pin's `wide`
+holds 800 `callDirect opaque`s and 796 `storeSlotReg`/`loadRegSlot` pairs, and opens with
+`x64.prologue 6408`. Its first instruction after the prologue loads `g` from `[rbp + 48]`, the first
+incoming stack argument, and the range checks that follow read `c` out of RAX.
 
-So a prologue that used RAX would destroy **parameter 7** of every function that had one and a frame
-over 4 KiB, before that parameter was ever read. A silent wrong-answer miscompile, not a crash, and
-invisible to any function with six parameters or a small frame. The size travels in R11: caller-saved,
-not an argument register, and dead at function entry — the discipline `__gt_morestack` and the arm64
-probe (X16/X17) follow.
+The result is `g`, and it is computed from every parameter, so a prologue that clobbered RAX or the
+stack argument changes the exit code.
 
-The self-hosted backend emits no `__chkstk`: it walks the pages INLINE
-(`X64Backend.encodeStackProbe`), borrowing R11 and never RAX, so it cannot have this bug. The test still
-runs there, and still asserts that a seventh parameter survives the prologue — its GT stack guard
-does execute — but note the two lanes are guarding different things.
-
-The frame is forced past 4 KiB by 800 values the allocator does not rematerialize, so each occupies a
-stack slot. (Written as `let v = g + N`, the allocator simply re-emits the constant and the frame
-stays tiny — the test would then pass under any large-frame bug.)
-
-⚠ **THE VALUES ARE NOT CALL RESULTS.** `opaque` is a tiny leaf, so `inlineLeaves` splices it away and
-`foldConstants` evaluates what is left: the `TargetIr` pin holds **9** `callDirect`s and 800 `movRegImm32`s. **The
-frame is large anyway** — 6344 bytes, with 788 `storeSlotReg`/`loadRegSlot` pairs — because the compiler's
-allocator does not rematerialize a `const` across a spill. So the case tests what it says it tests, and
-the pin's `x64.prologue 6344` is what says so. If rematerialization shrinks this frame below 4 KiB,
-this case needs a different source of pressure, not a smaller expectation.
-
-The result depends on parameter 7, so a clobbered RAX changes the answer: a RAX-clobbering prologue
-returns 5568 — *the frame size itself*, read straight out of the register the prologue overwrote.
-
-**Targets: an x64-windows case ON ITS MERITS.** `__chkstk` is the Windows stack probe — Linux x64 grows
-the stack without one, and neither arm64 nor wasm has the concept — so no other native target can exhibit
-this bug and a pass on one would be a green light about nothing. arm64 is therefore gated out on the
-merits, not merely for a missing pin.
-
-The `x64-linux` and `wasm32-wasi` lanes are kept because they pass and cost nothing, but **both check
-the SUM, not the prologue** — a green light about nothing, run because it is free, not because it proves
-anything.
+**Targets: x64 on its merits.** The subject is the x64 walk and the x64 argument registers it must
+leave alone. `x64-linux` lays the same walk as `x64-windows` (their pins hold the same `wide`), so both
+lanes assert it. arm64's page walk is another encoder with its own scratch register, and is not this
+case's subject. The `wasm32-wasi` lane checks the sum, not a prologue.
 
 ## Tests
 
 <!-- test: seventh-param-survives-chkstk-prologue -->
 <!-- unsupported-targets: arm64-macos, arm64-linux -->
-⚠ **THE SUBJECT IS THE x64 FRAME**: a frame past the touch threshold takes the `__chkstk` prologue, and
-the claim is that the seventh argument survives it. arm64 lays no such prologue, so the case would run
-there without asserting anything.
+⚠ **THE SUBJECT IS THE x64 FRAME**: a frame past the touch threshold takes the page-walking prologue, and
+the claim is that the seventh argument survives it. arm64 walks its pages with another encoder, so the
+case would run there without asserting anything about this one.
 ```maxon
 typealias Num = int(0 to 100000000)
 
@@ -884,6 +869,10 @@ end 'main'
 7
 ```
 
+```RequiredRuntime
+opaque
+wide
+```
 ```TargetIr:x64-windows
 data {
   __mrt_console_probe_stdin@24 = i8 0
@@ -892,817 +881,4215 @@ data {
   __mrt_program_started@27 = i8 0
 }
 
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100000000
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventh-param-survives-chkstk-prologue.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @wide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 6408
+    x64.loadRegBaseDisp.word64 r8, [rbp + 48]
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 100000000
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 100000000
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 rax, 100000000
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.cmpRegImm32 r9, 0
+    x64.jcc less, __rc_panic#11
+  __rc_chk#12:
+    x64.cmpRegImm32 r9, 100000000
+    x64.jcc greater, __rc_panic#11
+  __rc_ok#10:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __rc_panic#14
+  __rc_chk#15:
+    x64.cmpRegImm32 rsi, 100000000
+    x64.jcc greater, __rc_panic#14
+  __rc_ok#13:
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc less, __rc_panic#17
+  __rc_chk#18:
+    x64.cmpRegImm32 rdi, 100000000
+    x64.jcc greater, __rc_panic#17
+  __rc_ok#16:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#20
+  __rc_chk#21:
+    x64.cmpRegImm32 r8, 100000000
+    x64.jcc greater, __rc_panic#20
+  __rc_ok#19:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.storeSlotReg slot0, rax
+    x64.movRegImm32 rcx, 0
+    x64.callDirect opaque
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect opaque
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect opaque
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 3
+    x64.callDirect opaque
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 4
+    x64.callDirect opaque
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect opaque
+    x64.storeSlotReg slot795, r8
+    x64.movRegImm32 rcx, 6
+    x64.callDirect opaque
+    x64.storeSlotReg slot794, r8
+    x64.movRegImm32 rcx, 7
+    x64.callDirect opaque
+    x64.storeSlotReg slot793, r8
+    x64.movRegImm32 rcx, 8
+    x64.callDirect opaque
+    x64.storeSlotReg slot792, r8
+    x64.movRegImm32 rcx, 9
+    x64.callDirect opaque
+    x64.storeSlotReg slot791, r8
+    x64.movRegImm32 rcx, 10
+    x64.callDirect opaque
+    x64.storeSlotReg slot790, r8
+    x64.movRegImm32 rcx, 11
+    x64.callDirect opaque
+    x64.storeSlotReg slot789, r8
+    x64.movRegImm32 rcx, 12
+    x64.callDirect opaque
+    x64.storeSlotReg slot788, r8
+    x64.movRegImm32 rcx, 13
+    x64.callDirect opaque
+    x64.storeSlotReg slot2, r8
+    x64.movRegImm32 rcx, 14
+    x64.callDirect opaque
+    x64.storeSlotReg slot3, r8
+    x64.movRegImm32 rcx, 15
+    x64.callDirect opaque
+    x64.storeSlotReg slot4, r8
+    x64.movRegImm32 rcx, 16
+    x64.callDirect opaque
+    x64.storeSlotReg slot5, r8
+    x64.movRegImm32 rcx, 17
+    x64.callDirect opaque
+    x64.storeSlotReg slot6, r8
+    x64.movRegImm32 rcx, 18
+    x64.callDirect opaque
+    x64.storeSlotReg slot7, r8
+    x64.movRegImm32 rcx, 19
+    x64.callDirect opaque
+    x64.storeSlotReg slot8, r8
+    x64.movRegImm32 rcx, 20
+    x64.callDirect opaque
+    x64.storeSlotReg slot9, r8
+    x64.movRegImm32 rcx, 21
+    x64.callDirect opaque
+    x64.storeSlotReg slot10, r8
+    x64.movRegImm32 rcx, 22
+    x64.callDirect opaque
+    x64.storeSlotReg slot11, r8
+    x64.movRegImm32 rcx, 23
+    x64.callDirect opaque
+    x64.storeSlotReg slot12, r8
+    x64.movRegImm32 rcx, 24
+    x64.callDirect opaque
+    x64.storeSlotReg slot13, r8
+    x64.movRegImm32 rcx, 25
+    x64.callDirect opaque
+    x64.storeSlotReg slot14, r8
+    x64.movRegImm32 rcx, 26
+    x64.callDirect opaque
+    x64.storeSlotReg slot15, r8
+    x64.movRegImm32 rcx, 27
+    x64.callDirect opaque
+    x64.storeSlotReg slot16, r8
+    x64.movRegImm32 rcx, 28
+    x64.callDirect opaque
+    x64.storeSlotReg slot17, r8
+    x64.movRegImm32 rcx, 29
+    x64.callDirect opaque
+    x64.storeSlotReg slot18, r8
+    x64.movRegImm32 rcx, 30
+    x64.callDirect opaque
+    x64.storeSlotReg slot19, r8
+    x64.movRegImm32 rcx, 31
+    x64.callDirect opaque
+    x64.storeSlotReg slot20, r8
+    x64.movRegImm32 rcx, 32
+    x64.callDirect opaque
+    x64.storeSlotReg slot21, r8
+    x64.movRegImm32 rcx, 33
+    x64.callDirect opaque
+    x64.storeSlotReg slot22, r8
+    x64.movRegImm32 rcx, 34
+    x64.callDirect opaque
+    x64.storeSlotReg slot23, r8
+    x64.movRegImm32 rcx, 35
+    x64.callDirect opaque
+    x64.storeSlotReg slot24, r8
+    x64.movRegImm32 rcx, 36
+    x64.callDirect opaque
+    x64.storeSlotReg slot25, r8
+    x64.movRegImm32 rcx, 37
+    x64.callDirect opaque
+    x64.storeSlotReg slot26, r8
+    x64.movRegImm32 rcx, 38
+    x64.callDirect opaque
+    x64.storeSlotReg slot27, r8
+    x64.movRegImm32 rcx, 39
+    x64.callDirect opaque
+    x64.storeSlotReg slot28, r8
+    x64.movRegImm32 rcx, 40
+    x64.callDirect opaque
+    x64.storeSlotReg slot29, r8
+    x64.movRegImm32 rcx, 41
+    x64.callDirect opaque
+    x64.storeSlotReg slot30, r8
+    x64.movRegImm32 rcx, 42
+    x64.callDirect opaque
+    x64.storeSlotReg slot31, r8
+    x64.movRegImm32 rcx, 43
+    x64.callDirect opaque
+    x64.storeSlotReg slot32, r8
+    x64.movRegImm32 rcx, 44
+    x64.callDirect opaque
+    x64.storeSlotReg slot33, r8
+    x64.movRegImm32 rcx, 45
+    x64.callDirect opaque
+    x64.storeSlotReg slot34, r8
+    x64.movRegImm32 rcx, 46
+    x64.callDirect opaque
+    x64.storeSlotReg slot35, r8
+    x64.movRegImm32 rcx, 47
+    x64.callDirect opaque
+    x64.storeSlotReg slot36, r8
+    x64.movRegImm32 rcx, 48
+    x64.callDirect opaque
+    x64.storeSlotReg slot37, r8
+    x64.movRegImm32 rcx, 49
+    x64.callDirect opaque
+    x64.storeSlotReg slot38, r8
+    x64.movRegImm32 rcx, 50
+    x64.callDirect opaque
+    x64.storeSlotReg slot39, r8
+    x64.movRegImm32 rcx, 51
+    x64.callDirect opaque
+    x64.storeSlotReg slot40, r8
+    x64.movRegImm32 rcx, 52
+    x64.callDirect opaque
+    x64.storeSlotReg slot41, r8
+    x64.movRegImm32 rcx, 53
+    x64.callDirect opaque
+    x64.storeSlotReg slot42, r8
+    x64.movRegImm32 rcx, 54
+    x64.callDirect opaque
+    x64.storeSlotReg slot43, r8
+    x64.movRegImm32 rcx, 55
+    x64.callDirect opaque
+    x64.storeSlotReg slot44, r8
+    x64.movRegImm32 rcx, 56
+    x64.callDirect opaque
+    x64.storeSlotReg slot45, r8
+    x64.movRegImm32 rcx, 57
+    x64.callDirect opaque
+    x64.storeSlotReg slot46, r8
+    x64.movRegImm32 rcx, 58
+    x64.callDirect opaque
+    x64.storeSlotReg slot47, r8
+    x64.movRegImm32 rcx, 59
+    x64.callDirect opaque
+    x64.storeSlotReg slot48, r8
+    x64.movRegImm32 rcx, 60
+    x64.callDirect opaque
+    x64.storeSlotReg slot49, r8
+    x64.movRegImm32 rcx, 61
+    x64.callDirect opaque
+    x64.storeSlotReg slot50, r8
+    x64.movRegImm32 rcx, 62
+    x64.callDirect opaque
+    x64.storeSlotReg slot51, r8
+    x64.movRegImm32 rcx, 63
+    x64.callDirect opaque
+    x64.storeSlotReg slot52, r8
+    x64.movRegImm32 rcx, 64
+    x64.callDirect opaque
+    x64.storeSlotReg slot53, r8
+    x64.movRegImm32 rcx, 65
+    x64.callDirect opaque
+    x64.storeSlotReg slot54, r8
+    x64.movRegImm32 rcx, 66
+    x64.callDirect opaque
+    x64.storeSlotReg slot55, r8
+    x64.movRegImm32 rcx, 67
+    x64.callDirect opaque
+    x64.storeSlotReg slot56, r8
+    x64.movRegImm32 rcx, 68
+    x64.callDirect opaque
+    x64.storeSlotReg slot57, r8
+    x64.movRegImm32 rcx, 69
+    x64.callDirect opaque
+    x64.storeSlotReg slot58, r8
+    x64.movRegImm32 rcx, 70
+    x64.callDirect opaque
+    x64.storeSlotReg slot59, r8
+    x64.movRegImm32 rcx, 71
+    x64.callDirect opaque
+    x64.storeSlotReg slot60, r8
+    x64.movRegImm32 rcx, 72
+    x64.callDirect opaque
+    x64.storeSlotReg slot61, r8
+    x64.movRegImm32 rcx, 73
+    x64.callDirect opaque
+    x64.storeSlotReg slot62, r8
+    x64.movRegImm32 rcx, 74
+    x64.callDirect opaque
+    x64.storeSlotReg slot63, r8
+    x64.movRegImm32 rcx, 75
+    x64.callDirect opaque
+    x64.storeSlotReg slot64, r8
+    x64.movRegImm32 rcx, 76
+    x64.callDirect opaque
+    x64.storeSlotReg slot65, r8
+    x64.movRegImm32 rcx, 77
+    x64.callDirect opaque
+    x64.storeSlotReg slot66, r8
+    x64.movRegImm32 rcx, 78
+    x64.callDirect opaque
+    x64.storeSlotReg slot67, r8
+    x64.movRegImm32 rcx, 79
+    x64.callDirect opaque
+    x64.storeSlotReg slot68, r8
+    x64.movRegImm32 rcx, 80
+    x64.callDirect opaque
+    x64.storeSlotReg slot69, r8
+    x64.movRegImm32 rcx, 81
+    x64.callDirect opaque
+    x64.storeSlotReg slot70, r8
+    x64.movRegImm32 rcx, 82
+    x64.callDirect opaque
+    x64.storeSlotReg slot71, r8
+    x64.movRegImm32 rcx, 83
+    x64.callDirect opaque
+    x64.storeSlotReg slot72, r8
+    x64.movRegImm32 rcx, 84
+    x64.callDirect opaque
+    x64.storeSlotReg slot73, r8
+    x64.movRegImm32 rcx, 85
+    x64.callDirect opaque
+    x64.storeSlotReg slot74, r8
+    x64.movRegImm32 rcx, 86
+    x64.callDirect opaque
+    x64.storeSlotReg slot75, r8
+    x64.movRegImm32 rcx, 87
+    x64.callDirect opaque
+    x64.storeSlotReg slot76, r8
+    x64.movRegImm32 rcx, 88
+    x64.callDirect opaque
+    x64.storeSlotReg slot77, r8
+    x64.movRegImm32 rcx, 89
+    x64.callDirect opaque
+    x64.storeSlotReg slot78, r8
+    x64.movRegImm32 rcx, 90
+    x64.callDirect opaque
+    x64.storeSlotReg slot79, r8
+    x64.movRegImm32 rcx, 91
+    x64.callDirect opaque
+    x64.storeSlotReg slot80, r8
+    x64.movRegImm32 rcx, 92
+    x64.callDirect opaque
+    x64.storeSlotReg slot81, r8
+    x64.movRegImm32 rcx, 93
+    x64.callDirect opaque
+    x64.storeSlotReg slot82, r8
+    x64.movRegImm32 rcx, 94
+    x64.callDirect opaque
+    x64.storeSlotReg slot83, r8
+    x64.movRegImm32 rcx, 95
+    x64.callDirect opaque
+    x64.storeSlotReg slot84, r8
+    x64.movRegImm32 rcx, 96
+    x64.callDirect opaque
+    x64.storeSlotReg slot85, r8
+    x64.movRegImm32 rcx, 97
+    x64.callDirect opaque
+    x64.storeSlotReg slot86, r8
+    x64.movRegImm32 rcx, 98
+    x64.callDirect opaque
+    x64.storeSlotReg slot87, r8
+    x64.movRegImm32 rcx, 99
+    x64.callDirect opaque
+    x64.storeSlotReg slot88, r8
+    x64.movRegImm32 rcx, 100
+    x64.callDirect opaque
+    x64.storeSlotReg slot89, r8
+    x64.movRegImm32 rcx, 101
+    x64.callDirect opaque
+    x64.storeSlotReg slot90, r8
+    x64.movRegImm32 rcx, 102
+    x64.callDirect opaque
+    x64.storeSlotReg slot91, r8
+    x64.movRegImm32 rcx, 103
+    x64.callDirect opaque
+    x64.storeSlotReg slot92, r8
+    x64.movRegImm32 rcx, 104
+    x64.callDirect opaque
+    x64.storeSlotReg slot93, r8
+    x64.movRegImm32 rcx, 105
+    x64.callDirect opaque
+    x64.storeSlotReg slot94, r8
+    x64.movRegImm32 rcx, 106
+    x64.callDirect opaque
+    x64.storeSlotReg slot95, r8
+    x64.movRegImm32 rcx, 107
+    x64.callDirect opaque
+    x64.storeSlotReg slot96, r8
+    x64.movRegImm32 rcx, 108
+    x64.callDirect opaque
+    x64.storeSlotReg slot97, r8
+    x64.movRegImm32 rcx, 109
+    x64.callDirect opaque
+    x64.storeSlotReg slot98, r8
+    x64.movRegImm32 rcx, 110
+    x64.callDirect opaque
+    x64.storeSlotReg slot99, r8
+    x64.movRegImm32 rcx, 111
+    x64.callDirect opaque
+    x64.storeSlotReg slot100, r8
+    x64.movRegImm32 rcx, 112
+    x64.callDirect opaque
+    x64.storeSlotReg slot101, r8
+    x64.movRegImm32 rcx, 113
+    x64.callDirect opaque
+    x64.storeSlotReg slot102, r8
+    x64.movRegImm32 rcx, 114
+    x64.callDirect opaque
+    x64.storeSlotReg slot103, r8
+    x64.movRegImm32 rcx, 115
+    x64.callDirect opaque
+    x64.storeSlotReg slot104, r8
+    x64.movRegImm32 rcx, 116
+    x64.callDirect opaque
+    x64.storeSlotReg slot105, r8
+    x64.movRegImm32 rcx, 117
+    x64.callDirect opaque
+    x64.storeSlotReg slot106, r8
+    x64.movRegImm32 rcx, 118
+    x64.callDirect opaque
+    x64.storeSlotReg slot107, r8
+    x64.movRegImm32 rcx, 119
+    x64.callDirect opaque
+    x64.storeSlotReg slot108, r8
+    x64.movRegImm32 rcx, 120
+    x64.callDirect opaque
+    x64.storeSlotReg slot109, r8
+    x64.movRegImm32 rcx, 121
+    x64.callDirect opaque
+    x64.storeSlotReg slot110, r8
+    x64.movRegImm32 rcx, 122
+    x64.callDirect opaque
+    x64.storeSlotReg slot111, r8
+    x64.movRegImm32 rcx, 123
+    x64.callDirect opaque
+    x64.storeSlotReg slot112, r8
+    x64.movRegImm32 rcx, 124
+    x64.callDirect opaque
+    x64.storeSlotReg slot113, r8
+    x64.movRegImm32 rcx, 125
+    x64.callDirect opaque
+    x64.storeSlotReg slot114, r8
+    x64.movRegImm32 rcx, 126
+    x64.callDirect opaque
+    x64.storeSlotReg slot115, r8
+    x64.movRegImm32 rcx, 127
+    x64.callDirect opaque
+    x64.storeSlotReg slot116, r8
+    x64.movRegImm32 rcx, 128
+    x64.callDirect opaque
+    x64.storeSlotReg slot117, r8
+    x64.movRegImm32 rcx, 129
+    x64.callDirect opaque
+    x64.storeSlotReg slot118, r8
+    x64.movRegImm32 rcx, 130
+    x64.callDirect opaque
+    x64.storeSlotReg slot119, r8
+    x64.movRegImm32 rcx, 131
+    x64.callDirect opaque
+    x64.storeSlotReg slot120, r8
+    x64.movRegImm32 rcx, 132
+    x64.callDirect opaque
+    x64.storeSlotReg slot121, r8
+    x64.movRegImm32 rcx, 133
+    x64.callDirect opaque
+    x64.storeSlotReg slot122, r8
+    x64.movRegImm32 rcx, 134
+    x64.callDirect opaque
+    x64.storeSlotReg slot123, r8
+    x64.movRegImm32 rcx, 135
+    x64.callDirect opaque
+    x64.storeSlotReg slot124, r8
+    x64.movRegImm32 rcx, 136
+    x64.callDirect opaque
+    x64.storeSlotReg slot125, r8
+    x64.movRegImm32 rcx, 137
+    x64.callDirect opaque
+    x64.storeSlotReg slot126, r8
+    x64.movRegImm32 rcx, 138
+    x64.callDirect opaque
+    x64.storeSlotReg slot127, r8
+    x64.movRegImm32 rcx, 139
+    x64.callDirect opaque
+    x64.storeSlotReg slot128, r8
+    x64.movRegImm32 rcx, 140
+    x64.callDirect opaque
+    x64.storeSlotReg slot129, r8
+    x64.movRegImm32 rcx, 141
+    x64.callDirect opaque
+    x64.storeSlotReg slot130, r8
+    x64.movRegImm32 rcx, 142
+    x64.callDirect opaque
+    x64.storeSlotReg slot131, r8
+    x64.movRegImm32 rcx, 143
+    x64.callDirect opaque
+    x64.storeSlotReg slot132, r8
+    x64.movRegImm32 rcx, 144
+    x64.callDirect opaque
+    x64.storeSlotReg slot133, r8
+    x64.movRegImm32 rcx, 145
+    x64.callDirect opaque
+    x64.storeSlotReg slot134, r8
+    x64.movRegImm32 rcx, 146
+    x64.callDirect opaque
+    x64.storeSlotReg slot135, r8
+    x64.movRegImm32 rcx, 147
+    x64.callDirect opaque
+    x64.storeSlotReg slot136, r8
+    x64.movRegImm32 rcx, 148
+    x64.callDirect opaque
+    x64.storeSlotReg slot137, r8
+    x64.movRegImm32 rcx, 149
+    x64.callDirect opaque
+    x64.storeSlotReg slot138, r8
+    x64.movRegImm32 rcx, 150
+    x64.callDirect opaque
+    x64.storeSlotReg slot139, r8
+    x64.movRegImm32 rcx, 151
+    x64.callDirect opaque
+    x64.storeSlotReg slot140, r8
+    x64.movRegImm32 rcx, 152
+    x64.callDirect opaque
+    x64.storeSlotReg slot141, r8
+    x64.movRegImm32 rcx, 153
+    x64.callDirect opaque
+    x64.storeSlotReg slot142, r8
+    x64.movRegImm32 rcx, 154
+    x64.callDirect opaque
+    x64.storeSlotReg slot143, r8
+    x64.movRegImm32 rcx, 155
+    x64.callDirect opaque
+    x64.storeSlotReg slot144, r8
+    x64.movRegImm32 rcx, 156
+    x64.callDirect opaque
+    x64.storeSlotReg slot145, r8
+    x64.movRegImm32 rcx, 157
+    x64.callDirect opaque
+    x64.storeSlotReg slot146, r8
+    x64.movRegImm32 rcx, 158
+    x64.callDirect opaque
+    x64.storeSlotReg slot147, r8
+    x64.movRegImm32 rcx, 159
+    x64.callDirect opaque
+    x64.storeSlotReg slot148, r8
+    x64.movRegImm32 rcx, 160
+    x64.callDirect opaque
+    x64.storeSlotReg slot149, r8
+    x64.movRegImm32 rcx, 161
+    x64.callDirect opaque
+    x64.storeSlotReg slot150, r8
+    x64.movRegImm32 rcx, 162
+    x64.callDirect opaque
+    x64.storeSlotReg slot151, r8
+    x64.movRegImm32 rcx, 163
+    x64.callDirect opaque
+    x64.storeSlotReg slot152, r8
+    x64.movRegImm32 rcx, 164
+    x64.callDirect opaque
+    x64.storeSlotReg slot153, r8
+    x64.movRegImm32 rcx, 165
+    x64.callDirect opaque
+    x64.storeSlotReg slot154, r8
+    x64.movRegImm32 rcx, 166
+    x64.callDirect opaque
+    x64.storeSlotReg slot155, r8
+    x64.movRegImm32 rcx, 167
+    x64.callDirect opaque
+    x64.storeSlotReg slot156, r8
+    x64.movRegImm32 rcx, 168
+    x64.callDirect opaque
+    x64.storeSlotReg slot157, r8
+    x64.movRegImm32 rcx, 169
+    x64.callDirect opaque
+    x64.storeSlotReg slot158, r8
+    x64.movRegImm32 rcx, 170
+    x64.callDirect opaque
+    x64.storeSlotReg slot159, r8
+    x64.movRegImm32 rcx, 171
+    x64.callDirect opaque
+    x64.storeSlotReg slot160, r8
+    x64.movRegImm32 rcx, 172
+    x64.callDirect opaque
+    x64.storeSlotReg slot161, r8
+    x64.movRegImm32 rcx, 173
+    x64.callDirect opaque
+    x64.storeSlotReg slot162, r8
+    x64.movRegImm32 rcx, 174
+    x64.callDirect opaque
+    x64.storeSlotReg slot163, r8
+    x64.movRegImm32 rcx, 175
+    x64.callDirect opaque
+    x64.storeSlotReg slot164, r8
+    x64.movRegImm32 rcx, 176
+    x64.callDirect opaque
+    x64.storeSlotReg slot165, r8
+    x64.movRegImm32 rcx, 177
+    x64.callDirect opaque
+    x64.storeSlotReg slot166, r8
+    x64.movRegImm32 rcx, 178
+    x64.callDirect opaque
+    x64.storeSlotReg slot167, r8
+    x64.movRegImm32 rcx, 179
+    x64.callDirect opaque
+    x64.storeSlotReg slot168, r8
+    x64.movRegImm32 rcx, 180
+    x64.callDirect opaque
+    x64.storeSlotReg slot169, r8
+    x64.movRegImm32 rcx, 181
+    x64.callDirect opaque
+    x64.storeSlotReg slot170, r8
+    x64.movRegImm32 rcx, 182
+    x64.callDirect opaque
+    x64.storeSlotReg slot171, r8
+    x64.movRegImm32 rcx, 183
+    x64.callDirect opaque
+    x64.storeSlotReg slot172, r8
+    x64.movRegImm32 rcx, 184
+    x64.callDirect opaque
+    x64.storeSlotReg slot173, r8
+    x64.movRegImm32 rcx, 185
+    x64.callDirect opaque
+    x64.storeSlotReg slot174, r8
+    x64.movRegImm32 rcx, 186
+    x64.callDirect opaque
+    x64.storeSlotReg slot175, r8
+    x64.movRegImm32 rcx, 187
+    x64.callDirect opaque
+    x64.storeSlotReg slot176, r8
+    x64.movRegImm32 rcx, 188
+    x64.callDirect opaque
+    x64.storeSlotReg slot177, r8
+    x64.movRegImm32 rcx, 189
+    x64.callDirect opaque
+    x64.storeSlotReg slot178, r8
+    x64.movRegImm32 rcx, 190
+    x64.callDirect opaque
+    x64.storeSlotReg slot179, r8
+    x64.movRegImm32 rcx, 191
+    x64.callDirect opaque
+    x64.storeSlotReg slot180, r8
+    x64.movRegImm32 rcx, 192
+    x64.callDirect opaque
+    x64.storeSlotReg slot181, r8
+    x64.movRegImm32 rcx, 193
+    x64.callDirect opaque
+    x64.storeSlotReg slot182, r8
+    x64.movRegImm32 rcx, 194
+    x64.callDirect opaque
+    x64.storeSlotReg slot183, r8
+    x64.movRegImm32 rcx, 195
+    x64.callDirect opaque
+    x64.storeSlotReg slot184, r8
+    x64.movRegImm32 rcx, 196
+    x64.callDirect opaque
+    x64.storeSlotReg slot185, r8
+    x64.movRegImm32 rcx, 197
+    x64.callDirect opaque
+    x64.storeSlotReg slot186, r8
+    x64.movRegImm32 rcx, 198
+    x64.callDirect opaque
+    x64.storeSlotReg slot187, r8
+    x64.movRegImm32 rcx, 199
+    x64.callDirect opaque
+    x64.storeSlotReg slot188, r8
+    x64.movRegImm32 rcx, 200
+    x64.callDirect opaque
+    x64.storeSlotReg slot189, r8
+    x64.movRegImm32 rcx, 201
+    x64.callDirect opaque
+    x64.storeSlotReg slot190, r8
+    x64.movRegImm32 rcx, 202
+    x64.callDirect opaque
+    x64.storeSlotReg slot191, r8
+    x64.movRegImm32 rcx, 203
+    x64.callDirect opaque
+    x64.storeSlotReg slot192, r8
+    x64.movRegImm32 rcx, 204
+    x64.callDirect opaque
+    x64.storeSlotReg slot193, r8
+    x64.movRegImm32 rcx, 205
+    x64.callDirect opaque
+    x64.storeSlotReg slot194, r8
+    x64.movRegImm32 rcx, 206
+    x64.callDirect opaque
+    x64.storeSlotReg slot195, r8
+    x64.movRegImm32 rcx, 207
+    x64.callDirect opaque
+    x64.storeSlotReg slot196, r8
+    x64.movRegImm32 rcx, 208
+    x64.callDirect opaque
+    x64.storeSlotReg slot197, r8
+    x64.movRegImm32 rcx, 209
+    x64.callDirect opaque
+    x64.storeSlotReg slot198, r8
+    x64.movRegImm32 rcx, 210
+    x64.callDirect opaque
+    x64.storeSlotReg slot199, r8
+    x64.movRegImm32 rcx, 211
+    x64.callDirect opaque
+    x64.storeSlotReg slot200, r8
+    x64.movRegImm32 rcx, 212
+    x64.callDirect opaque
+    x64.storeSlotReg slot201, r8
+    x64.movRegImm32 rcx, 213
+    x64.callDirect opaque
+    x64.storeSlotReg slot202, r8
+    x64.movRegImm32 rcx, 214
+    x64.callDirect opaque
+    x64.storeSlotReg slot203, r8
+    x64.movRegImm32 rcx, 215
+    x64.callDirect opaque
+    x64.storeSlotReg slot204, r8
+    x64.movRegImm32 rcx, 216
+    x64.callDirect opaque
+    x64.storeSlotReg slot205, r8
+    x64.movRegImm32 rcx, 217
+    x64.callDirect opaque
+    x64.storeSlotReg slot206, r8
+    x64.movRegImm32 rcx, 218
+    x64.callDirect opaque
+    x64.storeSlotReg slot207, r8
+    x64.movRegImm32 rcx, 219
+    x64.callDirect opaque
+    x64.storeSlotReg slot208, r8
+    x64.movRegImm32 rcx, 220
+    x64.callDirect opaque
+    x64.storeSlotReg slot209, r8
+    x64.movRegImm32 rcx, 221
+    x64.callDirect opaque
+    x64.storeSlotReg slot210, r8
+    x64.movRegImm32 rcx, 222
+    x64.callDirect opaque
+    x64.storeSlotReg slot211, r8
+    x64.movRegImm32 rcx, 223
+    x64.callDirect opaque
+    x64.storeSlotReg slot212, r8
+    x64.movRegImm32 rcx, 224
+    x64.callDirect opaque
+    x64.storeSlotReg slot213, r8
+    x64.movRegImm32 rcx, 225
+    x64.callDirect opaque
+    x64.storeSlotReg slot214, r8
+    x64.movRegImm32 rcx, 226
+    x64.callDirect opaque
+    x64.storeSlotReg slot215, r8
+    x64.movRegImm32 rcx, 227
+    x64.callDirect opaque
+    x64.storeSlotReg slot216, r8
+    x64.movRegImm32 rcx, 228
+    x64.callDirect opaque
+    x64.storeSlotReg slot217, r8
+    x64.movRegImm32 rcx, 229
+    x64.callDirect opaque
+    x64.storeSlotReg slot218, r8
+    x64.movRegImm32 rcx, 230
+    x64.callDirect opaque
+    x64.storeSlotReg slot219, r8
+    x64.movRegImm32 rcx, 231
+    x64.callDirect opaque
+    x64.storeSlotReg slot220, r8
+    x64.movRegImm32 rcx, 232
+    x64.callDirect opaque
+    x64.storeSlotReg slot221, r8
+    x64.movRegImm32 rcx, 233
+    x64.callDirect opaque
+    x64.storeSlotReg slot222, r8
+    x64.movRegImm32 rcx, 234
+    x64.callDirect opaque
+    x64.storeSlotReg slot223, r8
+    x64.movRegImm32 rcx, 235
+    x64.callDirect opaque
+    x64.storeSlotReg slot224, r8
+    x64.movRegImm32 rcx, 236
+    x64.callDirect opaque
+    x64.storeSlotReg slot225, r8
+    x64.movRegImm32 rcx, 237
+    x64.callDirect opaque
+    x64.storeSlotReg slot226, r8
+    x64.movRegImm32 rcx, 238
+    x64.callDirect opaque
+    x64.storeSlotReg slot227, r8
+    x64.movRegImm32 rcx, 239
+    x64.callDirect opaque
+    x64.storeSlotReg slot228, r8
+    x64.movRegImm32 rcx, 240
+    x64.callDirect opaque
+    x64.storeSlotReg slot229, r8
+    x64.movRegImm32 rcx, 241
+    x64.callDirect opaque
+    x64.storeSlotReg slot230, r8
+    x64.movRegImm32 rcx, 242
+    x64.callDirect opaque
+    x64.storeSlotReg slot231, r8
+    x64.movRegImm32 rcx, 243
+    x64.callDirect opaque
+    x64.storeSlotReg slot232, r8
+    x64.movRegImm32 rcx, 244
+    x64.callDirect opaque
+    x64.storeSlotReg slot233, r8
+    x64.movRegImm32 rcx, 245
+    x64.callDirect opaque
+    x64.storeSlotReg slot234, r8
+    x64.movRegImm32 rcx, 246
+    x64.callDirect opaque
+    x64.storeSlotReg slot235, r8
+    x64.movRegImm32 rcx, 247
+    x64.callDirect opaque
+    x64.storeSlotReg slot236, r8
+    x64.movRegImm32 rcx, 248
+    x64.callDirect opaque
+    x64.storeSlotReg slot237, r8
+    x64.movRegImm32 rcx, 249
+    x64.callDirect opaque
+    x64.storeSlotReg slot238, r8
+    x64.movRegImm32 rcx, 250
+    x64.callDirect opaque
+    x64.storeSlotReg slot239, r8
+    x64.movRegImm32 rcx, 251
+    x64.callDirect opaque
+    x64.storeSlotReg slot240, r8
+    x64.movRegImm32 rcx, 252
+    x64.callDirect opaque
+    x64.storeSlotReg slot241, r8
+    x64.movRegImm32 rcx, 253
+    x64.callDirect opaque
+    x64.storeSlotReg slot242, r8
+    x64.movRegImm32 rcx, 254
+    x64.callDirect opaque
+    x64.storeSlotReg slot243, r8
+    x64.movRegImm32 rcx, 255
+    x64.callDirect opaque
+    x64.storeSlotReg slot244, r8
+    x64.movRegImm32 rcx, 256
+    x64.callDirect opaque
+    x64.storeSlotReg slot245, r8
+    x64.movRegImm32 rcx, 257
+    x64.callDirect opaque
+    x64.storeSlotReg slot246, r8
+    x64.movRegImm32 rcx, 258
+    x64.callDirect opaque
+    x64.storeSlotReg slot247, r8
+    x64.movRegImm32 rcx, 259
+    x64.callDirect opaque
+    x64.storeSlotReg slot248, r8
+    x64.movRegImm32 rcx, 260
+    x64.callDirect opaque
+    x64.storeSlotReg slot249, r8
+    x64.movRegImm32 rcx, 261
+    x64.callDirect opaque
+    x64.storeSlotReg slot250, r8
+    x64.movRegImm32 rcx, 262
+    x64.callDirect opaque
+    x64.storeSlotReg slot251, r8
+    x64.movRegImm32 rcx, 263
+    x64.callDirect opaque
+    x64.storeSlotReg slot252, r8
+    x64.movRegImm32 rcx, 264
+    x64.callDirect opaque
+    x64.storeSlotReg slot253, r8
+    x64.movRegImm32 rcx, 265
+    x64.callDirect opaque
+    x64.storeSlotReg slot254, r8
+    x64.movRegImm32 rcx, 266
+    x64.callDirect opaque
+    x64.storeSlotReg slot255, r8
+    x64.movRegImm32 rcx, 267
+    x64.callDirect opaque
+    x64.storeSlotReg slot256, r8
+    x64.movRegImm32 rcx, 268
+    x64.callDirect opaque
+    x64.storeSlotReg slot257, r8
+    x64.movRegImm32 rcx, 269
+    x64.callDirect opaque
+    x64.storeSlotReg slot258, r8
+    x64.movRegImm32 rcx, 270
+    x64.callDirect opaque
+    x64.storeSlotReg slot259, r8
+    x64.movRegImm32 rcx, 271
+    x64.callDirect opaque
+    x64.storeSlotReg slot260, r8
+    x64.movRegImm32 rcx, 272
+    x64.callDirect opaque
+    x64.storeSlotReg slot261, r8
+    x64.movRegImm32 rcx, 273
+    x64.callDirect opaque
+    x64.storeSlotReg slot262, r8
+    x64.movRegImm32 rcx, 274
+    x64.callDirect opaque
+    x64.storeSlotReg slot263, r8
+    x64.movRegImm32 rcx, 275
+    x64.callDirect opaque
+    x64.storeSlotReg slot264, r8
+    x64.movRegImm32 rcx, 276
+    x64.callDirect opaque
+    x64.storeSlotReg slot265, r8
+    x64.movRegImm32 rcx, 277
+    x64.callDirect opaque
+    x64.storeSlotReg slot266, r8
+    x64.movRegImm32 rcx, 278
+    x64.callDirect opaque
+    x64.storeSlotReg slot267, r8
+    x64.movRegImm32 rcx, 279
+    x64.callDirect opaque
+    x64.storeSlotReg slot268, r8
+    x64.movRegImm32 rcx, 280
+    x64.callDirect opaque
+    x64.storeSlotReg slot269, r8
+    x64.movRegImm32 rcx, 281
+    x64.callDirect opaque
+    x64.storeSlotReg slot270, r8
+    x64.movRegImm32 rcx, 282
+    x64.callDirect opaque
+    x64.storeSlotReg slot271, r8
+    x64.movRegImm32 rcx, 283
+    x64.callDirect opaque
+    x64.storeSlotReg slot272, r8
+    x64.movRegImm32 rcx, 284
+    x64.callDirect opaque
+    x64.storeSlotReg slot273, r8
+    x64.movRegImm32 rcx, 285
+    x64.callDirect opaque
+    x64.storeSlotReg slot274, r8
+    x64.movRegImm32 rcx, 286
+    x64.callDirect opaque
+    x64.storeSlotReg slot275, r8
+    x64.movRegImm32 rcx, 287
+    x64.callDirect opaque
+    x64.storeSlotReg slot276, r8
+    x64.movRegImm32 rcx, 288
+    x64.callDirect opaque
+    x64.storeSlotReg slot277, r8
+    x64.movRegImm32 rcx, 289
+    x64.callDirect opaque
+    x64.storeSlotReg slot278, r8
+    x64.movRegImm32 rcx, 290
+    x64.callDirect opaque
+    x64.storeSlotReg slot279, r8
+    x64.movRegImm32 rcx, 291
+    x64.callDirect opaque
+    x64.storeSlotReg slot280, r8
+    x64.movRegImm32 rcx, 292
+    x64.callDirect opaque
+    x64.storeSlotReg slot281, r8
+    x64.movRegImm32 rcx, 293
+    x64.callDirect opaque
+    x64.storeSlotReg slot282, r8
+    x64.movRegImm32 rcx, 294
+    x64.callDirect opaque
+    x64.storeSlotReg slot283, r8
+    x64.movRegImm32 rcx, 295
+    x64.callDirect opaque
+    x64.storeSlotReg slot284, r8
+    x64.movRegImm32 rcx, 296
+    x64.callDirect opaque
+    x64.storeSlotReg slot285, r8
+    x64.movRegImm32 rcx, 297
+    x64.callDirect opaque
+    x64.storeSlotReg slot286, r8
+    x64.movRegImm32 rcx, 298
+    x64.callDirect opaque
+    x64.storeSlotReg slot287, r8
+    x64.movRegImm32 rcx, 299
+    x64.callDirect opaque
+    x64.storeSlotReg slot288, r8
+    x64.movRegImm32 rcx, 300
+    x64.callDirect opaque
+    x64.storeSlotReg slot289, r8
+    x64.movRegImm32 rcx, 301
+    x64.callDirect opaque
+    x64.storeSlotReg slot290, r8
+    x64.movRegImm32 rcx, 302
+    x64.callDirect opaque
+    x64.storeSlotReg slot291, r8
+    x64.movRegImm32 rcx, 303
+    x64.callDirect opaque
+    x64.storeSlotReg slot292, r8
+    x64.movRegImm32 rcx, 304
+    x64.callDirect opaque
+    x64.storeSlotReg slot293, r8
+    x64.movRegImm32 rcx, 305
+    x64.callDirect opaque
+    x64.storeSlotReg slot294, r8
+    x64.movRegImm32 rcx, 306
+    x64.callDirect opaque
+    x64.storeSlotReg slot295, r8
+    x64.movRegImm32 rcx, 307
+    x64.callDirect opaque
+    x64.storeSlotReg slot296, r8
+    x64.movRegImm32 rcx, 308
+    x64.callDirect opaque
+    x64.storeSlotReg slot297, r8
+    x64.movRegImm32 rcx, 309
+    x64.callDirect opaque
+    x64.storeSlotReg slot298, r8
+    x64.movRegImm32 rcx, 310
+    x64.callDirect opaque
+    x64.storeSlotReg slot299, r8
+    x64.movRegImm32 rcx, 311
+    x64.callDirect opaque
+    x64.storeSlotReg slot300, r8
+    x64.movRegImm32 rcx, 312
+    x64.callDirect opaque
+    x64.storeSlotReg slot301, r8
+    x64.movRegImm32 rcx, 313
+    x64.callDirect opaque
+    x64.storeSlotReg slot302, r8
+    x64.movRegImm32 rcx, 314
+    x64.callDirect opaque
+    x64.storeSlotReg slot303, r8
+    x64.movRegImm32 rcx, 315
+    x64.callDirect opaque
+    x64.storeSlotReg slot304, r8
+    x64.movRegImm32 rcx, 316
+    x64.callDirect opaque
+    x64.storeSlotReg slot305, r8
+    x64.movRegImm32 rcx, 317
+    x64.callDirect opaque
+    x64.storeSlotReg slot306, r8
+    x64.movRegImm32 rcx, 318
+    x64.callDirect opaque
+    x64.storeSlotReg slot307, r8
+    x64.movRegImm32 rcx, 319
+    x64.callDirect opaque
+    x64.storeSlotReg slot308, r8
+    x64.movRegImm32 rcx, 320
+    x64.callDirect opaque
+    x64.storeSlotReg slot309, r8
+    x64.movRegImm32 rcx, 321
+    x64.callDirect opaque
+    x64.storeSlotReg slot310, r8
+    x64.movRegImm32 rcx, 322
+    x64.callDirect opaque
+    x64.storeSlotReg slot311, r8
+    x64.movRegImm32 rcx, 323
+    x64.callDirect opaque
+    x64.storeSlotReg slot312, r8
+    x64.movRegImm32 rcx, 324
+    x64.callDirect opaque
+    x64.storeSlotReg slot313, r8
+    x64.movRegImm32 rcx, 325
+    x64.callDirect opaque
+    x64.storeSlotReg slot314, r8
+    x64.movRegImm32 rcx, 326
+    x64.callDirect opaque
+    x64.storeSlotReg slot315, r8
+    x64.movRegImm32 rcx, 327
+    x64.callDirect opaque
+    x64.storeSlotReg slot316, r8
+    x64.movRegImm32 rcx, 328
+    x64.callDirect opaque
+    x64.storeSlotReg slot317, r8
+    x64.movRegImm32 rcx, 329
+    x64.callDirect opaque
+    x64.storeSlotReg slot318, r8
+    x64.movRegImm32 rcx, 330
+    x64.callDirect opaque
+    x64.storeSlotReg slot319, r8
+    x64.movRegImm32 rcx, 331
+    x64.callDirect opaque
+    x64.storeSlotReg slot320, r8
+    x64.movRegImm32 rcx, 332
+    x64.callDirect opaque
+    x64.storeSlotReg slot321, r8
+    x64.movRegImm32 rcx, 333
+    x64.callDirect opaque
+    x64.storeSlotReg slot322, r8
+    x64.movRegImm32 rcx, 334
+    x64.callDirect opaque
+    x64.storeSlotReg slot323, r8
+    x64.movRegImm32 rcx, 335
+    x64.callDirect opaque
+    x64.storeSlotReg slot324, r8
+    x64.movRegImm32 rcx, 336
+    x64.callDirect opaque
+    x64.storeSlotReg slot325, r8
+    x64.movRegImm32 rcx, 337
+    x64.callDirect opaque
+    x64.storeSlotReg slot326, r8
+    x64.movRegImm32 rcx, 338
+    x64.callDirect opaque
+    x64.storeSlotReg slot327, r8
+    x64.movRegImm32 rcx, 339
+    x64.callDirect opaque
+    x64.storeSlotReg slot328, r8
+    x64.movRegImm32 rcx, 340
+    x64.callDirect opaque
+    x64.storeSlotReg slot329, r8
+    x64.movRegImm32 rcx, 341
+    x64.callDirect opaque
+    x64.storeSlotReg slot330, r8
+    x64.movRegImm32 rcx, 342
+    x64.callDirect opaque
+    x64.storeSlotReg slot331, r8
+    x64.movRegImm32 rcx, 343
+    x64.callDirect opaque
+    x64.storeSlotReg slot332, r8
+    x64.movRegImm32 rcx, 344
+    x64.callDirect opaque
+    x64.storeSlotReg slot333, r8
+    x64.movRegImm32 rcx, 345
+    x64.callDirect opaque
+    x64.storeSlotReg slot334, r8
+    x64.movRegImm32 rcx, 346
+    x64.callDirect opaque
+    x64.storeSlotReg slot335, r8
+    x64.movRegImm32 rcx, 347
+    x64.callDirect opaque
+    x64.storeSlotReg slot336, r8
+    x64.movRegImm32 rcx, 348
+    x64.callDirect opaque
+    x64.storeSlotReg slot337, r8
+    x64.movRegImm32 rcx, 349
+    x64.callDirect opaque
+    x64.storeSlotReg slot338, r8
+    x64.movRegImm32 rcx, 350
+    x64.callDirect opaque
+    x64.storeSlotReg slot339, r8
+    x64.movRegImm32 rcx, 351
+    x64.callDirect opaque
+    x64.storeSlotReg slot340, r8
+    x64.movRegImm32 rcx, 352
+    x64.callDirect opaque
+    x64.storeSlotReg slot341, r8
+    x64.movRegImm32 rcx, 353
+    x64.callDirect opaque
+    x64.storeSlotReg slot342, r8
+    x64.movRegImm32 rcx, 354
+    x64.callDirect opaque
+    x64.storeSlotReg slot343, r8
+    x64.movRegImm32 rcx, 355
+    x64.callDirect opaque
+    x64.storeSlotReg slot344, r8
+    x64.movRegImm32 rcx, 356
+    x64.callDirect opaque
+    x64.storeSlotReg slot345, r8
+    x64.movRegImm32 rcx, 357
+    x64.callDirect opaque
+    x64.storeSlotReg slot346, r8
+    x64.movRegImm32 rcx, 358
+    x64.callDirect opaque
+    x64.storeSlotReg slot347, r8
+    x64.movRegImm32 rcx, 359
+    x64.callDirect opaque
+    x64.storeSlotReg slot348, r8
+    x64.movRegImm32 rcx, 360
+    x64.callDirect opaque
+    x64.storeSlotReg slot349, r8
+    x64.movRegImm32 rcx, 361
+    x64.callDirect opaque
+    x64.storeSlotReg slot350, r8
+    x64.movRegImm32 rcx, 362
+    x64.callDirect opaque
+    x64.storeSlotReg slot351, r8
+    x64.movRegImm32 rcx, 363
+    x64.callDirect opaque
+    x64.storeSlotReg slot352, r8
+    x64.movRegImm32 rcx, 364
+    x64.callDirect opaque
+    x64.storeSlotReg slot353, r8
+    x64.movRegImm32 rcx, 365
+    x64.callDirect opaque
+    x64.storeSlotReg slot354, r8
+    x64.movRegImm32 rcx, 366
+    x64.callDirect opaque
+    x64.storeSlotReg slot355, r8
+    x64.movRegImm32 rcx, 367
+    x64.callDirect opaque
+    x64.storeSlotReg slot356, r8
+    x64.movRegImm32 rcx, 368
+    x64.callDirect opaque
+    x64.storeSlotReg slot357, r8
+    x64.movRegImm32 rcx, 369
+    x64.callDirect opaque
+    x64.storeSlotReg slot358, r8
+    x64.movRegImm32 rcx, 370
+    x64.callDirect opaque
+    x64.storeSlotReg slot359, r8
+    x64.movRegImm32 rcx, 371
+    x64.callDirect opaque
+    x64.storeSlotReg slot360, r8
+    x64.movRegImm32 rcx, 372
+    x64.callDirect opaque
+    x64.storeSlotReg slot361, r8
+    x64.movRegImm32 rcx, 373
+    x64.callDirect opaque
+    x64.storeSlotReg slot362, r8
+    x64.movRegImm32 rcx, 374
+    x64.callDirect opaque
+    x64.storeSlotReg slot363, r8
+    x64.movRegImm32 rcx, 375
+    x64.callDirect opaque
+    x64.storeSlotReg slot364, r8
+    x64.movRegImm32 rcx, 376
+    x64.callDirect opaque
+    x64.storeSlotReg slot365, r8
+    x64.movRegImm32 rcx, 377
+    x64.callDirect opaque
+    x64.storeSlotReg slot366, r8
+    x64.movRegImm32 rcx, 378
+    x64.callDirect opaque
+    x64.storeSlotReg slot367, r8
+    x64.movRegImm32 rcx, 379
+    x64.callDirect opaque
+    x64.storeSlotReg slot368, r8
+    x64.movRegImm32 rcx, 380
+    x64.callDirect opaque
+    x64.storeSlotReg slot369, r8
+    x64.movRegImm32 rcx, 381
+    x64.callDirect opaque
+    x64.storeSlotReg slot370, r8
+    x64.movRegImm32 rcx, 382
+    x64.callDirect opaque
+    x64.storeSlotReg slot371, r8
+    x64.movRegImm32 rcx, 383
+    x64.callDirect opaque
+    x64.storeSlotReg slot372, r8
+    x64.movRegImm32 rcx, 384
+    x64.callDirect opaque
+    x64.storeSlotReg slot373, r8
+    x64.movRegImm32 rcx, 385
+    x64.callDirect opaque
+    x64.storeSlotReg slot374, r8
+    x64.movRegImm32 rcx, 386
+    x64.callDirect opaque
+    x64.storeSlotReg slot375, r8
+    x64.movRegImm32 rcx, 387
+    x64.callDirect opaque
+    x64.storeSlotReg slot376, r8
+    x64.movRegImm32 rcx, 388
+    x64.callDirect opaque
+    x64.storeSlotReg slot377, r8
+    x64.movRegImm32 rcx, 389
+    x64.callDirect opaque
+    x64.storeSlotReg slot378, r8
+    x64.movRegImm32 rcx, 390
+    x64.callDirect opaque
+    x64.storeSlotReg slot379, r8
+    x64.movRegImm32 rcx, 391
+    x64.callDirect opaque
+    x64.storeSlotReg slot380, r8
+    x64.movRegImm32 rcx, 392
+    x64.callDirect opaque
+    x64.storeSlotReg slot381, r8
+    x64.movRegImm32 rcx, 393
+    x64.callDirect opaque
+    x64.storeSlotReg slot382, r8
+    x64.movRegImm32 rcx, 394
+    x64.callDirect opaque
+    x64.storeSlotReg slot383, r8
+    x64.movRegImm32 rcx, 395
+    x64.callDirect opaque
+    x64.storeSlotReg slot384, r8
+    x64.movRegImm32 rcx, 396
+    x64.callDirect opaque
+    x64.storeSlotReg slot385, r8
+    x64.movRegImm32 rcx, 397
+    x64.callDirect opaque
+    x64.storeSlotReg slot386, r8
+    x64.movRegImm32 rcx, 398
+    x64.callDirect opaque
+    x64.storeSlotReg slot387, r8
+    x64.movRegImm32 rcx, 399
+    x64.callDirect opaque
+    x64.storeSlotReg slot388, r8
+    x64.movRegImm32 rcx, 400
+    x64.callDirect opaque
+    x64.storeSlotReg slot389, r8
+    x64.movRegImm32 rcx, 401
+    x64.callDirect opaque
+    x64.storeSlotReg slot390, r8
+    x64.movRegImm32 rcx, 402
+    x64.callDirect opaque
+    x64.storeSlotReg slot391, r8
+    x64.movRegImm32 rcx, 403
+    x64.callDirect opaque
+    x64.storeSlotReg slot392, r8
+    x64.movRegImm32 rcx, 404
+    x64.callDirect opaque
+    x64.storeSlotReg slot393, r8
+    x64.movRegImm32 rcx, 405
+    x64.callDirect opaque
+    x64.storeSlotReg slot394, r8
+    x64.movRegImm32 rcx, 406
+    x64.callDirect opaque
+    x64.storeSlotReg slot395, r8
+    x64.movRegImm32 rcx, 407
+    x64.callDirect opaque
+    x64.storeSlotReg slot396, r8
+    x64.movRegImm32 rcx, 408
+    x64.callDirect opaque
+    x64.storeSlotReg slot397, r8
+    x64.movRegImm32 rcx, 409
+    x64.callDirect opaque
+    x64.storeSlotReg slot398, r8
+    x64.movRegImm32 rcx, 410
+    x64.callDirect opaque
+    x64.storeSlotReg slot399, r8
+    x64.movRegImm32 rcx, 411
+    x64.callDirect opaque
+    x64.storeSlotReg slot400, r8
+    x64.movRegImm32 rcx, 412
+    x64.callDirect opaque
+    x64.storeSlotReg slot401, r8
+    x64.movRegImm32 rcx, 413
+    x64.callDirect opaque
+    x64.storeSlotReg slot402, r8
+    x64.movRegImm32 rcx, 414
+    x64.callDirect opaque
+    x64.storeSlotReg slot403, r8
+    x64.movRegImm32 rcx, 415
+    x64.callDirect opaque
+    x64.storeSlotReg slot404, r8
+    x64.movRegImm32 rcx, 416
+    x64.callDirect opaque
+    x64.storeSlotReg slot405, r8
+    x64.movRegImm32 rcx, 417
+    x64.callDirect opaque
+    x64.storeSlotReg slot406, r8
+    x64.movRegImm32 rcx, 418
+    x64.callDirect opaque
+    x64.storeSlotReg slot407, r8
+    x64.movRegImm32 rcx, 419
+    x64.callDirect opaque
+    x64.storeSlotReg slot408, r8
+    x64.movRegImm32 rcx, 420
+    x64.callDirect opaque
+    x64.storeSlotReg slot409, r8
+    x64.movRegImm32 rcx, 421
+    x64.callDirect opaque
+    x64.storeSlotReg slot410, r8
+    x64.movRegImm32 rcx, 422
+    x64.callDirect opaque
+    x64.storeSlotReg slot411, r8
+    x64.movRegImm32 rcx, 423
+    x64.callDirect opaque
+    x64.storeSlotReg slot412, r8
+    x64.movRegImm32 rcx, 424
+    x64.callDirect opaque
+    x64.storeSlotReg slot413, r8
+    x64.movRegImm32 rcx, 425
+    x64.callDirect opaque
+    x64.storeSlotReg slot414, r8
+    x64.movRegImm32 rcx, 426
+    x64.callDirect opaque
+    x64.storeSlotReg slot415, r8
+    x64.movRegImm32 rcx, 427
+    x64.callDirect opaque
+    x64.storeSlotReg slot416, r8
+    x64.movRegImm32 rcx, 428
+    x64.callDirect opaque
+    x64.storeSlotReg slot417, r8
+    x64.movRegImm32 rcx, 429
+    x64.callDirect opaque
+    x64.storeSlotReg slot418, r8
+    x64.movRegImm32 rcx, 430
+    x64.callDirect opaque
+    x64.storeSlotReg slot419, r8
+    x64.movRegImm32 rcx, 431
+    x64.callDirect opaque
+    x64.storeSlotReg slot420, r8
+    x64.movRegImm32 rcx, 432
+    x64.callDirect opaque
+    x64.storeSlotReg slot421, r8
+    x64.movRegImm32 rcx, 433
+    x64.callDirect opaque
+    x64.storeSlotReg slot422, r8
+    x64.movRegImm32 rcx, 434
+    x64.callDirect opaque
+    x64.storeSlotReg slot423, r8
+    x64.movRegImm32 rcx, 435
+    x64.callDirect opaque
+    x64.storeSlotReg slot424, r8
+    x64.movRegImm32 rcx, 436
+    x64.callDirect opaque
+    x64.storeSlotReg slot425, r8
+    x64.movRegImm32 rcx, 437
+    x64.callDirect opaque
+    x64.storeSlotReg slot426, r8
+    x64.movRegImm32 rcx, 438
+    x64.callDirect opaque
+    x64.storeSlotReg slot427, r8
+    x64.movRegImm32 rcx, 439
+    x64.callDirect opaque
+    x64.storeSlotReg slot428, r8
+    x64.movRegImm32 rcx, 440
+    x64.callDirect opaque
+    x64.storeSlotReg slot429, r8
+    x64.movRegImm32 rcx, 441
+    x64.callDirect opaque
+    x64.storeSlotReg slot430, r8
+    x64.movRegImm32 rcx, 442
+    x64.callDirect opaque
+    x64.storeSlotReg slot431, r8
+    x64.movRegImm32 rcx, 443
+    x64.callDirect opaque
+    x64.storeSlotReg slot432, r8
+    x64.movRegImm32 rcx, 444
+    x64.callDirect opaque
+    x64.storeSlotReg slot433, r8
+    x64.movRegImm32 rcx, 445
+    x64.callDirect opaque
+    x64.storeSlotReg slot434, r8
+    x64.movRegImm32 rcx, 446
+    x64.callDirect opaque
+    x64.storeSlotReg slot435, r8
+    x64.movRegImm32 rcx, 447
+    x64.callDirect opaque
+    x64.storeSlotReg slot436, r8
+    x64.movRegImm32 rcx, 448
+    x64.callDirect opaque
+    x64.storeSlotReg slot437, r8
+    x64.movRegImm32 rcx, 449
+    x64.callDirect opaque
+    x64.storeSlotReg slot438, r8
+    x64.movRegImm32 rcx, 450
+    x64.callDirect opaque
+    x64.storeSlotReg slot439, r8
+    x64.movRegImm32 rcx, 451
+    x64.callDirect opaque
+    x64.storeSlotReg slot440, r8
+    x64.movRegImm32 rcx, 452
+    x64.callDirect opaque
+    x64.storeSlotReg slot441, r8
+    x64.movRegImm32 rcx, 453
+    x64.callDirect opaque
+    x64.storeSlotReg slot442, r8
+    x64.movRegImm32 rcx, 454
+    x64.callDirect opaque
+    x64.storeSlotReg slot443, r8
+    x64.movRegImm32 rcx, 455
+    x64.callDirect opaque
+    x64.storeSlotReg slot444, r8
+    x64.movRegImm32 rcx, 456
+    x64.callDirect opaque
+    x64.storeSlotReg slot445, r8
+    x64.movRegImm32 rcx, 457
+    x64.callDirect opaque
+    x64.storeSlotReg slot446, r8
+    x64.movRegImm32 rcx, 458
+    x64.callDirect opaque
+    x64.storeSlotReg slot447, r8
+    x64.movRegImm32 rcx, 459
+    x64.callDirect opaque
+    x64.storeSlotReg slot448, r8
+    x64.movRegImm32 rcx, 460
+    x64.callDirect opaque
+    x64.storeSlotReg slot449, r8
+    x64.movRegImm32 rcx, 461
+    x64.callDirect opaque
+    x64.storeSlotReg slot450, r8
+    x64.movRegImm32 rcx, 462
+    x64.callDirect opaque
+    x64.storeSlotReg slot451, r8
+    x64.movRegImm32 rcx, 463
+    x64.callDirect opaque
+    x64.storeSlotReg slot452, r8
+    x64.movRegImm32 rcx, 464
+    x64.callDirect opaque
+    x64.storeSlotReg slot453, r8
+    x64.movRegImm32 rcx, 465
+    x64.callDirect opaque
+    x64.storeSlotReg slot454, r8
+    x64.movRegImm32 rcx, 466
+    x64.callDirect opaque
+    x64.storeSlotReg slot455, r8
+    x64.movRegImm32 rcx, 467
+    x64.callDirect opaque
+    x64.storeSlotReg slot456, r8
+    x64.movRegImm32 rcx, 468
+    x64.callDirect opaque
+    x64.storeSlotReg slot457, r8
+    x64.movRegImm32 rcx, 469
+    x64.callDirect opaque
+    x64.storeSlotReg slot458, r8
+    x64.movRegImm32 rcx, 470
+    x64.callDirect opaque
+    x64.storeSlotReg slot459, r8
+    x64.movRegImm32 rcx, 471
+    x64.callDirect opaque
+    x64.storeSlotReg slot460, r8
+    x64.movRegImm32 rcx, 472
+    x64.callDirect opaque
+    x64.storeSlotReg slot461, r8
+    x64.movRegImm32 rcx, 473
+    x64.callDirect opaque
+    x64.storeSlotReg slot462, r8
+    x64.movRegImm32 rcx, 474
+    x64.callDirect opaque
+    x64.storeSlotReg slot463, r8
+    x64.movRegImm32 rcx, 475
+    x64.callDirect opaque
+    x64.storeSlotReg slot464, r8
+    x64.movRegImm32 rcx, 476
+    x64.callDirect opaque
+    x64.storeSlotReg slot465, r8
+    x64.movRegImm32 rcx, 477
+    x64.callDirect opaque
+    x64.storeSlotReg slot466, r8
+    x64.movRegImm32 rcx, 478
+    x64.callDirect opaque
+    x64.storeSlotReg slot467, r8
+    x64.movRegImm32 rcx, 479
+    x64.callDirect opaque
+    x64.storeSlotReg slot468, r8
+    x64.movRegImm32 rcx, 480
+    x64.callDirect opaque
+    x64.storeSlotReg slot469, r8
+    x64.movRegImm32 rcx, 481
+    x64.callDirect opaque
+    x64.storeSlotReg slot470, r8
+    x64.movRegImm32 rcx, 482
+    x64.callDirect opaque
+    x64.storeSlotReg slot471, r8
+    x64.movRegImm32 rcx, 483
+    x64.callDirect opaque
+    x64.storeSlotReg slot472, r8
+    x64.movRegImm32 rcx, 484
+    x64.callDirect opaque
+    x64.storeSlotReg slot473, r8
+    x64.movRegImm32 rcx, 485
+    x64.callDirect opaque
+    x64.storeSlotReg slot474, r8
+    x64.movRegImm32 rcx, 486
+    x64.callDirect opaque
+    x64.storeSlotReg slot475, r8
+    x64.movRegImm32 rcx, 487
+    x64.callDirect opaque
+    x64.storeSlotReg slot476, r8
+    x64.movRegImm32 rcx, 488
+    x64.callDirect opaque
+    x64.storeSlotReg slot477, r8
+    x64.movRegImm32 rcx, 489
+    x64.callDirect opaque
+    x64.storeSlotReg slot478, r8
+    x64.movRegImm32 rcx, 490
+    x64.callDirect opaque
+    x64.storeSlotReg slot479, r8
+    x64.movRegImm32 rcx, 491
+    x64.callDirect opaque
+    x64.storeSlotReg slot480, r8
+    x64.movRegImm32 rcx, 492
+    x64.callDirect opaque
+    x64.storeSlotReg slot481, r8
+    x64.movRegImm32 rcx, 493
+    x64.callDirect opaque
+    x64.storeSlotReg slot482, r8
+    x64.movRegImm32 rcx, 494
+    x64.callDirect opaque
+    x64.storeSlotReg slot483, r8
+    x64.movRegImm32 rcx, 495
+    x64.callDirect opaque
+    x64.storeSlotReg slot484, r8
+    x64.movRegImm32 rcx, 496
+    x64.callDirect opaque
+    x64.storeSlotReg slot485, r8
+    x64.movRegImm32 rcx, 497
+    x64.callDirect opaque
+    x64.storeSlotReg slot486, r8
+    x64.movRegImm32 rcx, 498
+    x64.callDirect opaque
+    x64.storeSlotReg slot487, r8
+    x64.movRegImm32 rcx, 499
+    x64.callDirect opaque
+    x64.storeSlotReg slot488, r8
+    x64.movRegImm32 rcx, 500
+    x64.callDirect opaque
+    x64.storeSlotReg slot489, r8
+    x64.movRegImm32 rcx, 501
+    x64.callDirect opaque
+    x64.storeSlotReg slot490, r8
+    x64.movRegImm32 rcx, 502
+    x64.callDirect opaque
+    x64.storeSlotReg slot491, r8
+    x64.movRegImm32 rcx, 503
+    x64.callDirect opaque
+    x64.storeSlotReg slot492, r8
+    x64.movRegImm32 rcx, 504
+    x64.callDirect opaque
+    x64.storeSlotReg slot493, r8
+    x64.movRegImm32 rcx, 505
+    x64.callDirect opaque
+    x64.storeSlotReg slot494, r8
+    x64.movRegImm32 rcx, 506
+    x64.callDirect opaque
+    x64.storeSlotReg slot495, r8
+    x64.movRegImm32 rcx, 507
+    x64.callDirect opaque
+    x64.storeSlotReg slot496, r8
+    x64.movRegImm32 rcx, 508
+    x64.callDirect opaque
+    x64.storeSlotReg slot497, r8
+    x64.movRegImm32 rcx, 509
+    x64.callDirect opaque
+    x64.storeSlotReg slot498, r8
+    x64.movRegImm32 rcx, 510
+    x64.callDirect opaque
+    x64.storeSlotReg slot499, r8
+    x64.movRegImm32 rcx, 511
+    x64.callDirect opaque
+    x64.storeSlotReg slot500, r8
+    x64.movRegImm32 rcx, 512
+    x64.callDirect opaque
+    x64.storeSlotReg slot501, r8
+    x64.movRegImm32 rcx, 513
+    x64.callDirect opaque
+    x64.storeSlotReg slot502, r8
+    x64.movRegImm32 rcx, 514
+    x64.callDirect opaque
+    x64.storeSlotReg slot503, r8
+    x64.movRegImm32 rcx, 515
+    x64.callDirect opaque
+    x64.storeSlotReg slot504, r8
+    x64.movRegImm32 rcx, 516
+    x64.callDirect opaque
+    x64.storeSlotReg slot505, r8
+    x64.movRegImm32 rcx, 517
+    x64.callDirect opaque
+    x64.storeSlotReg slot506, r8
+    x64.movRegImm32 rcx, 518
+    x64.callDirect opaque
+    x64.storeSlotReg slot507, r8
+    x64.movRegImm32 rcx, 519
+    x64.callDirect opaque
+    x64.storeSlotReg slot508, r8
+    x64.movRegImm32 rcx, 520
+    x64.callDirect opaque
+    x64.storeSlotReg slot509, r8
+    x64.movRegImm32 rcx, 521
+    x64.callDirect opaque
+    x64.storeSlotReg slot510, r8
+    x64.movRegImm32 rcx, 522
+    x64.callDirect opaque
+    x64.storeSlotReg slot511, r8
+    x64.movRegImm32 rcx, 523
+    x64.callDirect opaque
+    x64.storeSlotReg slot512, r8
+    x64.movRegImm32 rcx, 524
+    x64.callDirect opaque
+    x64.storeSlotReg slot513, r8
+    x64.movRegImm32 rcx, 525
+    x64.callDirect opaque
+    x64.storeSlotReg slot514, r8
+    x64.movRegImm32 rcx, 526
+    x64.callDirect opaque
+    x64.storeSlotReg slot515, r8
+    x64.movRegImm32 rcx, 527
+    x64.callDirect opaque
+    x64.storeSlotReg slot516, r8
+    x64.movRegImm32 rcx, 528
+    x64.callDirect opaque
+    x64.storeSlotReg slot517, r8
+    x64.movRegImm32 rcx, 529
+    x64.callDirect opaque
+    x64.storeSlotReg slot518, r8
+    x64.movRegImm32 rcx, 530
+    x64.callDirect opaque
+    x64.storeSlotReg slot519, r8
+    x64.movRegImm32 rcx, 531
+    x64.callDirect opaque
+    x64.storeSlotReg slot520, r8
+    x64.movRegImm32 rcx, 532
+    x64.callDirect opaque
+    x64.storeSlotReg slot521, r8
+    x64.movRegImm32 rcx, 533
+    x64.callDirect opaque
+    x64.storeSlotReg slot522, r8
+    x64.movRegImm32 rcx, 534
+    x64.callDirect opaque
+    x64.storeSlotReg slot523, r8
+    x64.movRegImm32 rcx, 535
+    x64.callDirect opaque
+    x64.storeSlotReg slot524, r8
+    x64.movRegImm32 rcx, 536
+    x64.callDirect opaque
+    x64.storeSlotReg slot525, r8
+    x64.movRegImm32 rcx, 537
+    x64.callDirect opaque
+    x64.storeSlotReg slot526, r8
+    x64.movRegImm32 rcx, 538
+    x64.callDirect opaque
+    x64.storeSlotReg slot527, r8
+    x64.movRegImm32 rcx, 539
+    x64.callDirect opaque
+    x64.storeSlotReg slot528, r8
+    x64.movRegImm32 rcx, 540
+    x64.callDirect opaque
+    x64.storeSlotReg slot529, r8
+    x64.movRegImm32 rcx, 541
+    x64.callDirect opaque
+    x64.storeSlotReg slot530, r8
+    x64.movRegImm32 rcx, 542
+    x64.callDirect opaque
+    x64.storeSlotReg slot531, r8
+    x64.movRegImm32 rcx, 543
+    x64.callDirect opaque
+    x64.storeSlotReg slot532, r8
+    x64.movRegImm32 rcx, 544
+    x64.callDirect opaque
+    x64.storeSlotReg slot533, r8
+    x64.movRegImm32 rcx, 545
+    x64.callDirect opaque
+    x64.storeSlotReg slot534, r8
+    x64.movRegImm32 rcx, 546
+    x64.callDirect opaque
+    x64.storeSlotReg slot535, r8
+    x64.movRegImm32 rcx, 547
+    x64.callDirect opaque
+    x64.storeSlotReg slot536, r8
+    x64.movRegImm32 rcx, 548
+    x64.callDirect opaque
+    x64.storeSlotReg slot537, r8
+    x64.movRegImm32 rcx, 549
+    x64.callDirect opaque
+    x64.storeSlotReg slot538, r8
+    x64.movRegImm32 rcx, 550
+    x64.callDirect opaque
+    x64.storeSlotReg slot539, r8
+    x64.movRegImm32 rcx, 551
+    x64.callDirect opaque
+    x64.storeSlotReg slot540, r8
+    x64.movRegImm32 rcx, 552
+    x64.callDirect opaque
+    x64.storeSlotReg slot541, r8
+    x64.movRegImm32 rcx, 553
+    x64.callDirect opaque
+    x64.storeSlotReg slot542, r8
+    x64.movRegImm32 rcx, 554
+    x64.callDirect opaque
+    x64.storeSlotReg slot543, r8
+    x64.movRegImm32 rcx, 555
+    x64.callDirect opaque
+    x64.storeSlotReg slot544, r8
+    x64.movRegImm32 rcx, 556
+    x64.callDirect opaque
+    x64.storeSlotReg slot545, r8
+    x64.movRegImm32 rcx, 557
+    x64.callDirect opaque
+    x64.storeSlotReg slot546, r8
+    x64.movRegImm32 rcx, 558
+    x64.callDirect opaque
+    x64.storeSlotReg slot547, r8
+    x64.movRegImm32 rcx, 559
+    x64.callDirect opaque
+    x64.storeSlotReg slot548, r8
+    x64.movRegImm32 rcx, 560
+    x64.callDirect opaque
+    x64.storeSlotReg slot549, r8
+    x64.movRegImm32 rcx, 561
+    x64.callDirect opaque
+    x64.storeSlotReg slot550, r8
+    x64.movRegImm32 rcx, 562
+    x64.callDirect opaque
+    x64.storeSlotReg slot551, r8
+    x64.movRegImm32 rcx, 563
+    x64.callDirect opaque
+    x64.storeSlotReg slot552, r8
+    x64.movRegImm32 rcx, 564
+    x64.callDirect opaque
+    x64.storeSlotReg slot553, r8
+    x64.movRegImm32 rcx, 565
+    x64.callDirect opaque
+    x64.storeSlotReg slot554, r8
+    x64.movRegImm32 rcx, 566
+    x64.callDirect opaque
+    x64.storeSlotReg slot555, r8
+    x64.movRegImm32 rcx, 567
+    x64.callDirect opaque
+    x64.storeSlotReg slot556, r8
+    x64.movRegImm32 rcx, 568
+    x64.callDirect opaque
+    x64.storeSlotReg slot557, r8
+    x64.movRegImm32 rcx, 569
+    x64.callDirect opaque
+    x64.storeSlotReg slot558, r8
+    x64.movRegImm32 rcx, 570
+    x64.callDirect opaque
+    x64.storeSlotReg slot559, r8
+    x64.movRegImm32 rcx, 571
+    x64.callDirect opaque
+    x64.storeSlotReg slot560, r8
+    x64.movRegImm32 rcx, 572
+    x64.callDirect opaque
+    x64.storeSlotReg slot561, r8
+    x64.movRegImm32 rcx, 573
+    x64.callDirect opaque
+    x64.storeSlotReg slot562, r8
+    x64.movRegImm32 rcx, 574
+    x64.callDirect opaque
+    x64.storeSlotReg slot563, r8
+    x64.movRegImm32 rcx, 575
+    x64.callDirect opaque
+    x64.storeSlotReg slot564, r8
+    x64.movRegImm32 rcx, 576
+    x64.callDirect opaque
+    x64.storeSlotReg slot565, r8
+    x64.movRegImm32 rcx, 577
+    x64.callDirect opaque
+    x64.storeSlotReg slot566, r8
+    x64.movRegImm32 rcx, 578
+    x64.callDirect opaque
+    x64.storeSlotReg slot567, r8
+    x64.movRegImm32 rcx, 579
+    x64.callDirect opaque
+    x64.storeSlotReg slot568, r8
+    x64.movRegImm32 rcx, 580
+    x64.callDirect opaque
+    x64.storeSlotReg slot569, r8
+    x64.movRegImm32 rcx, 581
+    x64.callDirect opaque
+    x64.storeSlotReg slot570, r8
+    x64.movRegImm32 rcx, 582
+    x64.callDirect opaque
+    x64.storeSlotReg slot571, r8
+    x64.movRegImm32 rcx, 583
+    x64.callDirect opaque
+    x64.storeSlotReg slot572, r8
+    x64.movRegImm32 rcx, 584
+    x64.callDirect opaque
+    x64.storeSlotReg slot573, r8
+    x64.movRegImm32 rcx, 585
+    x64.callDirect opaque
+    x64.storeSlotReg slot574, r8
+    x64.movRegImm32 rcx, 586
+    x64.callDirect opaque
+    x64.storeSlotReg slot575, r8
+    x64.movRegImm32 rcx, 587
+    x64.callDirect opaque
+    x64.storeSlotReg slot576, r8
+    x64.movRegImm32 rcx, 588
+    x64.callDirect opaque
+    x64.storeSlotReg slot577, r8
+    x64.movRegImm32 rcx, 589
+    x64.callDirect opaque
+    x64.storeSlotReg slot578, r8
+    x64.movRegImm32 rcx, 590
+    x64.callDirect opaque
+    x64.storeSlotReg slot579, r8
+    x64.movRegImm32 rcx, 591
+    x64.callDirect opaque
+    x64.storeSlotReg slot580, r8
+    x64.movRegImm32 rcx, 592
+    x64.callDirect opaque
+    x64.storeSlotReg slot581, r8
+    x64.movRegImm32 rcx, 593
+    x64.callDirect opaque
+    x64.storeSlotReg slot582, r8
+    x64.movRegImm32 rcx, 594
+    x64.callDirect opaque
+    x64.storeSlotReg slot583, r8
+    x64.movRegImm32 rcx, 595
+    x64.callDirect opaque
+    x64.storeSlotReg slot584, r8
+    x64.movRegImm32 rcx, 596
+    x64.callDirect opaque
+    x64.storeSlotReg slot585, r8
+    x64.movRegImm32 rcx, 597
+    x64.callDirect opaque
+    x64.storeSlotReg slot586, r8
+    x64.movRegImm32 rcx, 598
+    x64.callDirect opaque
+    x64.storeSlotReg slot587, r8
+    x64.movRegImm32 rcx, 599
+    x64.callDirect opaque
+    x64.storeSlotReg slot588, r8
+    x64.movRegImm32 rcx, 600
+    x64.callDirect opaque
+    x64.storeSlotReg slot589, r8
+    x64.movRegImm32 rcx, 601
+    x64.callDirect opaque
+    x64.storeSlotReg slot590, r8
+    x64.movRegImm32 rcx, 602
+    x64.callDirect opaque
+    x64.storeSlotReg slot591, r8
+    x64.movRegImm32 rcx, 603
+    x64.callDirect opaque
+    x64.storeSlotReg slot592, r8
+    x64.movRegImm32 rcx, 604
+    x64.callDirect opaque
+    x64.storeSlotReg slot593, r8
+    x64.movRegImm32 rcx, 605
+    x64.callDirect opaque
+    x64.storeSlotReg slot594, r8
+    x64.movRegImm32 rcx, 606
+    x64.callDirect opaque
+    x64.storeSlotReg slot595, r8
+    x64.movRegImm32 rcx, 607
+    x64.callDirect opaque
+    x64.storeSlotReg slot596, r8
+    x64.movRegImm32 rcx, 608
+    x64.callDirect opaque
+    x64.storeSlotReg slot597, r8
+    x64.movRegImm32 rcx, 609
+    x64.callDirect opaque
+    x64.storeSlotReg slot598, r8
+    x64.movRegImm32 rcx, 610
+    x64.callDirect opaque
+    x64.storeSlotReg slot599, r8
+    x64.movRegImm32 rcx, 611
+    x64.callDirect opaque
+    x64.storeSlotReg slot600, r8
+    x64.movRegImm32 rcx, 612
+    x64.callDirect opaque
+    x64.storeSlotReg slot601, r8
+    x64.movRegImm32 rcx, 613
+    x64.callDirect opaque
+    x64.storeSlotReg slot602, r8
+    x64.movRegImm32 rcx, 614
+    x64.callDirect opaque
+    x64.storeSlotReg slot603, r8
+    x64.movRegImm32 rcx, 615
+    x64.callDirect opaque
+    x64.storeSlotReg slot604, r8
+    x64.movRegImm32 rcx, 616
+    x64.callDirect opaque
+    x64.storeSlotReg slot605, r8
+    x64.movRegImm32 rcx, 617
+    x64.callDirect opaque
+    x64.storeSlotReg slot606, r8
+    x64.movRegImm32 rcx, 618
+    x64.callDirect opaque
+    x64.storeSlotReg slot607, r8
+    x64.movRegImm32 rcx, 619
+    x64.callDirect opaque
+    x64.storeSlotReg slot608, r8
+    x64.movRegImm32 rcx, 620
+    x64.callDirect opaque
+    x64.storeSlotReg slot609, r8
+    x64.movRegImm32 rcx, 621
+    x64.callDirect opaque
+    x64.storeSlotReg slot610, r8
+    x64.movRegImm32 rcx, 622
+    x64.callDirect opaque
+    x64.storeSlotReg slot611, r8
+    x64.movRegImm32 rcx, 623
+    x64.callDirect opaque
+    x64.storeSlotReg slot612, r8
+    x64.movRegImm32 rcx, 624
+    x64.callDirect opaque
+    x64.storeSlotReg slot613, r8
+    x64.movRegImm32 rcx, 625
+    x64.callDirect opaque
+    x64.storeSlotReg slot614, r8
+    x64.movRegImm32 rcx, 626
+    x64.callDirect opaque
+    x64.storeSlotReg slot615, r8
+    x64.movRegImm32 rcx, 627
+    x64.callDirect opaque
+    x64.storeSlotReg slot616, r8
+    x64.movRegImm32 rcx, 628
+    x64.callDirect opaque
+    x64.storeSlotReg slot617, r8
+    x64.movRegImm32 rcx, 629
+    x64.callDirect opaque
+    x64.storeSlotReg slot618, r8
+    x64.movRegImm32 rcx, 630
+    x64.callDirect opaque
+    x64.storeSlotReg slot619, r8
+    x64.movRegImm32 rcx, 631
+    x64.callDirect opaque
+    x64.storeSlotReg slot620, r8
+    x64.movRegImm32 rcx, 632
+    x64.callDirect opaque
+    x64.storeSlotReg slot621, r8
+    x64.movRegImm32 rcx, 633
+    x64.callDirect opaque
+    x64.storeSlotReg slot622, r8
+    x64.movRegImm32 rcx, 634
+    x64.callDirect opaque
+    x64.storeSlotReg slot623, r8
+    x64.movRegImm32 rcx, 635
+    x64.callDirect opaque
+    x64.storeSlotReg slot624, r8
+    x64.movRegImm32 rcx, 636
+    x64.callDirect opaque
+    x64.storeSlotReg slot625, r8
+    x64.movRegImm32 rcx, 637
+    x64.callDirect opaque
+    x64.storeSlotReg slot626, r8
+    x64.movRegImm32 rcx, 638
+    x64.callDirect opaque
+    x64.storeSlotReg slot627, r8
+    x64.movRegImm32 rcx, 639
+    x64.callDirect opaque
+    x64.storeSlotReg slot628, r8
+    x64.movRegImm32 rcx, 640
+    x64.callDirect opaque
+    x64.storeSlotReg slot629, r8
+    x64.movRegImm32 rcx, 641
+    x64.callDirect opaque
+    x64.storeSlotReg slot630, r8
+    x64.movRegImm32 rcx, 642
+    x64.callDirect opaque
+    x64.storeSlotReg slot631, r8
+    x64.movRegImm32 rcx, 643
+    x64.callDirect opaque
+    x64.storeSlotReg slot632, r8
+    x64.movRegImm32 rcx, 644
+    x64.callDirect opaque
+    x64.storeSlotReg slot633, r8
+    x64.movRegImm32 rcx, 645
+    x64.callDirect opaque
+    x64.storeSlotReg slot634, r8
+    x64.movRegImm32 rcx, 646
+    x64.callDirect opaque
+    x64.storeSlotReg slot635, r8
+    x64.movRegImm32 rcx, 647
+    x64.callDirect opaque
+    x64.storeSlotReg slot636, r8
+    x64.movRegImm32 rcx, 648
+    x64.callDirect opaque
+    x64.storeSlotReg slot637, r8
+    x64.movRegImm32 rcx, 649
+    x64.callDirect opaque
+    x64.storeSlotReg slot638, r8
+    x64.movRegImm32 rcx, 650
+    x64.callDirect opaque
+    x64.storeSlotReg slot639, r8
+    x64.movRegImm32 rcx, 651
+    x64.callDirect opaque
+    x64.storeSlotReg slot640, r8
+    x64.movRegImm32 rcx, 652
+    x64.callDirect opaque
+    x64.storeSlotReg slot641, r8
+    x64.movRegImm32 rcx, 653
+    x64.callDirect opaque
+    x64.storeSlotReg slot642, r8
+    x64.movRegImm32 rcx, 654
+    x64.callDirect opaque
+    x64.storeSlotReg slot643, r8
+    x64.movRegImm32 rcx, 655
+    x64.callDirect opaque
+    x64.storeSlotReg slot644, r8
+    x64.movRegImm32 rcx, 656
+    x64.callDirect opaque
+    x64.storeSlotReg slot645, r8
+    x64.movRegImm32 rcx, 657
+    x64.callDirect opaque
+    x64.storeSlotReg slot646, r8
+    x64.movRegImm32 rcx, 658
+    x64.callDirect opaque
+    x64.storeSlotReg slot647, r8
+    x64.movRegImm32 rcx, 659
+    x64.callDirect opaque
+    x64.storeSlotReg slot648, r8
+    x64.movRegImm32 rcx, 660
+    x64.callDirect opaque
+    x64.storeSlotReg slot649, r8
+    x64.movRegImm32 rcx, 661
+    x64.callDirect opaque
+    x64.storeSlotReg slot650, r8
+    x64.movRegImm32 rcx, 662
+    x64.callDirect opaque
+    x64.storeSlotReg slot651, r8
+    x64.movRegImm32 rcx, 663
+    x64.callDirect opaque
+    x64.storeSlotReg slot652, r8
+    x64.movRegImm32 rcx, 664
+    x64.callDirect opaque
+    x64.storeSlotReg slot653, r8
+    x64.movRegImm32 rcx, 665
+    x64.callDirect opaque
+    x64.storeSlotReg slot654, r8
+    x64.movRegImm32 rcx, 666
+    x64.callDirect opaque
+    x64.storeSlotReg slot655, r8
+    x64.movRegImm32 rcx, 667
+    x64.callDirect opaque
+    x64.storeSlotReg slot656, r8
+    x64.movRegImm32 rcx, 668
+    x64.callDirect opaque
+    x64.storeSlotReg slot657, r8
+    x64.movRegImm32 rcx, 669
+    x64.callDirect opaque
+    x64.storeSlotReg slot658, r8
+    x64.movRegImm32 rcx, 670
+    x64.callDirect opaque
+    x64.storeSlotReg slot659, r8
+    x64.movRegImm32 rcx, 671
+    x64.callDirect opaque
+    x64.storeSlotReg slot660, r8
+    x64.movRegImm32 rcx, 672
+    x64.callDirect opaque
+    x64.storeSlotReg slot661, r8
+    x64.movRegImm32 rcx, 673
+    x64.callDirect opaque
+    x64.storeSlotReg slot662, r8
+    x64.movRegImm32 rcx, 674
+    x64.callDirect opaque
+    x64.storeSlotReg slot663, r8
+    x64.movRegImm32 rcx, 675
+    x64.callDirect opaque
+    x64.storeSlotReg slot664, r8
+    x64.movRegImm32 rcx, 676
+    x64.callDirect opaque
+    x64.storeSlotReg slot665, r8
+    x64.movRegImm32 rcx, 677
+    x64.callDirect opaque
+    x64.storeSlotReg slot666, r8
+    x64.movRegImm32 rcx, 678
+    x64.callDirect opaque
+    x64.storeSlotReg slot667, r8
+    x64.movRegImm32 rcx, 679
+    x64.callDirect opaque
+    x64.storeSlotReg slot668, r8
+    x64.movRegImm32 rcx, 680
+    x64.callDirect opaque
+    x64.storeSlotReg slot669, r8
+    x64.movRegImm32 rcx, 681
+    x64.callDirect opaque
+    x64.storeSlotReg slot670, r8
+    x64.movRegImm32 rcx, 682
+    x64.callDirect opaque
+    x64.storeSlotReg slot671, r8
+    x64.movRegImm32 rcx, 683
+    x64.callDirect opaque
+    x64.storeSlotReg slot672, r8
+    x64.movRegImm32 rcx, 684
+    x64.callDirect opaque
+    x64.storeSlotReg slot673, r8
+    x64.movRegImm32 rcx, 685
+    x64.callDirect opaque
+    x64.storeSlotReg slot674, r8
+    x64.movRegImm32 rcx, 686
+    x64.callDirect opaque
+    x64.storeSlotReg slot675, r8
+    x64.movRegImm32 rcx, 687
+    x64.callDirect opaque
+    x64.storeSlotReg slot676, r8
+    x64.movRegImm32 rcx, 688
+    x64.callDirect opaque
+    x64.storeSlotReg slot677, r8
+    x64.movRegImm32 rcx, 689
+    x64.callDirect opaque
+    x64.storeSlotReg slot678, r8
+    x64.movRegImm32 rcx, 690
+    x64.callDirect opaque
+    x64.storeSlotReg slot679, r8
+    x64.movRegImm32 rcx, 691
+    x64.callDirect opaque
+    x64.storeSlotReg slot680, r8
+    x64.movRegImm32 rcx, 692
+    x64.callDirect opaque
+    x64.storeSlotReg slot681, r8
+    x64.movRegImm32 rcx, 693
+    x64.callDirect opaque
+    x64.storeSlotReg slot682, r8
+    x64.movRegImm32 rcx, 694
+    x64.callDirect opaque
+    x64.storeSlotReg slot683, r8
+    x64.movRegImm32 rcx, 695
+    x64.callDirect opaque
+    x64.storeSlotReg slot684, r8
+    x64.movRegImm32 rcx, 696
+    x64.callDirect opaque
+    x64.storeSlotReg slot685, r8
+    x64.movRegImm32 rcx, 697
+    x64.callDirect opaque
+    x64.storeSlotReg slot686, r8
+    x64.movRegImm32 rcx, 698
+    x64.callDirect opaque
+    x64.storeSlotReg slot687, r8
+    x64.movRegImm32 rcx, 699
+    x64.callDirect opaque
+    x64.storeSlotReg slot688, r8
+    x64.movRegImm32 rcx, 700
+    x64.callDirect opaque
+    x64.storeSlotReg slot689, r8
+    x64.movRegImm32 rcx, 701
+    x64.callDirect opaque
+    x64.storeSlotReg slot690, r8
+    x64.movRegImm32 rcx, 702
+    x64.callDirect opaque
+    x64.storeSlotReg slot691, r8
+    x64.movRegImm32 rcx, 703
+    x64.callDirect opaque
+    x64.storeSlotReg slot692, r8
+    x64.movRegImm32 rcx, 704
+    x64.callDirect opaque
+    x64.storeSlotReg slot693, r8
+    x64.movRegImm32 rcx, 705
+    x64.callDirect opaque
+    x64.storeSlotReg slot694, r8
+    x64.movRegImm32 rcx, 706
+    x64.callDirect opaque
+    x64.storeSlotReg slot695, r8
+    x64.movRegImm32 rcx, 707
+    x64.callDirect opaque
+    x64.storeSlotReg slot696, r8
+    x64.movRegImm32 rcx, 708
+    x64.callDirect opaque
+    x64.storeSlotReg slot697, r8
+    x64.movRegImm32 rcx, 709
+    x64.callDirect opaque
+    x64.storeSlotReg slot698, r8
+    x64.movRegImm32 rcx, 710
+    x64.callDirect opaque
+    x64.storeSlotReg slot699, r8
+    x64.movRegImm32 rcx, 711
+    x64.callDirect opaque
+    x64.storeSlotReg slot700, r8
+    x64.movRegImm32 rcx, 712
+    x64.callDirect opaque
+    x64.storeSlotReg slot701, r8
+    x64.movRegImm32 rcx, 713
+    x64.callDirect opaque
+    x64.storeSlotReg slot702, r8
+    x64.movRegImm32 rcx, 714
+    x64.callDirect opaque
+    x64.storeSlotReg slot703, r8
+    x64.movRegImm32 rcx, 715
+    x64.callDirect opaque
+    x64.storeSlotReg slot704, r8
+    x64.movRegImm32 rcx, 716
+    x64.callDirect opaque
+    x64.storeSlotReg slot705, r8
+    x64.movRegImm32 rcx, 717
+    x64.callDirect opaque
+    x64.storeSlotReg slot706, r8
+    x64.movRegImm32 rcx, 718
+    x64.callDirect opaque
+    x64.storeSlotReg slot707, r8
+    x64.movRegImm32 rcx, 719
+    x64.callDirect opaque
+    x64.storeSlotReg slot708, r8
+    x64.movRegImm32 rcx, 720
+    x64.callDirect opaque
+    x64.storeSlotReg slot709, r8
+    x64.movRegImm32 rcx, 721
+    x64.callDirect opaque
+    x64.storeSlotReg slot710, r8
+    x64.movRegImm32 rcx, 722
+    x64.callDirect opaque
+    x64.storeSlotReg slot711, r8
+    x64.movRegImm32 rcx, 723
+    x64.callDirect opaque
+    x64.storeSlotReg slot712, r8
+    x64.movRegImm32 rcx, 724
+    x64.callDirect opaque
+    x64.storeSlotReg slot713, r8
+    x64.movRegImm32 rcx, 725
+    x64.callDirect opaque
+    x64.storeSlotReg slot714, r8
+    x64.movRegImm32 rcx, 726
+    x64.callDirect opaque
+    x64.storeSlotReg slot715, r8
+    x64.movRegImm32 rcx, 727
+    x64.callDirect opaque
+    x64.storeSlotReg slot716, r8
+    x64.movRegImm32 rcx, 728
+    x64.callDirect opaque
+    x64.storeSlotReg slot717, r8
+    x64.movRegImm32 rcx, 729
+    x64.callDirect opaque
+    x64.storeSlotReg slot718, r8
+    x64.movRegImm32 rcx, 730
+    x64.callDirect opaque
+    x64.storeSlotReg slot719, r8
+    x64.movRegImm32 rcx, 731
+    x64.callDirect opaque
+    x64.storeSlotReg slot720, r8
+    x64.movRegImm32 rcx, 732
+    x64.callDirect opaque
+    x64.storeSlotReg slot721, r8
+    x64.movRegImm32 rcx, 733
+    x64.callDirect opaque
+    x64.storeSlotReg slot722, r8
+    x64.movRegImm32 rcx, 734
+    x64.callDirect opaque
+    x64.storeSlotReg slot723, r8
+    x64.movRegImm32 rcx, 735
+    x64.callDirect opaque
+    x64.storeSlotReg slot724, r8
+    x64.movRegImm32 rcx, 736
+    x64.callDirect opaque
+    x64.storeSlotReg slot725, r8
+    x64.movRegImm32 rcx, 737
+    x64.callDirect opaque
+    x64.storeSlotReg slot726, r8
+    x64.movRegImm32 rcx, 738
+    x64.callDirect opaque
+    x64.storeSlotReg slot727, r8
+    x64.movRegImm32 rcx, 739
+    x64.callDirect opaque
+    x64.storeSlotReg slot728, r8
+    x64.movRegImm32 rcx, 740
+    x64.callDirect opaque
+    x64.storeSlotReg slot729, r8
+    x64.movRegImm32 rcx, 741
+    x64.callDirect opaque
+    x64.storeSlotReg slot730, r8
+    x64.movRegImm32 rcx, 742
+    x64.callDirect opaque
+    x64.storeSlotReg slot731, r8
+    x64.movRegImm32 rcx, 743
+    x64.callDirect opaque
+    x64.storeSlotReg slot732, r8
+    x64.movRegImm32 rcx, 744
+    x64.callDirect opaque
+    x64.storeSlotReg slot733, r8
+    x64.movRegImm32 rcx, 745
+    x64.callDirect opaque
+    x64.storeSlotReg slot734, r8
+    x64.movRegImm32 rcx, 746
+    x64.callDirect opaque
+    x64.storeSlotReg slot735, r8
+    x64.movRegImm32 rcx, 747
+    x64.callDirect opaque
+    x64.storeSlotReg slot736, r8
+    x64.movRegImm32 rcx, 748
+    x64.callDirect opaque
+    x64.storeSlotReg slot737, r8
+    x64.movRegImm32 rcx, 749
+    x64.callDirect opaque
+    x64.storeSlotReg slot738, r8
+    x64.movRegImm32 rcx, 750
+    x64.callDirect opaque
+    x64.storeSlotReg slot739, r8
+    x64.movRegImm32 rcx, 751
+    x64.callDirect opaque
+    x64.storeSlotReg slot740, r8
+    x64.movRegImm32 rcx, 752
+    x64.callDirect opaque
+    x64.storeSlotReg slot741, r8
+    x64.movRegImm32 rcx, 753
+    x64.callDirect opaque
+    x64.storeSlotReg slot742, r8
+    x64.movRegImm32 rcx, 754
+    x64.callDirect opaque
+    x64.storeSlotReg slot743, r8
+    x64.movRegImm32 rcx, 755
+    x64.callDirect opaque
+    x64.storeSlotReg slot744, r8
+    x64.movRegImm32 rcx, 756
+    x64.callDirect opaque
+    x64.storeSlotReg slot745, r8
+    x64.movRegImm32 rcx, 757
+    x64.callDirect opaque
+    x64.storeSlotReg slot746, r8
+    x64.movRegImm32 rcx, 758
+    x64.callDirect opaque
+    x64.storeSlotReg slot747, r8
+    x64.movRegImm32 rcx, 759
+    x64.callDirect opaque
+    x64.storeSlotReg slot748, r8
+    x64.movRegImm32 rcx, 760
+    x64.callDirect opaque
+    x64.storeSlotReg slot749, r8
+    x64.movRegImm32 rcx, 761
+    x64.callDirect opaque
+    x64.storeSlotReg slot750, r8
+    x64.movRegImm32 rcx, 762
+    x64.callDirect opaque
+    x64.storeSlotReg slot751, r8
+    x64.movRegImm32 rcx, 763
+    x64.callDirect opaque
+    x64.storeSlotReg slot752, r8
+    x64.movRegImm32 rcx, 764
+    x64.callDirect opaque
+    x64.storeSlotReg slot753, r8
+    x64.movRegImm32 rcx, 765
+    x64.callDirect opaque
+    x64.storeSlotReg slot754, r8
+    x64.movRegImm32 rcx, 766
+    x64.callDirect opaque
+    x64.storeSlotReg slot755, r8
+    x64.movRegImm32 rcx, 767
+    x64.callDirect opaque
+    x64.storeSlotReg slot756, r8
+    x64.movRegImm32 rcx, 768
+    x64.callDirect opaque
+    x64.storeSlotReg slot757, r8
+    x64.movRegImm32 rcx, 769
+    x64.callDirect opaque
+    x64.storeSlotReg slot758, r8
+    x64.movRegImm32 rcx, 770
+    x64.callDirect opaque
+    x64.storeSlotReg slot759, r8
+    x64.movRegImm32 rcx, 771
+    x64.callDirect opaque
+    x64.storeSlotReg slot760, r8
+    x64.movRegImm32 rcx, 772
+    x64.callDirect opaque
+    x64.storeSlotReg slot761, r8
+    x64.movRegImm32 rcx, 773
+    x64.callDirect opaque
+    x64.storeSlotReg slot762, r8
+    x64.movRegImm32 rcx, 774
+    x64.callDirect opaque
+    x64.storeSlotReg slot763, r8
+    x64.movRegImm32 rcx, 775
+    x64.callDirect opaque
+    x64.storeSlotReg slot764, r8
+    x64.movRegImm32 rcx, 776
+    x64.callDirect opaque
+    x64.storeSlotReg slot765, r8
+    x64.movRegImm32 rcx, 777
+    x64.callDirect opaque
+    x64.storeSlotReg slot766, r8
+    x64.movRegImm32 rcx, 778
+    x64.callDirect opaque
+    x64.storeSlotReg slot767, r8
+    x64.movRegImm32 rcx, 779
+    x64.callDirect opaque
+    x64.storeSlotReg slot768, r8
+    x64.movRegImm32 rcx, 780
+    x64.callDirect opaque
+    x64.storeSlotReg slot769, r8
+    x64.movRegImm32 rcx, 781
+    x64.callDirect opaque
+    x64.storeSlotReg slot770, r8
+    x64.movRegImm32 rcx, 782
+    x64.callDirect opaque
+    x64.storeSlotReg slot771, r8
+    x64.movRegImm32 rcx, 783
+    x64.callDirect opaque
+    x64.storeSlotReg slot772, r8
+    x64.movRegImm32 rcx, 784
+    x64.callDirect opaque
+    x64.storeSlotReg slot773, r8
+    x64.movRegImm32 rcx, 785
+    x64.callDirect opaque
+    x64.storeSlotReg slot774, r8
+    x64.movRegImm32 rcx, 786
+    x64.callDirect opaque
+    x64.storeSlotReg slot775, r8
+    x64.movRegImm32 rcx, 787
+    x64.callDirect opaque
+    x64.storeSlotReg slot776, r8
+    x64.movRegImm32 rcx, 788
+    x64.callDirect opaque
+    x64.storeSlotReg slot777, r8
+    x64.movRegImm32 rcx, 789
+    x64.callDirect opaque
+    x64.storeSlotReg slot778, r8
+    x64.movRegImm32 rcx, 790
+    x64.callDirect opaque
+    x64.storeSlotReg slot779, r8
+    x64.movRegImm32 rcx, 791
+    x64.callDirect opaque
+    x64.storeSlotReg slot780, r8
+    x64.movRegImm32 rcx, 792
+    x64.callDirect opaque
+    x64.storeSlotReg slot781, r8
+    x64.movRegImm32 rcx, 793
+    x64.callDirect opaque
+    x64.storeSlotReg slot782, r8
+    x64.movRegImm32 rcx, 794
+    x64.callDirect opaque
+    x64.storeSlotReg slot783, r8
+    x64.movRegImm32 rcx, 795
+    x64.callDirect opaque
+    x64.storeSlotReg slot784, r8
+    x64.movRegImm32 rcx, 796
+    x64.callDirect opaque
+    x64.storeSlotReg slot785, r8
+    x64.movRegImm32 rcx, 797
+    x64.callDirect opaque
+    x64.storeSlotReg slot786, r8
+    x64.movRegImm32 rcx, 798
+    x64.callDirect opaque
+    x64.storeSlotReg slot787, r8
+    x64.movRegImm32 rcx, 799
+    x64.callDirect opaque
+    x64.leaRegRegReg rax, rbx, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot795
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot794
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot793
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot792
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot791
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot790
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot789
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot788
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot4
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot13
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot14
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot16
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot17
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot18
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot19
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot20
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot21
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot22
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot23
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot24
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot25
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot26
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot27
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot28
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot29
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot30
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot31
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot32
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot33
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot34
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot35
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot36
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot37
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot38
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot39
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot40
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot41
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot42
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot43
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot44
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot45
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot46
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot47
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot48
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot49
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot50
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot51
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot52
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot53
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot54
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot55
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot56
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot57
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot58
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot59
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot60
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot61
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot62
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot63
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot64
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot65
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot66
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot67
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot68
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot69
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot70
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot71
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot72
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot73
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot74
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot75
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot76
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot77
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot78
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot79
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot80
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot81
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot82
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot83
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot84
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot85
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot86
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot87
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot88
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot89
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot90
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot91
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot92
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot93
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot94
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot95
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot96
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot97
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot98
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot99
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot100
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot101
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot102
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot103
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot104
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot105
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot106
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot107
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot108
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot109
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot110
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot111
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot112
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot113
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot114
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot115
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot116
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot117
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot118
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot119
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot120
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot121
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot122
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot123
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot124
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot125
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot126
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot127
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot128
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot129
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot130
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot131
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot132
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot133
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot134
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot135
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot136
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot137
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot138
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot139
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot140
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot141
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot142
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot143
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot144
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot145
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot146
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot147
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot148
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot149
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot150
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot151
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot152
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot153
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot154
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot155
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot156
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot157
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot158
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot159
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot160
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot161
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot162
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot163
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot164
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot165
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot166
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot167
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot168
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot169
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot170
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot171
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot172
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot173
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot174
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot175
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot176
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot177
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot178
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot179
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot180
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot181
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot182
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot183
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot184
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot185
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot186
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot187
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot188
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot189
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot190
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot191
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot192
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot193
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot194
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot195
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot196
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot197
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot198
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot199
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot200
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot201
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot202
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot203
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot204
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot205
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot206
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot207
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot208
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot209
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot210
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot211
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot212
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot213
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot214
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot215
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot216
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot217
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot218
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot219
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot220
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot221
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot222
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot223
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot224
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot225
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot226
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot227
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot228
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot229
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot230
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot231
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot232
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot233
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot234
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot235
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot236
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot237
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot238
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot239
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot240
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot241
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot242
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot243
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot244
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot245
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot246
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot247
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot248
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot249
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot250
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot251
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot252
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot253
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot254
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot255
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot256
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot257
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot258
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot259
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot260
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot261
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot262
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot263
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot264
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot265
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot266
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot267
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot268
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot269
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot270
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot271
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot272
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot273
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot274
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot275
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot276
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot277
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot278
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot279
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot280
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot281
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot282
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot283
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot284
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot285
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot286
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot287
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot288
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot289
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot290
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot291
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot292
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot293
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot294
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot295
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot296
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot297
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot298
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot299
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot300
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot301
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot302
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot303
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot304
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot305
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot306
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot307
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot308
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot309
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot310
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot311
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot312
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot313
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot314
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot315
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot316
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot317
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot318
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot319
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot320
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot321
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot322
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot323
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot324
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot325
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot326
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot327
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot328
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot329
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot330
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot331
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot332
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot333
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot334
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot335
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot336
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot337
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot338
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot339
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot340
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot341
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot342
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot343
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot344
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot345
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot346
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot347
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot348
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot349
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot350
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot351
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot352
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot353
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot354
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot355
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot356
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot357
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot358
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot359
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot360
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot361
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot362
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot363
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot364
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot365
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot366
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot367
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot368
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot369
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot370
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot371
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot372
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot373
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot374
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot375
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot376
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot377
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot378
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot379
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot380
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot381
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot382
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot383
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot384
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot385
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot386
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot387
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot388
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot389
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot390
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot391
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot392
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot393
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot394
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot395
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot396
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot397
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot398
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot399
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot400
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot401
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot402
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot403
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot404
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot405
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot406
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot407
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot408
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot409
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot410
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot411
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot412
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot413
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot414
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot415
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot416
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot417
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot418
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot419
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot420
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot421
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot422
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot423
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot424
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot425
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot426
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot427
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot428
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot429
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot430
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot431
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot432
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot433
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot434
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot435
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot436
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot437
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot438
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot439
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot440
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot441
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot442
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot443
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot444
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot445
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot446
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot447
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot448
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot449
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot450
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot451
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot452
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot453
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot454
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot455
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot456
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot457
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot458
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot459
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot460
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot461
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot462
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot463
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot464
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot465
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot466
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot467
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot468
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot469
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot470
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot471
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot472
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot473
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot474
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot475
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot476
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot477
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot478
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot479
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot480
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot481
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot482
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot483
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot484
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot486
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot487
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot488
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot489
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot490
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot491
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot492
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot493
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot494
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot495
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot496
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot497
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot498
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot499
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot500
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot501
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot502
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot503
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot504
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot505
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot506
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot507
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot508
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot509
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot510
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot511
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot512
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot513
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot514
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot515
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot516
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot517
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot518
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot519
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot520
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot521
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot522
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot523
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot524
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot525
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot526
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot527
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot528
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot529
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot530
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot531
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot532
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot533
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot534
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot535
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot536
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot537
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot538
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot539
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot540
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot541
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot542
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot543
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot544
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot545
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot546
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot547
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot548
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot549
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot550
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot551
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot552
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot553
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot554
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot555
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot556
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot557
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot558
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot559
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot560
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot561
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot562
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot563
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot564
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot565
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot566
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot567
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot568
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot569
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot570
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot571
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot572
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot573
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot574
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot575
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot576
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot577
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot578
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot579
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot580
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot581
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot582
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot583
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot584
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot585
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot586
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot587
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot588
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot589
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot590
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot591
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot592
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot593
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot594
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot595
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot596
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot597
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot598
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot599
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot600
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot601
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot602
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot603
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot604
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot605
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot606
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot607
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot608
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot609
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot610
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot611
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot612
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot613
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot614
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot615
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot616
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot617
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot618
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot619
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot620
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot621
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot622
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot623
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot624
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot626
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot627
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot628
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot629
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot630
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot631
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot632
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot633
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot634
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot635
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot636
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot637
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot638
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot639
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot640
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot641
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot642
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot643
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot644
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot645
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot646
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot647
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot648
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot649
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot650
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot651
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot652
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot653
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot654
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot655
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot656
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot657
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot658
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot659
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot660
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot661
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot662
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot663
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot664
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot665
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot666
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot667
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot668
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot669
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot670
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot671
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot672
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot673
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot674
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot675
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot676
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot677
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot678
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot679
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot680
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot681
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot682
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot683
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot684
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot685
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot686
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot687
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot688
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot689
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot690
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot691
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot692
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot693
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot694
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot696
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot697
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot698
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot699
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot700
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot701
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot702
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot703
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot704
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot705
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot706
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot707
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot708
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot709
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot710
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot711
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot712
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot713
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot714
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot715
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot716
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot717
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot718
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot719
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot720
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot721
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot722
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot723
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot724
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot725
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot726
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot727
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot728
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot729
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot730
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot731
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot732
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot733
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot734
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot735
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot736
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot737
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot738
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot739
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot740
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot741
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot742
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot743
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot744
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot745
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot746
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot747
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot748
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot749
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot750
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot751
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot752
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot753
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot754
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot755
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot756
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot757
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot758
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot759
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot760
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot761
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot762
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot763
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot764
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot765
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot766
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot767
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot768
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot769
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot770
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot771
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot772
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot773
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot774
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot775
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot776
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot777
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot778
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot779
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot780
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot781
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot782
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot783
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot784
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot785
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot786
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot787
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegImm32 rax, rax, -319600
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rax, rcx, rax
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegImm32 r8, rax, -21
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#23
+  __rc_chk#24:
+    x64.cmpRegImm32 r8, 100000000
+    x64.jcc greater, __rc_panic#23
+  __rc_ok#22:
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at seventh-param-survives-chkstk-prologue.test:813: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  __il_body:
-    x64.movRegImm32 rax, 0
-  __il_cont#6:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.leaRegRegImm32 rax, rax, 3
-    x64.leaRegRegImm32 rax, rax, 4
-    x64.leaRegRegImm32 rax, rax, 5
-    x64.leaRegRegImm32 rax, rax, 6
-    x64.leaRegRegImm32 rax, rax, 7
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.leaRegRegImm32 rax, rax, 9
-    x64.leaRegRegImm32 rax, rax, 10
-    x64.leaRegRegImm32 rax, rax, 11
-    x64.leaRegRegImm32 rax, rax, 12
-    x64.leaRegRegImm32 rax, rax, 13
-    x64.leaRegRegImm32 rax, rax, 14
-    x64.leaRegRegImm32 rax, rax, 15
-    x64.leaRegRegImm32 rax, rax, 16
-    x64.leaRegRegImm32 rax, rax, 17
-    x64.leaRegRegImm32 rax, rax, 18
-    x64.leaRegRegImm32 rax, rax, 19
-    x64.leaRegRegImm32 rax, rax, 20
-    x64.leaRegRegImm32 rax, rax, 21
-    x64.leaRegRegImm32 rax, rax, 22
-    x64.leaRegRegImm32 rax, rax, 23
-    x64.leaRegRegImm32 rax, rax, 24
-    x64.leaRegRegImm32 rax, rax, 25
-    x64.leaRegRegImm32 rax, rax, 26
-    x64.leaRegRegImm32 rax, rax, 27
-    x64.leaRegRegImm32 rax, rax, 28
-    x64.leaRegRegImm32 rax, rax, 29
-    x64.leaRegRegImm32 rax, rax, 30
-    x64.leaRegRegImm32 rax, rax, 31
-    x64.leaRegRegImm32 rax, rax, 32
-    x64.leaRegRegImm32 rax, rax, 33
-    x64.leaRegRegImm32 rax, rax, 34
-    x64.leaRegRegImm32 rax, rax, 35
-    x64.leaRegRegImm32 rax, rax, 36
-    x64.leaRegRegImm32 rax, rax, 37
-    x64.leaRegRegImm32 rax, rax, 38
-    x64.leaRegRegImm32 rax, rax, 39
-    x64.leaRegRegImm32 rax, rax, 40
-    x64.leaRegRegImm32 rax, rax, 41
-    x64.leaRegRegImm32 rax, rax, 42
-    x64.leaRegRegImm32 rax, rax, 43
-    x64.leaRegRegImm32 rax, rax, 44
-    x64.leaRegRegImm32 rax, rax, 45
-    x64.leaRegRegImm32 rax, rax, 46
-    x64.leaRegRegImm32 rax, rax, 47
-    x64.leaRegRegImm32 rax, rax, 48
-    x64.leaRegRegImm32 rax, rax, 49
-    x64.leaRegRegImm32 rax, rax, 50
-    x64.leaRegRegImm32 rax, rax, 51
-    x64.leaRegRegImm32 rax, rax, 52
-    x64.leaRegRegImm32 rax, rax, 53
-    x64.leaRegRegImm32 rax, rax, 54
-    x64.leaRegRegImm32 rax, rax, 55
-    x64.leaRegRegImm32 rax, rax, 56
-    x64.leaRegRegImm32 rax, rax, 57
-    x64.leaRegRegImm32 rax, rax, 58
-    x64.leaRegRegImm32 rax, rax, 59
-    x64.leaRegRegImm32 rax, rax, 60
-    x64.leaRegRegImm32 rax, rax, 61
-    x64.leaRegRegImm32 rax, rax, 62
-    x64.leaRegRegImm32 rax, rax, 63
-    x64.leaRegRegImm32 rax, rax, 64
-    x64.leaRegRegImm32 rax, rax, 65
-    x64.leaRegRegImm32 rax, rax, 66
-    x64.leaRegRegImm32 rax, rax, 67
-    x64.leaRegRegImm32 rax, rax, 68
-    x64.leaRegRegImm32 rax, rax, 69
-    x64.leaRegRegImm32 rax, rax, 70
-    x64.leaRegRegImm32 rax, rax, 71
-    x64.leaRegRegImm32 rax, rax, 72
-    x64.leaRegRegImm32 rax, rax, 73
-    x64.leaRegRegImm32 rax, rax, 74
-    x64.leaRegRegImm32 rax, rax, 75
-    x64.leaRegRegImm32 rax, rax, 76
-    x64.leaRegRegImm32 rax, rax, 77
-    x64.leaRegRegImm32 rax, rax, 78
-    x64.leaRegRegImm32 rax, rax, 79
-    x64.leaRegRegImm32 rax, rax, 80
-    x64.leaRegRegImm32 rax, rax, 81
-    x64.leaRegRegImm32 rax, rax, 82
-    x64.leaRegRegImm32 rax, rax, 83
-    x64.leaRegRegImm32 rax, rax, 84
-    x64.leaRegRegImm32 rax, rax, 85
-    x64.leaRegRegImm32 rax, rax, 86
-    x64.leaRegRegImm32 rax, rax, 87
-    x64.leaRegRegImm32 rax, rax, 88
-    x64.leaRegRegImm32 rax, rax, 89
-    x64.leaRegRegImm32 rax, rax, 90
-    x64.leaRegRegImm32 rax, rax, 91
-    x64.leaRegRegImm32 rax, rax, 92
-    x64.leaRegRegImm32 rax, rax, 93
-    x64.leaRegRegImm32 rax, rax, 94
-    x64.leaRegRegImm32 rax, rax, 95
-    x64.leaRegRegImm32 rax, rax, 96
-    x64.leaRegRegImm32 rax, rax, 97
-    x64.leaRegRegImm32 rax, rax, 98
-    x64.leaRegRegImm32 rax, rax, 99
-    x64.leaRegRegImm32 rax, rax, 100
-    x64.leaRegRegImm32 rax, rax, 101
-    x64.leaRegRegImm32 rax, rax, 102
-    x64.leaRegRegImm32 rax, rax, 103
-    x64.leaRegRegImm32 rax, rax, 104
-    x64.leaRegRegImm32 rax, rax, 105
-    x64.leaRegRegImm32 rax, rax, 106
-    x64.leaRegRegImm32 rax, rax, 107
-    x64.leaRegRegImm32 rax, rax, 108
-    x64.leaRegRegImm32 rax, rax, 109
-    x64.leaRegRegImm32 rax, rax, 110
-    x64.leaRegRegImm32 rax, rax, 111
-    x64.leaRegRegImm32 rax, rax, 112
-    x64.leaRegRegImm32 rax, rax, 113
-    x64.leaRegRegImm32 rax, rax, 114
-    x64.leaRegRegImm32 rax, rax, 115
-    x64.leaRegRegImm32 rax, rax, 116
-    x64.leaRegRegImm32 rax, rax, 117
-    x64.leaRegRegImm32 rax, rax, 118
-    x64.leaRegRegImm32 rax, rax, 119
-    x64.leaRegRegImm32 rax, rax, 120
-    x64.leaRegRegImm32 rax, rax, 121
-    x64.leaRegRegImm32 rax, rax, 122
-    x64.leaRegRegImm32 rax, rax, 123
-    x64.leaRegRegImm32 rax, rax, 124
-    x64.leaRegRegImm32 rax, rax, 125
-    x64.leaRegRegImm32 rax, rax, 126
-    x64.leaRegRegImm32 rax, rax, 127
-    x64.leaRegRegImm32 rax, rax, 128
-    x64.leaRegRegImm32 rax, rax, 129
-    x64.leaRegRegImm32 rax, rax, 130
-    x64.leaRegRegImm32 rax, rax, 131
-    x64.leaRegRegImm32 rax, rax, 132
-    x64.leaRegRegImm32 rax, rax, 133
-    x64.leaRegRegImm32 rax, rax, 134
-    x64.leaRegRegImm32 rax, rax, 135
-    x64.leaRegRegImm32 rax, rax, 136
-    x64.leaRegRegImm32 rax, rax, 137
-    x64.leaRegRegImm32 rax, rax, 138
-    x64.leaRegRegImm32 rax, rax, 139
-    x64.leaRegRegImm32 rax, rax, 140
-    x64.leaRegRegImm32 rax, rax, 141
-    x64.leaRegRegImm32 rax, rax, 142
-    x64.leaRegRegImm32 rax, rax, 143
-    x64.leaRegRegImm32 rax, rax, 144
-    x64.leaRegRegImm32 rax, rax, 145
-    x64.leaRegRegImm32 rax, rax, 146
-    x64.leaRegRegImm32 rax, rax, 147
-    x64.leaRegRegImm32 rax, rax, 148
-    x64.leaRegRegImm32 rax, rax, 149
-    x64.leaRegRegImm32 rax, rax, 150
-    x64.leaRegRegImm32 rax, rax, 151
-    x64.leaRegRegImm32 rax, rax, 152
-    x64.leaRegRegImm32 rax, rax, 153
-    x64.leaRegRegImm32 rax, rax, 154
-    x64.leaRegRegImm32 rax, rax, 155
-    x64.leaRegRegImm32 rax, rax, 156
-    x64.leaRegRegImm32 rax, rax, 157
-    x64.leaRegRegImm32 rax, rax, 158
-    x64.leaRegRegImm32 rax, rax, 159
-    x64.leaRegRegImm32 rax, rax, 160
-    x64.leaRegRegImm32 rax, rax, 161
-    x64.leaRegRegImm32 rax, rax, 162
-    x64.leaRegRegImm32 rax, rax, 163
-    x64.leaRegRegImm32 rax, rax, 164
-    x64.leaRegRegImm32 rax, rax, 165
-    x64.leaRegRegImm32 rax, rax, 166
-    x64.leaRegRegImm32 rax, rax, 167
-    x64.leaRegRegImm32 rax, rax, 168
-    x64.leaRegRegImm32 rax, rax, 169
-    x64.leaRegRegImm32 rax, rax, 170
-    x64.leaRegRegImm32 rax, rax, 171
-    x64.leaRegRegImm32 rax, rax, 172
-    x64.leaRegRegImm32 rax, rax, 173
-    x64.leaRegRegImm32 rax, rax, 174
-    x64.leaRegRegImm32 rax, rax, 175
-    x64.leaRegRegImm32 rax, rax, 176
-    x64.leaRegRegImm32 rax, rax, 177
-    x64.leaRegRegImm32 rax, rax, 178
-    x64.leaRegRegImm32 rax, rax, 179
-    x64.leaRegRegImm32 rax, rax, 180
-    x64.leaRegRegImm32 rax, rax, 181
-    x64.leaRegRegImm32 rax, rax, 182
-    x64.leaRegRegImm32 rax, rax, 183
-    x64.leaRegRegImm32 rax, rax, 184
-    x64.leaRegRegImm32 rax, rax, 185
-    x64.leaRegRegImm32 rax, rax, 186
-    x64.leaRegRegImm32 rax, rax, 187
-    x64.leaRegRegImm32 rax, rax, 188
-    x64.leaRegRegImm32 rax, rax, 189
-    x64.leaRegRegImm32 rax, rax, 190
-    x64.leaRegRegImm32 rax, rax, 191
-    x64.leaRegRegImm32 rax, rax, 192
-    x64.leaRegRegImm32 rax, rax, 193
-    x64.leaRegRegImm32 rax, rax, 194
-    x64.leaRegRegImm32 rax, rax, 195
-    x64.leaRegRegImm32 rax, rax, 196
-    x64.leaRegRegImm32 rax, rax, 197
-    x64.leaRegRegImm32 rax, rax, 198
-    x64.leaRegRegImm32 rax, rax, 199
-    x64.leaRegRegImm32 rax, rax, 200
-    x64.leaRegRegImm32 rax, rax, 201
-    x64.leaRegRegImm32 rax, rax, 202
-    x64.leaRegRegImm32 rax, rax, 203
-    x64.leaRegRegImm32 rax, rax, 204
-    x64.leaRegRegImm32 rax, rax, 205
-    x64.leaRegRegImm32 rax, rax, 206
-    x64.leaRegRegImm32 rax, rax, 207
-    x64.leaRegRegImm32 rax, rax, 208
-    x64.leaRegRegImm32 rax, rax, 209
-    x64.leaRegRegImm32 rax, rax, 210
-    x64.leaRegRegImm32 rax, rax, 211
-    x64.leaRegRegImm32 rax, rax, 212
-    x64.leaRegRegImm32 rax, rax, 213
-    x64.leaRegRegImm32 rax, rax, 214
-    x64.leaRegRegImm32 rax, rax, 215
-    x64.leaRegRegImm32 rax, rax, 216
-    x64.leaRegRegImm32 rax, rax, 217
-    x64.leaRegRegImm32 rax, rax, 218
-    x64.leaRegRegImm32 rax, rax, 219
-    x64.leaRegRegImm32 rax, rax, 220
-    x64.leaRegRegImm32 rax, rax, 221
-    x64.leaRegRegImm32 rax, rax, 222
-    x64.leaRegRegImm32 rax, rax, 223
-    x64.leaRegRegImm32 rax, rax, 224
-    x64.leaRegRegImm32 rax, rax, 225
-    x64.leaRegRegImm32 rax, rax, 226
-    x64.leaRegRegImm32 rax, rax, 227
-    x64.leaRegRegImm32 rax, rax, 228
-    x64.leaRegRegImm32 rax, rax, 229
-    x64.leaRegRegImm32 rax, rax, 230
-    x64.leaRegRegImm32 rax, rax, 231
-    x64.leaRegRegImm32 rax, rax, 232
-    x64.leaRegRegImm32 rax, rax, 233
-    x64.leaRegRegImm32 rax, rax, 234
-    x64.leaRegRegImm32 rax, rax, 235
-    x64.leaRegRegImm32 rax, rax, 236
-    x64.leaRegRegImm32 rax, rax, 237
-    x64.leaRegRegImm32 rax, rax, 238
-    x64.leaRegRegImm32 rax, rax, 239
-    x64.leaRegRegImm32 rax, rax, 240
-    x64.leaRegRegImm32 rax, rax, 241
-    x64.leaRegRegImm32 rax, rax, 242
-    x64.leaRegRegImm32 rax, rax, 243
-    x64.leaRegRegImm32 rax, rax, 244
-    x64.leaRegRegImm32 rax, rax, 245
-    x64.leaRegRegImm32 rax, rax, 246
-    x64.leaRegRegImm32 rax, rax, 247
-    x64.leaRegRegImm32 rax, rax, 248
-    x64.leaRegRegImm32 rax, rax, 249
-    x64.leaRegRegImm32 rax, rax, 250
-    x64.leaRegRegImm32 rax, rax, 251
-    x64.leaRegRegImm32 rax, rax, 252
-    x64.leaRegRegImm32 rax, rax, 253
-    x64.leaRegRegImm32 rax, rax, 254
-    x64.leaRegRegImm32 rax, rax, 255
-    x64.leaRegRegImm32 rax, rax, 256
-    x64.leaRegRegImm32 rax, rax, 257
-    x64.leaRegRegImm32 rax, rax, 258
-    x64.leaRegRegImm32 rax, rax, 259
-    x64.leaRegRegImm32 rax, rax, 260
-    x64.leaRegRegImm32 rax, rax, 261
-    x64.leaRegRegImm32 rax, rax, 262
-    x64.leaRegRegImm32 rax, rax, 263
-    x64.leaRegRegImm32 rax, rax, 264
-    x64.leaRegRegImm32 rax, rax, 265
-    x64.leaRegRegImm32 rax, rax, 266
-    x64.leaRegRegImm32 rax, rax, 267
-    x64.leaRegRegImm32 rax, rax, 268
-    x64.leaRegRegImm32 rax, rax, 269
-    x64.leaRegRegImm32 rax, rax, 270
-    x64.leaRegRegImm32 rax, rax, 271
-    x64.leaRegRegImm32 rax, rax, 272
-    x64.leaRegRegImm32 rax, rax, 273
-    x64.leaRegRegImm32 rax, rax, 274
-    x64.leaRegRegImm32 rax, rax, 275
-    x64.leaRegRegImm32 rax, rax, 276
-    x64.leaRegRegImm32 rax, rax, 277
-    x64.leaRegRegImm32 rax, rax, 278
-    x64.leaRegRegImm32 rax, rax, 279
-    x64.leaRegRegImm32 rax, rax, 280
-    x64.leaRegRegImm32 rax, rax, 281
-    x64.leaRegRegImm32 rax, rax, 282
-    x64.leaRegRegImm32 rax, rax, 283
-    x64.leaRegRegImm32 rax, rax, 284
-    x64.leaRegRegImm32 rax, rax, 285
-    x64.leaRegRegImm32 rax, rax, 286
-    x64.leaRegRegImm32 rax, rax, 287
-    x64.leaRegRegImm32 rax, rax, 288
-    x64.leaRegRegImm32 rax, rax, 289
-    x64.leaRegRegImm32 rax, rax, 290
-    x64.leaRegRegImm32 rax, rax, 291
-    x64.leaRegRegImm32 rax, rax, 292
-    x64.leaRegRegImm32 rax, rax, 293
-    x64.leaRegRegImm32 rax, rax, 294
-    x64.leaRegRegImm32 rax, rax, 295
-    x64.leaRegRegImm32 rax, rax, 296
-    x64.leaRegRegImm32 rax, rax, 297
-    x64.leaRegRegImm32 rax, rax, 298
-    x64.leaRegRegImm32 rax, rax, 299
-    x64.leaRegRegImm32 rax, rax, 300
-    x64.leaRegRegImm32 rax, rax, 301
-    x64.leaRegRegImm32 rax, rax, 302
-    x64.leaRegRegImm32 rax, rax, 303
-    x64.leaRegRegImm32 rax, rax, 304
-    x64.leaRegRegImm32 rax, rax, 305
-    x64.leaRegRegImm32 rax, rax, 306
-    x64.leaRegRegImm32 rax, rax, 307
-    x64.leaRegRegImm32 rax, rax, 308
-    x64.leaRegRegImm32 rax, rax, 309
-    x64.leaRegRegImm32 rax, rax, 310
-    x64.leaRegRegImm32 rax, rax, 311
-    x64.leaRegRegImm32 rax, rax, 312
-    x64.leaRegRegImm32 rax, rax, 313
-    x64.leaRegRegImm32 rax, rax, 314
-    x64.leaRegRegImm32 rax, rax, 315
-    x64.leaRegRegImm32 rax, rax, 316
-    x64.leaRegRegImm32 rax, rax, 317
-    x64.leaRegRegImm32 rax, rax, 318
-    x64.leaRegRegImm32 rax, rax, 319
-    x64.leaRegRegImm32 rax, rax, 320
-    x64.leaRegRegImm32 rax, rax, 321
-    x64.leaRegRegImm32 rax, rax, 322
-    x64.leaRegRegImm32 rax, rax, 323
-    x64.leaRegRegImm32 rax, rax, 324
-    x64.leaRegRegImm32 rax, rax, 325
-    x64.leaRegRegImm32 rax, rax, 326
-    x64.leaRegRegImm32 rax, rax, 327
-    x64.leaRegRegImm32 rax, rax, 328
-    x64.leaRegRegImm32 rax, rax, 329
-    x64.leaRegRegImm32 rax, rax, 330
-    x64.leaRegRegImm32 rax, rax, 331
-    x64.leaRegRegImm32 rax, rax, 332
-    x64.leaRegRegImm32 rax, rax, 333
-    x64.leaRegRegImm32 rax, rax, 334
-    x64.leaRegRegImm32 rax, rax, 335
-    x64.leaRegRegImm32 rax, rax, 336
-    x64.leaRegRegImm32 rax, rax, 337
-    x64.leaRegRegImm32 rax, rax, 338
-    x64.leaRegRegImm32 rax, rax, 339
-    x64.leaRegRegImm32 rax, rax, 340
-    x64.leaRegRegImm32 rax, rax, 341
-    x64.leaRegRegImm32 rax, rax, 342
-    x64.leaRegRegImm32 rax, rax, 343
-    x64.leaRegRegImm32 rax, rax, 344
-    x64.leaRegRegImm32 rax, rax, 345
-    x64.leaRegRegImm32 rax, rax, 346
-    x64.leaRegRegImm32 rax, rax, 347
-    x64.leaRegRegImm32 rax, rax, 348
-    x64.leaRegRegImm32 rax, rax, 349
-    x64.leaRegRegImm32 rax, rax, 350
-    x64.leaRegRegImm32 rax, rax, 351
-    x64.leaRegRegImm32 rax, rax, 352
-    x64.leaRegRegImm32 rax, rax, 353
-    x64.leaRegRegImm32 rax, rax, 354
-    x64.leaRegRegImm32 rax, rax, 355
-    x64.leaRegRegImm32 rax, rax, 356
-    x64.leaRegRegImm32 rax, rax, 357
-    x64.leaRegRegImm32 rax, rax, 358
-    x64.leaRegRegImm32 rax, rax, 359
-    x64.leaRegRegImm32 rax, rax, 360
-    x64.leaRegRegImm32 rax, rax, 361
-    x64.leaRegRegImm32 rax, rax, 362
-    x64.leaRegRegImm32 rax, rax, 363
-    x64.leaRegRegImm32 rax, rax, 364
-    x64.leaRegRegImm32 rax, rax, 365
-    x64.leaRegRegImm32 rax, rax, 366
-    x64.leaRegRegImm32 rax, rax, 367
-    x64.leaRegRegImm32 rax, rax, 368
-    x64.leaRegRegImm32 rax, rax, 369
-    x64.leaRegRegImm32 rax, rax, 370
-    x64.leaRegRegImm32 rax, rax, 371
-    x64.leaRegRegImm32 rax, rax, 372
-    x64.leaRegRegImm32 rax, rax, 373
-    x64.leaRegRegImm32 rax, rax, 374
-    x64.leaRegRegImm32 rax, rax, 375
-    x64.leaRegRegImm32 rax, rax, 376
-    x64.leaRegRegImm32 rax, rax, 377
-    x64.leaRegRegImm32 rax, rax, 378
-    x64.leaRegRegImm32 rax, rax, 379
-    x64.leaRegRegImm32 rax, rax, 380
-    x64.leaRegRegImm32 rax, rax, 381
-    x64.leaRegRegImm32 rax, rax, 382
-    x64.leaRegRegImm32 rax, rax, 383
-    x64.leaRegRegImm32 rax, rax, 384
-    x64.leaRegRegImm32 rax, rax, 385
-    x64.leaRegRegImm32 rax, rax, 386
-    x64.leaRegRegImm32 rax, rax, 387
-    x64.leaRegRegImm32 rax, rax, 388
-    x64.leaRegRegImm32 rax, rax, 389
-    x64.leaRegRegImm32 rax, rax, 390
-    x64.leaRegRegImm32 rax, rax, 391
-    x64.leaRegRegImm32 rax, rax, 392
-    x64.leaRegRegImm32 rax, rax, 393
-    x64.leaRegRegImm32 rax, rax, 394
-    x64.leaRegRegImm32 rax, rax, 395
-    x64.leaRegRegImm32 rax, rax, 396
-    x64.leaRegRegImm32 rax, rax, 397
-    x64.leaRegRegImm32 rax, rax, 398
-    x64.leaRegRegImm32 rax, rax, 399
-    x64.leaRegRegImm32 rax, rax, 400
-    x64.leaRegRegImm32 rax, rax, 401
-    x64.leaRegRegImm32 rax, rax, 402
-    x64.leaRegRegImm32 rax, rax, 403
-    x64.leaRegRegImm32 rax, rax, 404
-    x64.leaRegRegImm32 rax, rax, 405
-    x64.leaRegRegImm32 rax, rax, 406
-    x64.leaRegRegImm32 rax, rax, 407
-    x64.leaRegRegImm32 rax, rax, 408
-    x64.leaRegRegImm32 rax, rax, 409
-    x64.leaRegRegImm32 rax, rax, 410
-    x64.leaRegRegImm32 rax, rax, 411
-    x64.leaRegRegImm32 rax, rax, 412
-    x64.leaRegRegImm32 rax, rax, 413
-    x64.leaRegRegImm32 rax, rax, 414
-    x64.leaRegRegImm32 rax, rax, 415
-    x64.leaRegRegImm32 rax, rax, 416
-    x64.leaRegRegImm32 rax, rax, 417
-    x64.leaRegRegImm32 rax, rax, 418
-    x64.leaRegRegImm32 rax, rax, 419
-    x64.leaRegRegImm32 rax, rax, 420
-    x64.leaRegRegImm32 rax, rax, 421
-    x64.leaRegRegImm32 rax, rax, 422
-    x64.leaRegRegImm32 rax, rax, 423
-    x64.leaRegRegImm32 rax, rax, 424
-    x64.leaRegRegImm32 rax, rax, 425
-    x64.leaRegRegImm32 rax, rax, 426
-    x64.leaRegRegImm32 rax, rax, 427
-    x64.leaRegRegImm32 rax, rax, 428
-    x64.leaRegRegImm32 rax, rax, 429
-    x64.leaRegRegImm32 rax, rax, 430
-    x64.leaRegRegImm32 rax, rax, 431
-    x64.leaRegRegImm32 rax, rax, 432
-    x64.leaRegRegImm32 rax, rax, 433
-    x64.leaRegRegImm32 rax, rax, 434
-    x64.leaRegRegImm32 rax, rax, 435
-    x64.leaRegRegImm32 rax, rax, 436
-    x64.leaRegRegImm32 rax, rax, 437
-    x64.leaRegRegImm32 rax, rax, 438
-    x64.leaRegRegImm32 rax, rax, 439
-    x64.leaRegRegImm32 rax, rax, 440
-    x64.leaRegRegImm32 rax, rax, 441
-    x64.leaRegRegImm32 rax, rax, 442
-    x64.leaRegRegImm32 rax, rax, 443
-    x64.leaRegRegImm32 rax, rax, 444
-    x64.leaRegRegImm32 rax, rax, 445
-    x64.leaRegRegImm32 rax, rax, 446
-    x64.leaRegRegImm32 rax, rax, 447
-    x64.leaRegRegImm32 rax, rax, 448
-    x64.leaRegRegImm32 rax, rax, 449
-    x64.leaRegRegImm32 rax, rax, 450
-    x64.leaRegRegImm32 rax, rax, 451
-    x64.leaRegRegImm32 rax, rax, 452
-    x64.leaRegRegImm32 rax, rax, 453
-    x64.leaRegRegImm32 rax, rax, 454
-    x64.leaRegRegImm32 rax, rax, 455
-    x64.leaRegRegImm32 rax, rax, 456
-    x64.leaRegRegImm32 rax, rax, 457
-    x64.leaRegRegImm32 rax, rax, 458
-    x64.leaRegRegImm32 rax, rax, 459
-    x64.leaRegRegImm32 rax, rax, 460
-    x64.leaRegRegImm32 rax, rax, 461
-    x64.leaRegRegImm32 rax, rax, 462
-    x64.leaRegRegImm32 rax, rax, 463
-    x64.leaRegRegImm32 rax, rax, 464
-    x64.leaRegRegImm32 rax, rax, 465
-    x64.leaRegRegImm32 rax, rax, 466
-    x64.leaRegRegImm32 rax, rax, 467
-    x64.leaRegRegImm32 rax, rax, 468
-    x64.leaRegRegImm32 rax, rax, 469
-    x64.leaRegRegImm32 rax, rax, 470
-    x64.leaRegRegImm32 rax, rax, 471
-    x64.leaRegRegImm32 rax, rax, 472
-    x64.leaRegRegImm32 rax, rax, 473
-    x64.leaRegRegImm32 rax, rax, 474
-    x64.leaRegRegImm32 rax, rax, 475
-    x64.leaRegRegImm32 rax, rax, 476
-    x64.leaRegRegImm32 rax, rax, 477
-    x64.leaRegRegImm32 rax, rax, 478
-    x64.leaRegRegImm32 rax, rax, 479
-    x64.leaRegRegImm32 rax, rax, 480
-    x64.leaRegRegImm32 rax, rax, 481
-    x64.leaRegRegImm32 rax, rax, 482
-    x64.leaRegRegImm32 rax, rax, 483
-    x64.leaRegRegImm32 rax, rax, 484
-    x64.leaRegRegImm32 rax, rax, 485
-    x64.leaRegRegImm32 rax, rax, 486
-    x64.leaRegRegImm32 rax, rax, 487
-    x64.leaRegRegImm32 rax, rax, 488
-    x64.leaRegRegImm32 rax, rax, 489
-    x64.leaRegRegImm32 rax, rax, 490
-    x64.leaRegRegImm32 rax, rax, 491
-    x64.leaRegRegImm32 rax, rax, 492
-    x64.leaRegRegImm32 rax, rax, 493
-    x64.leaRegRegImm32 rax, rax, 494
-    x64.leaRegRegImm32 rax, rax, 495
-    x64.leaRegRegImm32 rax, rax, 496
-    x64.leaRegRegImm32 rax, rax, 497
-    x64.leaRegRegImm32 rax, rax, 498
-    x64.leaRegRegImm32 rax, rax, 499
-    x64.leaRegRegImm32 rax, rax, 500
-    x64.leaRegRegImm32 rax, rax, 501
-    x64.leaRegRegImm32 rax, rax, 502
-    x64.leaRegRegImm32 rax, rax, 503
-    x64.leaRegRegImm32 rax, rax, 504
-    x64.leaRegRegImm32 rax, rax, 505
-    x64.leaRegRegImm32 rax, rax, 506
-    x64.leaRegRegImm32 rax, rax, 507
-    x64.leaRegRegImm32 rax, rax, 508
-    x64.leaRegRegImm32 rax, rax, 509
-    x64.leaRegRegImm32 rax, rax, 510
-    x64.leaRegRegImm32 rax, rax, 511
-    x64.leaRegRegImm32 rax, rax, 512
-    x64.leaRegRegImm32 rax, rax, 513
-    x64.leaRegRegImm32 rax, rax, 514
-    x64.leaRegRegImm32 rax, rax, 515
-    x64.leaRegRegImm32 rax, rax, 516
-    x64.leaRegRegImm32 rax, rax, 517
-    x64.leaRegRegImm32 rax, rax, 518
-    x64.leaRegRegImm32 rax, rax, 519
-    x64.leaRegRegImm32 rax, rax, 520
-    x64.leaRegRegImm32 rax, rax, 521
-    x64.leaRegRegImm32 rax, rax, 522
-    x64.leaRegRegImm32 rax, rax, 523
-    x64.leaRegRegImm32 rax, rax, 524
-    x64.leaRegRegImm32 rax, rax, 525
-    x64.leaRegRegImm32 rax, rax, 526
-    x64.leaRegRegImm32 rax, rax, 527
-    x64.leaRegRegImm32 rax, rax, 528
-    x64.leaRegRegImm32 rax, rax, 529
-    x64.leaRegRegImm32 rax, rax, 530
-    x64.leaRegRegImm32 rax, rax, 531
-    x64.leaRegRegImm32 rax, rax, 532
-    x64.leaRegRegImm32 rax, rax, 533
-    x64.leaRegRegImm32 rax, rax, 534
-    x64.leaRegRegImm32 rax, rax, 535
-    x64.leaRegRegImm32 rax, rax, 536
-    x64.leaRegRegImm32 rax, rax, 537
-    x64.leaRegRegImm32 rax, rax, 538
-    x64.leaRegRegImm32 rax, rax, 539
-    x64.leaRegRegImm32 rax, rax, 540
-    x64.leaRegRegImm32 rax, rax, 541
-    x64.leaRegRegImm32 rax, rax, 542
-    x64.leaRegRegImm32 rax, rax, 543
-    x64.leaRegRegImm32 rax, rax, 544
-    x64.leaRegRegImm32 rax, rax, 545
-    x64.leaRegRegImm32 rax, rax, 546
-    x64.leaRegRegImm32 rax, rax, 547
-    x64.leaRegRegImm32 rax, rax, 548
-    x64.leaRegRegImm32 rax, rax, 549
-    x64.leaRegRegImm32 rax, rax, 550
-    x64.leaRegRegImm32 rax, rax, 551
-    x64.leaRegRegImm32 rax, rax, 552
-    x64.leaRegRegImm32 rax, rax, 553
-    x64.leaRegRegImm32 rax, rax, 554
-    x64.leaRegRegImm32 rax, rax, 555
-    x64.leaRegRegImm32 rax, rax, 556
-    x64.leaRegRegImm32 rax, rax, 557
-    x64.leaRegRegImm32 rax, rax, 558
-    x64.leaRegRegImm32 rax, rax, 559
-    x64.leaRegRegImm32 rax, rax, 560
-    x64.leaRegRegImm32 rax, rax, 561
-    x64.leaRegRegImm32 rax, rax, 562
-    x64.leaRegRegImm32 rax, rax, 563
-    x64.leaRegRegImm32 rax, rax, 564
-    x64.leaRegRegImm32 rax, rax, 565
-    x64.leaRegRegImm32 rax, rax, 566
-    x64.leaRegRegImm32 rax, rax, 567
-    x64.leaRegRegImm32 rax, rax, 568
-    x64.leaRegRegImm32 rax, rax, 569
-    x64.leaRegRegImm32 rax, rax, 570
-    x64.leaRegRegImm32 rax, rax, 571
-    x64.leaRegRegImm32 rax, rax, 572
-    x64.leaRegRegImm32 rax, rax, 573
-    x64.leaRegRegImm32 rax, rax, 574
-    x64.leaRegRegImm32 rax, rax, 575
-    x64.leaRegRegImm32 rax, rax, 576
-    x64.leaRegRegImm32 rax, rax, 577
-    x64.leaRegRegImm32 rax, rax, 578
-    x64.leaRegRegImm32 rax, rax, 579
-    x64.leaRegRegImm32 rax, rax, 580
-    x64.leaRegRegImm32 rax, rax, 581
-    x64.leaRegRegImm32 rax, rax, 582
-    x64.leaRegRegImm32 rax, rax, 583
-    x64.leaRegRegImm32 rax, rax, 584
-    x64.leaRegRegImm32 rax, rax, 585
-    x64.leaRegRegImm32 rax, rax, 586
-    x64.leaRegRegImm32 rax, rax, 587
-    x64.leaRegRegImm32 rax, rax, 588
-    x64.leaRegRegImm32 rax, rax, 589
-    x64.leaRegRegImm32 rax, rax, 590
-    x64.leaRegRegImm32 rax, rax, 591
-    x64.leaRegRegImm32 rax, rax, 592
-    x64.leaRegRegImm32 rax, rax, 593
-    x64.leaRegRegImm32 rax, rax, 594
-    x64.leaRegRegImm32 rax, rax, 595
-    x64.leaRegRegImm32 rax, rax, 596
-    x64.leaRegRegImm32 rax, rax, 597
-    x64.leaRegRegImm32 rax, rax, 598
-    x64.leaRegRegImm32 rax, rax, 599
-    x64.leaRegRegImm32 rax, rax, 600
-    x64.leaRegRegImm32 rax, rax, 601
-    x64.leaRegRegImm32 rax, rax, 602
-    x64.leaRegRegImm32 rax, rax, 603
-    x64.leaRegRegImm32 rax, rax, 604
-    x64.leaRegRegImm32 rax, rax, 605
-    x64.leaRegRegImm32 rax, rax, 606
-    x64.leaRegRegImm32 rax, rax, 607
-    x64.leaRegRegImm32 rax, rax, 608
-    x64.leaRegRegImm32 rax, rax, 609
-    x64.leaRegRegImm32 rax, rax, 610
-    x64.leaRegRegImm32 rax, rax, 611
-    x64.leaRegRegImm32 rax, rax, 612
-    x64.leaRegRegImm32 rax, rax, 613
-    x64.leaRegRegImm32 rax, rax, 614
-    x64.leaRegRegImm32 rax, rax, 615
-    x64.leaRegRegImm32 rax, rax, 616
-    x64.leaRegRegImm32 rax, rax, 617
-    x64.leaRegRegImm32 rax, rax, 618
-    x64.leaRegRegImm32 rax, rax, 619
-    x64.leaRegRegImm32 rax, rax, 620
-    x64.leaRegRegImm32 rax, rax, 621
-    x64.leaRegRegImm32 rax, rax, 622
-    x64.leaRegRegImm32 rax, rax, 623
-    x64.leaRegRegImm32 rax, rax, 624
-    x64.leaRegRegImm32 rax, rax, 625
-    x64.leaRegRegImm32 rax, rax, 626
-    x64.leaRegRegImm32 rax, rax, 627
-    x64.leaRegRegImm32 rax, rax, 628
-    x64.leaRegRegImm32 rax, rax, 629
-    x64.leaRegRegImm32 rax, rax, 630
-    x64.leaRegRegImm32 rax, rax, 631
-    x64.leaRegRegImm32 rax, rax, 632
-    x64.leaRegRegImm32 rax, rax, 633
-    x64.leaRegRegImm32 rax, rax, 634
-    x64.leaRegRegImm32 rax, rax, 635
-    x64.leaRegRegImm32 rax, rax, 636
-    x64.leaRegRegImm32 rax, rax, 637
-    x64.leaRegRegImm32 rax, rax, 638
-    x64.leaRegRegImm32 rax, rax, 639
-    x64.leaRegRegImm32 rax, rax, 640
-    x64.leaRegRegImm32 rax, rax, 641
-    x64.leaRegRegImm32 rax, rax, 642
-    x64.leaRegRegImm32 rax, rax, 643
-    x64.leaRegRegImm32 rax, rax, 644
-    x64.leaRegRegImm32 rax, rax, 645
-    x64.leaRegRegImm32 rax, rax, 646
-    x64.leaRegRegImm32 rax, rax, 647
-    x64.leaRegRegImm32 rax, rax, 648
-    x64.leaRegRegImm32 rax, rax, 649
-    x64.leaRegRegImm32 rax, rax, 650
-    x64.leaRegRegImm32 rax, rax, 651
-    x64.leaRegRegImm32 rax, rax, 652
-    x64.leaRegRegImm32 rax, rax, 653
-    x64.leaRegRegImm32 rax, rax, 654
-    x64.leaRegRegImm32 rax, rax, 655
-    x64.leaRegRegImm32 rax, rax, 656
-    x64.leaRegRegImm32 rax, rax, 657
-    x64.leaRegRegImm32 rax, rax, 658
-    x64.leaRegRegImm32 rax, rax, 659
-    x64.leaRegRegImm32 rax, rax, 660
-    x64.leaRegRegImm32 rax, rax, 661
-    x64.leaRegRegImm32 rax, rax, 662
-    x64.leaRegRegImm32 rax, rax, 663
-    x64.leaRegRegImm32 rax, rax, 664
-    x64.leaRegRegImm32 rax, rax, 665
-    x64.leaRegRegImm32 rax, rax, 666
-    x64.leaRegRegImm32 rax, rax, 667
-    x64.leaRegRegImm32 rax, rax, 668
-    x64.leaRegRegImm32 rax, rax, 669
-    x64.leaRegRegImm32 rax, rax, 670
-    x64.leaRegRegImm32 rax, rax, 671
-    x64.leaRegRegImm32 rax, rax, 672
-    x64.leaRegRegImm32 rax, rax, 673
-    x64.leaRegRegImm32 rax, rax, 674
-    x64.leaRegRegImm32 rax, rax, 675
-    x64.leaRegRegImm32 rax, rax, 676
-    x64.leaRegRegImm32 rax, rax, 677
-    x64.leaRegRegImm32 rax, rax, 678
-    x64.leaRegRegImm32 rax, rax, 679
-    x64.leaRegRegImm32 rax, rax, 680
-    x64.leaRegRegImm32 rax, rax, 681
-    x64.leaRegRegImm32 rax, rax, 682
-    x64.leaRegRegImm32 rax, rax, 683
-    x64.leaRegRegImm32 rax, rax, 684
-    x64.leaRegRegImm32 rax, rax, 685
-    x64.leaRegRegImm32 rax, rax, 686
-    x64.leaRegRegImm32 rax, rax, 687
-    x64.leaRegRegImm32 rax, rax, 688
-    x64.leaRegRegImm32 rax, rax, 689
-    x64.leaRegRegImm32 rax, rax, 690
-    x64.leaRegRegImm32 rax, rax, 691
-    x64.leaRegRegImm32 rax, rax, 692
-    x64.leaRegRegImm32 rax, rax, 693
-    x64.leaRegRegImm32 rax, rax, 694
-    x64.leaRegRegImm32 rax, rax, 695
-    x64.leaRegRegImm32 rax, rax, 696
-    x64.leaRegRegImm32 rax, rax, 697
-    x64.leaRegRegImm32 rax, rax, 698
-    x64.leaRegRegImm32 rax, rax, 699
-    x64.leaRegRegImm32 rax, rax, 700
-    x64.leaRegRegImm32 rax, rax, 701
-    x64.leaRegRegImm32 rax, rax, 702
-    x64.leaRegRegImm32 rax, rax, 703
-    x64.leaRegRegImm32 rax, rax, 704
-    x64.leaRegRegImm32 rax, rax, 705
-    x64.leaRegRegImm32 rax, rax, 706
-    x64.leaRegRegImm32 rax, rax, 707
-    x64.leaRegRegImm32 rax, rax, 708
-    x64.leaRegRegImm32 rax, rax, 709
-    x64.leaRegRegImm32 rax, rax, 710
-    x64.leaRegRegImm32 rax, rax, 711
-    x64.leaRegRegImm32 rax, rax, 712
-    x64.leaRegRegImm32 rax, rax, 713
-    x64.leaRegRegImm32 rax, rax, 714
-    x64.leaRegRegImm32 rax, rax, 715
-    x64.leaRegRegImm32 rax, rax, 716
-    x64.leaRegRegImm32 rax, rax, 717
-    x64.leaRegRegImm32 rax, rax, 718
-    x64.leaRegRegImm32 rax, rax, 719
-    x64.leaRegRegImm32 rax, rax, 720
-    x64.leaRegRegImm32 rax, rax, 721
-    x64.leaRegRegImm32 rax, rax, 722
-    x64.leaRegRegImm32 rax, rax, 723
-    x64.leaRegRegImm32 rax, rax, 724
-    x64.leaRegRegImm32 rax, rax, 725
-    x64.leaRegRegImm32 rax, rax, 726
-    x64.leaRegRegImm32 rax, rax, 727
-    x64.leaRegRegImm32 rax, rax, 728
-    x64.leaRegRegImm32 rax, rax, 729
-    x64.leaRegRegImm32 rax, rax, 730
-    x64.leaRegRegImm32 rax, rax, 731
-    x64.leaRegRegImm32 rax, rax, 732
-    x64.leaRegRegImm32 rax, rax, 733
-    x64.leaRegRegImm32 rax, rax, 734
-    x64.leaRegRegImm32 rax, rax, 735
-    x64.leaRegRegImm32 rax, rax, 736
-    x64.leaRegRegImm32 rax, rax, 737
-    x64.leaRegRegImm32 rax, rax, 738
-    x64.leaRegRegImm32 rax, rax, 739
-    x64.leaRegRegImm32 rax, rax, 740
-    x64.leaRegRegImm32 rax, rax, 741
-    x64.leaRegRegImm32 rax, rax, 742
-    x64.leaRegRegImm32 rax, rax, 743
-    x64.leaRegRegImm32 rax, rax, 744
-    x64.leaRegRegImm32 rax, rax, 745
-    x64.leaRegRegImm32 rax, rax, 746
-    x64.leaRegRegImm32 rax, rax, 747
-    x64.leaRegRegImm32 rax, rax, 748
-    x64.leaRegRegImm32 rax, rax, 749
-    x64.leaRegRegImm32 rax, rax, 750
-    x64.leaRegRegImm32 rax, rax, 751
-    x64.leaRegRegImm32 rax, rax, 752
-    x64.leaRegRegImm32 rax, rax, 753
-    x64.leaRegRegImm32 rax, rax, 754
-    x64.leaRegRegImm32 rax, rax, 755
-    x64.leaRegRegImm32 rax, rax, 756
-    x64.leaRegRegImm32 rax, rax, 757
-    x64.leaRegRegImm32 rax, rax, 758
-    x64.leaRegRegImm32 rax, rax, 759
-    x64.leaRegRegImm32 rax, rax, 760
-    x64.leaRegRegImm32 rax, rax, 761
-    x64.leaRegRegImm32 rax, rax, 762
-    x64.leaRegRegImm32 rax, rax, 763
-    x64.leaRegRegImm32 rax, rax, 764
-    x64.leaRegRegImm32 rax, rax, 765
-    x64.leaRegRegImm32 rax, rax, 766
-    x64.leaRegRegImm32 rax, rax, 767
-    x64.leaRegRegImm32 rax, rax, 768
-    x64.leaRegRegImm32 rax, rax, 769
-    x64.leaRegRegImm32 rax, rax, 770
-    x64.leaRegRegImm32 rax, rax, 771
-    x64.leaRegRegImm32 rax, rax, 772
-    x64.leaRegRegImm32 rax, rax, 773
-    x64.leaRegRegImm32 rax, rax, 774
-    x64.leaRegRegImm32 rax, rax, 775
-    x64.leaRegRegImm32 rax, rax, 776
-    x64.leaRegRegImm32 rax, rax, 777
-    x64.leaRegRegImm32 rax, rax, 778
-    x64.leaRegRegImm32 rax, rax, 779
-    x64.leaRegRegImm32 rax, rax, 780
-    x64.leaRegRegImm32 rax, rax, 781
-    x64.leaRegRegImm32 rax, rax, 782
-    x64.leaRegRegImm32 rax, rax, 783
-    x64.leaRegRegImm32 rax, rax, 784
-    x64.leaRegRegImm32 rax, rax, 785
-    x64.leaRegRegImm32 rax, rax, 786
-    x64.leaRegRegImm32 rax, rax, 787
-    x64.leaRegRegImm32 rax, rax, 788
-    x64.leaRegRegImm32 rax, rax, 789
-    x64.leaRegRegImm32 rax, rax, 790
-    x64.leaRegRegImm32 rax, rax, 791
-    x64.leaRegRegImm32 rax, rax, 792
-    x64.leaRegRegImm32 rax, rax, 793
-    x64.leaRegRegImm32 rax, rax, 794
-    x64.leaRegRegImm32 rax, rax, 795
-    x64.leaRegRegImm32 rax, rax, 796
-    x64.leaRegRegImm32 rax, rax, 797
-    x64.leaRegRegImm32 rax, rax, 798
-    x64.leaRegRegImm32 rax, rax, 799
-    x64.leaRegRegImm32 rax, rax, -319600
-    x64.leaRegRegImm32 rax, rax, 7
-    x64.leaRegRegImm32 rax, rax, 21
-    x64.leaRegRegImm32 r8, rax, -21
-  __il_cont#1:
+    x64.prologue 48
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 3
+    x64.movRegImm32 r9, 4
+    x64.movRegImm32 rsi, 5
+    x64.movRegImm32 rdi, 6
+    x64.movRegImm32 r8, 7
+    x64.storeBaseDispReg.word64 [rsp + 32], r8
+    x64.callDirect wide
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }
@@ -1715,817 +5102,4228 @@ data {
   __mrt_program_started@16 = i8 0
 }
 
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100000000
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventh-param-survives-chkstk-prologue.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @wide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 6408
+    x64.loadRegBaseDisp.word64 r8, [rbp + 48]
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 100000000
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 100000000
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 rax, 100000000
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.cmpRegImm32 r9, 0
+    x64.jcc less, __rc_panic#11
+  __rc_chk#12:
+    x64.cmpRegImm32 r9, 100000000
+    x64.jcc greater, __rc_panic#11
+  __rc_ok#10:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __rc_panic#14
+  __rc_chk#15:
+    x64.cmpRegImm32 rsi, 100000000
+    x64.jcc greater, __rc_panic#14
+  __rc_ok#13:
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc less, __rc_panic#17
+  __rc_chk#18:
+    x64.cmpRegImm32 rdi, 100000000
+    x64.jcc greater, __rc_panic#17
+  __rc_ok#16:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#20
+  __rc_chk#21:
+    x64.cmpRegImm32 r8, 100000000
+    x64.jcc greater, __rc_panic#20
+  __rc_ok#19:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.storeSlotReg slot0, rax
+    x64.movRegImm32 rcx, 0
+    x64.callDirect opaque
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect opaque
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect opaque
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 3
+    x64.callDirect opaque
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 4
+    x64.callDirect opaque
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect opaque
+    x64.storeSlotReg slot795, r8
+    x64.movRegImm32 rcx, 6
+    x64.callDirect opaque
+    x64.storeSlotReg slot794, r8
+    x64.movRegImm32 rcx, 7
+    x64.callDirect opaque
+    x64.storeSlotReg slot793, r8
+    x64.movRegImm32 rcx, 8
+    x64.callDirect opaque
+    x64.storeSlotReg slot792, r8
+    x64.movRegImm32 rcx, 9
+    x64.callDirect opaque
+    x64.storeSlotReg slot791, r8
+    x64.movRegImm32 rcx, 10
+    x64.callDirect opaque
+    x64.storeSlotReg slot790, r8
+    x64.movRegImm32 rcx, 11
+    x64.callDirect opaque
+    x64.storeSlotReg slot789, r8
+    x64.movRegImm32 rcx, 12
+    x64.callDirect opaque
+    x64.storeSlotReg slot788, r8
+    x64.movRegImm32 rcx, 13
+    x64.callDirect opaque
+    x64.storeSlotReg slot2, r8
+    x64.movRegImm32 rcx, 14
+    x64.callDirect opaque
+    x64.storeSlotReg slot3, r8
+    x64.movRegImm32 rcx, 15
+    x64.callDirect opaque
+    x64.storeSlotReg slot4, r8
+    x64.movRegImm32 rcx, 16
+    x64.callDirect opaque
+    x64.storeSlotReg slot5, r8
+    x64.movRegImm32 rcx, 17
+    x64.callDirect opaque
+    x64.storeSlotReg slot6, r8
+    x64.movRegImm32 rcx, 18
+    x64.callDirect opaque
+    x64.storeSlotReg slot7, r8
+    x64.movRegImm32 rcx, 19
+    x64.callDirect opaque
+    x64.storeSlotReg slot8, r8
+    x64.movRegImm32 rcx, 20
+    x64.callDirect opaque
+    x64.storeSlotReg slot9, r8
+    x64.movRegImm32 rcx, 21
+    x64.callDirect opaque
+    x64.storeSlotReg slot10, r8
+    x64.movRegImm32 rcx, 22
+    x64.callDirect opaque
+    x64.storeSlotReg slot11, r8
+    x64.movRegImm32 rcx, 23
+    x64.callDirect opaque
+    x64.storeSlotReg slot12, r8
+    x64.movRegImm32 rcx, 24
+    x64.callDirect opaque
+    x64.storeSlotReg slot13, r8
+    x64.movRegImm32 rcx, 25
+    x64.callDirect opaque
+    x64.storeSlotReg slot14, r8
+    x64.movRegImm32 rcx, 26
+    x64.callDirect opaque
+    x64.storeSlotReg slot15, r8
+    x64.movRegImm32 rcx, 27
+    x64.callDirect opaque
+    x64.storeSlotReg slot16, r8
+    x64.movRegImm32 rcx, 28
+    x64.callDirect opaque
+    x64.storeSlotReg slot17, r8
+    x64.movRegImm32 rcx, 29
+    x64.callDirect opaque
+    x64.storeSlotReg slot18, r8
+    x64.movRegImm32 rcx, 30
+    x64.callDirect opaque
+    x64.storeSlotReg slot19, r8
+    x64.movRegImm32 rcx, 31
+    x64.callDirect opaque
+    x64.storeSlotReg slot20, r8
+    x64.movRegImm32 rcx, 32
+    x64.callDirect opaque
+    x64.storeSlotReg slot21, r8
+    x64.movRegImm32 rcx, 33
+    x64.callDirect opaque
+    x64.storeSlotReg slot22, r8
+    x64.movRegImm32 rcx, 34
+    x64.callDirect opaque
+    x64.storeSlotReg slot23, r8
+    x64.movRegImm32 rcx, 35
+    x64.callDirect opaque
+    x64.storeSlotReg slot24, r8
+    x64.movRegImm32 rcx, 36
+    x64.callDirect opaque
+    x64.storeSlotReg slot25, r8
+    x64.movRegImm32 rcx, 37
+    x64.callDirect opaque
+    x64.storeSlotReg slot26, r8
+    x64.movRegImm32 rcx, 38
+    x64.callDirect opaque
+    x64.storeSlotReg slot27, r8
+    x64.movRegImm32 rcx, 39
+    x64.callDirect opaque
+    x64.storeSlotReg slot28, r8
+    x64.movRegImm32 rcx, 40
+    x64.callDirect opaque
+    x64.storeSlotReg slot29, r8
+    x64.movRegImm32 rcx, 41
+    x64.callDirect opaque
+    x64.storeSlotReg slot30, r8
+    x64.movRegImm32 rcx, 42
+    x64.callDirect opaque
+    x64.storeSlotReg slot31, r8
+    x64.movRegImm32 rcx, 43
+    x64.callDirect opaque
+    x64.storeSlotReg slot32, r8
+    x64.movRegImm32 rcx, 44
+    x64.callDirect opaque
+    x64.storeSlotReg slot33, r8
+    x64.movRegImm32 rcx, 45
+    x64.callDirect opaque
+    x64.storeSlotReg slot34, r8
+    x64.movRegImm32 rcx, 46
+    x64.callDirect opaque
+    x64.storeSlotReg slot35, r8
+    x64.movRegImm32 rcx, 47
+    x64.callDirect opaque
+    x64.storeSlotReg slot36, r8
+    x64.movRegImm32 rcx, 48
+    x64.callDirect opaque
+    x64.storeSlotReg slot37, r8
+    x64.movRegImm32 rcx, 49
+    x64.callDirect opaque
+    x64.storeSlotReg slot38, r8
+    x64.movRegImm32 rcx, 50
+    x64.callDirect opaque
+    x64.storeSlotReg slot39, r8
+    x64.movRegImm32 rcx, 51
+    x64.callDirect opaque
+    x64.storeSlotReg slot40, r8
+    x64.movRegImm32 rcx, 52
+    x64.callDirect opaque
+    x64.storeSlotReg slot41, r8
+    x64.movRegImm32 rcx, 53
+    x64.callDirect opaque
+    x64.storeSlotReg slot42, r8
+    x64.movRegImm32 rcx, 54
+    x64.callDirect opaque
+    x64.storeSlotReg slot43, r8
+    x64.movRegImm32 rcx, 55
+    x64.callDirect opaque
+    x64.storeSlotReg slot44, r8
+    x64.movRegImm32 rcx, 56
+    x64.callDirect opaque
+    x64.storeSlotReg slot45, r8
+    x64.movRegImm32 rcx, 57
+    x64.callDirect opaque
+    x64.storeSlotReg slot46, r8
+    x64.movRegImm32 rcx, 58
+    x64.callDirect opaque
+    x64.storeSlotReg slot47, r8
+    x64.movRegImm32 rcx, 59
+    x64.callDirect opaque
+    x64.storeSlotReg slot48, r8
+    x64.movRegImm32 rcx, 60
+    x64.callDirect opaque
+    x64.storeSlotReg slot49, r8
+    x64.movRegImm32 rcx, 61
+    x64.callDirect opaque
+    x64.storeSlotReg slot50, r8
+    x64.movRegImm32 rcx, 62
+    x64.callDirect opaque
+    x64.storeSlotReg slot51, r8
+    x64.movRegImm32 rcx, 63
+    x64.callDirect opaque
+    x64.storeSlotReg slot52, r8
+    x64.movRegImm32 rcx, 64
+    x64.callDirect opaque
+    x64.storeSlotReg slot53, r8
+    x64.movRegImm32 rcx, 65
+    x64.callDirect opaque
+    x64.storeSlotReg slot54, r8
+    x64.movRegImm32 rcx, 66
+    x64.callDirect opaque
+    x64.storeSlotReg slot55, r8
+    x64.movRegImm32 rcx, 67
+    x64.callDirect opaque
+    x64.storeSlotReg slot56, r8
+    x64.movRegImm32 rcx, 68
+    x64.callDirect opaque
+    x64.storeSlotReg slot57, r8
+    x64.movRegImm32 rcx, 69
+    x64.callDirect opaque
+    x64.storeSlotReg slot58, r8
+    x64.movRegImm32 rcx, 70
+    x64.callDirect opaque
+    x64.storeSlotReg slot59, r8
+    x64.movRegImm32 rcx, 71
+    x64.callDirect opaque
+    x64.storeSlotReg slot60, r8
+    x64.movRegImm32 rcx, 72
+    x64.callDirect opaque
+    x64.storeSlotReg slot61, r8
+    x64.movRegImm32 rcx, 73
+    x64.callDirect opaque
+    x64.storeSlotReg slot62, r8
+    x64.movRegImm32 rcx, 74
+    x64.callDirect opaque
+    x64.storeSlotReg slot63, r8
+    x64.movRegImm32 rcx, 75
+    x64.callDirect opaque
+    x64.storeSlotReg slot64, r8
+    x64.movRegImm32 rcx, 76
+    x64.callDirect opaque
+    x64.storeSlotReg slot65, r8
+    x64.movRegImm32 rcx, 77
+    x64.callDirect opaque
+    x64.storeSlotReg slot66, r8
+    x64.movRegImm32 rcx, 78
+    x64.callDirect opaque
+    x64.storeSlotReg slot67, r8
+    x64.movRegImm32 rcx, 79
+    x64.callDirect opaque
+    x64.storeSlotReg slot68, r8
+    x64.movRegImm32 rcx, 80
+    x64.callDirect opaque
+    x64.storeSlotReg slot69, r8
+    x64.movRegImm32 rcx, 81
+    x64.callDirect opaque
+    x64.storeSlotReg slot70, r8
+    x64.movRegImm32 rcx, 82
+    x64.callDirect opaque
+    x64.storeSlotReg slot71, r8
+    x64.movRegImm32 rcx, 83
+    x64.callDirect opaque
+    x64.storeSlotReg slot72, r8
+    x64.movRegImm32 rcx, 84
+    x64.callDirect opaque
+    x64.storeSlotReg slot73, r8
+    x64.movRegImm32 rcx, 85
+    x64.callDirect opaque
+    x64.storeSlotReg slot74, r8
+    x64.movRegImm32 rcx, 86
+    x64.callDirect opaque
+    x64.storeSlotReg slot75, r8
+    x64.movRegImm32 rcx, 87
+    x64.callDirect opaque
+    x64.storeSlotReg slot76, r8
+    x64.movRegImm32 rcx, 88
+    x64.callDirect opaque
+    x64.storeSlotReg slot77, r8
+    x64.movRegImm32 rcx, 89
+    x64.callDirect opaque
+    x64.storeSlotReg slot78, r8
+    x64.movRegImm32 rcx, 90
+    x64.callDirect opaque
+    x64.storeSlotReg slot79, r8
+    x64.movRegImm32 rcx, 91
+    x64.callDirect opaque
+    x64.storeSlotReg slot80, r8
+    x64.movRegImm32 rcx, 92
+    x64.callDirect opaque
+    x64.storeSlotReg slot81, r8
+    x64.movRegImm32 rcx, 93
+    x64.callDirect opaque
+    x64.storeSlotReg slot82, r8
+    x64.movRegImm32 rcx, 94
+    x64.callDirect opaque
+    x64.storeSlotReg slot83, r8
+    x64.movRegImm32 rcx, 95
+    x64.callDirect opaque
+    x64.storeSlotReg slot84, r8
+    x64.movRegImm32 rcx, 96
+    x64.callDirect opaque
+    x64.storeSlotReg slot85, r8
+    x64.movRegImm32 rcx, 97
+    x64.callDirect opaque
+    x64.storeSlotReg slot86, r8
+    x64.movRegImm32 rcx, 98
+    x64.callDirect opaque
+    x64.storeSlotReg slot87, r8
+    x64.movRegImm32 rcx, 99
+    x64.callDirect opaque
+    x64.storeSlotReg slot88, r8
+    x64.movRegImm32 rcx, 100
+    x64.callDirect opaque
+    x64.storeSlotReg slot89, r8
+    x64.movRegImm32 rcx, 101
+    x64.callDirect opaque
+    x64.storeSlotReg slot90, r8
+    x64.movRegImm32 rcx, 102
+    x64.callDirect opaque
+    x64.storeSlotReg slot91, r8
+    x64.movRegImm32 rcx, 103
+    x64.callDirect opaque
+    x64.storeSlotReg slot92, r8
+    x64.movRegImm32 rcx, 104
+    x64.callDirect opaque
+    x64.storeSlotReg slot93, r8
+    x64.movRegImm32 rcx, 105
+    x64.callDirect opaque
+    x64.storeSlotReg slot94, r8
+    x64.movRegImm32 rcx, 106
+    x64.callDirect opaque
+    x64.storeSlotReg slot95, r8
+    x64.movRegImm32 rcx, 107
+    x64.callDirect opaque
+    x64.storeSlotReg slot96, r8
+    x64.movRegImm32 rcx, 108
+    x64.callDirect opaque
+    x64.storeSlotReg slot97, r8
+    x64.movRegImm32 rcx, 109
+    x64.callDirect opaque
+    x64.storeSlotReg slot98, r8
+    x64.movRegImm32 rcx, 110
+    x64.callDirect opaque
+    x64.storeSlotReg slot99, r8
+    x64.movRegImm32 rcx, 111
+    x64.callDirect opaque
+    x64.storeSlotReg slot100, r8
+    x64.movRegImm32 rcx, 112
+    x64.callDirect opaque
+    x64.storeSlotReg slot101, r8
+    x64.movRegImm32 rcx, 113
+    x64.callDirect opaque
+    x64.storeSlotReg slot102, r8
+    x64.movRegImm32 rcx, 114
+    x64.callDirect opaque
+    x64.storeSlotReg slot103, r8
+    x64.movRegImm32 rcx, 115
+    x64.callDirect opaque
+    x64.storeSlotReg slot104, r8
+    x64.movRegImm32 rcx, 116
+    x64.callDirect opaque
+    x64.storeSlotReg slot105, r8
+    x64.movRegImm32 rcx, 117
+    x64.callDirect opaque
+    x64.storeSlotReg slot106, r8
+    x64.movRegImm32 rcx, 118
+    x64.callDirect opaque
+    x64.storeSlotReg slot107, r8
+    x64.movRegImm32 rcx, 119
+    x64.callDirect opaque
+    x64.storeSlotReg slot108, r8
+    x64.movRegImm32 rcx, 120
+    x64.callDirect opaque
+    x64.storeSlotReg slot109, r8
+    x64.movRegImm32 rcx, 121
+    x64.callDirect opaque
+    x64.storeSlotReg slot110, r8
+    x64.movRegImm32 rcx, 122
+    x64.callDirect opaque
+    x64.storeSlotReg slot111, r8
+    x64.movRegImm32 rcx, 123
+    x64.callDirect opaque
+    x64.storeSlotReg slot112, r8
+    x64.movRegImm32 rcx, 124
+    x64.callDirect opaque
+    x64.storeSlotReg slot113, r8
+    x64.movRegImm32 rcx, 125
+    x64.callDirect opaque
+    x64.storeSlotReg slot114, r8
+    x64.movRegImm32 rcx, 126
+    x64.callDirect opaque
+    x64.storeSlotReg slot115, r8
+    x64.movRegImm32 rcx, 127
+    x64.callDirect opaque
+    x64.storeSlotReg slot116, r8
+    x64.movRegImm32 rcx, 128
+    x64.callDirect opaque
+    x64.storeSlotReg slot117, r8
+    x64.movRegImm32 rcx, 129
+    x64.callDirect opaque
+    x64.storeSlotReg slot118, r8
+    x64.movRegImm32 rcx, 130
+    x64.callDirect opaque
+    x64.storeSlotReg slot119, r8
+    x64.movRegImm32 rcx, 131
+    x64.callDirect opaque
+    x64.storeSlotReg slot120, r8
+    x64.movRegImm32 rcx, 132
+    x64.callDirect opaque
+    x64.storeSlotReg slot121, r8
+    x64.movRegImm32 rcx, 133
+    x64.callDirect opaque
+    x64.storeSlotReg slot122, r8
+    x64.movRegImm32 rcx, 134
+    x64.callDirect opaque
+    x64.storeSlotReg slot123, r8
+    x64.movRegImm32 rcx, 135
+    x64.callDirect opaque
+    x64.storeSlotReg slot124, r8
+    x64.movRegImm32 rcx, 136
+    x64.callDirect opaque
+    x64.storeSlotReg slot125, r8
+    x64.movRegImm32 rcx, 137
+    x64.callDirect opaque
+    x64.storeSlotReg slot126, r8
+    x64.movRegImm32 rcx, 138
+    x64.callDirect opaque
+    x64.storeSlotReg slot127, r8
+    x64.movRegImm32 rcx, 139
+    x64.callDirect opaque
+    x64.storeSlotReg slot128, r8
+    x64.movRegImm32 rcx, 140
+    x64.callDirect opaque
+    x64.storeSlotReg slot129, r8
+    x64.movRegImm32 rcx, 141
+    x64.callDirect opaque
+    x64.storeSlotReg slot130, r8
+    x64.movRegImm32 rcx, 142
+    x64.callDirect opaque
+    x64.storeSlotReg slot131, r8
+    x64.movRegImm32 rcx, 143
+    x64.callDirect opaque
+    x64.storeSlotReg slot132, r8
+    x64.movRegImm32 rcx, 144
+    x64.callDirect opaque
+    x64.storeSlotReg slot133, r8
+    x64.movRegImm32 rcx, 145
+    x64.callDirect opaque
+    x64.storeSlotReg slot134, r8
+    x64.movRegImm32 rcx, 146
+    x64.callDirect opaque
+    x64.storeSlotReg slot135, r8
+    x64.movRegImm32 rcx, 147
+    x64.callDirect opaque
+    x64.storeSlotReg slot136, r8
+    x64.movRegImm32 rcx, 148
+    x64.callDirect opaque
+    x64.storeSlotReg slot137, r8
+    x64.movRegImm32 rcx, 149
+    x64.callDirect opaque
+    x64.storeSlotReg slot138, r8
+    x64.movRegImm32 rcx, 150
+    x64.callDirect opaque
+    x64.storeSlotReg slot139, r8
+    x64.movRegImm32 rcx, 151
+    x64.callDirect opaque
+    x64.storeSlotReg slot140, r8
+    x64.movRegImm32 rcx, 152
+    x64.callDirect opaque
+    x64.storeSlotReg slot141, r8
+    x64.movRegImm32 rcx, 153
+    x64.callDirect opaque
+    x64.storeSlotReg slot142, r8
+    x64.movRegImm32 rcx, 154
+    x64.callDirect opaque
+    x64.storeSlotReg slot143, r8
+    x64.movRegImm32 rcx, 155
+    x64.callDirect opaque
+    x64.storeSlotReg slot144, r8
+    x64.movRegImm32 rcx, 156
+    x64.callDirect opaque
+    x64.storeSlotReg slot145, r8
+    x64.movRegImm32 rcx, 157
+    x64.callDirect opaque
+    x64.storeSlotReg slot146, r8
+    x64.movRegImm32 rcx, 158
+    x64.callDirect opaque
+    x64.storeSlotReg slot147, r8
+    x64.movRegImm32 rcx, 159
+    x64.callDirect opaque
+    x64.storeSlotReg slot148, r8
+    x64.movRegImm32 rcx, 160
+    x64.callDirect opaque
+    x64.storeSlotReg slot149, r8
+    x64.movRegImm32 rcx, 161
+    x64.callDirect opaque
+    x64.storeSlotReg slot150, r8
+    x64.movRegImm32 rcx, 162
+    x64.callDirect opaque
+    x64.storeSlotReg slot151, r8
+    x64.movRegImm32 rcx, 163
+    x64.callDirect opaque
+    x64.storeSlotReg slot152, r8
+    x64.movRegImm32 rcx, 164
+    x64.callDirect opaque
+    x64.storeSlotReg slot153, r8
+    x64.movRegImm32 rcx, 165
+    x64.callDirect opaque
+    x64.storeSlotReg slot154, r8
+    x64.movRegImm32 rcx, 166
+    x64.callDirect opaque
+    x64.storeSlotReg slot155, r8
+    x64.movRegImm32 rcx, 167
+    x64.callDirect opaque
+    x64.storeSlotReg slot156, r8
+    x64.movRegImm32 rcx, 168
+    x64.callDirect opaque
+    x64.storeSlotReg slot157, r8
+    x64.movRegImm32 rcx, 169
+    x64.callDirect opaque
+    x64.storeSlotReg slot158, r8
+    x64.movRegImm32 rcx, 170
+    x64.callDirect opaque
+    x64.storeSlotReg slot159, r8
+    x64.movRegImm32 rcx, 171
+    x64.callDirect opaque
+    x64.storeSlotReg slot160, r8
+    x64.movRegImm32 rcx, 172
+    x64.callDirect opaque
+    x64.storeSlotReg slot161, r8
+    x64.movRegImm32 rcx, 173
+    x64.callDirect opaque
+    x64.storeSlotReg slot162, r8
+    x64.movRegImm32 rcx, 174
+    x64.callDirect opaque
+    x64.storeSlotReg slot163, r8
+    x64.movRegImm32 rcx, 175
+    x64.callDirect opaque
+    x64.storeSlotReg slot164, r8
+    x64.movRegImm32 rcx, 176
+    x64.callDirect opaque
+    x64.storeSlotReg slot165, r8
+    x64.movRegImm32 rcx, 177
+    x64.callDirect opaque
+    x64.storeSlotReg slot166, r8
+    x64.movRegImm32 rcx, 178
+    x64.callDirect opaque
+    x64.storeSlotReg slot167, r8
+    x64.movRegImm32 rcx, 179
+    x64.callDirect opaque
+    x64.storeSlotReg slot168, r8
+    x64.movRegImm32 rcx, 180
+    x64.callDirect opaque
+    x64.storeSlotReg slot169, r8
+    x64.movRegImm32 rcx, 181
+    x64.callDirect opaque
+    x64.storeSlotReg slot170, r8
+    x64.movRegImm32 rcx, 182
+    x64.callDirect opaque
+    x64.storeSlotReg slot171, r8
+    x64.movRegImm32 rcx, 183
+    x64.callDirect opaque
+    x64.storeSlotReg slot172, r8
+    x64.movRegImm32 rcx, 184
+    x64.callDirect opaque
+    x64.storeSlotReg slot173, r8
+    x64.movRegImm32 rcx, 185
+    x64.callDirect opaque
+    x64.storeSlotReg slot174, r8
+    x64.movRegImm32 rcx, 186
+    x64.callDirect opaque
+    x64.storeSlotReg slot175, r8
+    x64.movRegImm32 rcx, 187
+    x64.callDirect opaque
+    x64.storeSlotReg slot176, r8
+    x64.movRegImm32 rcx, 188
+    x64.callDirect opaque
+    x64.storeSlotReg slot177, r8
+    x64.movRegImm32 rcx, 189
+    x64.callDirect opaque
+    x64.storeSlotReg slot178, r8
+    x64.movRegImm32 rcx, 190
+    x64.callDirect opaque
+    x64.storeSlotReg slot179, r8
+    x64.movRegImm32 rcx, 191
+    x64.callDirect opaque
+    x64.storeSlotReg slot180, r8
+    x64.movRegImm32 rcx, 192
+    x64.callDirect opaque
+    x64.storeSlotReg slot181, r8
+    x64.movRegImm32 rcx, 193
+    x64.callDirect opaque
+    x64.storeSlotReg slot182, r8
+    x64.movRegImm32 rcx, 194
+    x64.callDirect opaque
+    x64.storeSlotReg slot183, r8
+    x64.movRegImm32 rcx, 195
+    x64.callDirect opaque
+    x64.storeSlotReg slot184, r8
+    x64.movRegImm32 rcx, 196
+    x64.callDirect opaque
+    x64.storeSlotReg slot185, r8
+    x64.movRegImm32 rcx, 197
+    x64.callDirect opaque
+    x64.storeSlotReg slot186, r8
+    x64.movRegImm32 rcx, 198
+    x64.callDirect opaque
+    x64.storeSlotReg slot187, r8
+    x64.movRegImm32 rcx, 199
+    x64.callDirect opaque
+    x64.storeSlotReg slot188, r8
+    x64.movRegImm32 rcx, 200
+    x64.callDirect opaque
+    x64.storeSlotReg slot189, r8
+    x64.movRegImm32 rcx, 201
+    x64.callDirect opaque
+    x64.storeSlotReg slot190, r8
+    x64.movRegImm32 rcx, 202
+    x64.callDirect opaque
+    x64.storeSlotReg slot191, r8
+    x64.movRegImm32 rcx, 203
+    x64.callDirect opaque
+    x64.storeSlotReg slot192, r8
+    x64.movRegImm32 rcx, 204
+    x64.callDirect opaque
+    x64.storeSlotReg slot193, r8
+    x64.movRegImm32 rcx, 205
+    x64.callDirect opaque
+    x64.storeSlotReg slot194, r8
+    x64.movRegImm32 rcx, 206
+    x64.callDirect opaque
+    x64.storeSlotReg slot195, r8
+    x64.movRegImm32 rcx, 207
+    x64.callDirect opaque
+    x64.storeSlotReg slot196, r8
+    x64.movRegImm32 rcx, 208
+    x64.callDirect opaque
+    x64.storeSlotReg slot197, r8
+    x64.movRegImm32 rcx, 209
+    x64.callDirect opaque
+    x64.storeSlotReg slot198, r8
+    x64.movRegImm32 rcx, 210
+    x64.callDirect opaque
+    x64.storeSlotReg slot199, r8
+    x64.movRegImm32 rcx, 211
+    x64.callDirect opaque
+    x64.storeSlotReg slot200, r8
+    x64.movRegImm32 rcx, 212
+    x64.callDirect opaque
+    x64.storeSlotReg slot201, r8
+    x64.movRegImm32 rcx, 213
+    x64.callDirect opaque
+    x64.storeSlotReg slot202, r8
+    x64.movRegImm32 rcx, 214
+    x64.callDirect opaque
+    x64.storeSlotReg slot203, r8
+    x64.movRegImm32 rcx, 215
+    x64.callDirect opaque
+    x64.storeSlotReg slot204, r8
+    x64.movRegImm32 rcx, 216
+    x64.callDirect opaque
+    x64.storeSlotReg slot205, r8
+    x64.movRegImm32 rcx, 217
+    x64.callDirect opaque
+    x64.storeSlotReg slot206, r8
+    x64.movRegImm32 rcx, 218
+    x64.callDirect opaque
+    x64.storeSlotReg slot207, r8
+    x64.movRegImm32 rcx, 219
+    x64.callDirect opaque
+    x64.storeSlotReg slot208, r8
+    x64.movRegImm32 rcx, 220
+    x64.callDirect opaque
+    x64.storeSlotReg slot209, r8
+    x64.movRegImm32 rcx, 221
+    x64.callDirect opaque
+    x64.storeSlotReg slot210, r8
+    x64.movRegImm32 rcx, 222
+    x64.callDirect opaque
+    x64.storeSlotReg slot211, r8
+    x64.movRegImm32 rcx, 223
+    x64.callDirect opaque
+    x64.storeSlotReg slot212, r8
+    x64.movRegImm32 rcx, 224
+    x64.callDirect opaque
+    x64.storeSlotReg slot213, r8
+    x64.movRegImm32 rcx, 225
+    x64.callDirect opaque
+    x64.storeSlotReg slot214, r8
+    x64.movRegImm32 rcx, 226
+    x64.callDirect opaque
+    x64.storeSlotReg slot215, r8
+    x64.movRegImm32 rcx, 227
+    x64.callDirect opaque
+    x64.storeSlotReg slot216, r8
+    x64.movRegImm32 rcx, 228
+    x64.callDirect opaque
+    x64.storeSlotReg slot217, r8
+    x64.movRegImm32 rcx, 229
+    x64.callDirect opaque
+    x64.storeSlotReg slot218, r8
+    x64.movRegImm32 rcx, 230
+    x64.callDirect opaque
+    x64.storeSlotReg slot219, r8
+    x64.movRegImm32 rcx, 231
+    x64.callDirect opaque
+    x64.storeSlotReg slot220, r8
+    x64.movRegImm32 rcx, 232
+    x64.callDirect opaque
+    x64.storeSlotReg slot221, r8
+    x64.movRegImm32 rcx, 233
+    x64.callDirect opaque
+    x64.storeSlotReg slot222, r8
+    x64.movRegImm32 rcx, 234
+    x64.callDirect opaque
+    x64.storeSlotReg slot223, r8
+    x64.movRegImm32 rcx, 235
+    x64.callDirect opaque
+    x64.storeSlotReg slot224, r8
+    x64.movRegImm32 rcx, 236
+    x64.callDirect opaque
+    x64.storeSlotReg slot225, r8
+    x64.movRegImm32 rcx, 237
+    x64.callDirect opaque
+    x64.storeSlotReg slot226, r8
+    x64.movRegImm32 rcx, 238
+    x64.callDirect opaque
+    x64.storeSlotReg slot227, r8
+    x64.movRegImm32 rcx, 239
+    x64.callDirect opaque
+    x64.storeSlotReg slot228, r8
+    x64.movRegImm32 rcx, 240
+    x64.callDirect opaque
+    x64.storeSlotReg slot229, r8
+    x64.movRegImm32 rcx, 241
+    x64.callDirect opaque
+    x64.storeSlotReg slot230, r8
+    x64.movRegImm32 rcx, 242
+    x64.callDirect opaque
+    x64.storeSlotReg slot231, r8
+    x64.movRegImm32 rcx, 243
+    x64.callDirect opaque
+    x64.storeSlotReg slot232, r8
+    x64.movRegImm32 rcx, 244
+    x64.callDirect opaque
+    x64.storeSlotReg slot233, r8
+    x64.movRegImm32 rcx, 245
+    x64.callDirect opaque
+    x64.storeSlotReg slot234, r8
+    x64.movRegImm32 rcx, 246
+    x64.callDirect opaque
+    x64.storeSlotReg slot235, r8
+    x64.movRegImm32 rcx, 247
+    x64.callDirect opaque
+    x64.storeSlotReg slot236, r8
+    x64.movRegImm32 rcx, 248
+    x64.callDirect opaque
+    x64.storeSlotReg slot237, r8
+    x64.movRegImm32 rcx, 249
+    x64.callDirect opaque
+    x64.storeSlotReg slot238, r8
+    x64.movRegImm32 rcx, 250
+    x64.callDirect opaque
+    x64.storeSlotReg slot239, r8
+    x64.movRegImm32 rcx, 251
+    x64.callDirect opaque
+    x64.storeSlotReg slot240, r8
+    x64.movRegImm32 rcx, 252
+    x64.callDirect opaque
+    x64.storeSlotReg slot241, r8
+    x64.movRegImm32 rcx, 253
+    x64.callDirect opaque
+    x64.storeSlotReg slot242, r8
+    x64.movRegImm32 rcx, 254
+    x64.callDirect opaque
+    x64.storeSlotReg slot243, r8
+    x64.movRegImm32 rcx, 255
+    x64.callDirect opaque
+    x64.storeSlotReg slot244, r8
+    x64.movRegImm32 rcx, 256
+    x64.callDirect opaque
+    x64.storeSlotReg slot245, r8
+    x64.movRegImm32 rcx, 257
+    x64.callDirect opaque
+    x64.storeSlotReg slot246, r8
+    x64.movRegImm32 rcx, 258
+    x64.callDirect opaque
+    x64.storeSlotReg slot247, r8
+    x64.movRegImm32 rcx, 259
+    x64.callDirect opaque
+    x64.storeSlotReg slot248, r8
+    x64.movRegImm32 rcx, 260
+    x64.callDirect opaque
+    x64.storeSlotReg slot249, r8
+    x64.movRegImm32 rcx, 261
+    x64.callDirect opaque
+    x64.storeSlotReg slot250, r8
+    x64.movRegImm32 rcx, 262
+    x64.callDirect opaque
+    x64.storeSlotReg slot251, r8
+    x64.movRegImm32 rcx, 263
+    x64.callDirect opaque
+    x64.storeSlotReg slot252, r8
+    x64.movRegImm32 rcx, 264
+    x64.callDirect opaque
+    x64.storeSlotReg slot253, r8
+    x64.movRegImm32 rcx, 265
+    x64.callDirect opaque
+    x64.storeSlotReg slot254, r8
+    x64.movRegImm32 rcx, 266
+    x64.callDirect opaque
+    x64.storeSlotReg slot255, r8
+    x64.movRegImm32 rcx, 267
+    x64.callDirect opaque
+    x64.storeSlotReg slot256, r8
+    x64.movRegImm32 rcx, 268
+    x64.callDirect opaque
+    x64.storeSlotReg slot257, r8
+    x64.movRegImm32 rcx, 269
+    x64.callDirect opaque
+    x64.storeSlotReg slot258, r8
+    x64.movRegImm32 rcx, 270
+    x64.callDirect opaque
+    x64.storeSlotReg slot259, r8
+    x64.movRegImm32 rcx, 271
+    x64.callDirect opaque
+    x64.storeSlotReg slot260, r8
+    x64.movRegImm32 rcx, 272
+    x64.callDirect opaque
+    x64.storeSlotReg slot261, r8
+    x64.movRegImm32 rcx, 273
+    x64.callDirect opaque
+    x64.storeSlotReg slot262, r8
+    x64.movRegImm32 rcx, 274
+    x64.callDirect opaque
+    x64.storeSlotReg slot263, r8
+    x64.movRegImm32 rcx, 275
+    x64.callDirect opaque
+    x64.storeSlotReg slot264, r8
+    x64.movRegImm32 rcx, 276
+    x64.callDirect opaque
+    x64.storeSlotReg slot265, r8
+    x64.movRegImm32 rcx, 277
+    x64.callDirect opaque
+    x64.storeSlotReg slot266, r8
+    x64.movRegImm32 rcx, 278
+    x64.callDirect opaque
+    x64.storeSlotReg slot267, r8
+    x64.movRegImm32 rcx, 279
+    x64.callDirect opaque
+    x64.storeSlotReg slot268, r8
+    x64.movRegImm32 rcx, 280
+    x64.callDirect opaque
+    x64.storeSlotReg slot269, r8
+    x64.movRegImm32 rcx, 281
+    x64.callDirect opaque
+    x64.storeSlotReg slot270, r8
+    x64.movRegImm32 rcx, 282
+    x64.callDirect opaque
+    x64.storeSlotReg slot271, r8
+    x64.movRegImm32 rcx, 283
+    x64.callDirect opaque
+    x64.storeSlotReg slot272, r8
+    x64.movRegImm32 rcx, 284
+    x64.callDirect opaque
+    x64.storeSlotReg slot273, r8
+    x64.movRegImm32 rcx, 285
+    x64.callDirect opaque
+    x64.storeSlotReg slot274, r8
+    x64.movRegImm32 rcx, 286
+    x64.callDirect opaque
+    x64.storeSlotReg slot275, r8
+    x64.movRegImm32 rcx, 287
+    x64.callDirect opaque
+    x64.storeSlotReg slot276, r8
+    x64.movRegImm32 rcx, 288
+    x64.callDirect opaque
+    x64.storeSlotReg slot277, r8
+    x64.movRegImm32 rcx, 289
+    x64.callDirect opaque
+    x64.storeSlotReg slot278, r8
+    x64.movRegImm32 rcx, 290
+    x64.callDirect opaque
+    x64.storeSlotReg slot279, r8
+    x64.movRegImm32 rcx, 291
+    x64.callDirect opaque
+    x64.storeSlotReg slot280, r8
+    x64.movRegImm32 rcx, 292
+    x64.callDirect opaque
+    x64.storeSlotReg slot281, r8
+    x64.movRegImm32 rcx, 293
+    x64.callDirect opaque
+    x64.storeSlotReg slot282, r8
+    x64.movRegImm32 rcx, 294
+    x64.callDirect opaque
+    x64.storeSlotReg slot283, r8
+    x64.movRegImm32 rcx, 295
+    x64.callDirect opaque
+    x64.storeSlotReg slot284, r8
+    x64.movRegImm32 rcx, 296
+    x64.callDirect opaque
+    x64.storeSlotReg slot285, r8
+    x64.movRegImm32 rcx, 297
+    x64.callDirect opaque
+    x64.storeSlotReg slot286, r8
+    x64.movRegImm32 rcx, 298
+    x64.callDirect opaque
+    x64.storeSlotReg slot287, r8
+    x64.movRegImm32 rcx, 299
+    x64.callDirect opaque
+    x64.storeSlotReg slot288, r8
+    x64.movRegImm32 rcx, 300
+    x64.callDirect opaque
+    x64.storeSlotReg slot289, r8
+    x64.movRegImm32 rcx, 301
+    x64.callDirect opaque
+    x64.storeSlotReg slot290, r8
+    x64.movRegImm32 rcx, 302
+    x64.callDirect opaque
+    x64.storeSlotReg slot291, r8
+    x64.movRegImm32 rcx, 303
+    x64.callDirect opaque
+    x64.storeSlotReg slot292, r8
+    x64.movRegImm32 rcx, 304
+    x64.callDirect opaque
+    x64.storeSlotReg slot293, r8
+    x64.movRegImm32 rcx, 305
+    x64.callDirect opaque
+    x64.storeSlotReg slot294, r8
+    x64.movRegImm32 rcx, 306
+    x64.callDirect opaque
+    x64.storeSlotReg slot295, r8
+    x64.movRegImm32 rcx, 307
+    x64.callDirect opaque
+    x64.storeSlotReg slot296, r8
+    x64.movRegImm32 rcx, 308
+    x64.callDirect opaque
+    x64.storeSlotReg slot297, r8
+    x64.movRegImm32 rcx, 309
+    x64.callDirect opaque
+    x64.storeSlotReg slot298, r8
+    x64.movRegImm32 rcx, 310
+    x64.callDirect opaque
+    x64.storeSlotReg slot299, r8
+    x64.movRegImm32 rcx, 311
+    x64.callDirect opaque
+    x64.storeSlotReg slot300, r8
+    x64.movRegImm32 rcx, 312
+    x64.callDirect opaque
+    x64.storeSlotReg slot301, r8
+    x64.movRegImm32 rcx, 313
+    x64.callDirect opaque
+    x64.storeSlotReg slot302, r8
+    x64.movRegImm32 rcx, 314
+    x64.callDirect opaque
+    x64.storeSlotReg slot303, r8
+    x64.movRegImm32 rcx, 315
+    x64.callDirect opaque
+    x64.storeSlotReg slot304, r8
+    x64.movRegImm32 rcx, 316
+    x64.callDirect opaque
+    x64.storeSlotReg slot305, r8
+    x64.movRegImm32 rcx, 317
+    x64.callDirect opaque
+    x64.storeSlotReg slot306, r8
+    x64.movRegImm32 rcx, 318
+    x64.callDirect opaque
+    x64.storeSlotReg slot307, r8
+    x64.movRegImm32 rcx, 319
+    x64.callDirect opaque
+    x64.storeSlotReg slot308, r8
+    x64.movRegImm32 rcx, 320
+    x64.callDirect opaque
+    x64.storeSlotReg slot309, r8
+    x64.movRegImm32 rcx, 321
+    x64.callDirect opaque
+    x64.storeSlotReg slot310, r8
+    x64.movRegImm32 rcx, 322
+    x64.callDirect opaque
+    x64.storeSlotReg slot311, r8
+    x64.movRegImm32 rcx, 323
+    x64.callDirect opaque
+    x64.storeSlotReg slot312, r8
+    x64.movRegImm32 rcx, 324
+    x64.callDirect opaque
+    x64.storeSlotReg slot313, r8
+    x64.movRegImm32 rcx, 325
+    x64.callDirect opaque
+    x64.storeSlotReg slot314, r8
+    x64.movRegImm32 rcx, 326
+    x64.callDirect opaque
+    x64.storeSlotReg slot315, r8
+    x64.movRegImm32 rcx, 327
+    x64.callDirect opaque
+    x64.storeSlotReg slot316, r8
+    x64.movRegImm32 rcx, 328
+    x64.callDirect opaque
+    x64.storeSlotReg slot317, r8
+    x64.movRegImm32 rcx, 329
+    x64.callDirect opaque
+    x64.storeSlotReg slot318, r8
+    x64.movRegImm32 rcx, 330
+    x64.callDirect opaque
+    x64.storeSlotReg slot319, r8
+    x64.movRegImm32 rcx, 331
+    x64.callDirect opaque
+    x64.storeSlotReg slot320, r8
+    x64.movRegImm32 rcx, 332
+    x64.callDirect opaque
+    x64.storeSlotReg slot321, r8
+    x64.movRegImm32 rcx, 333
+    x64.callDirect opaque
+    x64.storeSlotReg slot322, r8
+    x64.movRegImm32 rcx, 334
+    x64.callDirect opaque
+    x64.storeSlotReg slot323, r8
+    x64.movRegImm32 rcx, 335
+    x64.callDirect opaque
+    x64.storeSlotReg slot324, r8
+    x64.movRegImm32 rcx, 336
+    x64.callDirect opaque
+    x64.storeSlotReg slot325, r8
+    x64.movRegImm32 rcx, 337
+    x64.callDirect opaque
+    x64.storeSlotReg slot326, r8
+    x64.movRegImm32 rcx, 338
+    x64.callDirect opaque
+    x64.storeSlotReg slot327, r8
+    x64.movRegImm32 rcx, 339
+    x64.callDirect opaque
+    x64.storeSlotReg slot328, r8
+    x64.movRegImm32 rcx, 340
+    x64.callDirect opaque
+    x64.storeSlotReg slot329, r8
+    x64.movRegImm32 rcx, 341
+    x64.callDirect opaque
+    x64.storeSlotReg slot330, r8
+    x64.movRegImm32 rcx, 342
+    x64.callDirect opaque
+    x64.storeSlotReg slot331, r8
+    x64.movRegImm32 rcx, 343
+    x64.callDirect opaque
+    x64.storeSlotReg slot332, r8
+    x64.movRegImm32 rcx, 344
+    x64.callDirect opaque
+    x64.storeSlotReg slot333, r8
+    x64.movRegImm32 rcx, 345
+    x64.callDirect opaque
+    x64.storeSlotReg slot334, r8
+    x64.movRegImm32 rcx, 346
+    x64.callDirect opaque
+    x64.storeSlotReg slot335, r8
+    x64.movRegImm32 rcx, 347
+    x64.callDirect opaque
+    x64.storeSlotReg slot336, r8
+    x64.movRegImm32 rcx, 348
+    x64.callDirect opaque
+    x64.storeSlotReg slot337, r8
+    x64.movRegImm32 rcx, 349
+    x64.callDirect opaque
+    x64.storeSlotReg slot338, r8
+    x64.movRegImm32 rcx, 350
+    x64.callDirect opaque
+    x64.storeSlotReg slot339, r8
+    x64.movRegImm32 rcx, 351
+    x64.callDirect opaque
+    x64.storeSlotReg slot340, r8
+    x64.movRegImm32 rcx, 352
+    x64.callDirect opaque
+    x64.storeSlotReg slot341, r8
+    x64.movRegImm32 rcx, 353
+    x64.callDirect opaque
+    x64.storeSlotReg slot342, r8
+    x64.movRegImm32 rcx, 354
+    x64.callDirect opaque
+    x64.storeSlotReg slot343, r8
+    x64.movRegImm32 rcx, 355
+    x64.callDirect opaque
+    x64.storeSlotReg slot344, r8
+    x64.movRegImm32 rcx, 356
+    x64.callDirect opaque
+    x64.storeSlotReg slot345, r8
+    x64.movRegImm32 rcx, 357
+    x64.callDirect opaque
+    x64.storeSlotReg slot346, r8
+    x64.movRegImm32 rcx, 358
+    x64.callDirect opaque
+    x64.storeSlotReg slot347, r8
+    x64.movRegImm32 rcx, 359
+    x64.callDirect opaque
+    x64.storeSlotReg slot348, r8
+    x64.movRegImm32 rcx, 360
+    x64.callDirect opaque
+    x64.storeSlotReg slot349, r8
+    x64.movRegImm32 rcx, 361
+    x64.callDirect opaque
+    x64.storeSlotReg slot350, r8
+    x64.movRegImm32 rcx, 362
+    x64.callDirect opaque
+    x64.storeSlotReg slot351, r8
+    x64.movRegImm32 rcx, 363
+    x64.callDirect opaque
+    x64.storeSlotReg slot352, r8
+    x64.movRegImm32 rcx, 364
+    x64.callDirect opaque
+    x64.storeSlotReg slot353, r8
+    x64.movRegImm32 rcx, 365
+    x64.callDirect opaque
+    x64.storeSlotReg slot354, r8
+    x64.movRegImm32 rcx, 366
+    x64.callDirect opaque
+    x64.storeSlotReg slot355, r8
+    x64.movRegImm32 rcx, 367
+    x64.callDirect opaque
+    x64.storeSlotReg slot356, r8
+    x64.movRegImm32 rcx, 368
+    x64.callDirect opaque
+    x64.storeSlotReg slot357, r8
+    x64.movRegImm32 rcx, 369
+    x64.callDirect opaque
+    x64.storeSlotReg slot358, r8
+    x64.movRegImm32 rcx, 370
+    x64.callDirect opaque
+    x64.storeSlotReg slot359, r8
+    x64.movRegImm32 rcx, 371
+    x64.callDirect opaque
+    x64.storeSlotReg slot360, r8
+    x64.movRegImm32 rcx, 372
+    x64.callDirect opaque
+    x64.storeSlotReg slot361, r8
+    x64.movRegImm32 rcx, 373
+    x64.callDirect opaque
+    x64.storeSlotReg slot362, r8
+    x64.movRegImm32 rcx, 374
+    x64.callDirect opaque
+    x64.storeSlotReg slot363, r8
+    x64.movRegImm32 rcx, 375
+    x64.callDirect opaque
+    x64.storeSlotReg slot364, r8
+    x64.movRegImm32 rcx, 376
+    x64.callDirect opaque
+    x64.storeSlotReg slot365, r8
+    x64.movRegImm32 rcx, 377
+    x64.callDirect opaque
+    x64.storeSlotReg slot366, r8
+    x64.movRegImm32 rcx, 378
+    x64.callDirect opaque
+    x64.storeSlotReg slot367, r8
+    x64.movRegImm32 rcx, 379
+    x64.callDirect opaque
+    x64.storeSlotReg slot368, r8
+    x64.movRegImm32 rcx, 380
+    x64.callDirect opaque
+    x64.storeSlotReg slot369, r8
+    x64.movRegImm32 rcx, 381
+    x64.callDirect opaque
+    x64.storeSlotReg slot370, r8
+    x64.movRegImm32 rcx, 382
+    x64.callDirect opaque
+    x64.storeSlotReg slot371, r8
+    x64.movRegImm32 rcx, 383
+    x64.callDirect opaque
+    x64.storeSlotReg slot372, r8
+    x64.movRegImm32 rcx, 384
+    x64.callDirect opaque
+    x64.storeSlotReg slot373, r8
+    x64.movRegImm32 rcx, 385
+    x64.callDirect opaque
+    x64.storeSlotReg slot374, r8
+    x64.movRegImm32 rcx, 386
+    x64.callDirect opaque
+    x64.storeSlotReg slot375, r8
+    x64.movRegImm32 rcx, 387
+    x64.callDirect opaque
+    x64.storeSlotReg slot376, r8
+    x64.movRegImm32 rcx, 388
+    x64.callDirect opaque
+    x64.storeSlotReg slot377, r8
+    x64.movRegImm32 rcx, 389
+    x64.callDirect opaque
+    x64.storeSlotReg slot378, r8
+    x64.movRegImm32 rcx, 390
+    x64.callDirect opaque
+    x64.storeSlotReg slot379, r8
+    x64.movRegImm32 rcx, 391
+    x64.callDirect opaque
+    x64.storeSlotReg slot380, r8
+    x64.movRegImm32 rcx, 392
+    x64.callDirect opaque
+    x64.storeSlotReg slot381, r8
+    x64.movRegImm32 rcx, 393
+    x64.callDirect opaque
+    x64.storeSlotReg slot382, r8
+    x64.movRegImm32 rcx, 394
+    x64.callDirect opaque
+    x64.storeSlotReg slot383, r8
+    x64.movRegImm32 rcx, 395
+    x64.callDirect opaque
+    x64.storeSlotReg slot384, r8
+    x64.movRegImm32 rcx, 396
+    x64.callDirect opaque
+    x64.storeSlotReg slot385, r8
+    x64.movRegImm32 rcx, 397
+    x64.callDirect opaque
+    x64.storeSlotReg slot386, r8
+    x64.movRegImm32 rcx, 398
+    x64.callDirect opaque
+    x64.storeSlotReg slot387, r8
+    x64.movRegImm32 rcx, 399
+    x64.callDirect opaque
+    x64.storeSlotReg slot388, r8
+    x64.movRegImm32 rcx, 400
+    x64.callDirect opaque
+    x64.storeSlotReg slot389, r8
+    x64.movRegImm32 rcx, 401
+    x64.callDirect opaque
+    x64.storeSlotReg slot390, r8
+    x64.movRegImm32 rcx, 402
+    x64.callDirect opaque
+    x64.storeSlotReg slot391, r8
+    x64.movRegImm32 rcx, 403
+    x64.callDirect opaque
+    x64.storeSlotReg slot392, r8
+    x64.movRegImm32 rcx, 404
+    x64.callDirect opaque
+    x64.storeSlotReg slot393, r8
+    x64.movRegImm32 rcx, 405
+    x64.callDirect opaque
+    x64.storeSlotReg slot394, r8
+    x64.movRegImm32 rcx, 406
+    x64.callDirect opaque
+    x64.storeSlotReg slot395, r8
+    x64.movRegImm32 rcx, 407
+    x64.callDirect opaque
+    x64.storeSlotReg slot396, r8
+    x64.movRegImm32 rcx, 408
+    x64.callDirect opaque
+    x64.storeSlotReg slot397, r8
+    x64.movRegImm32 rcx, 409
+    x64.callDirect opaque
+    x64.storeSlotReg slot398, r8
+    x64.movRegImm32 rcx, 410
+    x64.callDirect opaque
+    x64.storeSlotReg slot399, r8
+    x64.movRegImm32 rcx, 411
+    x64.callDirect opaque
+    x64.storeSlotReg slot400, r8
+    x64.movRegImm32 rcx, 412
+    x64.callDirect opaque
+    x64.storeSlotReg slot401, r8
+    x64.movRegImm32 rcx, 413
+    x64.callDirect opaque
+    x64.storeSlotReg slot402, r8
+    x64.movRegImm32 rcx, 414
+    x64.callDirect opaque
+    x64.storeSlotReg slot403, r8
+    x64.movRegImm32 rcx, 415
+    x64.callDirect opaque
+    x64.storeSlotReg slot404, r8
+    x64.movRegImm32 rcx, 416
+    x64.callDirect opaque
+    x64.storeSlotReg slot405, r8
+    x64.movRegImm32 rcx, 417
+    x64.callDirect opaque
+    x64.storeSlotReg slot406, r8
+    x64.movRegImm32 rcx, 418
+    x64.callDirect opaque
+    x64.storeSlotReg slot407, r8
+    x64.movRegImm32 rcx, 419
+    x64.callDirect opaque
+    x64.storeSlotReg slot408, r8
+    x64.movRegImm32 rcx, 420
+    x64.callDirect opaque
+    x64.storeSlotReg slot409, r8
+    x64.movRegImm32 rcx, 421
+    x64.callDirect opaque
+    x64.storeSlotReg slot410, r8
+    x64.movRegImm32 rcx, 422
+    x64.callDirect opaque
+    x64.storeSlotReg slot411, r8
+    x64.movRegImm32 rcx, 423
+    x64.callDirect opaque
+    x64.storeSlotReg slot412, r8
+    x64.movRegImm32 rcx, 424
+    x64.callDirect opaque
+    x64.storeSlotReg slot413, r8
+    x64.movRegImm32 rcx, 425
+    x64.callDirect opaque
+    x64.storeSlotReg slot414, r8
+    x64.movRegImm32 rcx, 426
+    x64.callDirect opaque
+    x64.storeSlotReg slot415, r8
+    x64.movRegImm32 rcx, 427
+    x64.callDirect opaque
+    x64.storeSlotReg slot416, r8
+    x64.movRegImm32 rcx, 428
+    x64.callDirect opaque
+    x64.storeSlotReg slot417, r8
+    x64.movRegImm32 rcx, 429
+    x64.callDirect opaque
+    x64.storeSlotReg slot418, r8
+    x64.movRegImm32 rcx, 430
+    x64.callDirect opaque
+    x64.storeSlotReg slot419, r8
+    x64.movRegImm32 rcx, 431
+    x64.callDirect opaque
+    x64.storeSlotReg slot420, r8
+    x64.movRegImm32 rcx, 432
+    x64.callDirect opaque
+    x64.storeSlotReg slot421, r8
+    x64.movRegImm32 rcx, 433
+    x64.callDirect opaque
+    x64.storeSlotReg slot422, r8
+    x64.movRegImm32 rcx, 434
+    x64.callDirect opaque
+    x64.storeSlotReg slot423, r8
+    x64.movRegImm32 rcx, 435
+    x64.callDirect opaque
+    x64.storeSlotReg slot424, r8
+    x64.movRegImm32 rcx, 436
+    x64.callDirect opaque
+    x64.storeSlotReg slot425, r8
+    x64.movRegImm32 rcx, 437
+    x64.callDirect opaque
+    x64.storeSlotReg slot426, r8
+    x64.movRegImm32 rcx, 438
+    x64.callDirect opaque
+    x64.storeSlotReg slot427, r8
+    x64.movRegImm32 rcx, 439
+    x64.callDirect opaque
+    x64.storeSlotReg slot428, r8
+    x64.movRegImm32 rcx, 440
+    x64.callDirect opaque
+    x64.storeSlotReg slot429, r8
+    x64.movRegImm32 rcx, 441
+    x64.callDirect opaque
+    x64.storeSlotReg slot430, r8
+    x64.movRegImm32 rcx, 442
+    x64.callDirect opaque
+    x64.storeSlotReg slot431, r8
+    x64.movRegImm32 rcx, 443
+    x64.callDirect opaque
+    x64.storeSlotReg slot432, r8
+    x64.movRegImm32 rcx, 444
+    x64.callDirect opaque
+    x64.storeSlotReg slot433, r8
+    x64.movRegImm32 rcx, 445
+    x64.callDirect opaque
+    x64.storeSlotReg slot434, r8
+    x64.movRegImm32 rcx, 446
+    x64.callDirect opaque
+    x64.storeSlotReg slot435, r8
+    x64.movRegImm32 rcx, 447
+    x64.callDirect opaque
+    x64.storeSlotReg slot436, r8
+    x64.movRegImm32 rcx, 448
+    x64.callDirect opaque
+    x64.storeSlotReg slot437, r8
+    x64.movRegImm32 rcx, 449
+    x64.callDirect opaque
+    x64.storeSlotReg slot438, r8
+    x64.movRegImm32 rcx, 450
+    x64.callDirect opaque
+    x64.storeSlotReg slot439, r8
+    x64.movRegImm32 rcx, 451
+    x64.callDirect opaque
+    x64.storeSlotReg slot440, r8
+    x64.movRegImm32 rcx, 452
+    x64.callDirect opaque
+    x64.storeSlotReg slot441, r8
+    x64.movRegImm32 rcx, 453
+    x64.callDirect opaque
+    x64.storeSlotReg slot442, r8
+    x64.movRegImm32 rcx, 454
+    x64.callDirect opaque
+    x64.storeSlotReg slot443, r8
+    x64.movRegImm32 rcx, 455
+    x64.callDirect opaque
+    x64.storeSlotReg slot444, r8
+    x64.movRegImm32 rcx, 456
+    x64.callDirect opaque
+    x64.storeSlotReg slot445, r8
+    x64.movRegImm32 rcx, 457
+    x64.callDirect opaque
+    x64.storeSlotReg slot446, r8
+    x64.movRegImm32 rcx, 458
+    x64.callDirect opaque
+    x64.storeSlotReg slot447, r8
+    x64.movRegImm32 rcx, 459
+    x64.callDirect opaque
+    x64.storeSlotReg slot448, r8
+    x64.movRegImm32 rcx, 460
+    x64.callDirect opaque
+    x64.storeSlotReg slot449, r8
+    x64.movRegImm32 rcx, 461
+    x64.callDirect opaque
+    x64.storeSlotReg slot450, r8
+    x64.movRegImm32 rcx, 462
+    x64.callDirect opaque
+    x64.storeSlotReg slot451, r8
+    x64.movRegImm32 rcx, 463
+    x64.callDirect opaque
+    x64.storeSlotReg slot452, r8
+    x64.movRegImm32 rcx, 464
+    x64.callDirect opaque
+    x64.storeSlotReg slot453, r8
+    x64.movRegImm32 rcx, 465
+    x64.callDirect opaque
+    x64.storeSlotReg slot454, r8
+    x64.movRegImm32 rcx, 466
+    x64.callDirect opaque
+    x64.storeSlotReg slot455, r8
+    x64.movRegImm32 rcx, 467
+    x64.callDirect opaque
+    x64.storeSlotReg slot456, r8
+    x64.movRegImm32 rcx, 468
+    x64.callDirect opaque
+    x64.storeSlotReg slot457, r8
+    x64.movRegImm32 rcx, 469
+    x64.callDirect opaque
+    x64.storeSlotReg slot458, r8
+    x64.movRegImm32 rcx, 470
+    x64.callDirect opaque
+    x64.storeSlotReg slot459, r8
+    x64.movRegImm32 rcx, 471
+    x64.callDirect opaque
+    x64.storeSlotReg slot460, r8
+    x64.movRegImm32 rcx, 472
+    x64.callDirect opaque
+    x64.storeSlotReg slot461, r8
+    x64.movRegImm32 rcx, 473
+    x64.callDirect opaque
+    x64.storeSlotReg slot462, r8
+    x64.movRegImm32 rcx, 474
+    x64.callDirect opaque
+    x64.storeSlotReg slot463, r8
+    x64.movRegImm32 rcx, 475
+    x64.callDirect opaque
+    x64.storeSlotReg slot464, r8
+    x64.movRegImm32 rcx, 476
+    x64.callDirect opaque
+    x64.storeSlotReg slot465, r8
+    x64.movRegImm32 rcx, 477
+    x64.callDirect opaque
+    x64.storeSlotReg slot466, r8
+    x64.movRegImm32 rcx, 478
+    x64.callDirect opaque
+    x64.storeSlotReg slot467, r8
+    x64.movRegImm32 rcx, 479
+    x64.callDirect opaque
+    x64.storeSlotReg slot468, r8
+    x64.movRegImm32 rcx, 480
+    x64.callDirect opaque
+    x64.storeSlotReg slot469, r8
+    x64.movRegImm32 rcx, 481
+    x64.callDirect opaque
+    x64.storeSlotReg slot470, r8
+    x64.movRegImm32 rcx, 482
+    x64.callDirect opaque
+    x64.storeSlotReg slot471, r8
+    x64.movRegImm32 rcx, 483
+    x64.callDirect opaque
+    x64.storeSlotReg slot472, r8
+    x64.movRegImm32 rcx, 484
+    x64.callDirect opaque
+    x64.storeSlotReg slot473, r8
+    x64.movRegImm32 rcx, 485
+    x64.callDirect opaque
+    x64.storeSlotReg slot474, r8
+    x64.movRegImm32 rcx, 486
+    x64.callDirect opaque
+    x64.storeSlotReg slot475, r8
+    x64.movRegImm32 rcx, 487
+    x64.callDirect opaque
+    x64.storeSlotReg slot476, r8
+    x64.movRegImm32 rcx, 488
+    x64.callDirect opaque
+    x64.storeSlotReg slot477, r8
+    x64.movRegImm32 rcx, 489
+    x64.callDirect opaque
+    x64.storeSlotReg slot478, r8
+    x64.movRegImm32 rcx, 490
+    x64.callDirect opaque
+    x64.storeSlotReg slot479, r8
+    x64.movRegImm32 rcx, 491
+    x64.callDirect opaque
+    x64.storeSlotReg slot480, r8
+    x64.movRegImm32 rcx, 492
+    x64.callDirect opaque
+    x64.storeSlotReg slot481, r8
+    x64.movRegImm32 rcx, 493
+    x64.callDirect opaque
+    x64.storeSlotReg slot482, r8
+    x64.movRegImm32 rcx, 494
+    x64.callDirect opaque
+    x64.storeSlotReg slot483, r8
+    x64.movRegImm32 rcx, 495
+    x64.callDirect opaque
+    x64.storeSlotReg slot484, r8
+    x64.movRegImm32 rcx, 496
+    x64.callDirect opaque
+    x64.storeSlotReg slot485, r8
+    x64.movRegImm32 rcx, 497
+    x64.callDirect opaque
+    x64.storeSlotReg slot486, r8
+    x64.movRegImm32 rcx, 498
+    x64.callDirect opaque
+    x64.storeSlotReg slot487, r8
+    x64.movRegImm32 rcx, 499
+    x64.callDirect opaque
+    x64.storeSlotReg slot488, r8
+    x64.movRegImm32 rcx, 500
+    x64.callDirect opaque
+    x64.storeSlotReg slot489, r8
+    x64.movRegImm32 rcx, 501
+    x64.callDirect opaque
+    x64.storeSlotReg slot490, r8
+    x64.movRegImm32 rcx, 502
+    x64.callDirect opaque
+    x64.storeSlotReg slot491, r8
+    x64.movRegImm32 rcx, 503
+    x64.callDirect opaque
+    x64.storeSlotReg slot492, r8
+    x64.movRegImm32 rcx, 504
+    x64.callDirect opaque
+    x64.storeSlotReg slot493, r8
+    x64.movRegImm32 rcx, 505
+    x64.callDirect opaque
+    x64.storeSlotReg slot494, r8
+    x64.movRegImm32 rcx, 506
+    x64.callDirect opaque
+    x64.storeSlotReg slot495, r8
+    x64.movRegImm32 rcx, 507
+    x64.callDirect opaque
+    x64.storeSlotReg slot496, r8
+    x64.movRegImm32 rcx, 508
+    x64.callDirect opaque
+    x64.storeSlotReg slot497, r8
+    x64.movRegImm32 rcx, 509
+    x64.callDirect opaque
+    x64.storeSlotReg slot498, r8
+    x64.movRegImm32 rcx, 510
+    x64.callDirect opaque
+    x64.storeSlotReg slot499, r8
+    x64.movRegImm32 rcx, 511
+    x64.callDirect opaque
+    x64.storeSlotReg slot500, r8
+    x64.movRegImm32 rcx, 512
+    x64.callDirect opaque
+    x64.storeSlotReg slot501, r8
+    x64.movRegImm32 rcx, 513
+    x64.callDirect opaque
+    x64.storeSlotReg slot502, r8
+    x64.movRegImm32 rcx, 514
+    x64.callDirect opaque
+    x64.storeSlotReg slot503, r8
+    x64.movRegImm32 rcx, 515
+    x64.callDirect opaque
+    x64.storeSlotReg slot504, r8
+    x64.movRegImm32 rcx, 516
+    x64.callDirect opaque
+    x64.storeSlotReg slot505, r8
+    x64.movRegImm32 rcx, 517
+    x64.callDirect opaque
+    x64.storeSlotReg slot506, r8
+    x64.movRegImm32 rcx, 518
+    x64.callDirect opaque
+    x64.storeSlotReg slot507, r8
+    x64.movRegImm32 rcx, 519
+    x64.callDirect opaque
+    x64.storeSlotReg slot508, r8
+    x64.movRegImm32 rcx, 520
+    x64.callDirect opaque
+    x64.storeSlotReg slot509, r8
+    x64.movRegImm32 rcx, 521
+    x64.callDirect opaque
+    x64.storeSlotReg slot510, r8
+    x64.movRegImm32 rcx, 522
+    x64.callDirect opaque
+    x64.storeSlotReg slot511, r8
+    x64.movRegImm32 rcx, 523
+    x64.callDirect opaque
+    x64.storeSlotReg slot512, r8
+    x64.movRegImm32 rcx, 524
+    x64.callDirect opaque
+    x64.storeSlotReg slot513, r8
+    x64.movRegImm32 rcx, 525
+    x64.callDirect opaque
+    x64.storeSlotReg slot514, r8
+    x64.movRegImm32 rcx, 526
+    x64.callDirect opaque
+    x64.storeSlotReg slot515, r8
+    x64.movRegImm32 rcx, 527
+    x64.callDirect opaque
+    x64.storeSlotReg slot516, r8
+    x64.movRegImm32 rcx, 528
+    x64.callDirect opaque
+    x64.storeSlotReg slot517, r8
+    x64.movRegImm32 rcx, 529
+    x64.callDirect opaque
+    x64.storeSlotReg slot518, r8
+    x64.movRegImm32 rcx, 530
+    x64.callDirect opaque
+    x64.storeSlotReg slot519, r8
+    x64.movRegImm32 rcx, 531
+    x64.callDirect opaque
+    x64.storeSlotReg slot520, r8
+    x64.movRegImm32 rcx, 532
+    x64.callDirect opaque
+    x64.storeSlotReg slot521, r8
+    x64.movRegImm32 rcx, 533
+    x64.callDirect opaque
+    x64.storeSlotReg slot522, r8
+    x64.movRegImm32 rcx, 534
+    x64.callDirect opaque
+    x64.storeSlotReg slot523, r8
+    x64.movRegImm32 rcx, 535
+    x64.callDirect opaque
+    x64.storeSlotReg slot524, r8
+    x64.movRegImm32 rcx, 536
+    x64.callDirect opaque
+    x64.storeSlotReg slot525, r8
+    x64.movRegImm32 rcx, 537
+    x64.callDirect opaque
+    x64.storeSlotReg slot526, r8
+    x64.movRegImm32 rcx, 538
+    x64.callDirect opaque
+    x64.storeSlotReg slot527, r8
+    x64.movRegImm32 rcx, 539
+    x64.callDirect opaque
+    x64.storeSlotReg slot528, r8
+    x64.movRegImm32 rcx, 540
+    x64.callDirect opaque
+    x64.storeSlotReg slot529, r8
+    x64.movRegImm32 rcx, 541
+    x64.callDirect opaque
+    x64.storeSlotReg slot530, r8
+    x64.movRegImm32 rcx, 542
+    x64.callDirect opaque
+    x64.storeSlotReg slot531, r8
+    x64.movRegImm32 rcx, 543
+    x64.callDirect opaque
+    x64.storeSlotReg slot532, r8
+    x64.movRegImm32 rcx, 544
+    x64.callDirect opaque
+    x64.storeSlotReg slot533, r8
+    x64.movRegImm32 rcx, 545
+    x64.callDirect opaque
+    x64.storeSlotReg slot534, r8
+    x64.movRegImm32 rcx, 546
+    x64.callDirect opaque
+    x64.storeSlotReg slot535, r8
+    x64.movRegImm32 rcx, 547
+    x64.callDirect opaque
+    x64.storeSlotReg slot536, r8
+    x64.movRegImm32 rcx, 548
+    x64.callDirect opaque
+    x64.storeSlotReg slot537, r8
+    x64.movRegImm32 rcx, 549
+    x64.callDirect opaque
+    x64.storeSlotReg slot538, r8
+    x64.movRegImm32 rcx, 550
+    x64.callDirect opaque
+    x64.storeSlotReg slot539, r8
+    x64.movRegImm32 rcx, 551
+    x64.callDirect opaque
+    x64.storeSlotReg slot540, r8
+    x64.movRegImm32 rcx, 552
+    x64.callDirect opaque
+    x64.storeSlotReg slot541, r8
+    x64.movRegImm32 rcx, 553
+    x64.callDirect opaque
+    x64.storeSlotReg slot542, r8
+    x64.movRegImm32 rcx, 554
+    x64.callDirect opaque
+    x64.storeSlotReg slot543, r8
+    x64.movRegImm32 rcx, 555
+    x64.callDirect opaque
+    x64.storeSlotReg slot544, r8
+    x64.movRegImm32 rcx, 556
+    x64.callDirect opaque
+    x64.storeSlotReg slot545, r8
+    x64.movRegImm32 rcx, 557
+    x64.callDirect opaque
+    x64.storeSlotReg slot546, r8
+    x64.movRegImm32 rcx, 558
+    x64.callDirect opaque
+    x64.storeSlotReg slot547, r8
+    x64.movRegImm32 rcx, 559
+    x64.callDirect opaque
+    x64.storeSlotReg slot548, r8
+    x64.movRegImm32 rcx, 560
+    x64.callDirect opaque
+    x64.storeSlotReg slot549, r8
+    x64.movRegImm32 rcx, 561
+    x64.callDirect opaque
+    x64.storeSlotReg slot550, r8
+    x64.movRegImm32 rcx, 562
+    x64.callDirect opaque
+    x64.storeSlotReg slot551, r8
+    x64.movRegImm32 rcx, 563
+    x64.callDirect opaque
+    x64.storeSlotReg slot552, r8
+    x64.movRegImm32 rcx, 564
+    x64.callDirect opaque
+    x64.storeSlotReg slot553, r8
+    x64.movRegImm32 rcx, 565
+    x64.callDirect opaque
+    x64.storeSlotReg slot554, r8
+    x64.movRegImm32 rcx, 566
+    x64.callDirect opaque
+    x64.storeSlotReg slot555, r8
+    x64.movRegImm32 rcx, 567
+    x64.callDirect opaque
+    x64.storeSlotReg slot556, r8
+    x64.movRegImm32 rcx, 568
+    x64.callDirect opaque
+    x64.storeSlotReg slot557, r8
+    x64.movRegImm32 rcx, 569
+    x64.callDirect opaque
+    x64.storeSlotReg slot558, r8
+    x64.movRegImm32 rcx, 570
+    x64.callDirect opaque
+    x64.storeSlotReg slot559, r8
+    x64.movRegImm32 rcx, 571
+    x64.callDirect opaque
+    x64.storeSlotReg slot560, r8
+    x64.movRegImm32 rcx, 572
+    x64.callDirect opaque
+    x64.storeSlotReg slot561, r8
+    x64.movRegImm32 rcx, 573
+    x64.callDirect opaque
+    x64.storeSlotReg slot562, r8
+    x64.movRegImm32 rcx, 574
+    x64.callDirect opaque
+    x64.storeSlotReg slot563, r8
+    x64.movRegImm32 rcx, 575
+    x64.callDirect opaque
+    x64.storeSlotReg slot564, r8
+    x64.movRegImm32 rcx, 576
+    x64.callDirect opaque
+    x64.storeSlotReg slot565, r8
+    x64.movRegImm32 rcx, 577
+    x64.callDirect opaque
+    x64.storeSlotReg slot566, r8
+    x64.movRegImm32 rcx, 578
+    x64.callDirect opaque
+    x64.storeSlotReg slot567, r8
+    x64.movRegImm32 rcx, 579
+    x64.callDirect opaque
+    x64.storeSlotReg slot568, r8
+    x64.movRegImm32 rcx, 580
+    x64.callDirect opaque
+    x64.storeSlotReg slot569, r8
+    x64.movRegImm32 rcx, 581
+    x64.callDirect opaque
+    x64.storeSlotReg slot570, r8
+    x64.movRegImm32 rcx, 582
+    x64.callDirect opaque
+    x64.storeSlotReg slot571, r8
+    x64.movRegImm32 rcx, 583
+    x64.callDirect opaque
+    x64.storeSlotReg slot572, r8
+    x64.movRegImm32 rcx, 584
+    x64.callDirect opaque
+    x64.storeSlotReg slot573, r8
+    x64.movRegImm32 rcx, 585
+    x64.callDirect opaque
+    x64.storeSlotReg slot574, r8
+    x64.movRegImm32 rcx, 586
+    x64.callDirect opaque
+    x64.storeSlotReg slot575, r8
+    x64.movRegImm32 rcx, 587
+    x64.callDirect opaque
+    x64.storeSlotReg slot576, r8
+    x64.movRegImm32 rcx, 588
+    x64.callDirect opaque
+    x64.storeSlotReg slot577, r8
+    x64.movRegImm32 rcx, 589
+    x64.callDirect opaque
+    x64.storeSlotReg slot578, r8
+    x64.movRegImm32 rcx, 590
+    x64.callDirect opaque
+    x64.storeSlotReg slot579, r8
+    x64.movRegImm32 rcx, 591
+    x64.callDirect opaque
+    x64.storeSlotReg slot580, r8
+    x64.movRegImm32 rcx, 592
+    x64.callDirect opaque
+    x64.storeSlotReg slot581, r8
+    x64.movRegImm32 rcx, 593
+    x64.callDirect opaque
+    x64.storeSlotReg slot582, r8
+    x64.movRegImm32 rcx, 594
+    x64.callDirect opaque
+    x64.storeSlotReg slot583, r8
+    x64.movRegImm32 rcx, 595
+    x64.callDirect opaque
+    x64.storeSlotReg slot584, r8
+    x64.movRegImm32 rcx, 596
+    x64.callDirect opaque
+    x64.storeSlotReg slot585, r8
+    x64.movRegImm32 rcx, 597
+    x64.callDirect opaque
+    x64.storeSlotReg slot586, r8
+    x64.movRegImm32 rcx, 598
+    x64.callDirect opaque
+    x64.storeSlotReg slot587, r8
+    x64.movRegImm32 rcx, 599
+    x64.callDirect opaque
+    x64.storeSlotReg slot588, r8
+    x64.movRegImm32 rcx, 600
+    x64.callDirect opaque
+    x64.storeSlotReg slot589, r8
+    x64.movRegImm32 rcx, 601
+    x64.callDirect opaque
+    x64.storeSlotReg slot590, r8
+    x64.movRegImm32 rcx, 602
+    x64.callDirect opaque
+    x64.storeSlotReg slot591, r8
+    x64.movRegImm32 rcx, 603
+    x64.callDirect opaque
+    x64.storeSlotReg slot592, r8
+    x64.movRegImm32 rcx, 604
+    x64.callDirect opaque
+    x64.storeSlotReg slot593, r8
+    x64.movRegImm32 rcx, 605
+    x64.callDirect opaque
+    x64.storeSlotReg slot594, r8
+    x64.movRegImm32 rcx, 606
+    x64.callDirect opaque
+    x64.storeSlotReg slot595, r8
+    x64.movRegImm32 rcx, 607
+    x64.callDirect opaque
+    x64.storeSlotReg slot596, r8
+    x64.movRegImm32 rcx, 608
+    x64.callDirect opaque
+    x64.storeSlotReg slot597, r8
+    x64.movRegImm32 rcx, 609
+    x64.callDirect opaque
+    x64.storeSlotReg slot598, r8
+    x64.movRegImm32 rcx, 610
+    x64.callDirect opaque
+    x64.storeSlotReg slot599, r8
+    x64.movRegImm32 rcx, 611
+    x64.callDirect opaque
+    x64.storeSlotReg slot600, r8
+    x64.movRegImm32 rcx, 612
+    x64.callDirect opaque
+    x64.storeSlotReg slot601, r8
+    x64.movRegImm32 rcx, 613
+    x64.callDirect opaque
+    x64.storeSlotReg slot602, r8
+    x64.movRegImm32 rcx, 614
+    x64.callDirect opaque
+    x64.storeSlotReg slot603, r8
+    x64.movRegImm32 rcx, 615
+    x64.callDirect opaque
+    x64.storeSlotReg slot604, r8
+    x64.movRegImm32 rcx, 616
+    x64.callDirect opaque
+    x64.storeSlotReg slot605, r8
+    x64.movRegImm32 rcx, 617
+    x64.callDirect opaque
+    x64.storeSlotReg slot606, r8
+    x64.movRegImm32 rcx, 618
+    x64.callDirect opaque
+    x64.storeSlotReg slot607, r8
+    x64.movRegImm32 rcx, 619
+    x64.callDirect opaque
+    x64.storeSlotReg slot608, r8
+    x64.movRegImm32 rcx, 620
+    x64.callDirect opaque
+    x64.storeSlotReg slot609, r8
+    x64.movRegImm32 rcx, 621
+    x64.callDirect opaque
+    x64.storeSlotReg slot610, r8
+    x64.movRegImm32 rcx, 622
+    x64.callDirect opaque
+    x64.storeSlotReg slot611, r8
+    x64.movRegImm32 rcx, 623
+    x64.callDirect opaque
+    x64.storeSlotReg slot612, r8
+    x64.movRegImm32 rcx, 624
+    x64.callDirect opaque
+    x64.storeSlotReg slot613, r8
+    x64.movRegImm32 rcx, 625
+    x64.callDirect opaque
+    x64.storeSlotReg slot614, r8
+    x64.movRegImm32 rcx, 626
+    x64.callDirect opaque
+    x64.storeSlotReg slot615, r8
+    x64.movRegImm32 rcx, 627
+    x64.callDirect opaque
+    x64.storeSlotReg slot616, r8
+    x64.movRegImm32 rcx, 628
+    x64.callDirect opaque
+    x64.storeSlotReg slot617, r8
+    x64.movRegImm32 rcx, 629
+    x64.callDirect opaque
+    x64.storeSlotReg slot618, r8
+    x64.movRegImm32 rcx, 630
+    x64.callDirect opaque
+    x64.storeSlotReg slot619, r8
+    x64.movRegImm32 rcx, 631
+    x64.callDirect opaque
+    x64.storeSlotReg slot620, r8
+    x64.movRegImm32 rcx, 632
+    x64.callDirect opaque
+    x64.storeSlotReg slot621, r8
+    x64.movRegImm32 rcx, 633
+    x64.callDirect opaque
+    x64.storeSlotReg slot622, r8
+    x64.movRegImm32 rcx, 634
+    x64.callDirect opaque
+    x64.storeSlotReg slot623, r8
+    x64.movRegImm32 rcx, 635
+    x64.callDirect opaque
+    x64.storeSlotReg slot624, r8
+    x64.movRegImm32 rcx, 636
+    x64.callDirect opaque
+    x64.storeSlotReg slot625, r8
+    x64.movRegImm32 rcx, 637
+    x64.callDirect opaque
+    x64.storeSlotReg slot626, r8
+    x64.movRegImm32 rcx, 638
+    x64.callDirect opaque
+    x64.storeSlotReg slot627, r8
+    x64.movRegImm32 rcx, 639
+    x64.callDirect opaque
+    x64.storeSlotReg slot628, r8
+    x64.movRegImm32 rcx, 640
+    x64.callDirect opaque
+    x64.storeSlotReg slot629, r8
+    x64.movRegImm32 rcx, 641
+    x64.callDirect opaque
+    x64.storeSlotReg slot630, r8
+    x64.movRegImm32 rcx, 642
+    x64.callDirect opaque
+    x64.storeSlotReg slot631, r8
+    x64.movRegImm32 rcx, 643
+    x64.callDirect opaque
+    x64.storeSlotReg slot632, r8
+    x64.movRegImm32 rcx, 644
+    x64.callDirect opaque
+    x64.storeSlotReg slot633, r8
+    x64.movRegImm32 rcx, 645
+    x64.callDirect opaque
+    x64.storeSlotReg slot634, r8
+    x64.movRegImm32 rcx, 646
+    x64.callDirect opaque
+    x64.storeSlotReg slot635, r8
+    x64.movRegImm32 rcx, 647
+    x64.callDirect opaque
+    x64.storeSlotReg slot636, r8
+    x64.movRegImm32 rcx, 648
+    x64.callDirect opaque
+    x64.storeSlotReg slot637, r8
+    x64.movRegImm32 rcx, 649
+    x64.callDirect opaque
+    x64.storeSlotReg slot638, r8
+    x64.movRegImm32 rcx, 650
+    x64.callDirect opaque
+    x64.storeSlotReg slot639, r8
+    x64.movRegImm32 rcx, 651
+    x64.callDirect opaque
+    x64.storeSlotReg slot640, r8
+    x64.movRegImm32 rcx, 652
+    x64.callDirect opaque
+    x64.storeSlotReg slot641, r8
+    x64.movRegImm32 rcx, 653
+    x64.callDirect opaque
+    x64.storeSlotReg slot642, r8
+    x64.movRegImm32 rcx, 654
+    x64.callDirect opaque
+    x64.storeSlotReg slot643, r8
+    x64.movRegImm32 rcx, 655
+    x64.callDirect opaque
+    x64.storeSlotReg slot644, r8
+    x64.movRegImm32 rcx, 656
+    x64.callDirect opaque
+    x64.storeSlotReg slot645, r8
+    x64.movRegImm32 rcx, 657
+    x64.callDirect opaque
+    x64.storeSlotReg slot646, r8
+    x64.movRegImm32 rcx, 658
+    x64.callDirect opaque
+    x64.storeSlotReg slot647, r8
+    x64.movRegImm32 rcx, 659
+    x64.callDirect opaque
+    x64.storeSlotReg slot648, r8
+    x64.movRegImm32 rcx, 660
+    x64.callDirect opaque
+    x64.storeSlotReg slot649, r8
+    x64.movRegImm32 rcx, 661
+    x64.callDirect opaque
+    x64.storeSlotReg slot650, r8
+    x64.movRegImm32 rcx, 662
+    x64.callDirect opaque
+    x64.storeSlotReg slot651, r8
+    x64.movRegImm32 rcx, 663
+    x64.callDirect opaque
+    x64.storeSlotReg slot652, r8
+    x64.movRegImm32 rcx, 664
+    x64.callDirect opaque
+    x64.storeSlotReg slot653, r8
+    x64.movRegImm32 rcx, 665
+    x64.callDirect opaque
+    x64.storeSlotReg slot654, r8
+    x64.movRegImm32 rcx, 666
+    x64.callDirect opaque
+    x64.storeSlotReg slot655, r8
+    x64.movRegImm32 rcx, 667
+    x64.callDirect opaque
+    x64.storeSlotReg slot656, r8
+    x64.movRegImm32 rcx, 668
+    x64.callDirect opaque
+    x64.storeSlotReg slot657, r8
+    x64.movRegImm32 rcx, 669
+    x64.callDirect opaque
+    x64.storeSlotReg slot658, r8
+    x64.movRegImm32 rcx, 670
+    x64.callDirect opaque
+    x64.storeSlotReg slot659, r8
+    x64.movRegImm32 rcx, 671
+    x64.callDirect opaque
+    x64.storeSlotReg slot660, r8
+    x64.movRegImm32 rcx, 672
+    x64.callDirect opaque
+    x64.storeSlotReg slot661, r8
+    x64.movRegImm32 rcx, 673
+    x64.callDirect opaque
+    x64.storeSlotReg slot662, r8
+    x64.movRegImm32 rcx, 674
+    x64.callDirect opaque
+    x64.storeSlotReg slot663, r8
+    x64.movRegImm32 rcx, 675
+    x64.callDirect opaque
+    x64.storeSlotReg slot664, r8
+    x64.movRegImm32 rcx, 676
+    x64.callDirect opaque
+    x64.storeSlotReg slot665, r8
+    x64.movRegImm32 rcx, 677
+    x64.callDirect opaque
+    x64.storeSlotReg slot666, r8
+    x64.movRegImm32 rcx, 678
+    x64.callDirect opaque
+    x64.storeSlotReg slot667, r8
+    x64.movRegImm32 rcx, 679
+    x64.callDirect opaque
+    x64.storeSlotReg slot668, r8
+    x64.movRegImm32 rcx, 680
+    x64.callDirect opaque
+    x64.storeSlotReg slot669, r8
+    x64.movRegImm32 rcx, 681
+    x64.callDirect opaque
+    x64.storeSlotReg slot670, r8
+    x64.movRegImm32 rcx, 682
+    x64.callDirect opaque
+    x64.storeSlotReg slot671, r8
+    x64.movRegImm32 rcx, 683
+    x64.callDirect opaque
+    x64.storeSlotReg slot672, r8
+    x64.movRegImm32 rcx, 684
+    x64.callDirect opaque
+    x64.storeSlotReg slot673, r8
+    x64.movRegImm32 rcx, 685
+    x64.callDirect opaque
+    x64.storeSlotReg slot674, r8
+    x64.movRegImm32 rcx, 686
+    x64.callDirect opaque
+    x64.storeSlotReg slot675, r8
+    x64.movRegImm32 rcx, 687
+    x64.callDirect opaque
+    x64.storeSlotReg slot676, r8
+    x64.movRegImm32 rcx, 688
+    x64.callDirect opaque
+    x64.storeSlotReg slot677, r8
+    x64.movRegImm32 rcx, 689
+    x64.callDirect opaque
+    x64.storeSlotReg slot678, r8
+    x64.movRegImm32 rcx, 690
+    x64.callDirect opaque
+    x64.storeSlotReg slot679, r8
+    x64.movRegImm32 rcx, 691
+    x64.callDirect opaque
+    x64.storeSlotReg slot680, r8
+    x64.movRegImm32 rcx, 692
+    x64.callDirect opaque
+    x64.storeSlotReg slot681, r8
+    x64.movRegImm32 rcx, 693
+    x64.callDirect opaque
+    x64.storeSlotReg slot682, r8
+    x64.movRegImm32 rcx, 694
+    x64.callDirect opaque
+    x64.storeSlotReg slot683, r8
+    x64.movRegImm32 rcx, 695
+    x64.callDirect opaque
+    x64.storeSlotReg slot684, r8
+    x64.movRegImm32 rcx, 696
+    x64.callDirect opaque
+    x64.storeSlotReg slot685, r8
+    x64.movRegImm32 rcx, 697
+    x64.callDirect opaque
+    x64.storeSlotReg slot686, r8
+    x64.movRegImm32 rcx, 698
+    x64.callDirect opaque
+    x64.storeSlotReg slot687, r8
+    x64.movRegImm32 rcx, 699
+    x64.callDirect opaque
+    x64.storeSlotReg slot688, r8
+    x64.movRegImm32 rcx, 700
+    x64.callDirect opaque
+    x64.storeSlotReg slot689, r8
+    x64.movRegImm32 rcx, 701
+    x64.callDirect opaque
+    x64.storeSlotReg slot690, r8
+    x64.movRegImm32 rcx, 702
+    x64.callDirect opaque
+    x64.storeSlotReg slot691, r8
+    x64.movRegImm32 rcx, 703
+    x64.callDirect opaque
+    x64.storeSlotReg slot692, r8
+    x64.movRegImm32 rcx, 704
+    x64.callDirect opaque
+    x64.storeSlotReg slot693, r8
+    x64.movRegImm32 rcx, 705
+    x64.callDirect opaque
+    x64.storeSlotReg slot694, r8
+    x64.movRegImm32 rcx, 706
+    x64.callDirect opaque
+    x64.storeSlotReg slot695, r8
+    x64.movRegImm32 rcx, 707
+    x64.callDirect opaque
+    x64.storeSlotReg slot696, r8
+    x64.movRegImm32 rcx, 708
+    x64.callDirect opaque
+    x64.storeSlotReg slot697, r8
+    x64.movRegImm32 rcx, 709
+    x64.callDirect opaque
+    x64.storeSlotReg slot698, r8
+    x64.movRegImm32 rcx, 710
+    x64.callDirect opaque
+    x64.storeSlotReg slot699, r8
+    x64.movRegImm32 rcx, 711
+    x64.callDirect opaque
+    x64.storeSlotReg slot700, r8
+    x64.movRegImm32 rcx, 712
+    x64.callDirect opaque
+    x64.storeSlotReg slot701, r8
+    x64.movRegImm32 rcx, 713
+    x64.callDirect opaque
+    x64.storeSlotReg slot702, r8
+    x64.movRegImm32 rcx, 714
+    x64.callDirect opaque
+    x64.storeSlotReg slot703, r8
+    x64.movRegImm32 rcx, 715
+    x64.callDirect opaque
+    x64.storeSlotReg slot704, r8
+    x64.movRegImm32 rcx, 716
+    x64.callDirect opaque
+    x64.storeSlotReg slot705, r8
+    x64.movRegImm32 rcx, 717
+    x64.callDirect opaque
+    x64.storeSlotReg slot706, r8
+    x64.movRegImm32 rcx, 718
+    x64.callDirect opaque
+    x64.storeSlotReg slot707, r8
+    x64.movRegImm32 rcx, 719
+    x64.callDirect opaque
+    x64.storeSlotReg slot708, r8
+    x64.movRegImm32 rcx, 720
+    x64.callDirect opaque
+    x64.storeSlotReg slot709, r8
+    x64.movRegImm32 rcx, 721
+    x64.callDirect opaque
+    x64.storeSlotReg slot710, r8
+    x64.movRegImm32 rcx, 722
+    x64.callDirect opaque
+    x64.storeSlotReg slot711, r8
+    x64.movRegImm32 rcx, 723
+    x64.callDirect opaque
+    x64.storeSlotReg slot712, r8
+    x64.movRegImm32 rcx, 724
+    x64.callDirect opaque
+    x64.storeSlotReg slot713, r8
+    x64.movRegImm32 rcx, 725
+    x64.callDirect opaque
+    x64.storeSlotReg slot714, r8
+    x64.movRegImm32 rcx, 726
+    x64.callDirect opaque
+    x64.storeSlotReg slot715, r8
+    x64.movRegImm32 rcx, 727
+    x64.callDirect opaque
+    x64.storeSlotReg slot716, r8
+    x64.movRegImm32 rcx, 728
+    x64.callDirect opaque
+    x64.storeSlotReg slot717, r8
+    x64.movRegImm32 rcx, 729
+    x64.callDirect opaque
+    x64.storeSlotReg slot718, r8
+    x64.movRegImm32 rcx, 730
+    x64.callDirect opaque
+    x64.storeSlotReg slot719, r8
+    x64.movRegImm32 rcx, 731
+    x64.callDirect opaque
+    x64.storeSlotReg slot720, r8
+    x64.movRegImm32 rcx, 732
+    x64.callDirect opaque
+    x64.storeSlotReg slot721, r8
+    x64.movRegImm32 rcx, 733
+    x64.callDirect opaque
+    x64.storeSlotReg slot722, r8
+    x64.movRegImm32 rcx, 734
+    x64.callDirect opaque
+    x64.storeSlotReg slot723, r8
+    x64.movRegImm32 rcx, 735
+    x64.callDirect opaque
+    x64.storeSlotReg slot724, r8
+    x64.movRegImm32 rcx, 736
+    x64.callDirect opaque
+    x64.storeSlotReg slot725, r8
+    x64.movRegImm32 rcx, 737
+    x64.callDirect opaque
+    x64.storeSlotReg slot726, r8
+    x64.movRegImm32 rcx, 738
+    x64.callDirect opaque
+    x64.storeSlotReg slot727, r8
+    x64.movRegImm32 rcx, 739
+    x64.callDirect opaque
+    x64.storeSlotReg slot728, r8
+    x64.movRegImm32 rcx, 740
+    x64.callDirect opaque
+    x64.storeSlotReg slot729, r8
+    x64.movRegImm32 rcx, 741
+    x64.callDirect opaque
+    x64.storeSlotReg slot730, r8
+    x64.movRegImm32 rcx, 742
+    x64.callDirect opaque
+    x64.storeSlotReg slot731, r8
+    x64.movRegImm32 rcx, 743
+    x64.callDirect opaque
+    x64.storeSlotReg slot732, r8
+    x64.movRegImm32 rcx, 744
+    x64.callDirect opaque
+    x64.storeSlotReg slot733, r8
+    x64.movRegImm32 rcx, 745
+    x64.callDirect opaque
+    x64.storeSlotReg slot734, r8
+    x64.movRegImm32 rcx, 746
+    x64.callDirect opaque
+    x64.storeSlotReg slot735, r8
+    x64.movRegImm32 rcx, 747
+    x64.callDirect opaque
+    x64.storeSlotReg slot736, r8
+    x64.movRegImm32 rcx, 748
+    x64.callDirect opaque
+    x64.storeSlotReg slot737, r8
+    x64.movRegImm32 rcx, 749
+    x64.callDirect opaque
+    x64.storeSlotReg slot738, r8
+    x64.movRegImm32 rcx, 750
+    x64.callDirect opaque
+    x64.storeSlotReg slot739, r8
+    x64.movRegImm32 rcx, 751
+    x64.callDirect opaque
+    x64.storeSlotReg slot740, r8
+    x64.movRegImm32 rcx, 752
+    x64.callDirect opaque
+    x64.storeSlotReg slot741, r8
+    x64.movRegImm32 rcx, 753
+    x64.callDirect opaque
+    x64.storeSlotReg slot742, r8
+    x64.movRegImm32 rcx, 754
+    x64.callDirect opaque
+    x64.storeSlotReg slot743, r8
+    x64.movRegImm32 rcx, 755
+    x64.callDirect opaque
+    x64.storeSlotReg slot744, r8
+    x64.movRegImm32 rcx, 756
+    x64.callDirect opaque
+    x64.storeSlotReg slot745, r8
+    x64.movRegImm32 rcx, 757
+    x64.callDirect opaque
+    x64.storeSlotReg slot746, r8
+    x64.movRegImm32 rcx, 758
+    x64.callDirect opaque
+    x64.storeSlotReg slot747, r8
+    x64.movRegImm32 rcx, 759
+    x64.callDirect opaque
+    x64.storeSlotReg slot748, r8
+    x64.movRegImm32 rcx, 760
+    x64.callDirect opaque
+    x64.storeSlotReg slot749, r8
+    x64.movRegImm32 rcx, 761
+    x64.callDirect opaque
+    x64.storeSlotReg slot750, r8
+    x64.movRegImm32 rcx, 762
+    x64.callDirect opaque
+    x64.storeSlotReg slot751, r8
+    x64.movRegImm32 rcx, 763
+    x64.callDirect opaque
+    x64.storeSlotReg slot752, r8
+    x64.movRegImm32 rcx, 764
+    x64.callDirect opaque
+    x64.storeSlotReg slot753, r8
+    x64.movRegImm32 rcx, 765
+    x64.callDirect opaque
+    x64.storeSlotReg slot754, r8
+    x64.movRegImm32 rcx, 766
+    x64.callDirect opaque
+    x64.storeSlotReg slot755, r8
+    x64.movRegImm32 rcx, 767
+    x64.callDirect opaque
+    x64.storeSlotReg slot756, r8
+    x64.movRegImm32 rcx, 768
+    x64.callDirect opaque
+    x64.storeSlotReg slot757, r8
+    x64.movRegImm32 rcx, 769
+    x64.callDirect opaque
+    x64.storeSlotReg slot758, r8
+    x64.movRegImm32 rcx, 770
+    x64.callDirect opaque
+    x64.storeSlotReg slot759, r8
+    x64.movRegImm32 rcx, 771
+    x64.callDirect opaque
+    x64.storeSlotReg slot760, r8
+    x64.movRegImm32 rcx, 772
+    x64.callDirect opaque
+    x64.storeSlotReg slot761, r8
+    x64.movRegImm32 rcx, 773
+    x64.callDirect opaque
+    x64.storeSlotReg slot762, r8
+    x64.movRegImm32 rcx, 774
+    x64.callDirect opaque
+    x64.storeSlotReg slot763, r8
+    x64.movRegImm32 rcx, 775
+    x64.callDirect opaque
+    x64.storeSlotReg slot764, r8
+    x64.movRegImm32 rcx, 776
+    x64.callDirect opaque
+    x64.storeSlotReg slot765, r8
+    x64.movRegImm32 rcx, 777
+    x64.callDirect opaque
+    x64.storeSlotReg slot766, r8
+    x64.movRegImm32 rcx, 778
+    x64.callDirect opaque
+    x64.storeSlotReg slot767, r8
+    x64.movRegImm32 rcx, 779
+    x64.callDirect opaque
+    x64.storeSlotReg slot768, r8
+    x64.movRegImm32 rcx, 780
+    x64.callDirect opaque
+    x64.storeSlotReg slot769, r8
+    x64.movRegImm32 rcx, 781
+    x64.callDirect opaque
+    x64.storeSlotReg slot770, r8
+    x64.movRegImm32 rcx, 782
+    x64.callDirect opaque
+    x64.storeSlotReg slot771, r8
+    x64.movRegImm32 rcx, 783
+    x64.callDirect opaque
+    x64.storeSlotReg slot772, r8
+    x64.movRegImm32 rcx, 784
+    x64.callDirect opaque
+    x64.storeSlotReg slot773, r8
+    x64.movRegImm32 rcx, 785
+    x64.callDirect opaque
+    x64.storeSlotReg slot774, r8
+    x64.movRegImm32 rcx, 786
+    x64.callDirect opaque
+    x64.storeSlotReg slot775, r8
+    x64.movRegImm32 rcx, 787
+    x64.callDirect opaque
+    x64.storeSlotReg slot776, r8
+    x64.movRegImm32 rcx, 788
+    x64.callDirect opaque
+    x64.storeSlotReg slot777, r8
+    x64.movRegImm32 rcx, 789
+    x64.callDirect opaque
+    x64.storeSlotReg slot778, r8
+    x64.movRegImm32 rcx, 790
+    x64.callDirect opaque
+    x64.storeSlotReg slot779, r8
+    x64.movRegImm32 rcx, 791
+    x64.callDirect opaque
+    x64.storeSlotReg slot780, r8
+    x64.movRegImm32 rcx, 792
+    x64.callDirect opaque
+    x64.storeSlotReg slot781, r8
+    x64.movRegImm32 rcx, 793
+    x64.callDirect opaque
+    x64.storeSlotReg slot782, r8
+    x64.movRegImm32 rcx, 794
+    x64.callDirect opaque
+    x64.storeSlotReg slot783, r8
+    x64.movRegImm32 rcx, 795
+    x64.callDirect opaque
+    x64.storeSlotReg slot784, r8
+    x64.movRegImm32 rcx, 796
+    x64.callDirect opaque
+    x64.storeSlotReg slot785, r8
+    x64.movRegImm32 rcx, 797
+    x64.callDirect opaque
+    x64.storeSlotReg slot786, r8
+    x64.movRegImm32 rcx, 798
+    x64.callDirect opaque
+    x64.storeSlotReg slot787, r8
+    x64.movRegImm32 rcx, 799
+    x64.callDirect opaque
+    x64.leaRegRegReg rax, rbx, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot795
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot794
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot793
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot792
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot791
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot790
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot789
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot788
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot4
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot13
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot14
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot16
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot17
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot18
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot19
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot20
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot21
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot22
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot23
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot24
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot25
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot26
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot27
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot28
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot29
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot30
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot31
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot32
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot33
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot34
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot35
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot36
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot37
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot38
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot39
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot40
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot41
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot42
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot43
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot44
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot45
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot46
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot47
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot48
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot49
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot50
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot51
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot52
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot53
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot54
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot55
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot56
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot57
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot58
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot59
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot60
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot61
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot62
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot63
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot64
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot65
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot66
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot67
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot68
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot69
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot70
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot71
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot72
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot73
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot74
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot75
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot76
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot77
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot78
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot79
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot80
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot81
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot82
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot83
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot84
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot85
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot86
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot87
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot88
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot89
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot90
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot91
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot92
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot93
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot94
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot95
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot96
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot97
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot98
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot99
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot100
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot101
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot102
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot103
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot104
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot105
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot106
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot107
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot108
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot109
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot110
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot111
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot112
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot113
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot114
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot115
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot116
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot117
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot118
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot119
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot120
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot121
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot122
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot123
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot124
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot125
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot126
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot127
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot128
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot129
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot130
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot131
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot132
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot133
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot134
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot135
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot136
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot137
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot138
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot139
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot140
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot141
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot142
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot143
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot144
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot145
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot146
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot147
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot148
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot149
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot150
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot151
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot152
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot153
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot154
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot155
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot156
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot157
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot158
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot159
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot160
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot161
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot162
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot163
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot164
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot165
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot166
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot167
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot168
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot169
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot170
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot171
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot172
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot173
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot174
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot175
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot176
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot177
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot178
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot179
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot180
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot181
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot182
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot183
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot184
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot185
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot186
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot187
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot188
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot189
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot190
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot191
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot192
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot193
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot194
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot195
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot196
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot197
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot198
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot199
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot200
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot201
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot202
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot203
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot204
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot205
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot206
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot207
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot208
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot209
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot210
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot211
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot212
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot213
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot214
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot215
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot216
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot217
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot218
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot219
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot220
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot221
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot222
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot223
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot224
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot225
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot226
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot227
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot228
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot229
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot230
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot231
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot232
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot233
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot234
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot235
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot236
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot237
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot238
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot239
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot240
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot241
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot242
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot243
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot244
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot245
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot246
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot247
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot248
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot249
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot250
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot251
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot252
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot253
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot254
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot255
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot256
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot257
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot258
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot259
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot260
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot261
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot262
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot263
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot264
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot265
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot266
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot267
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot268
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot269
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot270
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot271
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot272
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot273
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot274
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot275
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot276
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot277
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot278
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot279
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot280
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot281
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot282
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot283
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot284
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot285
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot286
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot287
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot288
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot289
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot290
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot291
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot292
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot293
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot294
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot295
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot296
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot297
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot298
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot299
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot300
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot301
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot302
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot303
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot304
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot305
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot306
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot307
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot308
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot309
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot310
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot311
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot312
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot313
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot314
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot315
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot316
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot317
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot318
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot319
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot320
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot321
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot322
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot323
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot324
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot325
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot326
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot327
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot328
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot329
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot330
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot331
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot332
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot333
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot334
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot335
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot336
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot337
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot338
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot339
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot340
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot341
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot342
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot343
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot344
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot345
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot346
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot347
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot348
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot349
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot350
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot351
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot352
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot353
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot354
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot355
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot356
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot357
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot358
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot359
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot360
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot361
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot362
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot363
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot364
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot365
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot366
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot367
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot368
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot369
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot370
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot371
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot372
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot373
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot374
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot375
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot376
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot377
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot378
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot379
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot380
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot381
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot382
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot383
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot384
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot385
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot386
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot387
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot388
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot389
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot390
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot391
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot392
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot393
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot394
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot395
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot396
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot397
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot398
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot399
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot400
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot401
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot402
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot403
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot404
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot405
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot406
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot407
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot408
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot409
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot410
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot411
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot412
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot413
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot414
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot415
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot416
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot417
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot418
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot419
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot420
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot421
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot422
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot423
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot424
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot425
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot426
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot427
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot428
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot429
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot430
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot431
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot432
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot433
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot434
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot435
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot436
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot437
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot438
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot439
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot440
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot441
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot442
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot443
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot444
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot445
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot446
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot447
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot448
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot449
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot450
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot451
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot452
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot453
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot454
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot455
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot456
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot457
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot458
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot459
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot460
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot461
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot462
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot463
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot464
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot465
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot466
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot467
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot468
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot469
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot470
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot471
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot472
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot473
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot474
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot475
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot476
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot477
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot478
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot479
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot480
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot481
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot482
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot483
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot484
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot485
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot486
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot487
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot488
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot489
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot490
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot491
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot492
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot493
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot494
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot495
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot496
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot497
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot498
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot499
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot500
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot501
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot502
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot503
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot504
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot505
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot506
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot507
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot508
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot509
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot510
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot511
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot512
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot513
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot514
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot515
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot516
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot517
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot518
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot519
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot520
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot521
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot522
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot523
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot524
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot525
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot526
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot527
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot528
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot529
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot530
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot531
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot532
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot533
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot534
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot535
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot536
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot537
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot538
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot539
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot540
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot541
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot542
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot543
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot544
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot545
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot546
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot547
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot548
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot549
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot550
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot551
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot552
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot553
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot554
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot555
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot556
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot557
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot558
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot559
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot560
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot561
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot562
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot563
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot564
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot565
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot566
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot567
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot568
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot569
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot570
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot571
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot572
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot573
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot574
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot575
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot576
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot577
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot578
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot579
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot580
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot581
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot582
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot583
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot584
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot585
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot586
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot587
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot588
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot589
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot590
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot591
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot592
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot593
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot594
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot595
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot596
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot597
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot598
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot599
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot600
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot601
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot602
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot603
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot604
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot605
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot606
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot607
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot608
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot609
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot610
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot611
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot612
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot613
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot614
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot615
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot616
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot617
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot618
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot619
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot620
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot621
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot622
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot623
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot624
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot625
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot626
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot627
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot628
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot629
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot630
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot631
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot632
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot633
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot634
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot635
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot636
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot637
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot638
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot639
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot640
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot641
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot642
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot643
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot644
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot645
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot646
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot647
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot648
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot649
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot650
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot651
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot652
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot653
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot654
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot655
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot656
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot657
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot658
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot659
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot660
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot661
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot662
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot663
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot664
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot665
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot666
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot667
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot668
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot669
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot670
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot671
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot672
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot673
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot674
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot675
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot676
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot677
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot678
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot679
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot680
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot681
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot682
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot683
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot684
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot685
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot686
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot687
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot688
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot689
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot690
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot691
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot692
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot693
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot694
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot695
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot696
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot697
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot698
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot699
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot700
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot701
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot702
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot703
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot704
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot705
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot706
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot707
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot708
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot709
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot710
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot711
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot712
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot713
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot714
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot715
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot716
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot717
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot718
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot719
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot720
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot721
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot722
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot723
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot724
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot725
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot726
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot727
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot728
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot729
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot730
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot731
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot732
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot733
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot734
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot735
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot736
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot737
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot738
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot739
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot740
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot741
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot742
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot743
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot744
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot745
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot746
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot747
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot748
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot749
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot750
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot751
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot752
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot753
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot754
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot755
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot756
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot757
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot758
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot759
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot760
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot761
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot762
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot763
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot764
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot765
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot766
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot767
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot768
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot769
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot770
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot771
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot772
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot773
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot774
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot775
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot776
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot777
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot778
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot779
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot780
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot781
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot782
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot783
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot784
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot785
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot786
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot787
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegImm32 rax, rax, -319600
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rax, rcx, rax
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegImm32 r8, rax, -21
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#23
+  __rc_chk#24:
+    x64.cmpRegImm32 r8, 100000000
+    x64.jcc greater, __rc_panic#23
+  __rc_ok#22:
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at seventh-param-survives-chkstk-prologue.test:813: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 6408
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  __il_body:
-    x64.movRegImm32 rax, 0
-  __il_cont:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.leaRegRegImm32 rax, rax, 3
-    x64.leaRegRegImm32 rax, rax, 4
-    x64.leaRegRegImm32 rax, rax, 5
-    x64.leaRegRegImm32 rax, rax, 6
-    x64.leaRegRegImm32 rax, rax, 7
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.leaRegRegImm32 rax, rax, 9
-    x64.leaRegRegImm32 rax, rax, 10
-    x64.leaRegRegImm32 rax, rax, 11
-    x64.leaRegRegImm32 rax, rax, 12
-    x64.leaRegRegImm32 rax, rax, 13
-    x64.leaRegRegImm32 rax, rax, 14
-    x64.leaRegRegImm32 rax, rax, 15
-    x64.leaRegRegImm32 rax, rax, 16
-    x64.leaRegRegImm32 rax, rax, 17
-    x64.leaRegRegImm32 rax, rax, 18
-    x64.leaRegRegImm32 rax, rax, 19
-    x64.leaRegRegImm32 rax, rax, 20
-    x64.leaRegRegImm32 rax, rax, 21
-    x64.leaRegRegImm32 rax, rax, 22
-    x64.leaRegRegImm32 rax, rax, 23
-    x64.leaRegRegImm32 rax, rax, 24
-    x64.leaRegRegImm32 rax, rax, 25
-    x64.leaRegRegImm32 rax, rax, 26
-    x64.leaRegRegImm32 rax, rax, 27
-    x64.leaRegRegImm32 rax, rax, 28
-    x64.leaRegRegImm32 rax, rax, 29
-    x64.leaRegRegImm32 rax, rax, 30
-    x64.leaRegRegImm32 rax, rax, 31
-    x64.leaRegRegImm32 rax, rax, 32
-    x64.leaRegRegImm32 rax, rax, 33
-    x64.leaRegRegImm32 rax, rax, 34
-    x64.leaRegRegImm32 rax, rax, 35
-    x64.leaRegRegImm32 rax, rax, 36
-    x64.leaRegRegImm32 rax, rax, 37
-    x64.leaRegRegImm32 rax, rax, 38
-    x64.leaRegRegImm32 rax, rax, 39
-    x64.leaRegRegImm32 rax, rax, 40
-    x64.leaRegRegImm32 rax, rax, 41
-    x64.leaRegRegImm32 rax, rax, 42
-    x64.leaRegRegImm32 rax, rax, 43
-    x64.leaRegRegImm32 rax, rax, 44
-    x64.leaRegRegImm32 rax, rax, 45
-    x64.leaRegRegImm32 rax, rax, 46
-    x64.leaRegRegImm32 rax, rax, 47
-    x64.leaRegRegImm32 rax, rax, 48
-    x64.leaRegRegImm32 rax, rax, 49
-    x64.leaRegRegImm32 rax, rax, 50
-    x64.leaRegRegImm32 rax, rax, 51
-    x64.leaRegRegImm32 rax, rax, 52
-    x64.leaRegRegImm32 rax, rax, 53
-    x64.leaRegRegImm32 rax, rax, 54
-    x64.leaRegRegImm32 rax, rax, 55
-    x64.leaRegRegImm32 rax, rax, 56
-    x64.leaRegRegImm32 rax, rax, 57
-    x64.leaRegRegImm32 rax, rax, 58
-    x64.leaRegRegImm32 rax, rax, 59
-    x64.leaRegRegImm32 rax, rax, 60
-    x64.leaRegRegImm32 rax, rax, 61
-    x64.leaRegRegImm32 rax, rax, 62
-    x64.leaRegRegImm32 rax, rax, 63
-    x64.leaRegRegImm32 rax, rax, 64
-    x64.leaRegRegImm32 rax, rax, 65
-    x64.leaRegRegImm32 rax, rax, 66
-    x64.leaRegRegImm32 rax, rax, 67
-    x64.leaRegRegImm32 rax, rax, 68
-    x64.leaRegRegImm32 rax, rax, 69
-    x64.leaRegRegImm32 rax, rax, 70
-    x64.leaRegRegImm32 rax, rax, 71
-    x64.leaRegRegImm32 rax, rax, 72
-    x64.leaRegRegImm32 rax, rax, 73
-    x64.leaRegRegImm32 rax, rax, 74
-    x64.leaRegRegImm32 rax, rax, 75
-    x64.leaRegRegImm32 rax, rax, 76
-    x64.leaRegRegImm32 rax, rax, 77
-    x64.leaRegRegImm32 rax, rax, 78
-    x64.leaRegRegImm32 rax, rax, 79
-    x64.leaRegRegImm32 rax, rax, 80
-    x64.leaRegRegImm32 rax, rax, 81
-    x64.leaRegRegImm32 rax, rax, 82
-    x64.leaRegRegImm32 rax, rax, 83
-    x64.leaRegRegImm32 rax, rax, 84
-    x64.leaRegRegImm32 rax, rax, 85
-    x64.leaRegRegImm32 rax, rax, 86
-    x64.leaRegRegImm32 rax, rax, 87
-    x64.leaRegRegImm32 rax, rax, 88
-    x64.leaRegRegImm32 rax, rax, 89
-    x64.leaRegRegImm32 rax, rax, 90
-    x64.leaRegRegImm32 rax, rax, 91
-    x64.leaRegRegImm32 rax, rax, 92
-    x64.leaRegRegImm32 rax, rax, 93
-    x64.leaRegRegImm32 rax, rax, 94
-    x64.leaRegRegImm32 rax, rax, 95
-    x64.leaRegRegImm32 rax, rax, 96
-    x64.leaRegRegImm32 rax, rax, 97
-    x64.leaRegRegImm32 rax, rax, 98
-    x64.leaRegRegImm32 rax, rax, 99
-    x64.leaRegRegImm32 rax, rax, 100
-    x64.leaRegRegImm32 rax, rax, 101
-    x64.leaRegRegImm32 rax, rax, 102
-    x64.leaRegRegImm32 rax, rax, 103
-    x64.leaRegRegImm32 rax, rax, 104
-    x64.leaRegRegImm32 rax, rax, 105
-    x64.leaRegRegImm32 rax, rax, 106
-    x64.leaRegRegImm32 rax, rax, 107
-    x64.leaRegRegImm32 rax, rax, 108
-    x64.leaRegRegImm32 rax, rax, 109
-    x64.leaRegRegImm32 rax, rax, 110
-    x64.leaRegRegImm32 rax, rax, 111
-    x64.leaRegRegImm32 rax, rax, 112
-    x64.leaRegRegImm32 rax, rax, 113
-    x64.leaRegRegImm32 rax, rax, 114
-    x64.leaRegRegImm32 rax, rax, 115
-    x64.leaRegRegImm32 rax, rax, 116
-    x64.leaRegRegImm32 rax, rax, 117
-    x64.leaRegRegImm32 rax, rax, 118
-    x64.leaRegRegImm32 rax, rax, 119
-    x64.leaRegRegImm32 rax, rax, 120
-    x64.leaRegRegImm32 rax, rax, 121
-    x64.leaRegRegImm32 rax, rax, 122
-    x64.leaRegRegImm32 rax, rax, 123
-    x64.leaRegRegImm32 rax, rax, 124
-    x64.leaRegRegImm32 rax, rax, 125
-    x64.leaRegRegImm32 rax, rax, 126
-    x64.leaRegRegImm32 rax, rax, 127
-    x64.leaRegRegImm32 rax, rax, 128
-    x64.leaRegRegImm32 rax, rax, 129
-    x64.leaRegRegImm32 rax, rax, 130
-    x64.leaRegRegImm32 rax, rax, 131
-    x64.leaRegRegImm32 rax, rax, 132
-    x64.leaRegRegImm32 rax, rax, 133
-    x64.leaRegRegImm32 rax, rax, 134
-    x64.leaRegRegImm32 rax, rax, 135
-    x64.leaRegRegImm32 rax, rax, 136
-    x64.leaRegRegImm32 rax, rax, 137
-    x64.leaRegRegImm32 rax, rax, 138
-    x64.leaRegRegImm32 rax, rax, 139
-    x64.leaRegRegImm32 rax, rax, 140
-    x64.leaRegRegImm32 rax, rax, 141
-    x64.leaRegRegImm32 rax, rax, 142
-    x64.leaRegRegImm32 rax, rax, 143
-    x64.leaRegRegImm32 rax, rax, 144
-    x64.leaRegRegImm32 rax, rax, 145
-    x64.leaRegRegImm32 rax, rax, 146
-    x64.leaRegRegImm32 rax, rax, 147
-    x64.leaRegRegImm32 rax, rax, 148
-    x64.leaRegRegImm32 rax, rax, 149
-    x64.leaRegRegImm32 rax, rax, 150
-    x64.leaRegRegImm32 rax, rax, 151
-    x64.leaRegRegImm32 rax, rax, 152
-    x64.leaRegRegImm32 rax, rax, 153
-    x64.leaRegRegImm32 rax, rax, 154
-    x64.leaRegRegImm32 rax, rax, 155
-    x64.leaRegRegImm32 rax, rax, 156
-    x64.leaRegRegImm32 rax, rax, 157
-    x64.leaRegRegImm32 rax, rax, 158
-    x64.leaRegRegImm32 rax, rax, 159
-    x64.leaRegRegImm32 rax, rax, 160
-    x64.leaRegRegImm32 rax, rax, 161
-    x64.leaRegRegImm32 rax, rax, 162
-    x64.leaRegRegImm32 rax, rax, 163
-    x64.leaRegRegImm32 rax, rax, 164
-    x64.leaRegRegImm32 rax, rax, 165
-    x64.leaRegRegImm32 rax, rax, 166
-    x64.leaRegRegImm32 rax, rax, 167
-    x64.leaRegRegImm32 rax, rax, 168
-    x64.leaRegRegImm32 rax, rax, 169
-    x64.leaRegRegImm32 rax, rax, 170
-    x64.leaRegRegImm32 rax, rax, 171
-    x64.leaRegRegImm32 rax, rax, 172
-    x64.leaRegRegImm32 rax, rax, 173
-    x64.leaRegRegImm32 rax, rax, 174
-    x64.leaRegRegImm32 rax, rax, 175
-    x64.leaRegRegImm32 rax, rax, 176
-    x64.leaRegRegImm32 rax, rax, 177
-    x64.leaRegRegImm32 rax, rax, 178
-    x64.leaRegRegImm32 rax, rax, 179
-    x64.leaRegRegImm32 rax, rax, 180
-    x64.leaRegRegImm32 rax, rax, 181
-    x64.leaRegRegImm32 rax, rax, 182
-    x64.leaRegRegImm32 rax, rax, 183
-    x64.leaRegRegImm32 rax, rax, 184
-    x64.leaRegRegImm32 rax, rax, 185
-    x64.leaRegRegImm32 rax, rax, 186
-    x64.leaRegRegImm32 rax, rax, 187
-    x64.leaRegRegImm32 rax, rax, 188
-    x64.leaRegRegImm32 rax, rax, 189
-    x64.leaRegRegImm32 rax, rax, 190
-    x64.leaRegRegImm32 rax, rax, 191
-    x64.leaRegRegImm32 rax, rax, 192
-    x64.leaRegRegImm32 rax, rax, 193
-    x64.leaRegRegImm32 rax, rax, 194
-    x64.leaRegRegImm32 rax, rax, 195
-    x64.leaRegRegImm32 rax, rax, 196
-    x64.leaRegRegImm32 rax, rax, 197
-    x64.leaRegRegImm32 rax, rax, 198
-    x64.leaRegRegImm32 rax, rax, 199
-    x64.leaRegRegImm32 rax, rax, 200
-    x64.leaRegRegImm32 rax, rax, 201
-    x64.leaRegRegImm32 rax, rax, 202
-    x64.leaRegRegImm32 rax, rax, 203
-    x64.leaRegRegImm32 rax, rax, 204
-    x64.leaRegRegImm32 rax, rax, 205
-    x64.leaRegRegImm32 rax, rax, 206
-    x64.leaRegRegImm32 rax, rax, 207
-    x64.leaRegRegImm32 rax, rax, 208
-    x64.leaRegRegImm32 rax, rax, 209
-    x64.leaRegRegImm32 rax, rax, 210
-    x64.leaRegRegImm32 rax, rax, 211
-    x64.leaRegRegImm32 rax, rax, 212
-    x64.leaRegRegImm32 rax, rax, 213
-    x64.leaRegRegImm32 rax, rax, 214
-    x64.leaRegRegImm32 rax, rax, 215
-    x64.leaRegRegImm32 rax, rax, 216
-    x64.leaRegRegImm32 rax, rax, 217
-    x64.leaRegRegImm32 rax, rax, 218
-    x64.leaRegRegImm32 rax, rax, 219
-    x64.leaRegRegImm32 rax, rax, 220
-    x64.leaRegRegImm32 rax, rax, 221
-    x64.leaRegRegImm32 rax, rax, 222
-    x64.leaRegRegImm32 rax, rax, 223
-    x64.leaRegRegImm32 rax, rax, 224
-    x64.leaRegRegImm32 rax, rax, 225
-    x64.leaRegRegImm32 rax, rax, 226
-    x64.leaRegRegImm32 rax, rax, 227
-    x64.leaRegRegImm32 rax, rax, 228
-    x64.leaRegRegImm32 rax, rax, 229
-    x64.leaRegRegImm32 rax, rax, 230
-    x64.leaRegRegImm32 rax, rax, 231
-    x64.leaRegRegImm32 rax, rax, 232
-    x64.leaRegRegImm32 rax, rax, 233
-    x64.leaRegRegImm32 rax, rax, 234
-    x64.leaRegRegImm32 rax, rax, 235
-    x64.leaRegRegImm32 rax, rax, 236
-    x64.leaRegRegImm32 rax, rax, 237
-    x64.leaRegRegImm32 rax, rax, 238
-    x64.leaRegRegImm32 rax, rax, 239
-    x64.leaRegRegImm32 rax, rax, 240
-    x64.leaRegRegImm32 rax, rax, 241
-    x64.leaRegRegImm32 rax, rax, 242
-    x64.leaRegRegImm32 rax, rax, 243
-    x64.leaRegRegImm32 rax, rax, 244
-    x64.leaRegRegImm32 rax, rax, 245
-    x64.leaRegRegImm32 rax, rax, 246
-    x64.leaRegRegImm32 rax, rax, 247
-    x64.leaRegRegImm32 rax, rax, 248
-    x64.leaRegRegImm32 rax, rax, 249
-    x64.leaRegRegImm32 rax, rax, 250
-    x64.leaRegRegImm32 rax, rax, 251
-    x64.leaRegRegImm32 rax, rax, 252
-    x64.leaRegRegImm32 rax, rax, 253
-    x64.leaRegRegImm32 rax, rax, 254
-    x64.leaRegRegImm32 rax, rax, 255
-    x64.leaRegRegImm32 rax, rax, 256
-    x64.leaRegRegImm32 rax, rax, 257
-    x64.leaRegRegImm32 rax, rax, 258
-    x64.leaRegRegImm32 rax, rax, 259
-    x64.leaRegRegImm32 rax, rax, 260
-    x64.leaRegRegImm32 rax, rax, 261
-    x64.leaRegRegImm32 rax, rax, 262
-    x64.leaRegRegImm32 rax, rax, 263
-    x64.leaRegRegImm32 rax, rax, 264
-    x64.leaRegRegImm32 rax, rax, 265
-    x64.leaRegRegImm32 rax, rax, 266
-    x64.leaRegRegImm32 rax, rax, 267
-    x64.leaRegRegImm32 rax, rax, 268
-    x64.leaRegRegImm32 rax, rax, 269
-    x64.leaRegRegImm32 rax, rax, 270
-    x64.leaRegRegImm32 rax, rax, 271
-    x64.leaRegRegImm32 rax, rax, 272
-    x64.leaRegRegImm32 rax, rax, 273
-    x64.leaRegRegImm32 rax, rax, 274
-    x64.leaRegRegImm32 rax, rax, 275
-    x64.leaRegRegImm32 rax, rax, 276
-    x64.leaRegRegImm32 rax, rax, 277
-    x64.leaRegRegImm32 rax, rax, 278
-    x64.leaRegRegImm32 rax, rax, 279
-    x64.leaRegRegImm32 rax, rax, 280
-    x64.leaRegRegImm32 rax, rax, 281
-    x64.leaRegRegImm32 rax, rax, 282
-    x64.leaRegRegImm32 rax, rax, 283
-    x64.leaRegRegImm32 rax, rax, 284
-    x64.leaRegRegImm32 rax, rax, 285
-    x64.leaRegRegImm32 rax, rax, 286
-    x64.leaRegRegImm32 rax, rax, 287
-    x64.leaRegRegImm32 rax, rax, 288
-    x64.leaRegRegImm32 rax, rax, 289
-    x64.leaRegRegImm32 rax, rax, 290
-    x64.leaRegRegImm32 rax, rax, 291
-    x64.leaRegRegImm32 rax, rax, 292
-    x64.leaRegRegImm32 rax, rax, 293
-    x64.leaRegRegImm32 rax, rax, 294
-    x64.leaRegRegImm32 rax, rax, 295
-    x64.leaRegRegImm32 rax, rax, 296
-    x64.leaRegRegImm32 rax, rax, 297
-    x64.leaRegRegImm32 rax, rax, 298
-    x64.leaRegRegImm32 rax, rax, 299
-    x64.leaRegRegImm32 rax, rax, 300
-    x64.leaRegRegImm32 rax, rax, 301
-    x64.leaRegRegImm32 rax, rax, 302
-    x64.leaRegRegImm32 rax, rax, 303
-    x64.leaRegRegImm32 rax, rax, 304
-    x64.leaRegRegImm32 rax, rax, 305
-    x64.leaRegRegImm32 rax, rax, 306
-    x64.leaRegRegImm32 rax, rax, 307
-    x64.leaRegRegImm32 rax, rax, 308
-    x64.leaRegRegImm32 rax, rax, 309
-    x64.leaRegRegImm32 rax, rax, 310
-    x64.leaRegRegImm32 rax, rax, 311
-    x64.leaRegRegImm32 rax, rax, 312
-    x64.leaRegRegImm32 rax, rax, 313
-    x64.leaRegRegImm32 rax, rax, 314
-    x64.leaRegRegImm32 rax, rax, 315
-    x64.leaRegRegImm32 rax, rax, 316
-    x64.leaRegRegImm32 rax, rax, 317
-    x64.leaRegRegImm32 rax, rax, 318
-    x64.leaRegRegImm32 rax, rax, 319
-    x64.leaRegRegImm32 rax, rax, 320
-    x64.leaRegRegImm32 rax, rax, 321
-    x64.leaRegRegImm32 rax, rax, 322
-    x64.leaRegRegImm32 rax, rax, 323
-    x64.leaRegRegImm32 rax, rax, 324
-    x64.leaRegRegImm32 rax, rax, 325
-    x64.leaRegRegImm32 rax, rax, 326
-    x64.leaRegRegImm32 rax, rax, 327
-    x64.leaRegRegImm32 rax, rax, 328
-    x64.leaRegRegImm32 rax, rax, 329
-    x64.leaRegRegImm32 rax, rax, 330
-    x64.leaRegRegImm32 rax, rax, 331
-    x64.leaRegRegImm32 rax, rax, 332
-    x64.leaRegRegImm32 rax, rax, 333
-    x64.leaRegRegImm32 rax, rax, 334
-    x64.leaRegRegImm32 rax, rax, 335
-    x64.leaRegRegImm32 rax, rax, 336
-    x64.leaRegRegImm32 rax, rax, 337
-    x64.leaRegRegImm32 rax, rax, 338
-    x64.leaRegRegImm32 rax, rax, 339
-    x64.leaRegRegImm32 rax, rax, 340
-    x64.leaRegRegImm32 rax, rax, 341
-    x64.leaRegRegImm32 rax, rax, 342
-    x64.leaRegRegImm32 rax, rax, 343
-    x64.leaRegRegImm32 rax, rax, 344
-    x64.leaRegRegImm32 rax, rax, 345
-    x64.leaRegRegImm32 rax, rax, 346
-    x64.leaRegRegImm32 rax, rax, 347
-    x64.leaRegRegImm32 rax, rax, 348
-    x64.leaRegRegImm32 rax, rax, 349
-    x64.leaRegRegImm32 rax, rax, 350
-    x64.leaRegRegImm32 rax, rax, 351
-    x64.leaRegRegImm32 rax, rax, 352
-    x64.leaRegRegImm32 rax, rax, 353
-    x64.leaRegRegImm32 rax, rax, 354
-    x64.leaRegRegImm32 rax, rax, 355
-    x64.leaRegRegImm32 rax, rax, 356
-    x64.leaRegRegImm32 rax, rax, 357
-    x64.leaRegRegImm32 rax, rax, 358
-    x64.leaRegRegImm32 rax, rax, 359
-    x64.leaRegRegImm32 rax, rax, 360
-    x64.leaRegRegImm32 rax, rax, 361
-    x64.leaRegRegImm32 rax, rax, 362
-    x64.leaRegRegImm32 rax, rax, 363
-    x64.leaRegRegImm32 rax, rax, 364
-    x64.leaRegRegImm32 rax, rax, 365
-    x64.leaRegRegImm32 rax, rax, 366
-    x64.leaRegRegImm32 rax, rax, 367
-    x64.leaRegRegImm32 rax, rax, 368
-    x64.leaRegRegImm32 rax, rax, 369
-    x64.leaRegRegImm32 rax, rax, 370
-    x64.leaRegRegImm32 rax, rax, 371
-    x64.leaRegRegImm32 rax, rax, 372
-    x64.leaRegRegImm32 rax, rax, 373
-    x64.leaRegRegImm32 rax, rax, 374
-    x64.leaRegRegImm32 rax, rax, 375
-    x64.leaRegRegImm32 rax, rax, 376
-    x64.leaRegRegImm32 rax, rax, 377
-    x64.leaRegRegImm32 rax, rax, 378
-    x64.leaRegRegImm32 rax, rax, 379
-    x64.leaRegRegImm32 rax, rax, 380
-    x64.leaRegRegImm32 rax, rax, 381
-    x64.leaRegRegImm32 rax, rax, 382
-    x64.leaRegRegImm32 rax, rax, 383
-    x64.leaRegRegImm32 rax, rax, 384
-    x64.leaRegRegImm32 rax, rax, 385
-    x64.leaRegRegImm32 rax, rax, 386
-    x64.leaRegRegImm32 rax, rax, 387
-    x64.leaRegRegImm32 rax, rax, 388
-    x64.leaRegRegImm32 rax, rax, 389
-    x64.leaRegRegImm32 rax, rax, 390
-    x64.leaRegRegImm32 rax, rax, 391
-    x64.leaRegRegImm32 rax, rax, 392
-    x64.leaRegRegImm32 rax, rax, 393
-    x64.leaRegRegImm32 rax, rax, 394
-    x64.leaRegRegImm32 rax, rax, 395
-    x64.leaRegRegImm32 rax, rax, 396
-    x64.leaRegRegImm32 rax, rax, 397
-    x64.leaRegRegImm32 rax, rax, 398
-    x64.leaRegRegImm32 rax, rax, 399
-    x64.leaRegRegImm32 rax, rax, 400
-    x64.leaRegRegImm32 rax, rax, 401
-    x64.leaRegRegImm32 rax, rax, 402
-    x64.leaRegRegImm32 rax, rax, 403
-    x64.leaRegRegImm32 rax, rax, 404
-    x64.leaRegRegImm32 rax, rax, 405
-    x64.leaRegRegImm32 rax, rax, 406
-    x64.leaRegRegImm32 rax, rax, 407
-    x64.leaRegRegImm32 rax, rax, 408
-    x64.leaRegRegImm32 rax, rax, 409
-    x64.leaRegRegImm32 rax, rax, 410
-    x64.leaRegRegImm32 rax, rax, 411
-    x64.leaRegRegImm32 rax, rax, 412
-    x64.leaRegRegImm32 rax, rax, 413
-    x64.leaRegRegImm32 rax, rax, 414
-    x64.leaRegRegImm32 rax, rax, 415
-    x64.leaRegRegImm32 rax, rax, 416
-    x64.leaRegRegImm32 rax, rax, 417
-    x64.leaRegRegImm32 rax, rax, 418
-    x64.leaRegRegImm32 rax, rax, 419
-    x64.leaRegRegImm32 rax, rax, 420
-    x64.leaRegRegImm32 rax, rax, 421
-    x64.leaRegRegImm32 rax, rax, 422
-    x64.leaRegRegImm32 rax, rax, 423
-    x64.leaRegRegImm32 rax, rax, 424
-    x64.leaRegRegImm32 rax, rax, 425
-    x64.leaRegRegImm32 rax, rax, 426
-    x64.leaRegRegImm32 rax, rax, 427
-    x64.leaRegRegImm32 rax, rax, 428
-    x64.leaRegRegImm32 rax, rax, 429
-    x64.leaRegRegImm32 rax, rax, 430
-    x64.leaRegRegImm32 rax, rax, 431
-    x64.leaRegRegImm32 rax, rax, 432
-    x64.leaRegRegImm32 rax, rax, 433
-    x64.leaRegRegImm32 rax, rax, 434
-    x64.leaRegRegImm32 rax, rax, 435
-    x64.leaRegRegImm32 rax, rax, 436
-    x64.leaRegRegImm32 rax, rax, 437
-    x64.leaRegRegImm32 rax, rax, 438
-    x64.leaRegRegImm32 rax, rax, 439
-    x64.leaRegRegImm32 rax, rax, 440
-    x64.leaRegRegImm32 rax, rax, 441
-    x64.leaRegRegImm32 rax, rax, 442
-    x64.leaRegRegImm32 rax, rax, 443
-    x64.leaRegRegImm32 rax, rax, 444
-    x64.leaRegRegImm32 rax, rax, 445
-    x64.leaRegRegImm32 rax, rax, 446
-    x64.leaRegRegImm32 rax, rax, 447
-    x64.leaRegRegImm32 rax, rax, 448
-    x64.leaRegRegImm32 rax, rax, 449
-    x64.leaRegRegImm32 rax, rax, 450
-    x64.leaRegRegImm32 rax, rax, 451
-    x64.leaRegRegImm32 rax, rax, 452
-    x64.leaRegRegImm32 rax, rax, 453
-    x64.leaRegRegImm32 rax, rax, 454
-    x64.leaRegRegImm32 rax, rax, 455
-    x64.leaRegRegImm32 rax, rax, 456
-    x64.leaRegRegImm32 rax, rax, 457
-    x64.leaRegRegImm32 rax, rax, 458
-    x64.leaRegRegImm32 rax, rax, 459
-    x64.leaRegRegImm32 rax, rax, 460
-    x64.leaRegRegImm32 rax, rax, 461
-    x64.leaRegRegImm32 rax, rax, 462
-    x64.leaRegRegImm32 rax, rax, 463
-    x64.leaRegRegImm32 rax, rax, 464
-    x64.leaRegRegImm32 rax, rax, 465
-    x64.leaRegRegImm32 rax, rax, 466
-    x64.leaRegRegImm32 rax, rax, 467
-    x64.leaRegRegImm32 rax, rax, 468
-    x64.leaRegRegImm32 rax, rax, 469
-    x64.leaRegRegImm32 rax, rax, 470
-    x64.leaRegRegImm32 rax, rax, 471
-    x64.leaRegRegImm32 rax, rax, 472
-    x64.leaRegRegImm32 rax, rax, 473
-    x64.leaRegRegImm32 rax, rax, 474
-    x64.leaRegRegImm32 rax, rax, 475
-    x64.leaRegRegImm32 rax, rax, 476
-    x64.leaRegRegImm32 rax, rax, 477
-    x64.leaRegRegImm32 rax, rax, 478
-    x64.leaRegRegImm32 rax, rax, 479
-    x64.leaRegRegImm32 rax, rax, 480
-    x64.leaRegRegImm32 rax, rax, 481
-    x64.leaRegRegImm32 rax, rax, 482
-    x64.leaRegRegImm32 rax, rax, 483
-    x64.leaRegRegImm32 rax, rax, 484
-    x64.leaRegRegImm32 rax, rax, 485
-    x64.leaRegRegImm32 rax, rax, 486
-    x64.leaRegRegImm32 rax, rax, 487
-    x64.leaRegRegImm32 rax, rax, 488
-    x64.leaRegRegImm32 rax, rax, 489
-    x64.leaRegRegImm32 rax, rax, 490
-    x64.leaRegRegImm32 rax, rax, 491
-    x64.leaRegRegImm32 rax, rax, 492
-    x64.leaRegRegImm32 rax, rax, 493
-    x64.leaRegRegImm32 rax, rax, 494
-    x64.leaRegRegImm32 rax, rax, 495
-    x64.leaRegRegImm32 rax, rax, 496
-    x64.leaRegRegImm32 rax, rax, 497
-    x64.leaRegRegImm32 rax, rax, 498
-    x64.leaRegRegImm32 rax, rax, 499
-    x64.leaRegRegImm32 rax, rax, 500
-    x64.leaRegRegImm32 rax, rax, 501
-    x64.leaRegRegImm32 rax, rax, 502
-    x64.leaRegRegImm32 rax, rax, 503
-    x64.leaRegRegImm32 rax, rax, 504
-    x64.leaRegRegImm32 rax, rax, 505
-    x64.leaRegRegImm32 rax, rax, 506
-    x64.leaRegRegImm32 rax, rax, 507
-    x64.leaRegRegImm32 rax, rax, 508
-    x64.leaRegRegImm32 rax, rax, 509
-    x64.leaRegRegImm32 rax, rax, 510
-    x64.leaRegRegImm32 rax, rax, 511
-    x64.leaRegRegImm32 rax, rax, 512
-    x64.leaRegRegImm32 rax, rax, 513
-    x64.leaRegRegImm32 rax, rax, 514
-    x64.leaRegRegImm32 rax, rax, 515
-    x64.leaRegRegImm32 rax, rax, 516
-    x64.leaRegRegImm32 rax, rax, 517
-    x64.leaRegRegImm32 rax, rax, 518
-    x64.leaRegRegImm32 rax, rax, 519
-    x64.leaRegRegImm32 rax, rax, 520
-    x64.leaRegRegImm32 rax, rax, 521
-    x64.leaRegRegImm32 rax, rax, 522
-    x64.leaRegRegImm32 rax, rax, 523
-    x64.leaRegRegImm32 rax, rax, 524
-    x64.leaRegRegImm32 rax, rax, 525
-    x64.leaRegRegImm32 rax, rax, 526
-    x64.leaRegRegImm32 rax, rax, 527
-    x64.leaRegRegImm32 rax, rax, 528
-    x64.leaRegRegImm32 rax, rax, 529
-    x64.leaRegRegImm32 rax, rax, 530
-    x64.leaRegRegImm32 rax, rax, 531
-    x64.leaRegRegImm32 rax, rax, 532
-    x64.leaRegRegImm32 rax, rax, 533
-    x64.leaRegRegImm32 rax, rax, 534
-    x64.leaRegRegImm32 rax, rax, 535
-    x64.leaRegRegImm32 rax, rax, 536
-    x64.leaRegRegImm32 rax, rax, 537
-    x64.leaRegRegImm32 rax, rax, 538
-    x64.leaRegRegImm32 rax, rax, 539
-    x64.leaRegRegImm32 rax, rax, 540
-    x64.leaRegRegImm32 rax, rax, 541
-    x64.leaRegRegImm32 rax, rax, 542
-    x64.leaRegRegImm32 rax, rax, 543
-    x64.leaRegRegImm32 rax, rax, 544
-    x64.leaRegRegImm32 rax, rax, 545
-    x64.leaRegRegImm32 rax, rax, 546
-    x64.leaRegRegImm32 rax, rax, 547
-    x64.leaRegRegImm32 rax, rax, 548
-    x64.leaRegRegImm32 rax, rax, 549
-    x64.leaRegRegImm32 rax, rax, 550
-    x64.leaRegRegImm32 rax, rax, 551
-    x64.leaRegRegImm32 rax, rax, 552
-    x64.leaRegRegImm32 rax, rax, 553
-    x64.leaRegRegImm32 rax, rax, 554
-    x64.leaRegRegImm32 rax, rax, 555
-    x64.leaRegRegImm32 rax, rax, 556
-    x64.leaRegRegImm32 rax, rax, 557
-    x64.leaRegRegImm32 rax, rax, 558
-    x64.leaRegRegImm32 rax, rax, 559
-    x64.leaRegRegImm32 rax, rax, 560
-    x64.leaRegRegImm32 rax, rax, 561
-    x64.leaRegRegImm32 rax, rax, 562
-    x64.leaRegRegImm32 rax, rax, 563
-    x64.leaRegRegImm32 rax, rax, 564
-    x64.leaRegRegImm32 rax, rax, 565
-    x64.leaRegRegImm32 rax, rax, 566
-    x64.leaRegRegImm32 rax, rax, 567
-    x64.leaRegRegImm32 rax, rax, 568
-    x64.leaRegRegImm32 rax, rax, 569
-    x64.leaRegRegImm32 rax, rax, 570
-    x64.leaRegRegImm32 rax, rax, 571
-    x64.leaRegRegImm32 rax, rax, 572
-    x64.leaRegRegImm32 rax, rax, 573
-    x64.leaRegRegImm32 rax, rax, 574
-    x64.leaRegRegImm32 rax, rax, 575
-    x64.leaRegRegImm32 rax, rax, 576
-    x64.leaRegRegImm32 rax, rax, 577
-    x64.leaRegRegImm32 rax, rax, 578
-    x64.leaRegRegImm32 rax, rax, 579
-    x64.leaRegRegImm32 rax, rax, 580
-    x64.leaRegRegImm32 rax, rax, 581
-    x64.leaRegRegImm32 rax, rax, 582
-    x64.leaRegRegImm32 rax, rax, 583
-    x64.leaRegRegImm32 rax, rax, 584
-    x64.leaRegRegImm32 rax, rax, 585
-    x64.leaRegRegImm32 rax, rax, 586
-    x64.leaRegRegImm32 rax, rax, 587
-    x64.leaRegRegImm32 rax, rax, 588
-    x64.leaRegRegImm32 rax, rax, 589
-    x64.leaRegRegImm32 rax, rax, 590
-    x64.leaRegRegImm32 rax, rax, 591
-    x64.leaRegRegImm32 rax, rax, 592
-    x64.leaRegRegImm32 rax, rax, 593
-    x64.leaRegRegImm32 rax, rax, 594
-    x64.leaRegRegImm32 rax, rax, 595
-    x64.leaRegRegImm32 rax, rax, 596
-    x64.leaRegRegImm32 rax, rax, 597
-    x64.leaRegRegImm32 rax, rax, 598
-    x64.leaRegRegImm32 rax, rax, 599
-    x64.leaRegRegImm32 rax, rax, 600
-    x64.leaRegRegImm32 rax, rax, 601
-    x64.leaRegRegImm32 rax, rax, 602
-    x64.leaRegRegImm32 rax, rax, 603
-    x64.leaRegRegImm32 rax, rax, 604
-    x64.leaRegRegImm32 rax, rax, 605
-    x64.leaRegRegImm32 rax, rax, 606
-    x64.leaRegRegImm32 rax, rax, 607
-    x64.leaRegRegImm32 rax, rax, 608
-    x64.leaRegRegImm32 rax, rax, 609
-    x64.leaRegRegImm32 rax, rax, 610
-    x64.leaRegRegImm32 rax, rax, 611
-    x64.leaRegRegImm32 rax, rax, 612
-    x64.leaRegRegImm32 rax, rax, 613
-    x64.leaRegRegImm32 rax, rax, 614
-    x64.leaRegRegImm32 rax, rax, 615
-    x64.leaRegRegImm32 rax, rax, 616
-    x64.leaRegRegImm32 rax, rax, 617
-    x64.leaRegRegImm32 rax, rax, 618
-    x64.leaRegRegImm32 rax, rax, 619
-    x64.leaRegRegImm32 rax, rax, 620
-    x64.leaRegRegImm32 rax, rax, 621
-    x64.leaRegRegImm32 rax, rax, 622
-    x64.leaRegRegImm32 rax, rax, 623
-    x64.leaRegRegImm32 rax, rax, 624
-    x64.leaRegRegImm32 rax, rax, 625
-    x64.leaRegRegImm32 rax, rax, 626
-    x64.leaRegRegImm32 rax, rax, 627
-    x64.leaRegRegImm32 rax, rax, 628
-    x64.leaRegRegImm32 rax, rax, 629
-    x64.leaRegRegImm32 rax, rax, 630
-    x64.leaRegRegImm32 rax, rax, 631
-    x64.leaRegRegImm32 rax, rax, 632
-    x64.leaRegRegImm32 rax, rax, 633
-    x64.leaRegRegImm32 rax, rax, 634
-    x64.leaRegRegImm32 rax, rax, 635
-    x64.leaRegRegImm32 rax, rax, 636
-    x64.leaRegRegImm32 rax, rax, 637
-    x64.leaRegRegImm32 rax, rax, 638
-    x64.leaRegRegImm32 rax, rax, 639
-    x64.leaRegRegImm32 rax, rax, 640
-    x64.leaRegRegImm32 rax, rax, 641
-    x64.leaRegRegImm32 rax, rax, 642
-    x64.leaRegRegImm32 rax, rax, 643
-    x64.leaRegRegImm32 rax, rax, 644
-    x64.leaRegRegImm32 rax, rax, 645
-    x64.leaRegRegImm32 rax, rax, 646
-    x64.leaRegRegImm32 rax, rax, 647
-    x64.leaRegRegImm32 rax, rax, 648
-    x64.leaRegRegImm32 rax, rax, 649
-    x64.leaRegRegImm32 rax, rax, 650
-    x64.leaRegRegImm32 rax, rax, 651
-    x64.leaRegRegImm32 rax, rax, 652
-    x64.leaRegRegImm32 rax, rax, 653
-    x64.leaRegRegImm32 rax, rax, 654
-    x64.leaRegRegImm32 rax, rax, 655
-    x64.leaRegRegImm32 rax, rax, 656
-    x64.leaRegRegImm32 rax, rax, 657
-    x64.leaRegRegImm32 rax, rax, 658
-    x64.leaRegRegImm32 rax, rax, 659
-    x64.leaRegRegImm32 rax, rax, 660
-    x64.leaRegRegImm32 rax, rax, 661
-    x64.leaRegRegImm32 rax, rax, 662
-    x64.leaRegRegImm32 rax, rax, 663
-    x64.leaRegRegImm32 rax, rax, 664
-    x64.leaRegRegImm32 rax, rax, 665
-    x64.leaRegRegImm32 rax, rax, 666
-    x64.leaRegRegImm32 rax, rax, 667
-    x64.leaRegRegImm32 rax, rax, 668
-    x64.leaRegRegImm32 rax, rax, 669
-    x64.leaRegRegImm32 rax, rax, 670
-    x64.leaRegRegImm32 rax, rax, 671
-    x64.leaRegRegImm32 rax, rax, 672
-    x64.leaRegRegImm32 rax, rax, 673
-    x64.leaRegRegImm32 rax, rax, 674
-    x64.leaRegRegImm32 rax, rax, 675
-    x64.leaRegRegImm32 rax, rax, 676
-    x64.leaRegRegImm32 rax, rax, 677
-    x64.leaRegRegImm32 rax, rax, 678
-    x64.leaRegRegImm32 rax, rax, 679
-    x64.leaRegRegImm32 rax, rax, 680
-    x64.leaRegRegImm32 rax, rax, 681
-    x64.leaRegRegImm32 rax, rax, 682
-    x64.leaRegRegImm32 rax, rax, 683
-    x64.leaRegRegImm32 rax, rax, 684
-    x64.leaRegRegImm32 rax, rax, 685
-    x64.leaRegRegImm32 rax, rax, 686
-    x64.leaRegRegImm32 rax, rax, 687
-    x64.leaRegRegImm32 rax, rax, 688
-    x64.leaRegRegImm32 rax, rax, 689
-    x64.leaRegRegImm32 rax, rax, 690
-    x64.leaRegRegImm32 rax, rax, 691
-    x64.leaRegRegImm32 rax, rax, 692
-    x64.leaRegRegImm32 rax, rax, 693
-    x64.leaRegRegImm32 rax, rax, 694
-    x64.leaRegRegImm32 rax, rax, 695
-    x64.leaRegRegImm32 rax, rax, 696
-    x64.leaRegRegImm32 rax, rax, 697
-    x64.leaRegRegImm32 rax, rax, 698
-    x64.leaRegRegImm32 rax, rax, 699
-    x64.leaRegRegImm32 rax, rax, 700
-    x64.leaRegRegImm32 rax, rax, 701
-    x64.leaRegRegImm32 rax, rax, 702
-    x64.leaRegRegImm32 rax, rax, 703
-    x64.leaRegRegImm32 rax, rax, 704
-    x64.leaRegRegImm32 rax, rax, 705
-    x64.leaRegRegImm32 rax, rax, 706
-    x64.leaRegRegImm32 rax, rax, 707
-    x64.leaRegRegImm32 rax, rax, 708
-    x64.leaRegRegImm32 rax, rax, 709
-    x64.leaRegRegImm32 rax, rax, 710
-    x64.leaRegRegImm32 rax, rax, 711
-    x64.leaRegRegImm32 rax, rax, 712
-    x64.leaRegRegImm32 rax, rax, 713
-    x64.leaRegRegImm32 rax, rax, 714
-    x64.leaRegRegImm32 rax, rax, 715
-    x64.leaRegRegImm32 rax, rax, 716
-    x64.leaRegRegImm32 rax, rax, 717
-    x64.leaRegRegImm32 rax, rax, 718
-    x64.leaRegRegImm32 rax, rax, 719
-    x64.leaRegRegImm32 rax, rax, 720
-    x64.leaRegRegImm32 rax, rax, 721
-    x64.leaRegRegImm32 rax, rax, 722
-    x64.leaRegRegImm32 rax, rax, 723
-    x64.leaRegRegImm32 rax, rax, 724
-    x64.leaRegRegImm32 rax, rax, 725
-    x64.leaRegRegImm32 rax, rax, 726
-    x64.leaRegRegImm32 rax, rax, 727
-    x64.leaRegRegImm32 rax, rax, 728
-    x64.leaRegRegImm32 rax, rax, 729
-    x64.leaRegRegImm32 rax, rax, 730
-    x64.leaRegRegImm32 rax, rax, 731
-    x64.leaRegRegImm32 rax, rax, 732
-    x64.leaRegRegImm32 rax, rax, 733
-    x64.leaRegRegImm32 rax, rax, 734
-    x64.leaRegRegImm32 rax, rax, 735
-    x64.leaRegRegImm32 rax, rax, 736
-    x64.leaRegRegImm32 rax, rax, 737
-    x64.leaRegRegImm32 rax, rax, 738
-    x64.leaRegRegImm32 rax, rax, 739
-    x64.leaRegRegImm32 rax, rax, 740
-    x64.leaRegRegImm32 rax, rax, 741
-    x64.leaRegRegImm32 rax, rax, 742
-    x64.leaRegRegImm32 rax, rax, 743
-    x64.leaRegRegImm32 rax, rax, 744
-    x64.leaRegRegImm32 rax, rax, 745
-    x64.leaRegRegImm32 rax, rax, 746
-    x64.leaRegRegImm32 rax, rax, 747
-    x64.leaRegRegImm32 rax, rax, 748
-    x64.leaRegRegImm32 rax, rax, 749
-    x64.leaRegRegImm32 rax, rax, 750
-    x64.leaRegRegImm32 rax, rax, 751
-    x64.leaRegRegImm32 rax, rax, 752
-    x64.leaRegRegImm32 rax, rax, 753
-    x64.leaRegRegImm32 rax, rax, 754
-    x64.leaRegRegImm32 rax, rax, 755
-    x64.leaRegRegImm32 rax, rax, 756
-    x64.leaRegRegImm32 rax, rax, 757
-    x64.leaRegRegImm32 rax, rax, 758
-    x64.leaRegRegImm32 rax, rax, 759
-    x64.leaRegRegImm32 rax, rax, 760
-    x64.leaRegRegImm32 rax, rax, 761
-    x64.leaRegRegImm32 rax, rax, 762
-    x64.leaRegRegImm32 rax, rax, 763
-    x64.leaRegRegImm32 rax, rax, 764
-    x64.leaRegRegImm32 rax, rax, 765
-    x64.leaRegRegImm32 rax, rax, 766
-    x64.leaRegRegImm32 rax, rax, 767
-    x64.leaRegRegImm32 rax, rax, 768
-    x64.leaRegRegImm32 rax, rax, 769
-    x64.leaRegRegImm32 rax, rax, 770
-    x64.leaRegRegImm32 rax, rax, 771
-    x64.leaRegRegImm32 rax, rax, 772
-    x64.leaRegRegImm32 rax, rax, 773
-    x64.leaRegRegImm32 rax, rax, 774
-    x64.leaRegRegImm32 rax, rax, 775
-    x64.leaRegRegImm32 rax, rax, 776
-    x64.leaRegRegImm32 rax, rax, 777
-    x64.leaRegRegImm32 rax, rax, 778
-    x64.leaRegRegImm32 rax, rax, 779
-    x64.leaRegRegImm32 rax, rax, 780
-    x64.leaRegRegImm32 rax, rax, 781
-    x64.leaRegRegImm32 rax, rax, 782
-    x64.leaRegRegImm32 rax, rax, 783
-    x64.leaRegRegImm32 rax, rax, 784
-    x64.leaRegRegImm32 rax, rax, 785
-    x64.leaRegRegImm32 rax, rax, 786
-    x64.leaRegRegImm32 rax, rax, 787
-    x64.leaRegRegImm32 rax, rax, 788
-    x64.leaRegRegImm32 rax, rax, 789
-    x64.leaRegRegImm32 rax, rax, 790
-    x64.leaRegRegImm32 rax, rax, 791
-    x64.leaRegRegImm32 rax, rax, 792
-    x64.leaRegRegImm32 rax, rax, 793
-    x64.leaRegRegImm32 rax, rax, 794
-    x64.leaRegRegImm32 rax, rax, 795
-    x64.leaRegRegImm32 rax, rax, 796
-    x64.leaRegRegImm32 rax, rax, 797
-    x64.leaRegRegImm32 rax, rax, 798
-    x64.leaRegRegImm32 rax, rax, 799
-    x64.leaRegRegImm32 rax, rax, -319600
-    x64.leaRegRegImm32 rax, rax, 7
-    x64.leaRegRegImm32 rax, rax, 21
-    x64.leaRegRegImm32 r8, rax, -21
+    x64.prologue 48
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 3
+    x64.movRegImm32 r9, 4
+    x64.movRegImm32 rsi, 5
+    x64.movRegImm32 rdi, 6
+    x64.movRegImm32 r8, 7
+    x64.storeBaseDispReg.word64 [rsp + 32], r8
+    x64.callDirect wide
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at seventh-param-survives-chkstk-prologue.test:817: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }

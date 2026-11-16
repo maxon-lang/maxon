@@ -50,11 +50,12 @@ let ChunkByteSeparator = " "
 let OpenBrace = "\{"
 let CloseBrace = "\}"
 
-// The WITHHELD functions a rendering names — the compiler's emitted runtime, or a `stdlib/` body — as
-// a `--emit-ir-runtime=` list, which a spec case writes as a ```RequiredRuntime block. EMPTY is the
+// The functions a rendering names — a withheld one (the compiler's emitted runtime, a `stdlib/`
+// body) or one of the program's own, which the inliner then keeps out of line — as a
+// `--emit-ir-runtime=` list, which a spec case writes as a ```RequiredRuntime block. EMPTY is the
 // ordinary case and is not a sentinel: it is the literal count of names the caller gave. (The alias
-// keeps the `Runtime` spelling the flag and the fence are both named by; what it selects is stated at
-// `isSuppliedFunction`, which is the one rule deciding it.)
+// keeps the `Runtime` spelling the flag and the fence are both named by; what is withheld unless
+// named is stated at `isSuppliedFunction`, which is the one rule deciding it.)
 export typealias RuntimeFunctionNameArray = Array with String
 
 // The `.data` section a module carries, rendered first by `printTargetModule` — which is the reason
@@ -178,19 +179,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	for func in module.functions 'eachFunc'
 		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
 
-		// ONE question, asked ONCE per function and read by both rules below — the refusal and the skip.
-		// Asking it twice is what the flag column's own header warns against, in the shape that reports a
-		// WRONG ANSWER rather than an error.
-		let supplied = isSuppliedFunction(func, libraryFunctions: libraryFunctions, runtimeTier: runtimeTier)
-
-		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
-		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
-		// the one selection rule.
-		if named and not supplied 'notWithheld'
-			throw CompileError.runtimeIrNameIsProgramFunction(String.from(func.name), declaredIn: func.sourceFilePath)
-		end 'notWithheld'
-
-		if supplied and not named 'skipSupplied'
+		if isSuppliedFunction(func, libraryFunctions: libraryFunctions, runtimeTier: runtimeTier) and not named 'skipSupplied'
 			continue
 		end 'skipSupplied'
 
@@ -508,10 +497,9 @@ end 'escapedPayloadByte'
 //
 // The cause is a misspelling, or a piece this program does not contain: the emitted runtime is
 // installed on DEMAND, so `__str_bytes_view` exists only in a program whose stdlib cone takes a
-// String's bytes, and `__gt_morestack` only in one that runs a green thread — and a STDLIB body is
-// dropped by dead-function elimination unless the program reaches it, so `String.trim` is nameable
-// only from a program that trims. (The other way to name nothing — naming a function the fragment
-// already shows — is caught inside the render loop, where the function is in hand.)
+// String's bytes, and `__gt_morestack` only in one that runs a green thread — and a STDLIB body, or
+// a function of the program's own, is dropped by dead-function elimination unless the program
+// reaches it, so `String.trim` is nameable only from a program that trims.
 //
 // ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" IS NOT A CAUSE.** A chunk has no IR body, but it is rendered as
 // BYTES rather than refused (see `printChunkBytes`). Every reason a name renders nothing is repairable
@@ -578,8 +566,8 @@ export function permitsTailCalls(func IrFunction, runtimeTier FunctionNameSet) r
 	return isRuntimeFunction(func, runtimeTier: runtimeTier) and not func.keepsItsOwnFrame
 end 'permitsTailCalls'
 
-// ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip
-// and the refusal all read** (see `printTargetModule`). Two disjoint provenances, one question:
+// ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render's skip
+// reads** (see `printTargetModule`). Two disjoint provenances, one question:
 //
 //   * the compiler's own emitted scaffolding (`isRuntimeFunction`), which is invariant across every
 //     program and identical in every fragment; and

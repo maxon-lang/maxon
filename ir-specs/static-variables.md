@@ -40,6 +40,9 @@ end 'main'
 ```exitcode
 2
 ```
+```RequiredRuntime
+churn
+```
 ```TargetIr:x64-windows
 data {
   __data_Point.origins@24 = i64 0
@@ -50,6 +53,15 @@ data {
   __mrt_console_probe_stdout@57 = i8 0
   __mrt_console_probe_stderr@58 = i8 0
   __mrt_program_started@59 = i8 0
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {
@@ -71,14 +83,14 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#13
+    x64.jcc equal, critsplit#11
   __im_empty:
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, __im_slow
-  critsplit#14:
+  critsplit#12:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
-  critsplit#13:
+  critsplit#11:
     x64.movRegReg r10, rax
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -93,11 +105,10 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-  __il_cont:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRegReg rbx, rcx, rax
+    x64.movRegReg rcx, r12
+    x64.callDirect churn
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rbx, rax, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -148,6 +159,15 @@ data {
   __mrt_program_started@48 = i8 0
 }
 
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -167,14 +187,14 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#13
+    x64.jcc equal, critsplit#11
   __im_empty:
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, __im_slow
-  critsplit#14:
+  critsplit#12:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
-  critsplit#13:
+  critsplit#11:
     x64.movRegReg r10, rax
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -189,11 +209,10 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-  __il_cont:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRegReg rbx, rcx, rax
+    x64.movRegReg rcx, r12
+    x64.callDirect churn
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rbx, rax, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -241,6 +260,14 @@ data {
   __mrt_program_started@32 = i8 0
 }
 
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.epilogue 16
+    arm64.ret
+}
+
 func @main {
   entry:
     arm64.prologue 32
@@ -258,14 +285,14 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#13
+    arm64.b.eq critsplit#11
   __im_empty:
     arm64.cmp x19, 0
     arm64.b.eq __im_slow
-  critsplit#14:
+  critsplit#12:
     arm64.movRegReg x9, x2
     arm64.b __im_cont
-  critsplit#13:
+  critsplit#11:
     arm64.movRegReg x9, x2
   __im_cont:
     arm64.cmp x9, 0
@@ -280,9 +307,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-  __il_cont:
+    arm64.movRegReg x0, x20
+    arm64.bl churn
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.add x19, x1, x0
     arm64.cmp x19, 0
@@ -332,6 +358,14 @@ data {
   __mrt_program_started@56 = i8 0
 }
 
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.epilogue 16
+    arm64.ret
+}
+
 func @main {
   entry:
     arm64.prologue 32
@@ -349,14 +383,14 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#13
+    arm64.b.eq critsplit#11
   __im_empty:
     arm64.cmp x19, 0
     arm64.b.eq __im_slow
-  critsplit#14:
+  critsplit#12:
     arm64.movRegReg x9, x2
     arm64.b __im_cont
-  critsplit#13:
+  critsplit#11:
     arm64.movRegReg x9, x2
   __im_cont:
     arm64.cmp x9, 0
@@ -371,9 +405,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-  __il_cont:
+    arm64.movRegReg x0, x20
+    arm64.bl churn
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.add x19, x1, x0
     arm64.cmp x19, 0

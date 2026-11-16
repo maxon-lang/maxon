@@ -46,9 +46,8 @@ let FoldedPathCount = 2
 let HottestPathPosition = 0
 let SecondPathPosition = 1
 
-// The program's own entry point, which is NOT the bottom of any stack, and the frame between it and the two
-// leaves. Both are declarations the FIXTURE makes, which is why this case may spell them.
-let ProgramEntryFrameName = "main"
+// The frame between the program's own entry point, which is NOT the bottom of any stack, and the two
+// leaves. It is a declaration the FIXTURE makes, which is why this case may spell it.
 let InteriorFrameName = "work"
 
 // Which of the fixture's collapsed paths a message is about.
@@ -78,7 +77,7 @@ test 'collapsed stacks carry every path the fixture runs, whatever floor the too
 	// so a format that started at the program's own entry point would be dropping frames it walked.
 	let hottest = try paths.get(HottestPathPosition) otherwise panic("profile-folded.test: a list whose count was just asserted has a first element")
 	let root = try hottest.split(FoldedFrameSeparator).get(0) otherwise panic("profile-folded.test: a split always has a first element")
-	Expect.notEqual(root, expected: ProgramEntryFrameName, message: "the collapsed path `{hottest}` opens at `{ProgramEntryFrameName}`, the program's own entry point. Every stack bottoms out in runtime code below it, so a path that starts there has lost the frames the walker had to cross to reach it.")
+	Expect.notEqual(root, expected: MainFunctionName, message: "the collapsed path `{hottest}` opens at `{MainFunctionName}`, the program's own entry point. Every stack bottoms out in runtime code below it, so a path that starts there has lost the frames the walker had to cross to reach it.")
 
 	discardStagedDir(staged)
 end 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
@@ -86,8 +85,8 @@ end 'collapsed stacks carry every path the fixture runs, whatever floor the tool
 // One path's tail, which is the part of it the FIXTURE decides: `…;main;work;<leaf>`.
 function requirePathEndsWith(paths StringArray, position FoldedPathPosition, leaf String) throws TestFailure
 	let path = try paths.get(position as ElementIndex) otherwise panic("profile-folded.test: position {position} is inside a list whose count was just asserted")
-	let tail = "{FoldedFrameSeparator}{ProgramEntryFrameName}{FoldedFrameSeparator}{InteriorFrameName}{FoldedFrameSeparator}{leaf}"
-	try Expect.endsWith(path, needle: tail, message: "the collapsed path at position {position} is `{path}`, which does not end in `{tail}`. The chain is one the fixture DECLARES — `{ProgramEntryFrameName}` calls `{InteriorFrameName}` calls `{leaf}` — so a different tail is a walker that lost a frame or a symbolizer that named the wrong one, and the order of the two paths is the order `{InteriorFrameName}` calls them in.")
+	let tail = "{FoldedFrameSeparator}{MainFunctionName}{FoldedFrameSeparator}{InteriorFrameName}{FoldedFrameSeparator}{leaf}"
+	try Expect.endsWith(path, needle: tail, message: "the collapsed path at position {position} is `{path}`, which does not end in `{tail}`. The chain is one the fixture DECLARES — `{MainFunctionName}` calls `{InteriorFrameName}` calls `{leaf}` — so a different tail is a walker that lost a frame or a symbolizer that named the wrong one, and the order of the two paths is the order `{InteriorFrameName}` calls them in.")
 end 'requirePathEndsWith'
 
 // The collapsed paths worth asserting about, in the order they were printed, with their counts dropped —

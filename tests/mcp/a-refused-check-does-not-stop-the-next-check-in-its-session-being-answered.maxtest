@@ -8,7 +8,6 @@ let DumpedDirName = "mcp-the-dump-after-a-refusal"
 
 let RefusedSource = "typealias Byte = int(0 to u8.max)\n\nfunction main() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0\nend 'main'\n"
 let RefusedCode = "E3005"
-let MainHeader = "func @main"
 
 test 'a refused check, a well-formed check and a dump_ir in one session are each answered'
 	let refused = stagedProgram(RefusedThenAnsweredDirName, fileName: StagedProgramFileName, source: RefusedSource)
@@ -32,7 +31,7 @@ test 'a refused check, a well-formed check and a dump_ir in one session are each
 	Expect.contains(toolCallText(refusedAnswer), needle: RefusedCode, message: "`check` over a type error did not carry its diagnostic code {RefusedCode}: {toolCallText(refusedAnswer)}")
 	Expect.isFalse(toolCallIsError(answeredAnswer), message: "the `check` after a refused one was answered as an error: {toolCallText(answeredAnswer)}")
 	Expect.isFalse(toolCallIsError(dumpedAnswer), message: "the `dump_ir` after them was answered as an error: {toolCallText(dumpedAnswer)}")
-	Expect.contains(toolCallText(dumpedAnswer), needle: MainHeader, message: "the `dump_ir` after a refused `check` did not answer the IR of `main`: {toolCallText(dumpedAnswer)}")
+	Expect.contains(toolCallText(dumpedAnswer), needle: MainFunctionHeader, message: "the `dump_ir` after a refused `check` did not answer the IR of `main`: {toolCallText(dumpedAnswer)}")
 
 	discardStagedDir(stagedDirNamed(RefusedThenAnsweredDirName))
 	discardStagedDir(stagedDirNamed(AnsweredDirName))

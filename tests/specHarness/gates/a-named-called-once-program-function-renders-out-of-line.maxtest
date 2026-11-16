@@ -1,0 +1,76 @@
+let NamedOnceSpecName = "named-called-once"
+let NamedOnceSpecFileName = "named-called-once.md"
+let NamedOnceNamedCase = "named-called-once.named"
+let NamedOnceUnnamedCase = "named-called-once.unnamed"
+let NamedOncePattern = "named-called-once/"
+let NamedOnceNamedMarker = "<!-- test: named-called-once.named -->"
+let NamedOnceUnnamedMarker = "<!-- test: named-called-once.unnamed -->"
+let NamedOnceHelperName = "helper"
+let NamedOnceMainCount = 2
+let NamedOnceHelperCount = 1
+let NamedOnceCallCount = 1
+
+test 'a program function a RequiredRuntime block names renders as a function of its own while the same function unnamed is spliced away'
+	let staged = stagedGateFixture()
+	let specPath = staged.join(NamedOnceSpecFileName)
+	plantBogusTargetIrPin(specPath)
+	plantPlaceholderPinsBeneath(specPath, markers: [NamedOnceNamedMarker, NamedOnceUnnamedMarker])
+
+	let arguments = StringArray.create(0)
+	arguments.push(UpdateRequiredFlag)
+	arguments.push(filterFlag(NamedOncePattern))
+
+	let remint = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
+	let written = fileText(specPath)
+	let rerun = runSpecTest(staged, includeNetwork: false)
+	discardStagedDir(staged)
+
+	let said = "The file now reads:\n{written}\nThe re-mint run said:\n{everythingSaid(remint)}\nThe plain run said:\n{everythingSaid(rerun)}"
+	let lines = written.split("\n")
+	let broken = StringArray.create(0)
+	let helperHeader = functionHeader(NamedOnceHelperName)
+	let callLine = hostDirectCallLine(NamedOnceHelperName)
+	let helperHeaderCount = occurrences(written, needle: helperHeader)
+	let mainHeaderCount = occurrences(written, needle: MainFunctionHeader)
+
+	if helperHeaderCount != NamedOnceHelperCount 'helperCount'
+		broken.push("the re-minted pins hold `{helperHeader}` {helperHeaderCount} time(s), not {NamedOnceHelperCount}: once, in the pin of the case that names it, and not in the pin of the case that does not. {said}\n")
+	end 'helperCount'
+
+	if mainHeaderCount != NamedOnceMainCount 'mainCount'
+		broken.push("the re-minted pins hold `{MainFunctionHeader}` {mainHeaderCount} time(s), not {NamedOnceMainCount}: once per case. {said}\n")
+	end 'mainCount'
+
+	let namedAt = firstLineOpening(lines, prefix: NamedOnceNamedMarker, said: said)
+	let unnamedAt = firstLineOpening(lines, prefix: NamedOnceUnnamedMarker, said: said)
+	let calls = linesOpening(lines, prefix: callLine)
+
+	if calls.count() != NamedOnceCallCount 'callCount'
+		broken.push("the re-minted pins hold `{callLine}` {calls.count()} time(s), not {NamedOnceCallCount}: once, in the `main` of the case that names the helper, and not in the case that does not. {said}\n")
+	end 'callCount'
+
+	if helperHeaderCount == NamedOnceHelperCount and mainHeaderCount == NamedOnceMainCount 'headersPresent'
+		let helperAt = firstLineOpening(lines, prefix: helperHeader, said: said)
+		let mainAt = firstLineOpening(lines, prefix: MainFunctionHeader, said: said)
+
+		if not (namedAt < helperAt and helperAt < mainAt and mainAt < unnamedAt) 'helperMisplaced'
+			broken.push("`{helperHeader}` is at line {helperAt + 1} and the first `{MainFunctionHeader}` at line {mainAt + 1}, not the helper then the main inside the case that names the helper (markers at lines {namedAt + 1} and {unnamedAt + 1}). {said}\n")
+		end 'helperMisplaced'
+
+		if calls.count() == NamedOnceCallCount 'oneCall'
+			let callAt = try calls.get(0) otherwise panic("spec-harness tests: the pins hold one `{callLine}` and the list of its lines has no first entry")
+
+			if not (mainAt < callAt and callAt < unnamedAt) 'callMisplaced'
+				broken.push("`{callLine}` is at line {callAt + 1}, not inside the `main` of the case that names the helper (that `main` at line {mainAt + 1}, the unnamed case's marker at line {unnamedAt + 1}). {said}\n")
+			end 'callMisplaced'
+		end 'oneCall'
+	end 'headersPresent'
+
+	collectNotPassed(everythingSaid(rerun), specName: NamedOnceSpecName, testNames: [NamedOnceNamedCase, NamedOnceUnnamedCase], broken: broken)
+
+	if rerun.exitCode() != SuccessExitCode 'rerunFailed'
+		broken.push("the plain run after the re-mint exited {rerun.exitCode()}. {said}\n")
+	end 'rerunFailed'
+
+	requireNothingBroken(broken, headline: "a program function a RequiredRuntime block names renders as a function of its own")
+end 'a program function a RequiredRuntime block names renders as a function of its own while the same function unnamed is spliced away'

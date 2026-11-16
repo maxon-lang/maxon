@@ -105,6 +105,7 @@ tests/
     Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `occurrences`, `compareBytes`, `checkoutDocumentText`, `sectionOf`
     StagedSource.maxon           `anchorLine`, `sourceColumnOf`, `linesOfStagedSource`, `buildStagedSource`, `builtTestBinary`, `sidecarOf`
     RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `CacheVendorDirName`, `VersionRecordSuffix`, `StdlibDirName`
+    TargetIr.maxon               how the Target IR printer spells a function and a direct call, and the program's entry function name the debugger and profiler corpora also read: `FunctionHeaderPrefix`, `functionHeader`, `MainFunctionName` and `MainFunctionHeader`, the op prefixes `X64OpPrefix` and `Arm64OpPrefix`, the direct-call prefixes `X64DirectCallPrefix` and `Arm64DirectCallPrefix` (with their mnemonics), and `hostDirectCallLine`
     VersionRecord.maxon          the compiler-version record: `soleVersionRecordUnder` a cache root, `recordLine`, `OlderRelease`, `LastBuiltWording`
   fmt/
     fixtures.maxtest             the fixture corpus: the harness, the guards and 32 tests
@@ -1182,7 +1183,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   a live-network case left out of a default run and named, an `alone` case run with nothing beside it, a
   run that writes no `fragments/` directory and speaks of no golden, a `TargetIr` pin that fails its case
   when it differs and that `--update-required` replaces or adds without asking a compile-error case for
-  one and that a run with `--update-required` mints while lanes are still owed, plain run cases that batch into programs
+  one and that a run with `--update-required` mints while lanes are still owed, a program function a
+  `RequiredRuntime` block names rendering as a function of its own in the minted pin while the same called-once function
+  unnamed is spliced into its caller, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
   kept in separate programs, a case keeping a function in a module `var` and a case holding closures in a
   record kept in separate programs, a case declaring a conformer with an unexported cursor and a case

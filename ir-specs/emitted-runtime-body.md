@@ -40,12 +40,16 @@ which is how a case whose subject IS a library body pins the one body it is abou
 be one the program REACHES: an unreached stdlib function is eliminated before the back end, so
 naming it renders nothing and is refused exactly as a misspelling is.
 
-Only the named functions are added, and only to that test's rendering; every test without
-the block renders only the program's own functions. A name
-that matches no emitted function — or one that names a function the rendering already
-shows — is refused by the compiler, so a misspelling cannot silently pin nothing. An
-EMPTY block is refused by the spec parser for the same reason: it would render no body at
-all, leaving the pin identical to a test that never asked.
+The block may also name one of the program's own functions. The rendering already shows every one
+that survives the pipeline, but the inliner may splice a function into its callers and drop it, and
+a named function is kept out of line: its body stays a call target with opaque parameters, so the
+case can pin the code inside it.
+
+Only the named withheld functions are added, and only to that test's rendering; every test without
+the block renders only the program's own functions that survive the pipeline. A name that matches no
+emitted function is refused by the compiler, so a misspelling cannot silently pin nothing, and so is
+a build that does not render a body it names. An EMPTY block is refused by the spec parser for the
+same reason: it would render no body at all, leaving the pin identical to a test that never asked.
 
 ### What it pins, and what it does not
 
@@ -23085,10 +23089,11 @@ chunk @mrt_host_event_set {
 The LIBRARY half of the same block. `String.trim` is `stdlib/String.maxon`'s own code — withheld
 from every rendering by default, exactly as `mrt_start` is — and this is the route that puts one
 body back. The case is this door's only gate: withdraw the stdlib half of
-`TargetPrinter.isSuppliedFunction` and the block stops pinning anything new (the rendering would
-show `String.trim` anyway, and the compiler refuses a name it already shows); withdraw the
-NAMING half and the compiler refuses the block outright. Either way this case goes red, which is
-what a case that would otherwise only assert an exit code cannot do.
+`TargetPrinter.isSuppliedFunction` and the rendering shows every stdlib body the program reaches,
+`String.sliceBytes`, `String.byteAt` and the grapheme helpers `String.trim` calls among them, so the
+pin moves; withdraw the NAMING half and `String.trim` is not rendered, which the compiler refuses.
+Either way this case goes red, which is what a case that would otherwise only assert an exit code
+cannot do.
 
 ⚠ `main` calls `String.trim` with its default argument, which the helper `__paramDefault#String.trim#0`
 supplies (`CharacterSet.whitespacesAndNewlines`). That helper is NOT named here: one body per name,

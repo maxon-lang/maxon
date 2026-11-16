@@ -127,7 +127,8 @@ that opens any other tagged fence, such as ` ```RequiredIR `, is refused, naming
 Three things pin what the compiler emits:
 
 - **A `TargetIr:<target>` block** holds the Target IR the compiler renders for the case on that lane: every
-  function the case's own source declares, plus the bodies a `RequiredRuntime` block names. It is a gate on
+  function of the case's own source that the build keeps out of line, plus the withheld bodies a
+  `RequiredRuntime` block names. It is a gate on
   the lane it names. When the run's lane has a block, a compile that renders different text fails the case
   and the failure shows the first differing line; only the block for the run's own lane is compared. The
   fence is always qualified, and the target is one of `x64-windows`, `x64-linux`, `arm64-macos` or `arm64-linux`: an
@@ -149,8 +150,14 @@ Three things pin what the compiler emits:
   none either, so the case names that lane in its `unsupported-targets` marker. A run with `--update-required`
   proceeds past an owed lane: it writes the one lane it is for, so the lanes still owed are named by the next
   plain run.
-- **A `RequiredRuntime` block**, which opts a body the Target IR would otherwise withhold — an emitted
-  runtime function, or a `stdlib/` body the program reaches — into the rendering, one name per line.
+- **A `RequiredRuntime` block**, one name per line, which names every function the case's subject lives
+  in: a body the Target IR would otherwise withhold — an emitted runtime function, or a `stdlib/` body the
+  program reaches — or one of the program's own functions. The compiler keeps a named function out of
+  line and refuses a build that does not render every name, so the pin of a named program function shows
+  it as an out-of-line build emits it. The block is the one way a case keeps a function in view: its
+  program carries no scaffolding to defeat the inliner (a function value, a second call site, recursion,
+  `__Raw.ownFrame`). A case whose helper is meant to inline names nothing, and a case whose subject is
+  the inliner's own decision about a function leaves that function unnamed.
   `ir-specs/emitted-runtime-body.md` is the subject and the canonical example. It says nothing about the
   run, so it does not satisfy `pinsAnyResult` — a case carrying it still owes an exit code, a stdout or a
   stderr block.
@@ -655,7 +662,8 @@ What a case must pin:
   the call that kept a function alive), re-root every case sharing that scaffolding, the negative control
   first, and read the control's pinned output: it must still show the construct the rule is about. A
   probe that reports absence needs a positive control known to be present. An `#if` or marker that is
-  true on every target tests nothing.
+  true on every target tests nothing. A case claiming a compiler rule is shown red with the rule disabled
+  before it is committed, and a case that cannot be is deleted, not re-described.
 - A line added inside a spec program, a comment included, shifts every `:line:col` an expected
   `maxoncstderr` or `stderr` block cites; explain a deliberate spelling in the prose above the fence.
 - A case carrying `<!-- unsupported-targets: x64-windows -->` is never compiled on a Windows host, so a

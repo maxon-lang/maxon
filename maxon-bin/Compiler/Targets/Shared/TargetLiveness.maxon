@@ -5810,19 +5810,18 @@ end 'transientDefOperand'
 //    direct one: `ir-specs/register-pressure.md`.)
 //
 //    It is charged only when the op frees NO register OF THE DEF'S OWN FILE. A def may take the
-//    register of a use that DIES here (`allocateDef`'s `dyingRegs`), so `lea dead, a, b` with `a` dying
-//    costs nothing extra; with both uses live-after it costs one. And a def that is LIVE after the op is
-//    charged NOTHING here — it is already counted as live-before at the next op (or as live-out of the
-//    block), which is where this model has always billed it, so nothing that compiled before moves.
+//    register of a use that DIES here (`allocateDef`'s `dyingRegs`), so a dead def with a dying use
+//    costs nothing extra; with every use live-after it costs one. And a def that is LIVE after the
+//    op is charged NOTHING here — it is already counted as live-before at the next op (or as
+//    live-out of the block), which is where this model bills it.
 //
-//    ⚠ THE FILE IS PART OF "FREES A REGISTER", AND LEAVING IT OUT LEFT THE PANIC REACHABLE. `dyingRegs`
-//    names every dying operand's register whatever file it is in, but `allocateDef` ORs
+//    ⚠ THE FILE IS PART OF "FREES A REGISTER", AND LEAVING IT OUT LEAVES THE PANIC REACHABLE.
+//    `dyingRegs` names every dying operand's register whatever file it is in, but `allocateDef` ORs
 //    `fullRegisterMask() and not classPool` into `blocked`, so a def can only ever inherit one of its
-//    OWN file's. A dying XMM therefore frees nothing a dead GPR def can use: `cvttsd2si dead, x` with
-//    `x` dying still wants a fifteenth GPR, and a class-blind test scored it zero and walked the
-//    colorer straight back into `chooseRegister`'s panic — the same wrong answer this correction
-//    exists to remove, one register file over. (Measured both ways: 14 live ints + `x as int`, and 16
-//    live floats + `y as float`.)
+//    OWN file's. A dying XMM therefore frees nothing a dead GPR def can use: `cvttsd2si dead, x`
+//    with `x` dying still wants a GPR of its own, and a class-blind test would score it zero and walk
+//    the colorer into `chooseRegister`'s panic — the wrong answer this correction exists to remove,
+//    one register file over.
 //
 // `liveRow` must still be the live-AFTER set (call it BEFORE the backward step, where a live-after
 // input is present and a use has not yet been re-added). Def-ness, reuse-ness and the input value all

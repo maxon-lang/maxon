@@ -20,7 +20,6 @@ let LinuxTargetName = "arm64-linux"
 let X64LinuxTargetName = "x64-linux"
 let X64WindowsTargetName = "x64-windows"
 
-let FunctionHeaderPrefix = "func @"
 let FunctionHeaderSuffix = " \{"
 let FunctionBodyEndLine = "\}"
 
@@ -29,10 +28,8 @@ let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
 let AcquireLoadMnemonic = "arm64.ldar.word64"
 let ReleaseStoreMnemonic = "arm64.stlr.word64"
 let AtomicClaimMnemonic = "arm64.arm64AtomicCas"
-let X64InstructionPrefix = "x64."
-let Arm64InstructionPrefix = "arm64."
 let RegisterMoveMnemonic = "movRegReg "
-let RegisterMovePrefix = "{Arm64InstructionPrefix}{RegisterMoveMnemonic}"
+let RegisterMovePrefix = "{Arm64OpPrefix}{RegisterMoveMnemonic}"
 let GlobalAddressPrefix = "arm64.leaGlobal "
 let ArgumentSeparator = ", "
 let NoFurtherDemand = ""
@@ -174,7 +171,7 @@ function irLines(path FilePath) returns StringArray
 end 'irLines'
 
 function functionBody(lines StringArray, functionName String, target String) returns StringArray
-	let header = "{FunctionHeaderPrefix}{functionName}{FunctionHeaderSuffix}"
+	let header = "{functionHeader(functionName)}{FunctionHeaderSuffix}"
 	let body = StringArray.create(0)
 	var found = false
 

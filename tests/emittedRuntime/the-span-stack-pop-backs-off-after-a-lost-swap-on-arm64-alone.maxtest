@@ -2,7 +2,6 @@ let TheSpanStackPopBacksOffAfterALostSwapOnArm64AloneCaseLabel = "span-stack-pop
 
 let RefillFunctionName = "__slab_refill"
 let SpinPauseChunkName = "mrt_host_spin_pause"
-let Arm64CallPrefix = "arm64.bl "
 let Arm64BranchPrefix = "arm64.b "
 let Arm64ShiftRightPrefix = "arm64.lsr "
 let Arm64AddPrefix = "arm64.add "
@@ -54,7 +53,7 @@ end 'refillBodyHoldingThePop'
 
 function notePopBackoff(findings StringArray, staged FilePath, caseLabel String, target String, fixture String) throws TestFailure
 	let body = try refillBodyHoldingThePop(staged, caseLabel: caseLabel, target: target, swapPrefix: AtomicClaimMnemonic)
-	let pause = "{Arm64CallPrefix}{SpinPauseChunkName}"
+	let pause = "{Arm64DirectCallPrefix}{SpinPauseChunkName}"
 	let subject = "on {target}, the `{fixture}` program's `{RefillFunctionName}`"
 	var paused = false
 
@@ -73,14 +72,14 @@ function notePopBackoff(findings StringArray, staged FilePath, caseLabel String,
 end 'notePopBackoff'
 
 function noteGrowingCount(findings StringArray, body StringArray, site LineIndex, target String, subject String)
-	let handed = try lastWriteBefore(body, register: PauseCountArgumentRegister, site: site) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, nothing in `{RefillFunctionName}` writes `{PauseCountArgumentRegister}` ahead of the `{Arm64CallPrefix}{SpinPauseChunkName}` at line {site}, so the count that call is handed cannot be read.")
+	let handed = try lastWriteBefore(body, register: PauseCountArgumentRegister, site: site) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, nothing in `{RefillFunctionName}` writes `{PauseCountArgumentRegister}` ahead of the `{Arm64DirectCallPrefix}{SpinPauseChunkName}` at line {site}, so the count that call is handed cannot be read.")
 
 	if handed.line.startsWith(FixedCountPrefix) 'fixedCount'
 		findings.push("{subject} hands `{SpinPauseChunkName}` one fixed count — `{handed.line}` — on every lost swap")
 		return
 	end 'fixedCount'
 
-	let count = try copySourceRegisterOf(handed.line, isa: Arm64InstructionPrefix) otherwise 'untraceable'
+	let count = try copySourceRegisterOf(handed.line, isa: Arm64OpPrefix) otherwise 'untraceable'
 		findings.push("{subject} hands `{SpinPauseChunkName}` its count with `{handed.line}`, which is no `{RegisterMovePrefix.trim()}` from the register that carries the backoff across the loop")
 		return
 	end 'untraceable'
