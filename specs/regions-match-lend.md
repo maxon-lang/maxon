@@ -1017,3 +1017,64 @@ end 'main'
 ```maxoncstderr
 error E3207: <fragment>:35:21: 'bump' needs a writable parameter 'h' at line 27; 'h' is read-only while 'arm' is open
 ```
+
+<!-- test: a-discard-bound-from-an-isolated-local-after-a-linear-union-match-releases-it -->
+Inside a block, a bare `match` of an outer `isolated` linear union consumes it and its arm sinks the payload. The
+later `let _ = h` moves `h` into the discard, which releases it.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Iq7
+	i0
+	i1(w isolated Lw7)
+end 'Iq7'
+
+type Bx7
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx7'
+
+type Lw7
+	var keep as Bx7
+
+	static function create(keep Bx7) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.keep.n}\n")
+		destruct self
+	end 'fin'
+end 'Lw7'
+
+function mk() returns isolated Lw7
+	return Lw7.create(Bx7.create(4))
+end 'mk'
+
+function sink(o isolated Lw7)
+	o.fin()
+end 'sink'
+
+function main() returns ExitCode
+	let h = Bx7.create(0) as isolated Bx7
+	let u = Iq7.i1(mk()) as isolated Iq7
+	modify h 'mh'
+		match u 'x1'
+			i0 then break
+			i1(o) then sink(o)
+		end 'x1'
+	end 'mh'
+	let _ = h
+	return 0
+end 'main'
+```
+```stdout
+fin 4
+```
+```exitcode
+0
+```

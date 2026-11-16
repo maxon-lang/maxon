@@ -7865,6 +7865,21 @@ extension Parser
 			return
 		end 'livesInACell'
 
+		let ownsADrop = self.valueIsOwnedHeap(boundValue)
+		let aliasesItsSource = ownsADrop and boundBareLocal and self.nameAliasesItsSource(kind, sourceName: sourceName, value: value)
+
+		// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned MUTABLE
+		// binding (`var t` + `let u = t`), `boundValue` is that binding's value: it MOVES to this new
+		// one. Poison the source so a later read of it is use-after-move and only the new owner drops
+		// the value. A fresh owned temp (`build()`, `"{x}"`, a promoted mutable-string copy) is held by
+		// no binding, so nothing is poisoned — that is a CONSUME (move-in), not a source-poisoning
+		// move. Gated on `boundBareLocal`, so a consume never pays the owner lookup; run BEFORE the
+		// binding is declared below, so the lookup cannot find this new binding (it aliases the same
+		// value) and poison it instead of the source.
+		if ownsADrop and boundBareLocal and not aliasesItsSource 'moveOnBind'
+			self.poisonMoveSource(boundValue)
+		end 'moveOnBind'
+
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
@@ -7893,9 +7908,9 @@ extension Parser
 		// BORROWED one: `let s = "hi"` (an immortal rdata literal) and `let q = a` where `a` is a struct
 		// PARAMETER (a borrowed pointer) both hold a struct/String tag yet own nothing — no bit, so the
 		// binding is borrowed and never dropped. `let u = t` from an already-owned binding DOES own (the
-		// bit rides the value), and MOVES it (below). The day a struct arrives from somewhere other than a
+		// bit rides the value), and MOVES it (above). The day a struct arrives from somewhere other than a
 		// factory call, its producer set the same bit, and this asks no new question.
-		if self.valueIsOwnedHeap(boundValue) 'trackOwned'
+		if ownsADrop 'trackOwned'
 			// ⭐⭐ **AN IMMUTABLE REBIND IS A SECOND REFERENCE, NOT A MOVE (the ownership ruling, 2026-08-04).**
 			// Maxon is single-ownership and everything is a reference; `clone()` is the only copy. What makes
 			// `let b = a` SAFE is mutability, not linearity — neither name can be written through, so the two
@@ -7917,24 +7932,13 @@ extension Parser
 			// source can LOSE its value while the alias still names it. Only a rebind can do that, and only a
 			// `var` can be rebound — a parameter is E2013 — so a consumed owned parameter is a perfectly safe
 			// thing to alias.
-			if boundBareLocal and self.nameAliasesItsSource(kind, sourceName: sourceName, value: value) 'aliasImmutableSource'
+			if aliasesItsSource 'aliasImmutableSource'
 				// `poisonMoveSource` must now consider more than the owned set: a consume of this value
 				// (`f(b)`, `return b`) poisons its OWNER, and this name would go on reading a value the callee
 				// took. The flag keeps that scan off every function that mints no alias — the overwhelming
 				// majority — rather than paying a symbol-table walk per move everywhere.
 				self.bodyState.functionMintedValueAliases = true
 			end 'aliasImmutableSource' else 'takeOwnership'
-				// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned MUTABLE
-				// binding (`var t` + `let u = t`), `boundValue` is that binding's value: it MOVES to this new
-				// one. Poison the source so a later read of it is use-after-move and only the new owner drops
-				// the value. A fresh owned temp (`build()`, `"{x}"`, a promoted mutable-string copy) is held by
-				// no binding, so nothing is poisoned — that is a CONSUME (move-in), not a source-poisoning
-				// move. Gated on `boundBareLocal`, so a consume never pays the owner lookup; run BEFORE the
-				// push below, so the lookup cannot find this new binding (it aliases the same value).
-				if boundBareLocal 'moveOnBind'
-					self.poisonMoveSource(boundValue)
-				end 'moveOnBind'
-
 				self.enrolOwnedBinding(binding)
 
 				// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop

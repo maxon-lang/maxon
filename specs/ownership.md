@@ -1705,3 +1705,95 @@ end 'main'
 ```exitcode
 22
 ```
+
+<!-- test: a-binding-moved-out-of-an-isolated-local-is-readable-after-an-alias -->
+`let a = r` makes `a` a second name for `r`'s record. `let z = h` then moves `h` into `z`: `h` is moved-from and `z`
+owns the record and reads it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let h = Box.create(1) as isolated Box
+	let r = Box.create(2)
+	let a = r
+	let z = h
+	print("{z.value} {a.value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-binding-moved-out-of-a-var-is-readable-after-an-alias -->
+The same move from a `var` source: `z` owns the record `h` held.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var h = Box.create(1)
+	h = Box.create(3)
+	let r = Box.create(2)
+	let a = r
+	let z = h
+	print("{z.value} {a.value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 2
+```
+
+<!-- test: a-discard-moved-out-of-an-isolated-local-after-an-alias-releases-it -->
+`let _ = h` moves `h` into the discard, which releases the record, in a function that also made an alias.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let h = Box.create(1) as isolated Box
+	let r = Box.create(2)
+	let a = r
+	let _ = h
+	print("{a.value}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
