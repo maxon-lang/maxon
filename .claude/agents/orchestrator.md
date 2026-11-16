@@ -199,6 +199,15 @@ the per-instance patch.
 session's place allows a model. Inside its `/land`, the worker breaks the task into implementer pieces
 and picks each piece's model (AGENTS.md, "Orchestration"). You do not choose models below the task.
 
+**Match the task to the host.** `status` shows each worker's machine, and a cloud session shows as a VM.
+The fleet issue lists the hosts; never name them in this repository.
+- Desktop machines are faster and less limited than cloud VMs. Give them heavy work: self-compiles,
+  scale ladders, bootstraps, seed landings, and anything that needs their operating system (a
+  Windows-only defect goes to a Windows desktop).
+- A macOS machine takes arm64-macos lane work and arm64-macos seed proofs. It may go offline, so give it
+  work that survives an interruption, never something a landing waits on.
+- Cloud VMs take contained work: docs, tests, small compiler fixes, audits.
+
 Open a `task` issue in the fleet repository for each task (`gh issue create -R <fleet repository>
 --label task`), its body holding the fields below, then send `ASSIGN` carrying the same:
 
