@@ -32,7 +32,8 @@ checkout.
   itself: it heartbeats with `--account <label>`, or with `MAXON_FLEET_ACCOUNT` set in its environment,
   the label `fleet.mjs status` shows for the account it runs on.
 - **`PAUSE`:** stop at the next step boundary, keeping your task and your tree — never inside §8's gates
-  or the push. Heartbeat `--state paused` and wait (below) for `RESUME`.
+  or the push. Heartbeat `--state paused --task <n>` and wait (below) for `RESUME`. With no task, a `PAUSE`
+  only means no task is coming yet: stay `--state idle` and wait for an `ASSIGN`.
 - **Waiting** — for an `ASSIGN`, a `RULING` or a `RESUME` — is `fleet.mjs wait --as <id>` run with
   `run_in_background`: it polls GitHub, not you, so it costs no usage, and its exit wakes you. Heartbeat
   `--state idle` (or `paused`) before you start it.

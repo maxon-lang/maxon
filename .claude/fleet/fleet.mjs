@@ -304,6 +304,7 @@ async function commandHeartbeat(options) {
   const id = required(options, 'as');
   const state = required(options, 'state');
   if (!STATES.includes(state)) fail(`--state must be one of ${STATES.join(', ')}`);
+  if (state === 'paused' && options.task === undefined) fail('--state paused needs --task: a session paused with no task is idle (--state idle)');
   const model = required(options, 'model');
   const { label, planTier } = account(options);
   const usage = await usageSample();
