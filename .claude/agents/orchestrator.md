@@ -89,7 +89,7 @@ on the other account. Your fleet id is `orchestrator`.
 - `… ack --as orchestrator <id> …` — mark them read, once acted on.
 - `… send --as orchestrator --to <id> --file <path>` — write the message in your scratchpad first.
 - `… heartbeat --as orchestrator --model claude-sonnet-5-5 --state working` — at every wake, so the
-  budget counts your own consumption against your account.
+  account has a usage sample even when none of its workers can report one.
 - `… status` — every session's last heartbeat. `… budget` — the sizing below.
 - **Waiting:** run `node .claude/fleet/fleet.mjs wait --as orchestrator --max 1200` with
   `run_in_background`. It polls GitHub, not you, so waiting costs no usage; it exits when a message
@@ -130,8 +130,8 @@ unknown work surfaces before you assign anything; start the `wait`.
 so the binding window is each account's weekly one — and the two reset on different days. An account
 whose reset is near can carry more workers, because what it does not spend by then is lost; `budget`
 already weighs that, since each account is paced against its own reset. `budget` reads every heartbeat's usage sample, keeps
-each account's history in the fleet issue, measures the burn per active consumer (you count as one, on
-your account), and prints for each account how many workers it can carry until the binding window
+each account's history in the fleet issue, measures the burn per working worker (you are not counted),
+and prints for each account how many workers it can carry until the binding window
 resets, with an `action`:
 
 - **`start N`** — assign tasks to N of that account's idle or paused workers. `budget` never proposes

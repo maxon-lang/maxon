@@ -377,7 +377,6 @@ function commandBudget() {
 
   for (const acct of accounts) {
     const live = heartbeats.map(entry => entry.data).filter(row => row.account === acct && ageMinutes(row.at) < LIVE_HEARTBEAT_MINUTES);
-    const orchestrator = live.some(row => row.id === ORCHESTRATOR_ID) ? 1 : 0;
     const workers = live.filter(row => row.id !== ORCHESTRATOR_ID);
     const working = workers.filter(row => row.state === 'working').length;
     const available = workers.length;
@@ -389,7 +388,7 @@ function commandBudget() {
     const limits = openLimits(sample, now);
 
     if (sample && (history.length === 0 || sample.at - history[history.length - 1].at >= HISTORY_SPACING_SECONDS)) {
-      history.push({ at: sample.at, consumers: working + orchestrator, limits });
+      history.push({ at: sample.at, consumers: working, limits });
     }
 
     history = history.filter(point => point.at >= now - HISTORY_HOURS * 3600);
@@ -402,14 +401,14 @@ function commandBudget() {
 
     const limit = Math.min(Infinity, ...windows.map(window => window.limit));
     for (const window of windows) window.limit = window.limit === Infinity ? 'unbounded' : Number(window.limit.toFixed(2));
-    const ceiling = limit === Infinity ? working + 1 : Math.floor(limit) - orchestrator;
+    const ceiling = limit === Infinity ? working + 1 : Math.floor(limit);
     const target = sample ? Math.max(0, Math.min(ceiling, working + 1, available)) : working;
     const action = !sample ? 'hold (no usage sample)'
       : target > working ? `start ${target - working}`
         : target < working ? `pause ${working - target}`
           : 'hold';
 
-    plan.push({ account: acct, working, available, orchestrator: orchestrator === 1, target, action, sampleAgeMinutes: sample ? Math.round(ageMinutes(sample.at)) : null, windows });
+    plan.push({ account: acct, working, available, target, action, sampleAgeMinutes: sample ? Math.round(ageMinutes(sample.at)) : null, windows });
   }
 
   console.log(JSON.stringify(plan, null, 2));
