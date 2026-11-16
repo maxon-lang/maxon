@@ -2571,6 +2571,63 @@ end 'main'
 error E3207: <fragment>:38:10: 'eatArr' needs a writable parameter 'xs' at line 29; 'xs' is read-only while 'f1' is open
 ```
 
+<!-- test: model-hand-ag-f2-call -->
+The model (`core-m3w-fa14`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `f2-call` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias TkArray = Array with Tk
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hs2
+	var xs as TkArray
+
+	static function create(xs TkArray) returns Self
+		return Self{xs: xs}
+	end 'create'
+end 'Hs2'
+
+type Sa
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeA(xsV TkArray)
+		for x in xsV 'f1'
+			x.n = 1
+		end 'f1'
+	end 'takeA'
+end 'Sa'
+
+function eatArr(xsV TkArray)
+	for x in xsV 'f1'
+		x.n = 2
+	end 'f1'
+end 'eatArr'
+
+function main() returns ExitCode
+	let _ = spawn Sa.create(0)
+	let h = Hs2.create(TkArray.create(0))
+	h.xs.push(Tk.create(1))
+	for _ in h.xs 'f1'
+		eatArr(h.xs)
+	end 'f1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:46:10: 'eatArr' needs a writable parameter 'xsV' at line 37; 'h' is read-only while 'f1' is open
+```
+
 <!-- test: model-hand-ag-f1-call-write -->
 The model (`core-m3w-fa14`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `f1-call-write` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -2619,6 +2676,64 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:38:10: 'eatArr' needs a writable parameter 'xs' at line 29; 'xs' is read-only while 'f1' is open
+```
+
+<!-- test: model-hand-ag-f2-call-write -->
+The model (`core-m3w-fa14`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `f2-call-write` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias TkArray = Array with Tk
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hs2
+	var xs as TkArray
+
+	static function create(xs TkArray) returns Self
+		return Self{xs: xs}
+	end 'create'
+end 'Hs2'
+
+type Sa
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeA(xsV TkArray)
+		for x in xsV 'f1'
+			x.n = 1
+		end 'f1'
+	end 'takeA'
+end 'Sa'
+
+function eatArr(xsV TkArray)
+	for x in xsV 'f1'
+		x.n = 2
+	end 'f1'
+end 'eatArr'
+
+function main() returns ExitCode
+	let _ = spawn Sa.create(0)
+	let h = Hs2.create(TkArray.create(0))
+	h.xs.push(Tk.create(1))
+	for t in h.xs 'f1'
+		eatArr(h.xs)
+		t.n = 4
+	end 'f1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:46:10: 'eatArr' needs a writable parameter 'xsV' at line 37; 'h' is read-only while 'f1' is open
 ```
 
 <!-- test: model-hand-ag-f1-send -->
@@ -2725,6 +2840,58 @@ end 'main'
 ```
 ```maxoncstderr
 error E3214: <fragment>:40:16: cannot hand 'h.xs' to argument `xsV` of the message `Sa.takeA`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
+```
+
+<!-- test: model-hand-ag-f2-assign -->
+The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `f2-assign` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias TkArray = Array with Tk
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hs2
+	var xs as TkArray
+
+	static function create(xs TkArray) returns Self
+		return Self{xs: xs}
+	end 'create'
+end 'Hs2'
+
+type Sa
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeA(xsV TkArray)
+		for x in xsV 'f1'
+			x.n = 1
+		end 'f1'
+	end 'takeA'
+end 'Sa'
+
+function main() returns ExitCode
+	let _ = spawn Sa.create(0)
+	let h = Hs2.create(TkArray.create(0))
+	h.xs.push(Tk.create(1))
+	for t in h.xs 'f1'
+		h.xs = TkArray.create(0)
+		t.n = 6
+	end 'f1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:40:3: cannot write 'xs' through 'h', which is read-only while 'f1' drains it
 ```
 
 <!-- test: model-hand-fa14-m-unique-tk-store -->

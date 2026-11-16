@@ -6883,15 +6883,18 @@ opens it for the whole statement.
 
 #### Match Arms That Lend an `isolated` Payload
 
-The arm of a `match` over a union whose case holds an `isolated` payload is a window, as a `modify` block is:
-data that existed before the arm is read-only in it, whether or not the arm names the payload. A write to a
-field of an outer record, of a parameter, of `self`, of the root of an enclosing `modify` or of an acquired
-state is **E3197** (`cannot write 'n' through 'b', which is read-only while 'x1' is open`), and a call that needs
-that data writable is **E3207**. Data the arm creates, the payload through its binding, a variable that holds a
-number, and the arm of a case with no `isolated` payload are writable. A union with a linear payload is consumed
-by the `match`, so its arms own their payloads and open no window, a frozen union lends nothing, and a union held
-in an `isolated` local hands its payload out as a region of its own.
-`specs/regions-modify.md` pins the forms (`a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data`).
+An arm of a `match` that binds an `isolated` payload is a window, as a `modify` block is: data that existed
+before the arm is read-only in it. A write to a field of an outer record, of a parameter, of `self`, of the root
+of an enclosing `modify` or of an acquired state is **E3197** (`cannot write 'n' through 'b', which is read-only
+while 'x1' is open`), and a call that needs that data writable is **E3207**. Data the arm creates, the payload
+through its binding and a variable that holds a number are writable. An arm that binds no `isolated` payload
+opens no window, even over a case that holds one: `have then o.n = 5` writes outer data, and an arm of
+`match h.u` that binds nothing writes `h`. A `match` whose subject is read through an `isolated` value that is
+not open (`match job.state`) still opens that value for the whole statement, every arm included. A union with
+a linear payload is consumed by the `match`, so its arms own their payloads and open no window, a frozen union
+lends nothing, and a union held in an `isolated` local hands its payload out as a region of its own.
+`specs/regions-modify.md` pins the forms (`a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data`),
+and `specs/regions-match-lend.md` the arm that binds nothing.
 
 Every other union is ordinary region data, held by a plain `let`, a `var`, a parameter, a field or an element, and
 it aliases freely: a second name, a call that keeps it and a call that returns it reach the same payload. The

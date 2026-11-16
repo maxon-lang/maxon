@@ -848,7 +848,7 @@ error E3204: <fragment>:18:3: 'keep' holds a record from outside 'fill' and cann
 ```
 
 <!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data -->
-The arm of a `match` over a union with an `isolated` payload is a window: data that existed before the arm is read-only in it, so `b.n = 5` is refused whether or not the arm names the payload.
+The arm of a `match` that binds an `isolated` payload is a window: data that existed before the arm is read-only in it, so `b.n = 5` is refused.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -879,13 +879,13 @@ function main() returns ExitCode
 	let u = Sh.held(Bk.create(1))
 	match u 'x1'
 		none then break
-		held then b.n = 5
+		held(r) then b.n = 5
 	end 'x1'
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:30:13: cannot write 'n' through 'b', which is read-only while 'x1' is open
+error E3197: <fragment>:30:16: cannot write 'n' through 'b', which is read-only while 'x1' is open
 ```
 
 <!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-through-a-parameter -->
@@ -918,7 +918,7 @@ end 'Bx'
 function bump(u Sh, c Bx)
 	match u 'x1'
 		none then break
-		held then c.n = 3
+		held(r) then c.n = 3
 	end 'x1'
 end 'bump'
 
@@ -929,7 +929,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:28:13: cannot write 'n' through 'c', which is read-only while 'x1' is open
+error E3197: <fragment>:28:16: cannot write 'n' through 'c', which is read-only while 'x1' is open
 ```
 
 <!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-through-self -->
@@ -962,7 +962,7 @@ type Hd
 	function bump()
 		match self.u 'x1'
 			none then break
-			held then self.n = 3
+			held(r) then self.n = 3
 		end 'x1'
 	end 'bump'
 end 'Hd'
@@ -974,7 +974,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:28:14: cannot write 'n' through 'self', which is read-only while 'x1' is open
+error E3197: <fragment>:28:17: cannot write 'n' through 'self', which is read-only while 'x1' is open
 ```
 
 <!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-write-to-the-open-root -->
@@ -1010,14 +1010,14 @@ function main() returns ExitCode
 	modify h 'm1'
 		match h.u 'x2'
 			none then break
-			held then h.n = 3
+			held(r) then h.n = 3
 		end 'x2'
 	end 'm1'
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:31:14: cannot write 'n' through 'h', which is read-only while 'x2' is open
+error E3197: <fragment>:31:17: cannot write 'n' through 'h', which is read-only while 'x2' is open
 ```
 
 <!-- test: a-match-arm-lending-an-isolated-payload-refuses-a-call-that-writes-outer-data -->
@@ -1056,13 +1056,13 @@ function main() returns ExitCode
 	let u = Sh.held(Bk.create(1))
 	match u 'x1'
 		none then break
-		held then b.bump()
+		held(r) then b.bump()
 	end 'x1'
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:34:13: 'bump' needs a writable receiver at line 25; 'b' is read-only while 'x1' is open
+error E3207: <fragment>:34:16: 'bump' needs a writable receiver at line 25; 'b' is read-only while 'x1' is open
 ```
 
 <!-- test: a-match-arm-lending-an-isolated-payload-leaves-what-it-owns-writable -->

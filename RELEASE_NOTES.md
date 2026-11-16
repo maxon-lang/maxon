@@ -49,13 +49,13 @@ release's version as its heading when the release is cut.
   inside the arm that lends it`). A call that only reads it stays legal.
   Fix: move or copy the union before or after the `match`.
 
-- The arm of a `match` over a union that holds an `isolated` payload is a window: data that existed before the
-  arm is read-only in it, as it is inside `modify`, whether or not the arm names the payload. A write to a field
-  of an outer record, of a parameter, of `self`, of the root of an enclosing `modify` or of an acquired state, and
-  a call that needs that data writable, is E3197 (`cannot write 'n' through 'b', which is read-only while 'x1' is
-  open`) or E3207. Data the arm creates, the payload itself, a variable that holds a number and the arm of a case
-  with no `isolated` payload stay writable, and so does everything in the arm of a union with a linear payload
-  (the match consumes it), of a frozen one, or of one held in an `isolated` local (its payload moves out whole).
+- An arm of a `match` that binds an `isolated` payload is a window: data that existed before the arm is
+  read-only in it, as it is inside `modify`. A write to a field of an outer record, of a parameter, of `self`, of
+  the root of an enclosing `modify` or of an acquired state, and a call that needs that data writable, is E3197
+  (`cannot write 'n' through 'b', which is read-only while 'x1' is open`) or E3207. Data the arm creates, the
+  payload itself, a variable that holds a number and an arm that binds no `isolated` payload stay writable, and so
+  does everything in the arm of a union with a linear payload (the match consumes it), of a frozen one, or of one
+  held in an `isolated` local (its payload moves out whole).
   Fix: do the write before or after the `match`, or carry what the arm decided in a variable that holds a number
   or a value and write the record afterwards.
 

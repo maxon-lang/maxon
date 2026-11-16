@@ -4968,7 +4968,7 @@ extension Parser
 
 				if isEnumMatch 'enumPattern'
 					arm = try self.collectEnumPatternIntervals(self.enumArmTable(enumMatch, errorUnion: errorUnion), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals, intervalMark: intervalMark)
-					armLendsIsolatedPayload = armsLendIsolatedPayloads and self.armCoversAnIsolatedPayload(arm, into: dispatchIntervals, intervalMark: intervalMark)
+					armLendsIsolatedPayload = armsLendIsolatedPayloads and arm.bindsAnIsolatedPayload()
 
 					// An `and fallthrough` edge reaches this arm's BODY from a different case, and this arm's
 					// bindings sit at the head of that body — so they would destructure a case the value does
@@ -5539,24 +5539,6 @@ extension Parser
 
 		return floor
 	end 'enterLentArm'
-
-	function armCoversAnIsolatedPayload(arm EnumPatternArm, into DispatchIntervalArray, intervalMark ElementIndex) returns bool
-		let layout = requireEnumLayout(arm.payloadEnum)
-
-		for ci in 0 upto layout.caseCount() 'eachCase'
-			if not self.armCoversTag(self.armDispatchTagOf(arm, payloadLayout: layout, index: ci), into: into, intervalMark: intervalMark) 'anotherArmsCase'
-				continue
-			end 'anotherArmsCase'
-
-			for field in layout.payloadsAt(ci) 'eachPayload'
-				if field.capability == ParamCapability.isolated 'anIsolatedSlot'
-					return true
-				end 'anIsolatedSlot'
-			end 'eachPayload'
-		end 'eachCase'
-
-		return false
-	end 'armCoversAnIsolatedPayload'
 
 	function openLentArmWindow(label immutable ByteArray, valueFloor ValueId)
 		let windows = self.regionFactsForWrite().windows

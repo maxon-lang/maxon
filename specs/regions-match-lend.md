@@ -1078,3 +1078,184 @@ fin 4
 ```exitcode
 0
 ```
+
+<!-- test: an-arm-that-binds-no-isolated-payload-writes-outer-data -->
+The `have` arm covers a case with an `isolated` payload and binds nothing, so it opens no window and `o` stays writable.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Iu
+	none
+	have(b isolated Bx)
+end 'Iu'
+
+type Holder
+	var u as Iu
+	var n as Num
+
+	static function create() returns Self
+		return Self{u: Iu.have(Bx.create(1)), n: 0}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let o = Bx.create(0)
+
+	match h.u 'm'
+		none then o.n = 1
+		have then o.n = 5
+	end 'm'
+
+	print("{o.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+5
+```
+```exitcode
+0
+```
+
+<!-- test: an-arm-that-binds-no-isolated-payload-writes-the-root-it-matches-through -->
+`match h.u` lends nothing to an arm that binds no payload, so `h` stays writable there.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Iu
+	none
+	have(b isolated Bx)
+end 'Iu'
+
+type Holder
+	var u as Iu
+	var n as Num
+
+	static function create() returns Self
+		return Self{u: Iu.have(Bx.create(1)), n: 0}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+
+	match h.u 'r'
+		none then h.n = 1
+		have then h.n = 7
+	end 'r'
+
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: an-arm-that-binds-an-isolated-payload-refuses-a-write-to-outer-data -->
+The `have(b)` arm binds the `isolated` payload, so it is a window and `o` is read-only in it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Iu
+	none
+	have(b isolated Bx)
+end 'Iu'
+
+type Holder
+	var u as Iu
+	var n as Num
+
+	static function create() returns Self
+		return Self{u: Iu.have(Bx.create(1)), n: 0}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let o = Bx.create(0)
+
+	match h.u 'm'
+		none then o.n = 1
+		have(b) then o.n = 5
+	end 'm'
+
+	print("{o.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:32:16: cannot write 'n' through 'o', which is read-only while 'm' is open
+```
+
+<!-- test: a-match-on-a-field-of-an-isolated-variable-opens-it-for-the-whole-statement -->
+`job` is `isolated` and not open, so `match job.state` opens it for the whole statement, and every arm sees `o` as outer data whether or not it binds a payload.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union St
+	idle
+	busy(b isolated Bx)
+end 'St'
+
+type Job
+	var state as St
+	var n as Num
+
+	static function create() returns Self
+		return Self{state: St.busy(Bx.create(1)), n: 0}
+	end 'create'
+end 'Job'
+
+function main() returns ExitCode
+	let job = Job.create() as isolated Job
+	let o = Bx.create(0)
+
+	match job.state 'm'
+		idle then o.n = 1
+		busy then o.n = 5
+	end 'm'
+
+	print("{o.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:31:13: cannot write 'n' through 'o', which is read-only while 'the isolated value' is open
+```

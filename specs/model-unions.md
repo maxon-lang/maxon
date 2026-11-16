@@ -17,47 +17,6 @@ the day the compiler stops agreeing with a verdict the model pinned. The rule se
 
 ## Tests
 
-<!-- test: model-finding-ae-arm-outer-write-nonlinear-ctl -->
-The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `arm-outer-write-nonlinear-ctl` of redteamAE/p10.txt, in capmodel `reggio/REPORTRTAE.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Sh
-	none
-	held(r isolated Bk)
-end 'Sh'
-
-type Bk
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-end 'Bk'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-function main() returns ExitCode
-	let b = Bx.create(0)
-	let u = Sh.held(Bk.create(1))
-	match u 'x1'
-		none then break
-		held then b.n = 5
-	end 'x1'
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:30:13: cannot write 'n' through 'b', which is read-only while 'x1' is open
-```
-
 <!-- test: model-finding-ae-frozen-union-iso-arm-write -->
 The model (`core-m3w-fa14`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `frozen-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
@@ -98,51 +57,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: model-finding-ae-param-union-iso-arm-write -->
-The model (`core-m3w-fa14`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `param-union-iso-arm-write` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-union Ub
-	u0
-	u1(b isolated Bx)
-end 'Ub'
-
-type Bx
-	var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Bx'
-
-type Cnt
-	var k as Num
-
-	static function create(k Num) returns Self
-		return Self{k: k}
-	end 'create'
-end 'Cnt'
-
-function f(u Ub, c Cnt)
-	match u 'x1'
-		u0 then break
-		u1 then c.k = 3
-	end 'x1'
-end 'f'
-
-function main() returns ExitCode
-	let u = Ub.u1(Bx.create(0))
-	let c = Cnt.create(0)
-	f(u, c: c)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:28:11: cannot write 'k' through 'c', which is read-only while 'x1' is open
 ```
 
 <!-- test: model-finding-ae-imm-param-union-iso-arm-write -->
